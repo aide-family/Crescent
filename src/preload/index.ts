@@ -1,8 +1,23 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { AgentConfig, AgentEvent, AgentRunInput } from '../main/agent/types'
 
 // Custom APIs for renderer
-const api = {}
+const api = {
+  agent: {
+    getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
+    saveConfig: (config: Partial<AgentConfig>): Promise<AgentConfig> =>
+      ipcRenderer.invoke('agent:save-config', config),
+    run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:run', input),
+    onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: AgentEvent): void => callback(event)
+
+      ipcRenderer.on('agent:event', listener)
+      return () => ipcRenderer.removeListener('agent:event', listener)
+    }
+  }
+}
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
