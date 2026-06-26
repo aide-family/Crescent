@@ -4,6 +4,49 @@ import type { AgentConfig, AgentEvent, AgentModelOption, AgentRunInput } from '.
 
 // Custom APIs for renderer
 const api = {
+  terminal: {
+    start: (options?: { cols?: number; rows?: number }): Promise<{
+      sessionId: number
+      mode: 'pty' | 'pipe'
+      pid: number
+      shell: string
+      cwd: string
+    }> =>
+      ipcRenderer.invoke('terminal:start', options),
+    write: (data: string): void => {
+      ipcRenderer.send('terminal:write', data)
+    },
+    resize: (dimensions: { cols: number; rows: number }): void => {
+      ipcRenderer.send('terminal:resize', dimensions)
+    },
+    stop: (): void => {
+      ipcRenderer.send('terminal:stop')
+    },
+    clear: (): void => {
+      ipcRenderer.send('terminal:clear')
+    },
+    onData: (callback: (data: string) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, data: string): void => callback(data)
+
+      ipcRenderer.on('terminal:data', listener)
+      return () => ipcRenderer.removeListener('terminal:data', listener)
+    },
+    onPrompt: (callback: (event: { cwd: string }) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: { cwd: string }): void => callback(event)
+
+      ipcRenderer.on('terminal:prompt', listener)
+      return () => ipcRenderer.removeListener('terminal:prompt', listener)
+    },
+    onExit: (callback: (event: { sessionId: number; exitCode: number; signal?: number }) => void): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        event: { sessionId: number; exitCode: number; signal?: number }
+      ): void => callback(event)
+
+      ipcRenderer.on('terminal:exit', listener)
+      return () => ipcRenderer.removeListener('terminal:exit', listener)
+    }
+  },
   agent: {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),

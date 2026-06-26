@@ -33,9 +33,7 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
-import type { AgentConfig, AgentEvent, AgentModelOption } from '../../main/agent/types'
-
-const PROMPT = '\x1b[38;5;45mterminal-agent\x1b[0m $ '
+import type { AgentConfig, AgentModelOption } from '../../main/agent/types'
 
 const emptyConfig: AgentConfig = {
   openAiApiKey: '',
@@ -51,12 +49,14 @@ function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
-  const inputBufferRef = useRef('')
-  const busyRef = useRef(false)
+  const terminalSessionIdRef = useRef<number | null>(null)
+  const terminalModeRef = useRef<'pty' | 'pipe'>('pty')
+  const pipeInputBufferRef = useRef('')
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [terminalReady, setTerminalReady] = useState(false)
+  const [terminalCwd, setTerminalCwd] = useState('')
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
@@ -101,15 +101,54 @@ function App(): React.JSX.Element {
     terminal.open(host)
     fitAddon.fit()
 
-    terminal.writeln('\x1b[1mTerminalAgent\x1b[0m')
-    terminal.writeln('Type a natural-language command. Use /config, /clear, /remember, or /help.')
-    terminal.write(`\r\n${PROMPT}`)
+    terminal.writeln('\x1b[1mTerminalAgent Shell\x1b[0m')
+    terminal.writeln('Starting local shell in your home directory...')
 
-    terminal.onData((data) => {
-      void handleTerminalData(data)
+    const terminalDataDisposable = terminal.onData((data) => {
+      if (terminalModeRef.current === 'pipe') {
+        handlePipeTerminalInput(terminal, data)
+        return
+      }
+
+      window.api.terminal.write(data)
+    })
+    const stopTerminalData = window.api.terminal.onData((data) => {
+      terminal.write(data)
+    })
+    const stopTerminalPrompt = window.api.terminal.onPrompt(({ cwd }) => {
+      setTerminalCwd(cwd)
+      terminal.write(`\r\n${formatPipePrompt(cwd)}`)
+    })
+    const stopTerminalExit = window.api.terminal.onExit((event) => {
+      if (event.sessionId !== terminalSessionIdRef.current) return
+      terminal.writeln(`\r\n\x1b[31mShell exited with code ${event.exitCode}.\x1b[0m`)
+      setTerminalReady(false)
     })
 
-    const resizeObserver = new ResizeObserver(() => fitAddon.fit())
+    const startShell = async (): Promise<void> => {
+      const dimensions = fitAddon.proposeDimensions()
+      const session = await window.api.terminal.start({
+        cols: dimensions?.cols ?? 80,
+        rows: dimensions?.rows ?? 24
+      })
+
+      terminalSessionIdRef.current = session.sessionId
+      terminalModeRef.current = session.mode
+      setTerminalCwd(session.cwd)
+      setTerminalReady(true)
+    }
+
+    void startShell().catch((error) => {
+      terminal.writeln(`\r\n\x1b[31mFailed to start shell: ${String(error)}\x1b[0m`)
+    })
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit()
+      const dimensions = fitAddon.proposeDimensions()
+      if (dimensions) {
+        window.api.terminal.resize({ cols: dimensions.cols, rows: dimensions.rows })
+      }
+    })
     resizeObserver.observe(host)
 
     terminalRef.current = terminal
@@ -117,89 +156,17 @@ function App(): React.JSX.Element {
 
     return () => {
       resizeObserver.disconnect()
+      terminalDataDisposable.dispose()
+      stopTerminalData()
+      stopTerminalPrompt()
+      stopTerminalExit()
+      window.api.terminal.stop()
+      terminalSessionIdRef.current = null
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
     }
   }, [])
-
-  useEffect(() => {
-    return window.api.agent.onEvent((event) => {
-      writeAgentEvent(event)
-    })
-  }, [])
-
-  async function handleTerminalData(data: string): Promise<void> {
-    for (const char of data) {
-      if (char === '\r') {
-        const command = inputBufferRef.current.trim()
-        inputBufferRef.current = ''
-        terminalRef.current?.write('\r\n')
-        await runCommand(command)
-        continue
-      }
-
-      if (char === '\u007f') {
-        if (inputBufferRef.current.length > 0) {
-          inputBufferRef.current = inputBufferRef.current.slice(0, -1)
-          terminalRef.current?.write('\b \b')
-        }
-        continue
-      }
-
-      if (char >= ' ') {
-        inputBufferRef.current += char
-        terminalRef.current?.write(char)
-      }
-    }
-  }
-
-  async function runCommand(command: string): Promise<void> {
-    if (!command) {
-      writePrompt()
-      return
-    }
-
-    if (command === '/config') {
-      setSheetOpen(true)
-      writeLine('Opening configuration panel.')
-      writePrompt()
-      return
-    }
-
-    if (command === '/clear') {
-      terminalRef.current?.clear()
-      writePrompt()
-      return
-    }
-
-    if (command === '/help') {
-      writeLine('Commands: /config, /clear, /help, /remember <note>')
-      writeLine('Modes: ReAct for direct reasoning/action, Plan-and-Execute for multi-step workflows.')
-      writeLine('Enter a natural-language request to let the model select and call OpenAPI tools.')
-      writePrompt()
-      return
-    }
-
-    if (busyRef.current) {
-      writeLine('\x1b[33mAgent is still running. Wait for the current command to finish.\x1b[0m')
-      writePrompt()
-      return
-    }
-
-    busyRef.current = true
-    setBusy(true)
-
-    const result = await window.api.agent.run({ input: command })
-
-    if (!result.ok && result.error) {
-      writeLine(`\x1b[31m${result.error}\x1b[0m`)
-    }
-
-    busyRef.current = false
-    setBusy(false)
-    writePrompt()
-  }
 
   async function saveConfig(): Promise<void> {
     const nextConfig = await window.api.agent.saveConfig(config)
@@ -212,25 +179,39 @@ function App(): React.JSX.Element {
     setConfig((current) => ({ ...current, [key]: value }))
   }
 
-  function writeAgentEvent(event: AgentEvent): void {
-    if (event.type === 'status') writeLine(`\x1b[90m${event.message}\x1b[0m`)
-    if (event.type === 'thought') writeLine(`\x1b[35mthought\x1b[0m ${event.message}`)
-    if (event.type === 'plan') {
-      writeLine('\x1b[33mplan\x1b[0m')
-      event.steps.forEach((step, index) => writeLine(`  ${index + 1}. ${step}`))
+  function handlePipeTerminalInput(terminal: Terminal, data: string): void {
+    for (const char of data) {
+      if (char === '\r') {
+        const command = pipeInputBufferRef.current
+        pipeInputBufferRef.current = ''
+        terminal.write('\r\n')
+        window.api.terminal.write(`${command}\n`)
+        continue
+      }
+
+      if (char === '\u007f') {
+        if (pipeInputBufferRef.current.length > 0) {
+          pipeInputBufferRef.current = pipeInputBufferRef.current.slice(0, -1)
+          terminal.write('\b \b')
+        }
+        continue
+      }
+
+      if (char >= ' ') {
+        pipeInputBufferRef.current += char
+        terminal.write(char)
+      }
     }
-    if (event.type === 'tool') writeLine(`\x1b[36mtool\x1b[0m ${event.name}: ${event.message}`)
-    if (event.type === 'token') writeLine(event.text)
-    if (event.type === 'error') writeLine(`\x1b[31m${event.message}\x1b[0m`)
-    if (event.type === 'done') writeLine(`\x1b[32m${event.message}\x1b[0m`)
+  }
+
+  function formatPipePrompt(cwd: string): string {
+    const home = cwd.replace(/^\/Users\/[^/]+/, '~')
+
+    return `\x1b[38;5;45m${home}\x1b[0m $ `
   }
 
   function writeLine(text: string): void {
     terminalRef.current?.writeln(text.replace(/\n/g, '\r\n'))
-  }
-
-  function writePrompt(): void {
-    terminalRef.current?.write(`\r\n${PROMPT}`)
   }
 
   const configured = Boolean(
@@ -362,7 +343,7 @@ function App(): React.JSX.Element {
                 </FieldGroup>
               </div>
               <SheetFooter>
-                <Button onClick={saveConfig} disabled={busy}>
+                <Button onClick={saveConfig}>
                   {saved ? <CheckIcon data-icon="inline-start" /> : <BotIcon data-icon="inline-start" />}
                   {saved ? 'Saved' : 'Save settings'}
                 </Button>
@@ -377,10 +358,10 @@ function App(): React.JSX.Element {
         </div>
       </section>
       <footer className="flex h-9 shrink-0 items-center justify-between border-t px-4 text-xs text-muted-foreground">
-        <span>Use /config for settings. Current mode: {config.agentMode}.</span>
+        <span>Shell cwd: {terminalCwd || 'starting...'}</span>
         <span className="inline-flex items-center gap-2">
-          {busy && <Loader2Icon className="animate-spin" aria-hidden="true" />}
-          {busy ? 'Running' : 'Ready'}
+          {!terminalReady && <Loader2Icon className="animate-spin" aria-hidden="true" />}
+          {terminalReady ? 'Shell ready' : 'Starting shell'}
         </span>
       </footer>
     </main>
