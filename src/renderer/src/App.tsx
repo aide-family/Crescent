@@ -23,15 +23,24 @@ import {
   SheetTrigger
 } from '@renderer/components/ui/sheet'
 import { Textarea } from '@renderer/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue
+} from '@renderer/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
-import type { AgentConfig, AgentEvent } from '../../main/agent/types'
+import type { AgentConfig, AgentEvent, AgentModelOption } from '../../main/agent/types'
 
 const PROMPT = '\x1b[38;5;45mterminal-agent\x1b[0m $ '
 
 const emptyConfig: AgentConfig = {
   openAiApiKey: '',
   openAiBaseUrl: '',
-  model: 'gpt-4.1-mini',
+  model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
   openApiBaseUrl: '',
@@ -45,6 +54,7 @@ function App(): React.JSX.Element {
   const inputBufferRef = useRef('')
   const busyRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
+  const [models, setModels] = useState<AgentModelOption[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -54,6 +64,9 @@ function App(): React.JSX.Element {
 
     window.api.agent.getConfig().then(setConfig).catch((error) => {
       writeLine(`\x1b[31mFailed to load config: ${String(error)}\x1b[0m`)
+    })
+    window.api.agent.getModels().then(setModels).catch((error) => {
+      writeLine(`\x1b[31mFailed to load models: ${String(error)}\x1b[0m`)
     })
   }, [])
 
@@ -278,12 +291,24 @@ function App(): React.JSX.Element {
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="model">Model</FieldLabel>
-                    <Input
-                      id="model"
-                      value={config.model}
-                      onChange={(event) => updateConfig('model', event.target.value)}
-                      placeholder="gpt-4.1-mini"
-                    />
+                    <Select value={config.model} onValueChange={(value) => updateConfig('model', value)}>
+                      <SelectTrigger id="model" className="w-full">
+                        <SelectValue placeholder="Select a model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>OpenClaw-compatible defaults</SelectLabel>
+                          {models.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.name} · {model.providerId}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      Defaults mirror the OpenClaw provider layout; API keys stay local.
+                    </FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel>Agent mode</FieldLabel>

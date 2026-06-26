@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import type Store from 'electron-store'
 
 import { AgentMemory, type AgentMemoryState } from './memory'
+import { defaultOpenClawLikeConfig, getAvailableModels } from './openclaw-config'
 import { runTerminalAgent } from './runner'
 import type { AgentConfig, AgentRunInput } from './types'
 
@@ -13,7 +14,7 @@ type StoreShape = {
 const defaultConfig: AgentConfig = {
   openAiApiKey: '',
   openAiBaseUrl: '',
-  model: 'gpt-4.1-mini',
+  model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
   agentMode: 'react',
   maxActiveTools: 5,
   openApiBaseUrl: '',
@@ -34,6 +35,23 @@ export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-config', async () => {
     const store = await getStore()
     return store.get('config', defaultConfig)
+  })
+
+  ipcMain.handle('agent:get-models', () => {
+    const providerEntries = Object.entries(defaultOpenClawLikeConfig.models.providers)
+
+    return getAvailableModels(defaultOpenClawLikeConfig).map((model) => {
+      const provider = providerEntries.find(([, providerConfig]) =>
+        providerConfig.models.some((candidate) => candidate.id === model.id)
+      )
+
+      return {
+        id: model.id,
+        name: model.name,
+        providerId: provider?.[0] ?? 'custom',
+        reasoning: model.reasoning
+      }
+    })
   })
 
   ipcMain.handle('agent:save-config', async (_, config: Partial<AgentConfig>) => {

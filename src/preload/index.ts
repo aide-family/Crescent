@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { AgentConfig, AgentEvent, AgentRunInput } from '../main/agent/types'
+import type { AgentConfig, AgentEvent, AgentModelOption, AgentRunInput } from '../main/agent/types'
 
 // Custom APIs for renderer
 const api = {
   agent: {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
+    getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
     saveConfig: (config: Partial<AgentConfig>): Promise<AgentConfig> =>
       ipcRenderer.invoke('agent:save-config', config),
     run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>

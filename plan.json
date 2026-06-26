@@ -1,0 +1,42 @@
+{
+  "project": "TerminalAgent OpenAPI Agent",
+  "updatedAt": "2026-06-26T23:30:00+08:00",
+  "tasks": [
+    {
+      "id": "plan",
+      "title": "Create executable development plan",
+      "status": "completed",
+      "tests": ["manual: plan.json exists and is updated as tasks complete"]
+    },
+    {
+      "id": "openclaw-config",
+      "title": "Add OpenClaw-inspired model/provider/default-agent configuration",
+      "status": "completed",
+      "tests": ["unit: provider config resolves model/baseUrl/apiKey without leaking secrets"]
+    },
+    {
+      "id": "agent-runtime",
+      "title": "Complete common AI Agent runtime: brain, memory, planner, tools, sessions",
+      "status": "completed",
+      "tests": ["unit: mode/config normalization and memory persistence behavior"]
+    },
+    {
+      "id": "openapi-tools",
+      "title": "Harden OpenAPI dynamic tool loading and execution pipeline",
+      "status": "completed",
+      "tests": ["unit: OpenAPI paths convert to OpenAI function tools"]
+    },
+    {
+      "id": "renderer-controls",
+      "title": "Expose provider/model/agent controls in shadcn UI",
+      "status": "completed",
+      "tests": ["typecheck: renderer API and UI compile"]
+    },
+    {
+      "id": "verification",
+      "title": "Run automated verification before final handoff",
+      "status": "completed",
+      "tests": ["npm run test", "npm run typecheck", "npm run build"]
+    }
+  ]
+}

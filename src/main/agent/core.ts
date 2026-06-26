@@ -2,6 +2,7 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
 
 import { AgentBrain } from './brain'
 import type { AgentMemory } from './memory'
+import { resolveModelProvider } from './openclaw-config'
 import { AgentPlanner } from './planner'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { OpenApiToolExecutor } from './tool-executor'
@@ -165,7 +166,9 @@ function selectTools(tools: OpenAiTool[], selectedToolNames: string[]): OpenAiTo
 }
 
 function assertConfig(config: AgentConfig): void {
-  if (!config.openAiApiKey.trim()) throw new Error('OpenAI API key is required.')
+  const provider = resolveModelProvider(config)
+
+  if (!provider.apiKey.trim()) throw new Error('OpenAI-compatible API key is required.')
   if (!config.model.trim()) throw new Error('Model is required.')
   if (!config.openApiBaseUrl.trim()) throw new Error('OpenAPI base URL is required.')
   if (!config.openApiDocument.trim()) throw new Error('OpenAPI URL or JSON document is required.')

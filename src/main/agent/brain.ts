@@ -7,17 +7,20 @@ import type {
 } from 'openai/resources/chat/completions'
 
 import type { AgentConfig, ToolCatalogEntry } from './types'
+import { resolveModelProvider } from './openclaw-config'
 
 export class AgentBrain {
   private readonly client: OpenAI
   private readonly model: string
 
   constructor(config: AgentConfig) {
+    const provider = resolveModelProvider(config)
+
     this.client = new OpenAI({
-      apiKey: config.openAiApiKey,
-      ...(config.openAiBaseUrl.trim() ? { baseURL: config.openAiBaseUrl.trim() } : {})
+      apiKey: provider.apiKey,
+      ...(provider.baseUrl ? { baseURL: provider.baseUrl } : {})
     })
-    this.model = config.model
+    this.model = provider.model
   }
 
   chat(

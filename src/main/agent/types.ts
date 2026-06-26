@@ -29,6 +29,13 @@ export interface AgentRunInput {
   input: string
 }
 
+export interface AgentModelOption {
+  id: string
+  name: string
+  providerId: string
+  reasoning: boolean
+}
+
 export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'thought'; message: string }
