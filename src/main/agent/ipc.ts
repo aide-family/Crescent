@@ -179,7 +179,12 @@ export function registerAgentIpc(): void {
     if (input.startsWith('/remember ')) {
       const memory = createMemory()
       memory.addLongTermNote(input.slice('/remember '.length))
-      event.sender.send('agent:event', { type: 'done', message: 'Saved to long-term memory.' })
+      event.sender.send('agent:event', {
+        type: 'done',
+        message: 'Saved to long-term memory.',
+        runId,
+        tabId: payload?.tabId
+      })
       return { ok: true, text: 'Saved to long-term memory.' }
     }
 
@@ -193,7 +198,7 @@ export function registerAgentIpc(): void {
         createMemory(),
         payload?.terminalContext ?? '',
         (agentEvent) => {
-          event.sender.send('agent:event', agentEvent)
+          event.sender.send('agent:event', { ...agentEvent, runId, tabId: payload?.tabId })
         },
         {
           executeCommand: (command, timeoutMs) =>
@@ -228,7 +233,7 @@ export function registerAgentIpc(): void {
         summary: input,
         output: message
       })
-      event.sender.send('agent:event', { type: 'error', message })
+      event.sender.send('agent:event', { type: 'error', message, runId, tabId: payload?.tabId })
       return { ok: false, error: message }
     } finally {
       activeRuns.delete(runId)

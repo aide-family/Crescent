@@ -5,6 +5,8 @@ import icon from '../../resources/icon.png?asset'
 import { registerAgentIpc } from './agent/ipc'
 import { registerTerminalIpc, stopAllTerminalSessions } from './terminal/ipc'
 import { registerConnectionIpc } from './connections/ipc'
+import { initializeCrescentDatabase } from './crescent-sqlite'
+import { registerStorageIpc } from './storage/ipc'
 
 function createWindow(): void {
   // Create the browser window.
@@ -54,8 +56,10 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+  initializeCrescentDatabase()
   registerAgentIpc()
   registerConnectionIpc()
+  registerStorageIpc()
   registerTerminalIpc()
 
   createWindow()

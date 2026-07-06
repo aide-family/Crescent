@@ -136,13 +136,18 @@ export interface AgentModelOption {
 }
 
 export type AgentEvent =
-  | { type: 'status'; message: string }
-  | { type: 'thought'; message: string }
-  | { type: 'plan'; steps: string[] }
-  | { type: 'tool'; name: string; message: string }
-  | { type: 'token'; text: string }
-  | { type: 'error'; message: string }
-  | { type: 'done'; message: string }
+  | ({ type: 'status'; message: string } & AgentEventMeta)
+  | ({ type: 'thought'; message: string } & AgentEventMeta)
+  | ({ type: 'plan'; steps: string[] } & AgentEventMeta)
+  | ({ type: 'tool'; name: string; message: string } & AgentEventMeta)
+  | ({ type: 'token'; text: string } & AgentEventMeta)
+  | ({ type: 'error'; message: string } & AgentEventMeta)
+  | ({ type: 'done'; message: string } & AgentEventMeta)
+
+export interface AgentEventMeta {
+  runId?: string
+  tabId?: string
+}
 
 export interface OpenApiOperationMeta {
   name: string
@@ -176,4 +181,32 @@ export interface ToolCatalogEntry {
   method: HttpMethod
   path: string
   description: string
+}
+
+export interface StoredSessionTab {
+  tabId: string
+  title: string
+  connectionId?: string
+  connectionName?: string
+  isSsh: boolean
+  terminalCwd?: string
+  terminalMode?: 'pty' | 'pipe'
+}
+
+export interface StoredAgentLogEntry {
+  tabId: string
+  logId: number
+  kind: string
+  text: string
+  createdAt: string
+}
+
+export interface StoredAgentRun {
+  runId: string
+  tabId: string
+  input: string
+  status: 'running' | 'success' | 'error' | 'canceled'
+  connectionId?: string
+  output?: string
+  error?: string
 }
