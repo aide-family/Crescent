@@ -4,6 +4,8 @@ import type {
   AgentCommandInput,
   AgentCommandResult,
   AgentConfig,
+  AgentConnectionIntentInput,
+  AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
@@ -95,8 +97,15 @@ const api = {
       ipcRenderer.invoke('agent:validate-config', config),
     generateCommand: (input: AgentCommandInput): Promise<AgentCommandResult> =>
       ipcRenderer.invoke('agent:generate-command', input),
+    resolveConnectionIntent: (
+      input: AgentConnectionIntentInput
+    ): Promise<AgentConnectionIntentResult> =>
+      ipcRenderer.invoke('agent:resolve-connection-intent', input),
     run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>
       ipcRenderer.invoke('agent:run', input),
+    cancel: (runId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:cancel', runId),
+    supplement: (input: { runId: string; input: string }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:supplement', input),
     onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentEvent): void => callback(event)
 

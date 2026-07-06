@@ -1,4 +1,4 @@
-import type { AgentConfig } from './types'
+import type { AgentConfig, AgentProviderConfig } from './types'
 
 export interface OpenClawModelInfo {
   id: string
@@ -8,6 +8,7 @@ export interface OpenClawModelInfo {
 }
 
 export interface OpenClawProviderConfig {
+  name?: string
   baseUrl: string
   api: 'openai-completions'
   auth: 'api-key'
@@ -47,7 +48,8 @@ export const defaultOpenClawLikeConfig: OpenClawLikeConfig = {
   models: {
     mode: 'merge',
     providers: {
-      azure: {
+      'nova-litellm': {
+        name: 'Nova LiteLLM',
         baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
         api: 'openai-completions',
         auth: 'api-key',
@@ -56,19 +58,14 @@ export const defaultOpenClawLikeConfig: OpenClawLikeConfig = {
         },
         models: [
           { id: 'azure/gpt-5.4', name: 'azure/gpt-5.4', reasoning: true, input: ['text'] },
-          { id: 'azure/gpt-5.5', name: 'azure/gpt-5.5', reasoning: true, input: ['text'] }
-        ]
-      },
-      bailian: {
-        baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
-        api: 'openai-completions',
-        auth: 'api-key',
-        request: {
-          allowPrivateNetwork: true
-        },
-        models: [
+          { id: 'azure/gpt-5.5', name: 'azure/gpt-5.5', reasoning: true, input: ['text'] },
           { id: 'bailian/glm-5-1', name: 'bailian/glm-5-1', reasoning: false, input: ['text'] },
-          { id: 'bailian/qwen3.6-plus', name: 'bailian/qwen3.6-plus', reasoning: false, input: ['text'] }
+          {
+            id: 'bailian/qwen3.6-plus',
+            name: 'bailian/qwen3.6-plus',
+            reasoning: false,
+            input: ['text']
+          }
         ]
       }
     }
@@ -100,30 +97,58 @@ export function resolveModelProvider(
   openClawConfig: OpenClawLikeConfig = defaultOpenClawLikeConfig
 ): ResolvedModelProvider {
   const requestedModel = agentConfig.model.trim() || openClawConfig.agents.defaults.model.primary
-  const providerEntry = Object.entries(openClawConfig.models.providers).find(([, provider]) =>
-    provider.models.some((model) => model.id === requestedModel)
+  const providers = getAgentProviders(agentConfig, openClawConfig)
+  const provider = providers.find((candidate) =>
+    candidate.models.some((model) => model.id === requestedModel)
   )
 
-  if (!providerEntry) {
+  if (!provider) {
     return {
       model: requestedModel,
-      baseUrl: agentConfig.openAiBaseUrl.trim(),
-      apiKey: agentConfig.openAiApiKey.trim(),
+      baseUrl: agentConfig.openAiBaseUrl?.trim() ?? '',
+      apiKey: agentConfig.openAiApiKey?.trim() ?? '',
       providerId: 'custom'
     }
   }
 
-  const [providerId, provider] = providerEntry
-
   return {
     model: requestedModel,
-    baseUrl: agentConfig.openAiBaseUrl.trim() || provider.baseUrl,
+    baseUrl: provider.baseUrl.trim() || agentConfig.openAiBaseUrl?.trim() || '',
     apiKey:
-      agentConfig.openAiApiKey.trim() ||
       provider.apiKey?.trim() ||
+      agentConfig.openAiApiKey?.trim() ||
       process.env.TERMINAL_AGENT_API_KEY?.trim() ||
       process.env.OPENAI_API_KEY?.trim() ||
       '',
-    providerId
+    providerId: provider.id
   }
+}
+
+export function getDefaultAgentProviders(
+  config: OpenClawLikeConfig = defaultOpenClawLikeConfig
+): AgentProviderConfig[] {
+  return Object.entries(config.models.providers).map(([id, provider]) => ({
+    id,
+    name: provider.name ?? id,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey ?? '',
+    models: provider.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning
+    }))
+  }))
+}
+
+export function getAgentProviders(
+  agentConfig: AgentConfig,
+  openClawConfig: OpenClawLikeConfig = defaultOpenClawLikeConfig
+): AgentProviderConfig[] {
+  if (agentConfig.providers?.length) return agentConfig.providers
+
+  return getDefaultAgentProviders(openClawConfig).map((provider) => ({
+    ...provider,
+    baseUrl: agentConfig.openAiBaseUrl?.trim() || provider.baseUrl,
+    apiKey: agentConfig.openAiApiKey?.trim() || provider.apiKey
+  }))
 }

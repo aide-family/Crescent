@@ -8,13 +8,28 @@ export type AgentMode = 'react' | 'plan-execute'
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'trace'
 
 export interface AgentConfig {
-  openAiApiKey: string
-  openAiBaseUrl: string
+  openAiApiKey?: string
+  openAiBaseUrl?: string
+  providers: AgentProviderConfig[]
   model: string
   agentMode: AgentMode
   maxActiveTools: number
   openApiBaseUrl: string
   openApiDocument: string
+}
+
+export interface AgentProviderConfig {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey?: string
+  models: AgentProviderModelConfig[]
+}
+
+export interface AgentProviderModelConfig {
+  id: string
+  name?: string
+  reasoning?: boolean
 }
 
 export type ConnectionSource = 'ssh-config' | 'custom'
@@ -56,10 +71,23 @@ export interface OperationRecord {
 }
 
 export interface AgentRunInput {
+  runId?: string
   input: string
   terminalContext?: string
   connectionId?: string
   tabId?: string
+}
+
+export interface AgentConnectionIntentInput {
+  input: string
+}
+
+export interface AgentConnectionIntentResult {
+  ok: boolean
+  connectionId?: string
+  confidence?: number
+  reason?: string
+  error?: string
 }
 
 export interface AgentCommandInput {
@@ -103,6 +131,7 @@ export interface AgentModelOption {
   id: string
   name: string
   providerId: string
+  providerName: string
   reasoning: boolean
 }
 

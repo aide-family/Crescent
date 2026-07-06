@@ -3,11 +3,13 @@ import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { randomUUID } from 'crypto'
 
-import { defaultOpenClawLikeConfig } from './agent/openclaw-config'
+import { defaultOpenClawLikeConfig, getDefaultAgentProviders } from './agent/openclaw-config'
 import type {
   AgentConfig,
   AgentLongTermMemory,
   AgentMemoryRecord,
+  AgentProviderConfig,
+  AgentProviderModelConfig,
   ConnectionConfig,
   ConnectionInput,
   OperationRecord
@@ -24,8 +26,7 @@ export interface CrescentMemoryFile {
 }
 
 export const defaultAgentConfig: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
+  providers: getDefaultAgentProviders(),
   model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
   agentMode: 'react',
   maxActiveTools: 5,
@@ -134,14 +135,64 @@ export function appendOperationRecord(
 }
 
 export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig {
+  const providers = normalizeAgentProviders(config)
+  const defaultModel = providers[0]?.models[0]?.id ?? defaultAgentConfig.model
+  const model = String(config.model ?? defaultAgentConfig.model)
+
   return {
-    openAiApiKey: String(config.openAiApiKey ?? ''),
-    openAiBaseUrl: String(config.openAiBaseUrl ?? ''),
-    model: String(config.model ?? defaultAgentConfig.model),
+    providers,
+    model: providers.some((provider) => provider.models.some((candidate) => candidate.id === model))
+      ? model
+      : defaultModel,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
     maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools),
     openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
     openApiDocument: String(config.openApiDocument ?? '')
+  }
+}
+
+function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderConfig[] {
+  if (Array.isArray(config.providers)) {
+    const providers = config.providers.map(normalizeAgentProvider).filter((provider) => provider.id)
+    if (providers.length) return providers
+  }
+
+  const legacyBaseUrl = config.openAiBaseUrl?.trim()
+  const legacyApiKey = config.openAiApiKey?.trim()
+
+  return defaultAgentConfig.providers.map((provider) => ({
+    ...provider,
+    baseUrl: legacyBaseUrl || provider.baseUrl,
+    apiKey: legacyApiKey || provider.apiKey
+  }))
+}
+
+function normalizeAgentProvider(value: unknown): AgentProviderConfig {
+  const record = isRecord(value) ? value : {}
+  const id = String(record.id || record.name || '').trim()
+  const models = Array.isArray(record.models)
+    ? record.models.map(normalizeAgentProviderModel).filter((model) => model.id)
+    : []
+
+  return {
+    id,
+    name: String(record.name || id),
+    baseUrl: String(record.baseUrl || ''),
+    apiKey: record.apiKey ? String(record.apiKey) : '',
+    models
+  }
+}
+
+function normalizeAgentProviderModel(value: unknown): AgentProviderModelConfig {
+  if (typeof value === 'string') return { id: value.trim(), name: value.trim(), reasoning: false }
+
+  const record = isRecord(value) ? value : {}
+  const id = String(record.id || record.name || '').trim()
+
+  return {
+    id,
+    name: String(record.name || id),
+    reasoning: Boolean(record.reasoning)
   }
 }
 

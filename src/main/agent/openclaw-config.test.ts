@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { defaultOpenClawLikeConfig, getAvailableModels, resolveModelProvider } from './openclaw-config'
+import {
+  defaultOpenClawLikeConfig,
+  getDefaultAgentProviders,
+  getAvailableModels,
+  resolveModelProvider
+} from './openclaw-config'
 import type { AgentConfig } from './types'
 
 const baseConfig: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
+  providers: getDefaultAgentProviders(),
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
@@ -24,7 +28,7 @@ describe('openclaw-config', () => {
   it('resolves built-in provider base URL without storing a default API key', () => {
     const resolved = resolveModelProvider(baseConfig)
 
-    expect(resolved.providerId).toBe('azure')
+    expect(resolved.providerId).toBe('nova-litellm')
     expect(resolved.model).toBe('azure/gpt-5.5')
     expect(resolved.baseUrl).toBe('http://nova.dmxwg.yiducloud.cn/litellm')
     expect(resolved.apiKey).toBe('')
@@ -33,8 +37,13 @@ describe('openclaw-config', () => {
   it('uses explicit user API key and base URL before defaults', () => {
     const resolved = resolveModelProvider({
       ...baseConfig,
-      openAiApiKey: 'sk-user',
-      openAiBaseUrl: 'https://proxy.example.test/v1'
+      providers: [
+        {
+          ...baseConfig.providers[0],
+          apiKey: 'sk-user',
+          baseUrl: 'https://proxy.example.test/v1'
+        }
+      ]
     })
 
     expect(resolved.apiKey).toBe('sk-user')

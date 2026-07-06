@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentToolRuntime } from './tool-runtime'
+import { getDefaultAgentProviders } from './openclaw-config'
 import type {
   AgentConfig,
   AgentEvent,
@@ -10,8 +11,7 @@ import type {
 import type { AgentBrain } from './brain'
 
 const config: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
+  providers: getDefaultAgentProviders(),
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,

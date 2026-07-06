@@ -2,6 +2,7 @@ import axios from 'axios'
 import { describe, expect, it, vi } from 'vitest'
 
 import { OpenApiToolExecutor } from './tool-executor'
+import { getDefaultAgentProviders } from './openclaw-config'
 import type { AgentConfig, OpenApiOperationMeta } from './types'
 
 vi.mock('axios', () => ({
@@ -13,8 +14,7 @@ vi.mock('axios', () => ({
 const request = vi.mocked(axios.request)
 
 const config: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
+  providers: getDefaultAgentProviders(),
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,

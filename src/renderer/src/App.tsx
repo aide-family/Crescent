@@ -39,18 +39,39 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
+import {
+  dictionaries,
+  localeOptions,
+  resolveInitialLocale,
+  type Dictionary,
+  type Locale
+} from '@renderer/i18n'
 import type {
   AgentConfig,
   AgentEvent,
   AgentModelOption,
+  AgentProviderConfig,
+  AgentProviderModelConfig,
   AgentValidationResult,
   ConnectionConfig,
   ConnectionInput
 } from '../../main/agent/types'
 
 const emptyConfig: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
+  providers: [
+    {
+      id: 'nova-litellm',
+      name: 'Nova LiteLLM',
+      baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
+      apiKey: '',
+      models: [
+        { id: 'azure/gpt-5.4', name: 'azure/gpt-5.4', reasoning: true },
+        { id: 'azure/gpt-5.5', name: 'azure/gpt-5.5', reasoning: true },
+        { id: 'bailian/glm-5-1', name: 'bailian/glm-5-1', reasoning: false },
+        { id: 'bailian/qwen3.6-plus', name: 'bailian/qwen3.6-plus', reasoning: false }
+      ]
+    }
+  ],
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
@@ -66,6 +87,31 @@ type AgentLogEntry =
       text: string
       createdAt: string
     }
+
+interface AgentRunViewState {
+  logId: number
+  actions: AgentRunAction[]
+  result?: string
+  error?: string
+}
+
+interface AgentRunAction {
+  title: string
+  detail: string
+}
+
+interface ConnectionIntent {
+  original: string
+  query: string
+  candidates: string[]
+  explicit: boolean
+  executeAfterLogin: boolean
+}
+
+interface PostConnectionTask {
+  input: string
+  connection: ConnectionConfig
+}
 
 interface AgentTerminalTab {
   id: string
@@ -84,13 +130,6 @@ interface AgentTerminalTab {
   agentLog: AgentLogEntry[]
 }
 
-const defaultAgentLogEntry: AgentLogEntry = {
-  id: 0,
-  kind: 'status',
-  text: 'Ready. Configure a model and OpenAPI document, then ask the agent to call your API.',
-  createdAt: new Date().toISOString()
-}
-
 function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab {
   return {
     id: input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -106,7 +145,7 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
     agentInput: input?.agentInput ?? '',
     agentBusy: input?.agentBusy ?? false,
     copiedLogId: input?.copiedLogId ?? null,
-    agentLog: input?.agentLog ?? [defaultAgentLogEntry]
+    agentLog: input?.agentLog ?? []
   }
 }
 
@@ -123,6 +162,8 @@ function App(): React.JSX.Element {
   const terminalSessionIdRef = useRef<number | null>(null)
   const terminalModeRef = useRef<'pty' | 'pipe'>('pty')
   const terminalCwdRef = useRef('')
+  const activeRunCanceledRef = useRef(new Set<string>())
+  const activeRunIdRef = useRef(new Map<string, string>())
   const pipeInputBufferRef = useRef('')
   const pipeCursorRef = useRef(0)
   const pipeHistoryRef = useRef<string[]>([])
@@ -132,6 +173,12 @@ function App(): React.JSX.Element {
   const activeTabIdRef = useRef('default')
   const tabsRef = useRef<AgentTerminalTab[]>([])
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
+  const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
+  const runAgentConversationRef = useRef<
+    ((input: string, tabId: string, connectionId?: string) => Promise<void>) | null
+  >(null)
+  const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
+  const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -140,6 +187,8 @@ function App(): React.JSX.Element {
   const [validating, setValidating] = useState(false)
   const [connections, setConnections] = useState<ConnectionConfig[]>([])
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
+  const [selectedConnectionId, setSelectedConnectionId] = useState('')
+  const [connectionEditing, setConnectionEditing] = useState(true)
   const [connectionForm, setConnectionForm] = useState<ConnectionInput>({
     name: '',
     host: '',
@@ -152,6 +201,10 @@ function App(): React.JSX.Element {
   })
   const [connectionSshOptionsText, setConnectionSshOptionsText] = useState('')
   const [connectionActionsText, setConnectionActionsText] = useState('')
+  const [connectionImportText, setConnectionImportText] = useState('')
+  const [terminalPanePercent, setTerminalPanePercent] = useState(65)
+  const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
+  const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
     createTerminalTab({ id: 'default', title: 'Local' })
   ])
@@ -162,6 +215,41 @@ function App(): React.JSX.Element {
     y: number
   } | null>(null)
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+  const t = dictionaries[locale]
+  const providerOptions = useMemo(
+    () =>
+      config.providers.map((provider) => ({
+        id: provider.id,
+        name: provider.name || provider.id
+      })),
+    [config.providers]
+  )
+  const modelOptions = useMemo(() => flattenProviderModels(config.providers), [config.providers])
+  const visibleModels = models.length ? models : modelOptions
+  const activeModel = visibleModels.find((model) => model.id === config.model)
+  const activeProviderId = activeModel?.providerId ?? config.providers[0]?.id ?? 'custom'
+  const filteredModels = visibleModels.filter((model) => model.providerId === activeProviderId)
+  const settingsProvider =
+    config.providers.find((provider) => provider.id === settingsProviderId) ??
+    config.providers[0] ??
+    emptyConfig.providers[0]
+  const settingsProviderModelsText = useMemo(
+    () => settingsProvider.models.map((model) => model.id).join('\n'),
+    [settingsProvider.models]
+  )
+  const aiState: 'ready' | 'pending' | 'not-ready' = validating
+    ? 'pending'
+    : config.model.trim()
+      ? 'ready'
+      : 'not-ready'
+  const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
+    ? 'ready'
+    : activeTab.sessionId
+      ? 'not-ready'
+      : 'pending'
+  const failedToLoadConfigText = t.terminal.failedToLoadConfig
+  const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
+  const failedToLoadModelsText = t.terminal.failedToLoadModels
 
   const configured = useMemo(
     () =>
@@ -204,7 +292,7 @@ function App(): React.JSX.Element {
   )
 
   const appendLog = useCallback(
-    (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): void => {
+    (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): number => {
       const id = nextLogIdRef.current
       nextLogIdRef.current += 1
       updateTab(tabId, (tab) => ({
@@ -213,8 +301,31 @@ function App(): React.JSX.Element {
           -120
         )
       }))
+      return id
     },
     [updateTab]
+  )
+
+  const updateLogEntryText = useCallback(
+    (tabId: string, logId: number, text: string): void => {
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        agentLog: tab.agentLog.map((entry) => (entry.id === logId ? { ...entry, text } : entry))
+      }))
+    },
+    [updateTab]
+  )
+
+  const updateAgentRun = useCallback(
+    (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState): void => {
+      const run = activeAgentRunRef.current.get(tabId)
+      if (!run) return
+
+      const nextRun = updater(run)
+      activeAgentRunRef.current.set(tabId, nextRun)
+      updateLogEntryText(tabId, nextRun.logId, formatAgentRunMarkdown(nextRun, t))
+    },
+    [t, updateLogEntryText]
   )
 
   const appendAgentEvent = useCallback(
@@ -222,25 +333,61 @@ function App(): React.JSX.Element {
       if (event.type === 'token' || event.type === 'done') return
 
       if (event.type === 'plan') {
-        appendLog(
-          {
-            kind: 'plan',
-            text: event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
-          },
-          tabId
-        )
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          actions: [
+            ...run.actions,
+            {
+              title: t.input.createdPlan,
+              detail: event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+            }
+          ]
+        }))
         return
       }
 
       if (event.type === 'tool') {
-        appendLog({ kind: 'tool', text: `${event.name}: ${event.message}` }, tabId)
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          actions: [
+            ...run.actions,
+            {
+              title: `${t.input.usedTool}: ${event.name}`,
+              detail: localizeAgentEventMessage(event.message, t)
+            }
+          ]
+        }))
         return
       }
 
-      appendLog({ kind: event.type, text: event.message }, tabId)
+      updateAgentRun(tabId, (run) => ({
+        ...run,
+        actions: [
+          ...run.actions,
+          {
+            title: formatAgentEventActionTitle(event, t),
+            detail: localizeAgentEventMessage(event.message, t)
+          }
+        ]
+      }))
     },
-    [appendLog]
+    [t, updateAgentRun]
   )
+
+  runAgentConversationRef.current = runAgentConversation
+
+  const drainPostConnectionTasks = useCallback((targetTabId: string): void => {
+    const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
+    if (tasks.length === 0) return
+
+    postConnectionTasksRef.current.delete(targetTabId)
+    void Promise.all(
+      tasks.map(async (task) => {
+        await waitForTerminalIdle(targetTabId, { idleMs: 1500, timeoutMs: 60_000 })
+        await runAgentConversationRef.current?.(task.input, targetTabId, task.connection.id)
+      })
+    )
+  }, [])
 
   const executeConnectionCommands = useCallback(
     (connection: ConnectionConfig, targetTabId: string): void => {
@@ -252,7 +399,10 @@ function App(): React.JSX.Element {
         appendLog(
           {
             kind: 'error',
-            text: 'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
+            text:
+              locale === 'zh-CN'
+                ? 'SSH 需要 PTY 模式。当前终端是 PIPE 备用模式，请在 node-pty 可用后重启应用。'
+                : 'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
           },
           targetTabId
         )
@@ -270,14 +420,16 @@ function App(): React.JSX.Element {
         {
           kind: connection.actions?.length ? 'status' : 'error',
           text: connection.actions?.length
-            ? `Starting connection with ${connection.actions.length} login action${connection.actions.length === 1 ? '' : 's'}.`
-            : 'Starting SSH connection without login actions. Password prompts will wait for manual input.'
+            ? `${t.terminal.connectionStarting}: ${connection.actions.length}`
+            : t.terminal.connectionNoActions
         },
         targetTabId
       )
-      void runConnectionCommandSequence(commands, targetTabId, appendLog)
+      void runConnectionCommandSequence(commands, targetTabId, appendLog, t).then(() => {
+        drainPostConnectionTasks(targetTabId)
+      })
     },
-    [appendLog, updateTab]
+    [appendLog, drainPostConnectionTasks, locale, t, updateTab]
   )
 
   useEffect(() => {
@@ -287,6 +439,10 @@ function App(): React.JSX.Element {
   useEffect(() => {
     tabsRef.current = tabs
   }, [tabs])
+
+  useEffect(() => {
+    localStorage.setItem('crescent.locale', locale)
+  }, [locale])
 
   useEffect(() => {
     if (!tabMenu) return
@@ -300,6 +456,30 @@ function App(): React.JSX.Element {
       window.removeEventListener('blur', closeMenu)
     }
   }, [tabMenu])
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent): void => {
+      if (!splitDragRef.current) return
+
+      const width = window.innerWidth
+      const nextPercent = Math.max(35, Math.min(78, (event.clientX / width) * 100))
+      setTerminalPanePercent(nextPercent)
+      window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+    }
+    const handlePointerUp = (): void => {
+      splitDragRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
 
   const redrawPipeInput = useCallback((terminal: Terminal): void => {
     const buffer = pipeInputBufferRef.current
@@ -428,15 +608,19 @@ function App(): React.JSX.Element {
 
     window.api.agent
       .getConfig()
-      .then(setConfig)
+      .then((nextConfig) => {
+        setConfig(nextConfig)
+        setModels(flattenProviderModels(nextConfig.providers))
+        setSettingsProviderId(nextConfig.providers[0]?.id ?? 'nova-litellm')
+      })
       .catch((error) => {
-        writeLine(`\x1b[31mFailed to load config: ${String(error)}\x1b[0m`)
+        writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
       })
     window.api.agent
       .getModels()
       .then(setModels)
       .catch((error) => {
-        writeLine(`\x1b[31mFailed to load models: ${String(error)}\x1b[0m`)
+        writeLine(`\x1b[31m${failedToLoadModelsText}: ${String(error)}\x1b[0m`)
       })
     window.api.connections
       .list()
@@ -444,9 +628,9 @@ function App(): React.JSX.Element {
         setConnections(items)
       })
       .catch((error) => {
-        writeLine(`\x1b[31mFailed to load connections: ${String(error)}\x1b[0m`)
+        writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
       })
-  }, [writeLine])
+  }, [failedToLoadConfigText, failedToLoadConnectionsText, failedToLoadModelsText, writeLine])
 
   useEffect(() => {
     const unsubscribe = window.api.agent.onEvent((event) => {
@@ -496,8 +680,8 @@ function App(): React.JSX.Element {
     if (tab.terminalOutput) {
       terminal.write(tab.terminalOutput)
     } else {
-      terminal.writeln('\x1b[1mCrescent Shell\x1b[0m')
-      terminal.writeln('Starting local shell in your home directory...')
+      terminal.writeln(`\x1b[1m${t.terminal.shellTitle}\x1b[0m`)
+      terminal.writeln(t.terminal.shellIntro)
     }
 
     const terminalDataDisposable = terminal.onData((data) => {
@@ -525,7 +709,7 @@ function App(): React.JSX.Element {
     const stopTerminalExit = window.api.terminal.onExit((event) => {
       updateTab(event.tabId, (current) => ({ ...current, terminalReady: false }))
       if (event.tabId === activeTabIdRef.current) {
-        terminal.writeln(`\r\n\x1b[31mShell exited with code ${event.exitCode}.\x1b[0m`)
+        terminal.writeln(`\r\n\x1b[31m${t.terminal.shellExited} ${event.exitCode}.\x1b[0m`)
       }
     })
 
@@ -555,7 +739,7 @@ function App(): React.JSX.Element {
         terminalReady: true
       }))
       terminal.writeln(
-        `\r\n\x1b[2mTerminal mode: ${session.mode.toUpperCase()}${session.mode === 'pipe' ? ' (limited fallback; SSH/password prompts are disabled)' : ''}\x1b[0m`
+        `\r\n\x1b[2m${t.terminal.terminalMode}: ${session.mode.toUpperCase()}${session.mode === 'pipe' ? ` (${t.terminal.fallbackLimited})` : ''}\x1b[0m`
       )
       const pendingConnection = pendingSshRef.current.get(tab.id)
       if (pendingConnection) {
@@ -565,7 +749,7 @@ function App(): React.JSX.Element {
     }
 
     void startShell().catch((error) => {
-      terminal.writeln(`\r\n\x1b[31mFailed to start shell: ${String(error)}\x1b[0m`)
+      terminal.writeln(`\r\n\x1b[31m${t.terminal.failedToStartShell}: ${String(error)}\x1b[0m`)
     })
 
     const resizeObserver = new ResizeObserver(() => {
@@ -591,13 +775,25 @@ function App(): React.JSX.Element {
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [activeTabId, appendLog, executeConnectionCommands, handlePipeTerminalInput, updateTab])
+  }, [activeTabId, appendLog, executeConnectionCommands, handlePipeTerminalInput, t, updateTab])
 
   async function saveConfig(): Promise<void> {
-    const nextConfig = await window.api.agent.saveConfig(config)
-    setConfig(nextConfig)
+    await saveAgentConfig(config)
     setSaved(true)
     setTimeout(() => setSaved(false), 1400)
+  }
+
+  async function saveAgentConfig(nextConfigInput: AgentConfig): Promise<AgentConfig> {
+    const nextConfig = await window.api.agent.saveConfig(nextConfigInput)
+    setConfig(nextConfig)
+    setModels(flattenProviderModels(nextConfig.providers))
+    setSettingsProviderId(
+      (current) =>
+        nextConfig.providers.find((provider) => provider.id === current)?.id ??
+        nextConfig.providers[0]?.id ??
+        'nova-litellm'
+    )
+    return nextConfig
   }
 
   async function validateConfig(): Promise<void> {
@@ -610,6 +806,23 @@ function App(): React.JSX.Element {
     } finally {
       setValidating(false)
     }
+  }
+
+  async function applyModel(modelId: string): Promise<void> {
+    await saveAgentConfig({ ...config, model: modelId })
+  }
+
+  async function applyProvider(providerId: string): Promise<void> {
+    const nextModel = visibleModels.find((model) => model.providerId === providerId)
+    if (nextModel) await applyModel(nextModel.id)
+  }
+
+  function stopAgentRun(tabId = activeTabIdRef.current): void {
+    activeRunCanceledRef.current.add(tabId)
+    const runId = activeRunIdRef.current.get(tabId)
+    if (runId) void window.api.agent.cancel(runId)
+    updateAgentRun(tabId, (run) => ({ ...run, error: t.input.agentCanceled }))
+    updateTab(tabId, (tab) => ({ ...tab, agentBusy: false }))
   }
 
   async function getTerminalContextForAgent(): Promise<string> {
@@ -627,7 +840,7 @@ function App(): React.JSX.Element {
       .join('\n')
   }
 
-  function connectToConnection(connection: ConnectionConfig): void {
+  function connectToConnection(connection: ConnectionConfig, postLoginInput?: string): string {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
     let targetTabId = currentTab?.id ?? 'default'
 
@@ -643,11 +856,46 @@ function App(): React.JSX.Element {
       setActiveTabId(nextTab.id)
     }
 
+    if (postLoginInput) {
+      const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
+      postConnectionTasksRef.current.set(targetTabId, [
+        ...tasks,
+        { input: postLoginInput, connection }
+      ])
+    }
+
     const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
     if (targetTab?.sessionId) {
       executeConnectionCommands(connection, targetTabId)
     } else {
       pendingSshRef.current.set(targetTabId, connection)
+    }
+
+    return targetTabId
+  }
+
+  async function findConnectionForIntent(
+    intent: ConnectionIntent
+  ): Promise<ConnectionConfig | undefined> {
+    let candidates = connections
+
+    try {
+      candidates = await window.api.connections.list()
+      setConnections(candidates)
+    } catch {
+      candidates = connections
+    }
+
+    const localMatch = matchConnectionIntent(intent, candidates)
+    if (localMatch) return localMatch
+
+    try {
+      const resolved = await window.api.agent.resolveConnectionIntent({ input: intent.original })
+      if (!resolved.ok || !resolved.connectionId) return undefined
+
+      return candidates.find((connection) => connection.id === resolved.connectionId)
+    } catch {
+      return undefined
     }
   }
 
@@ -680,6 +928,8 @@ function App(): React.JSX.Element {
   }
 
   async function deleteConnection(id: string): Promise<void> {
+    if (!window.confirm(t.confirm.deleteConnection)) return
+
     const nextConnections = await window.api.connections.delete(id)
     setConnections(nextConnections)
     if (connectionForm.id === id) resetConnectionForm()
@@ -691,33 +941,149 @@ function App(): React.JSX.Element {
     const tabId = activeTabIdRef.current
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
     const input = tab?.agentInput.trim() ?? ''
-    if (!input || tab?.agentBusy) return
+    if (!input) return
 
+    if (tab?.agentBusy) {
+      updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+      const runId = activeRunIdRef.current.get(tabId)
+      if (runId) void window.api.agent.supplement({ runId, input })
+      updateAgentRun(tabId, (run) => ({
+        ...run,
+        actions: [
+          ...run.actions,
+          {
+            title: t.input.contextSupplement,
+            detail: `${t.input.contextSupplementDetail}\n${input}`
+          }
+        ]
+      }))
+      return
+    }
+
+    updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+    const connectionIntent = parseConnectionIntent(input)
+    if (connectionIntent) {
+      const matchedConnection = await findConnectionForIntent(connectionIntent)
+
+      if (!matchedConnection) {
+        if (!connectionIntent.explicit) {
+          await runAgentConversation(input, tabId, tab?.connectionId || undefined)
+          return
+        }
+
+        appendLog({ kind: 'user', text: input }, tabId)
+        appendLog(
+          {
+            kind: 'assistant',
+            text: formatAgentRunMarkdown(
+              {
+                logId: -1,
+                actions: [
+                  {
+                    title: t.terminal.connectionMatched,
+                    detail: connectionIntent.query
+                  }
+                ],
+                error: t.terminal.connectionNoMatch
+              },
+              t
+            )
+          },
+          tabId
+        )
+        updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+        return
+      }
+
+      if (!connectionIntent.executeAfterLogin) appendLog({ kind: 'user', text: input }, tabId)
+      appendLog(
+        {
+          kind: 'assistant',
+          text: formatAgentRunMarkdown(
+            {
+              logId: -1,
+              actions: [
+                {
+                  title: t.terminal.connectionMatched,
+                  detail: `${matchedConnection.name}\n${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`
+                }
+              ],
+              result: t.terminal.connectionIntentResult
+            },
+            t
+          )
+        },
+        tabId
+      )
+      connectToConnection(matchedConnection, connectionIntent.executeAfterLogin ? input : undefined)
+      updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+      return
+    }
+
+    await runAgentConversation(input, tabId, tab?.connectionId || undefined)
+  }
+
+  async function runAgentConversation(
+    input: string,
+    tabId: string,
+    connectionId?: string
+  ): Promise<void> {
     updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: true }))
+    activeRunCanceledRef.current.delete(tabId)
+    const runId = `run-${crypto.randomUUID()}`
+    activeRunIdRef.current.set(tabId, runId)
     appendLog({ kind: 'user', text: input }, tabId)
+    const runLogId = appendLog(
+      {
+        kind: 'assistant',
+        text: formatAgentRunMarkdown(
+          {
+            logId: -1,
+            actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }]
+          },
+          t
+        )
+      },
+      tabId
+    )
+    activeAgentRunRef.current.set(tabId, {
+      logId: runLogId,
+      actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }]
+    })
 
     try {
       const terminalContext = await getTerminalContextForAgent()
       const result = await window.api.agent.run({
+        runId,
         input,
         terminalContext,
-        connectionId: tab?.connectionId || undefined,
+        connectionId,
         tabId
       })
 
+      if (activeRunCanceledRef.current.has(tabId)) return
+
       if (result.ok) {
-        const text = result.text || 'Done.'
-        appendLog({ kind: 'assistant', text }, tabId)
+        const text = result.text || t.input.done
+        updateAgentRun(tabId, (run) => ({ ...run, result: text }))
       } else {
-        appendLog({ kind: 'error', text: result.error || 'Agent run failed.' }, tabId)
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          error: result.error || t.input.failed
+        }))
       }
     } catch (error) {
-      appendLog(
-        { kind: 'error', text: error instanceof Error ? error.message : String(error) },
-        tabId
-      )
+      if (activeRunCanceledRef.current.has(tabId)) return
+
+      updateAgentRun(tabId, (run) => ({
+        ...run,
+        error: error instanceof Error ? error.message : String(error)
+      }))
     } finally {
-      updateTab(tabId, (current) => ({ ...current, agentBusy: false }))
+      activeAgentRunRef.current.delete(tabId)
+      activeRunCanceledRef.current.delete(tabId)
+      activeRunIdRef.current.delete(tabId)
+      updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: false }))
     }
   }
 
@@ -730,6 +1096,42 @@ function App(): React.JSX.Element {
 
   function updateConfig<K extends keyof AgentConfig>(key: K, value: AgentConfig[K]): void {
     setConfig((current) => ({ ...current, [key]: value }))
+    setValidation(undefined)
+  }
+
+  function updateSettingsProvider<K extends keyof AgentProviderConfig>(
+    key: K,
+    value: AgentProviderConfig[K]
+  ): void {
+    const nextProviderId = key === 'id' ? String(value) : settingsProviderId
+
+    setConfig((current) => {
+      const providers = current.providers.map((provider) =>
+        provider.id === settingsProvider.id ? { ...provider, [key]: value } : provider
+      )
+
+      return { ...current, providers }
+    })
+    if (key === 'id') setSettingsProviderId(nextProviderId)
+    setValidation(undefined)
+  }
+
+  function updateSettingsProviderModels(value: string): void {
+    updateSettingsProvider('models', parseProviderModels(value))
+  }
+
+  function createProvider(): void {
+    const id = `provider-${Date.now()}`
+    const provider: AgentProviderConfig = {
+      id,
+      name: id,
+      baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
+      apiKey: '',
+      models: []
+    }
+
+    setConfig((current) => ({ ...current, providers: [...current.providers, provider] }))
+    setSettingsProviderId(id)
     setValidation(undefined)
   }
 
@@ -774,9 +1176,12 @@ function App(): React.JSX.Element {
     })
     setConnectionSshOptionsText('')
     setConnectionActionsText('')
+    setConnectionImportText('')
+    setSelectedConnectionId('')
+    setConnectionEditing(true)
   }
 
-  function editConnection(connection: ConnectionConfig): void {
+  function loadConnectionIntoForm(connection: ConnectionConfig, editing: boolean): void {
     setConnectionForm({
       id: connection.id,
       name: connection.name,
@@ -790,10 +1195,77 @@ function App(): React.JSX.Element {
     })
     setConnectionSshOptionsText(connection.sshOptions?.join('\n') ?? '')
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
+    setSelectedConnectionId(connection.id)
+    setConnectionEditing(editing)
+  }
+
+  function selectConnection(connection: ConnectionConfig): void {
+    loadConnectionIntoForm(connection, false)
+  }
+
+  function editConnection(connection: ConnectionConfig): void {
+    loadConnectionIntoForm(connection, true)
+  }
+
+  function duplicateConnection(connection: ConnectionConfig): void {
+    const name = `${connection.name} copy`
+    setConnectionForm({
+      name,
+      host: connection.host,
+      user: connection.user,
+      port: connection.port ?? 22,
+      identityFile: connection.identityFile,
+      sshOptions: connection.sshOptions,
+      description: connection.description,
+      actions: connection.actions
+    })
+    setConnectionSshOptionsText(connection.sshOptions?.join('\n') ?? '')
+    setConnectionActionsText(connection.actions?.join('\n') ?? '')
+    setSelectedConnectionId('')
+    setConnectionEditing(true)
+  }
+
+  async function copyConnection(connection: ConnectionConfig): Promise<void> {
+    const value: ConnectionInput = {
+      name: connection.name,
+      host: connection.host,
+      user: connection.user,
+      port: connection.port,
+      identityFile: connection.identityFile,
+      sshOptions: connection.sshOptions,
+      description: connection.description,
+      actions: connection.actions
+    }
+
+    await copyText(JSON.stringify(value, null, 2))
+  }
+
+  function importConnectionFromText(): void {
+    try {
+      const parsed = JSON.parse(connectionImportText) as Partial<ConnectionInput>
+      setConnectionForm({
+        name: parsed.name ? `${parsed.name} copy` : '',
+        host: String(parsed.host ?? ''),
+        user: parsed.user,
+        port: parsed.port ?? 22,
+        identityFile: parsed.identityFile,
+        sshOptions: parsed.sshOptions,
+        description: parsed.description,
+        actions: parsed.actions
+      })
+      setConnectionSshOptionsText(parsed.sshOptions?.join('\n') ?? '')
+      setConnectionActionsText(parsed.actions?.join('\n') ?? '')
+      setConnectionImportText('')
+      setSelectedConnectionId('')
+      setConnectionEditing(true)
+    } catch {
+      setConnectionImportText((current) => current)
+    }
   }
 
   function closeTab(tabId: string): void {
     if (tabId === 'default') return
+    if (!window.confirm(t.confirm.closeTab)) return
 
     window.api.terminal.stop(tabId)
     pendingSshRef.current.delete(tabId)
@@ -809,15 +1281,19 @@ function App(): React.JSX.Element {
   }
 
   function closeOtherTabs(tabId: string): void {
-    const keepIds = new Set(['default', tabId])
+    if (!window.confirm(t.confirm.closeOtherTabs)) return
+
     for (const tab of tabsRef.current) {
-      if (!keepIds.has(tab.id)) {
+      if (tab.id !== tabId) {
         window.api.terminal.stop(tab.id)
         pendingSshRef.current.delete(tab.id)
       }
     }
 
-    setTabs((current) => current.filter((tab) => keepIds.has(tab.id)))
+    setTabs((current) => {
+      const keepTab = current.find((tab) => tab.id === tabId)
+      return keepTab ? [keepTab] : [createTerminalTab({ id: 'default', title: 'Local' })]
+    })
     setActiveTabId(tabId)
     setTabMenu(null)
   }
@@ -843,79 +1319,143 @@ function App(): React.JSX.Element {
           </div>
           <div className="flex flex-col leading-tight">
             <span className="text-sm font-semibold">Crescent</span>
-            <span className="text-xs text-muted-foreground">
-              Terminal + SSH + AI command workbench
-            </span>
+            <span className="text-xs text-muted-foreground">{t.app.titleDescription}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant={configured ? 'secondary' : 'outline'}>
-            {config.model.trim() ? 'AI ready' : 'Needs model'}
-          </Badge>
+          <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
+            <SelectTrigger className="h-8 w-28">
+              <SelectValue aria-label={t.app.language} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel>{t.app.language}</SelectLabel>
+                {localeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm">
                 <SettingsIcon data-icon="inline-start" />
-                Settings
+                {t.common.settings}
               </Button>
             </SheetTrigger>
             <SheetContent className="w-full sm:max-w-xl">
               <SheetHeader>
-                <SheetTitle>Agent settings</SheetTitle>
-                <SheetDescription>
-                  Configure the model provider and the OpenAPI document used to generate tools.
-                </SheetDescription>
+                <SheetTitle>{t.settings.title}</SheetTitle>
+                <SheetDescription>{t.settings.titleDescription}</SheetDescription>
               </SheetHeader>
               <div className="min-h-0 flex-1 overflow-auto px-4">
                 <FieldGroup>
                   <Field>
-                    <FieldLabel htmlFor="open-ai-api-key">OpenAI API key</FieldLabel>
-                    <Input
-                      id="open-ai-api-key"
-                      type="password"
-                      value={config.openAiApiKey}
-                      onChange={(event) => updateConfig('openAiApiKey', event.target.value)}
-                      placeholder="sk-... or leave blank when env key is available"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="open-ai-base-url">OpenAI-compatible base URL</FieldLabel>
-                    <Input
-                      id="open-ai-base-url"
-                      value={config.openAiBaseUrl}
-                      onChange={(event) => updateConfig('openAiBaseUrl', event.target.value)}
-                      placeholder="https://api.openai.com/v1"
-                    />
-                    <FieldDescription>
-                      Leave blank to use the selected built-in provider default.
-                    </FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="model">Model</FieldLabel>
+                    <div className="flex items-center justify-between gap-2">
+                      <FieldLabel htmlFor="provider">{t.settings.providerList}</FieldLabel>
+                      <Button type="button" variant="outline" size="sm" onClick={createProvider}>
+                        <PlusIcon data-icon="inline-start" />
+                        {t.settings.newProvider}
+                      </Button>
+                    </div>
                     <Select
-                      value={config.model}
-                      onValueChange={(value) => updateConfig('model', value)}
+                      value={settingsProvider.id}
+                      onValueChange={(value) => setSettingsProviderId(value)}
                     >
-                      <SelectTrigger id="model" className="w-full">
-                        <SelectValue placeholder="Select a model" />
+                      <SelectTrigger id="provider" className="w-full">
+                        <SelectValue placeholder={t.settings.providerList} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          <SelectLabel>OpenClaw-compatible defaults</SelectLabel>
-                          {models.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              {model.name} · {model.providerId}
+                          <SelectLabel>{t.settings.providerList}</SelectLabel>
+                          {config.providers.map((provider) => (
+                            <SelectItem key={provider.id} value={provider.id}>
+                              {provider.name || provider.id}
                             </SelectItem>
                           ))}
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <FieldDescription>
-                      Defaults mirror the OpenClaw provider layout; API keys stay local.
-                    </FieldDescription>
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field>
+                      <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
+                      <Input
+                        id="provider-id"
+                        value={settingsProvider.id}
+                        onChange={(event) => updateSettingsProvider('id', event.target.value)}
+                        placeholder="nova-litellm"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="provider-name">{t.settings.providerName}</FieldLabel>
+                      <Input
+                        id="provider-name"
+                        value={settingsProvider.name}
+                        onChange={(event) => updateSettingsProvider('name', event.target.value)}
+                        placeholder="Nova LiteLLM"
+                      />
+                    </Field>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="provider-base-url">{t.settings.baseUrl}</FieldLabel>
+                    <Input
+                      id="provider-base-url"
+                      value={settingsProvider.baseUrl}
+                      onChange={(event) => updateSettingsProvider('baseUrl', event.target.value)}
+                      placeholder="http://nova.dmxwg.yiducloud.cn/litellm"
+                    />
+                    <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
                   </Field>
                   <Field>
-                    <FieldLabel>Agent mode</FieldLabel>
+                    <FieldLabel htmlFor="provider-api-key">{t.settings.apiKey}</FieldLabel>
+                    <Input
+                      id="provider-api-key"
+                      type="password"
+                      value={settingsProvider.apiKey ?? ''}
+                      onChange={(event) => updateSettingsProvider('apiKey', event.target.value)}
+                      placeholder="sk-... or leave blank when env key is available"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="provider-models">{t.settings.providerModels}</FieldLabel>
+                    <Textarea
+                      id="provider-models"
+                      className="min-h-28 resize-y font-mono text-xs"
+                      value={settingsProviderModelsText}
+                      onChange={(event) => updateSettingsProviderModels(event.target.value)}
+                      placeholder={
+                        'azure/gpt-5.4\nazure/gpt-5.5\nbailian/glm-5-1\nbailian/qwen3.6-plus'
+                      }
+                    />
+                    <FieldDescription>{t.settings.modelListHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
+                    <Select
+                      value={config.model}
+                      onValueChange={(value) => updateConfig('model', value)}
+                    >
+                      <SelectTrigger id="model" className="w-full">
+                        <SelectValue placeholder={t.settings.selectModel} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>{t.settings.modelGroup}</SelectLabel>
+                          {modelOptions.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.name} · {model.providerName}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>{t.settings.modelHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t.settings.agentMode}</FieldLabel>
                     <ToggleGroup
                       type="single"
                       value={config.agentMode}
@@ -929,12 +1469,12 @@ function App(): React.JSX.Element {
                       <ToggleGroupItem value="react">ReAct</ToggleGroupItem>
                       <ToggleGroupItem value="plan-execute">Plan-and-Execute</ToggleGroupItem>
                     </ToggleGroup>
-                    <FieldDescription>
-                      Use Plan-and-Execute for longer workflows that may need replanning.
-                    </FieldDescription>
+                    <FieldDescription>{t.settings.planExecuteHint}</FieldDescription>
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor="max-active-tools">Dynamic tool limit</FieldLabel>
+                    <FieldLabel htmlFor="max-active-tools">
+                      {t.settings.dynamicToolLimit}
+                    </FieldLabel>
                     <Input
                       id="max-active-tools"
                       type="number"
@@ -945,13 +1485,11 @@ function App(): React.JSX.Element {
                         updateConfig('maxActiveTools', Number(event.target.value))
                       }
                     />
-                    <FieldDescription>
-                      Only the most relevant OpenAPI tools are sent to the model.
-                    </FieldDescription>
+                    <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
                   </Field>
                   <Separator />
                   <Field>
-                    <FieldLabel htmlFor="open-api-base-url">REST API base URL</FieldLabel>
+                    <FieldLabel htmlFor="open-api-base-url">{t.settings.openApiBaseUrl}</FieldLabel>
                     <Input
                       id="open-api-base-url"
                       value={config.openApiBaseUrl}
@@ -960,7 +1498,7 @@ function App(): React.JSX.Element {
                     />
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor="open-api-document">OpenAPI URL or JSON</FieldLabel>
+                    <FieldLabel htmlFor="open-api-document">{t.settings.document}</FieldLabel>
                     <Textarea
                       id="open-api-document"
                       className="min-h-48 resize-none font-mono text-xs"
@@ -974,7 +1512,7 @@ function App(): React.JSX.Element {
                       {validation.ok ? (
                         <div className="space-y-2">
                           <p className="font-medium text-green-400">
-                            Loaded {validation.toolCount} OpenAPI tools.
+                            {t.settings.selectedTools}: {validation.toolCount}
                           </p>
                           <div className="space-y-1 text-muted-foreground">
                             {validation.tools?.map((tool) => (
@@ -1003,7 +1541,7 @@ function App(): React.JSX.Element {
                   ) : (
                     <TestTube2Icon data-icon="inline-start" />
                   )}
-                  {validating ? 'Validating' : 'Validate tools'}
+                  {validating ? t.settings.validating : t.settings.validateTools}
                 </Button>
                 <Button onClick={saveConfig}>
                   {saved ? (
@@ -1011,15 +1549,18 @@ function App(): React.JSX.Element {
                   ) : (
                     <BotIcon data-icon="inline-start" />
                   )}
-                  {saved ? 'Saved' : 'Save settings'}
+                  {saved ? t.settings.saved : t.settings.saveSettings}
                 </Button>
               </SheetFooter>
             </SheetContent>
           </Sheet>
         </div>
       </header>
-      <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-        <div className="flex min-h-0 flex-col border-r bg-[#111111]">
+      <section className="flex min-h-0 flex-1">
+        <div
+          className="flex min-h-0 min-w-[35%] flex-col bg-[#111111]"
+          style={{ width: `${terminalPanePercent}%` }}
+        >
           <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
             {tabs.map((tab) => (
               <button
@@ -1039,8 +1580,8 @@ function App(): React.JSX.Element {
               type="button"
               variant="ghost"
               size="icon-xs"
-              aria-label="Add SSH connection"
-              title="Add SSH connection"
+              aria-label={t.connections.sshConnections}
+              title={t.connections.sshConnections}
               onClick={() => setConnectionModalOpen(true)}
             >
               <PlusIcon aria-hidden="true" />
@@ -1053,39 +1594,51 @@ function App(): React.JSX.Element {
               >
                 <button
                   type="button"
-                  className="block w-full rounded px-2 py-1.5 text-left hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={tabMenu.tabId === 'default'}
                   onClick={() => closeTab(tabMenu.tabId)}
                 >
-                  Close tab
+                  {t.common.closeTab}
                 </button>
                 <button
                   type="button"
-                  className="block w-full rounded px-2 py-1.5 text-left hover:bg-accent"
+                  className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
                   onClick={() => closeOtherTabs(tabMenu.tabId)}
                 >
-                  Close other tabs
+                  {t.common.closeOtherTabs}
                 </button>
               </div>
             )}
           </div>
           <div ref={terminalHostRef} className="h-full min-h-0" />
         </div>
-        <aside className="flex min-h-0 flex-col bg-card">
+        <div
+          className="w-1.5 shrink-0 cursor-col-resize border-x border-border bg-muted/30 hover:bg-primary/40"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={
+            locale === 'zh-CN' ? '调整终端和对话区域宽度' : 'Resize terminal and chat panes'
+          }
+          onPointerDown={(event) => {
+            event.preventDefault()
+            splitDragRef.current = true
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+          }}
+        />
+        <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
           <div className="border-b p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold">Agent run panel</h2>
-                <p className="text-xs text-muted-foreground">
-                  Chat with AI, generate shell commands, and inject them into the terminal.
-                </p>
+                <h2 className="text-sm font-semibold">{t.app.chatTitle}</h2>
+                <p className="text-xs text-muted-foreground">{t.app.chatSubtitle}</p>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant={activeTab.terminalMode === 'pty' ? 'secondary' : 'destructive'}>
                   {activeTab.terminalMode.toUpperCase()}
                 </Badge>
                 <Badge variant={activeTab.agentBusy ? 'secondary' : 'outline'}>
-                  {activeTab.agentBusy ? 'Running' : config.agentMode}
+                  {activeTab.agentBusy ? t.app.running : formatAgentMode(config.agentMode)}
                 </Badge>
               </div>
             </div>
@@ -1096,7 +1649,7 @@ function App(): React.JSX.Element {
                 <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="font-medium uppercase tracking-wide">
-                      {logRoleLabel(entry.kind)}
+                      {logRoleLabel(entry.kind, t)}
                     </span>
                     <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
                   </div>
@@ -1104,8 +1657,8 @@ function App(): React.JSX.Element {
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Copy message"
-                    title="Copy message"
+                    aria-label={t.common.copy}
+                    title={t.common.copy}
                     onClick={() => copyLogEntry(entry)}
                   >
                     {activeTab.copiedLogId === entry.id ? (
@@ -1116,11 +1669,60 @@ function App(): React.JSX.Element {
                   </Button>
                 </div>
                 <MarkdownContent value={entry.text} />
+                <div className="mt-3 flex justify-end border-t pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t.common.copyMarkdown}
+                    title={t.common.copyMarkdown}
+                    onClick={() => copyLogEntry(entry)}
+                  >
+                    {activeTab.copiedLogId === entry.id ? (
+                      <CheckIcon data-icon="inline-start" />
+                    ) : (
+                      <CopyIcon data-icon="inline-start" />
+                    )}
+                    {activeTab.copiedLogId === entry.id ? t.common.copied : t.common.copyMarkdown}
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
           <div className="space-y-3 border-t p-4">
             <form onSubmit={submitAgent} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Select value={activeProviderId} onValueChange={applyProvider}>
+                  <SelectTrigger className="h-8 min-w-0 flex-1">
+                    <SelectValue aria-label={t.app.provider} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t.app.provider}</SelectLabel>
+                      {providerOptions.map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          {provider.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Select value={config.model} onValueChange={applyModel}>
+                  <SelectTrigger className="h-8 min-w-0 flex-1">
+                    <SelectValue aria-label={t.app.model} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t.app.model}</SelectLabel>
+                      {(filteredModels.length ? filteredModels : visibleModels).map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="rounded-lg border bg-background p-2 shadow-sm">
                 <Textarea
                   value={activeTab.agentInput}
@@ -1128,24 +1730,31 @@ function App(): React.JSX.Element {
                     updateTab(activeTab.id, (tab) => ({ ...tab, agentInput: event.target.value }))
                   }
                   onKeyDown={handleAgentInputKeyDown}
-                  placeholder="Ask AI, or type /command check disk usage in the current terminal"
+                  placeholder={t.input.askPlaceholder}
                   className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
-                  disabled={activeTab.agentBusy}
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
-                  <span>Commands run through the agent in the current terminal.</span>
+                  <span>{activeTab.agentBusy ? t.input.contextHint : t.input.currentTerminal}</span>
                   <div className="flex items-center gap-2">
-                    <span>
-                      {configured ? 'Tools configured' : 'Chat works without OpenAPI tools'}
-                    </span>
+                    <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
+                    {activeTab.agentBusy && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => stopAgentRun()}
+                      >
+                        {t.common.stop}
+                      </Button>
+                    )}
                     <Button
                       type="submit"
                       size="icon"
-                      aria-label="Send message"
-                      disabled={activeTab.agentBusy || !activeTab.agentInput.trim()}
+                      aria-label={activeTab.agentBusy ? t.input.contextAdd : t.common.send}
+                      disabled={!activeTab.agentInput.trim()}
                     >
                       {activeTab.agentBusy ? (
-                        <Loader2Icon className="animate-spin" aria-hidden="true" />
+                        <PlusIcon aria-hidden="true" />
                       ) : (
                         <ArrowUpIcon aria-hidden="true" />
                       )}
@@ -1171,10 +1780,10 @@ function App(): React.JSX.Element {
             <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
               <div>
                 <h2 id="connection-modal-title" className="text-sm font-semibold">
-                  SSH connections
+                  {t.connections.sshConnections}
                 </h2>
                 <p className="text-xs text-muted-foreground">
-                  Choose an existing connection or create a custom command sequence.
+                  {t.connections.sshConnectionsDescription}
                 </p>
               </div>
               <Button
@@ -1183,25 +1792,31 @@ function App(): React.JSX.Element {
                 size="sm"
                 onClick={() => setConnectionModalOpen(false)}
               >
-                Close
+                {t.common.close}
               </Button>
             </div>
             <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,0.9fr)_minmax(360px,1.1fr)] overflow-hidden">
               <div className="min-h-0 overflow-auto border-r p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                    Existing
+                    {t.connections.existing}
                   </h3>
                   <Badge variant="outline">{connections.length}</Badge>
                 </div>
                 <div className="space-y-2">
                   {connections.length === 0 ? (
                     <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                      No connections found.
+                      {t.connections.noConnections}
                     </p>
                   ) : (
                     connections.map((connection) => (
-                      <div key={connection.id} className="rounded-md border bg-card p-3 text-xs">
+                      <div
+                        key={connection.id}
+                        className={`rounded-md border bg-card p-3 text-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md ${selectedConnectionId === connection.id ? 'border-primary/70 shadow-lg shadow-primary/10 ring-1 ring-primary/30' : ''}`}
+                        onClick={() => {
+                          if (connection.source === 'custom') selectConnection(connection)
+                        }}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate font-medium">{connection.name}</p>
@@ -1215,8 +1830,8 @@ function App(): React.JSX.Element {
                             </p>
                             {connection.source === 'custom' && (
                               <p className="truncate text-muted-foreground">
-                                {connection.sshOptions?.length || 0} SSH options ·{' '}
-                                {connection.actions?.length || 0} login actions
+                                {connection.sshOptions?.length || 0} {t.connections.sshOptionsCount}{' '}
+                                · {connection.actions?.length || 0} {t.connections.actionsCount}
                               </p>
                             )}
                           </div>
@@ -1224,32 +1839,62 @@ function App(): React.JSX.Element {
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => {
+                            onClick={(event) => {
+                              event.stopPropagation()
                               connectToConnection(connection)
                               setConnectionModalOpen(false)
                             }}
                           >
                             <ServerIcon data-icon="inline-start" />
-                            Connect
+                            {t.connections.connect}
                           </Button>
                         </div>
                         {connection.source === 'custom' && (
-                          <div className="mt-2 flex items-center gap-2">
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
-                              onClick={() => editConnection(connection)}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                copyConnection(connection)
+                              }}
                             >
-                              Edit
+                              <CopyIcon data-icon="inline-start" />
+                              {t.common.copy}
                             </Button>
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
-                              onClick={() => deleteConnection(connection.id)}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                duplicateConnection(connection)
+                              }}
                             >
-                              Delete
+                              {t.common.duplicate}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                editConnection(connection)
+                              }}
+                            >
+                              {t.common.edit}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                deleteConnection(connection.id)
+                              }}
+                            >
+                              {t.common.delete}
                             </Button>
                           </div>
                         )}
@@ -1261,24 +1906,46 @@ function App(): React.JSX.Element {
               <div className="min-h-0 overflow-auto p-4">
                 <FieldGroup>
                   <Field>
-                    <FieldLabel>Custom connection name</FieldLabel>
+                    <FieldLabel>{t.connections.copiedConnection}</FieldLabel>
+                    <Textarea
+                      className="min-h-20 resize-y font-mono text-xs"
+                      value={connectionImportText}
+                      onChange={(event) => setConnectionImportText(event.target.value)}
+                      placeholder={t.connections.copiedConnectionPlaceholder}
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={importConnectionFromText}
+                        disabled={!connectionImportText.trim()}
+                      >
+                        {t.connections.importAsNew}
+                      </Button>
+                    </div>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t.connections.customConnectionName}</FieldLabel>
                     <Input
                       value={connectionForm.name}
                       onChange={(event) => updateConnectionForm('name', event.target.value)}
-                      placeholder="production"
+                      placeholder={t.connections.namePlaceholder}
+                      disabled={!connectionEditing}
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-2">
                     <Field>
-                      <FieldLabel>Host</FieldLabel>
+                      <FieldLabel>{t.connections.host}</FieldLabel>
                       <Input
                         value={connectionForm.host}
                         onChange={(event) => updateConnectionForm('host', event.target.value)}
                         placeholder="10.0.0.8"
+                        disabled={!connectionEditing}
                       />
                     </Field>
                     <Field>
-                      <FieldLabel>Port</FieldLabel>
+                      <FieldLabel>{t.connections.port}</FieldLabel>
                       <Input
                         type="number"
                         value={connectionForm.port ?? 22}
@@ -1286,39 +1953,40 @@ function App(): React.JSX.Element {
                           updateConnectionForm('port', Number(event.target.value))
                         }
                         placeholder="22"
+                        disabled={!connectionEditing}
                       />
                     </Field>
                   </div>
                   <Field>
-                    <FieldLabel>User</FieldLabel>
+                    <FieldLabel>{t.connections.user}</FieldLabel>
                     <Input
                       value={connectionForm.user ?? ''}
                       onChange={(event) => updateConnectionForm('user', event.target.value)}
                       placeholder="root"
+                      disabled={!connectionEditing}
                     />
                   </Field>
                   <Field>
-                    <FieldLabel>Identity file</FieldLabel>
+                    <FieldLabel>{t.connections.identityFile}</FieldLabel>
                     <Input
                       value={connectionForm.identityFile ?? ''}
                       onChange={(event) => updateConnectionForm('identityFile', event.target.value)}
                       placeholder="~/.ssh/id_rsa"
+                      disabled={!connectionEditing}
                     />
                   </Field>
                   <Field>
-                    <FieldLabel>SSH options</FieldLabel>
+                    <FieldLabel>{t.connections.sshOptions}</FieldLabel>
                     <Textarea
                       className="min-h-28 resize-y font-mono text-xs"
                       value={connectionSshOptionsText}
                       onChange={(event) => setConnectionSshOptionsText(event.target.value)}
+                      disabled={!connectionEditing}
                       placeholder={
                         '-o HostKeyAlgorithms=+ssh-rsa\n-o PubkeyAcceptedAlgorithms=+ssh-rsa\n-t\n-o PreferredAuthentications=keyboard-interactive,password\n-o PubkeyAuthentication=no'
                       }
                     />
-                    <FieldDescription>
-                      One SSH argument per line. Crescent appends these to the generated ssh command
-                      before the host.
-                    </FieldDescription>
+                    <FieldDescription>{t.connections.sshOptionsDescription}</FieldDescription>
                     {connectionCommandPreview && (
                       <pre className="overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs text-muted-foreground">
                         {connectionCommandPreview}
@@ -1326,27 +1994,26 @@ function App(): React.JSX.Element {
                     )}
                   </Field>
                   <Field>
-                    <FieldLabel>Login actions</FieldLabel>
+                    <FieldLabel>{t.connections.loginActions}</FieldLabel>
                     <Textarea
                       className="min-h-32 resize-y font-mono text-xs"
                       value={connectionActionsText}
                       onChange={(event) => setConnectionActionsText(event.target.value)}
+                      disabled={!connectionEditing}
                       placeholder={'your_password\ncd /srv/app\nkubectl get pods'}
                     />
-                    <FieldDescription>
-                      One line per terminal input after ssh starts, such as password, confirmation,
-                      or commands after login.
-                    </FieldDescription>
+                    <FieldDescription>{t.connections.loginActionsDescription}</FieldDescription>
                   </Field>
                   <Field>
-                    <FieldLabel>Description</FieldLabel>
+                    <FieldLabel>{t.connections.description}</FieldLabel>
                     <Input
                       value={connectionForm.description ?? ''}
                       onChange={(event) => updateConnectionForm('description', event.target.value)}
-                      placeholder="Optional note"
+                      placeholder={t.connections.descriptionPlaceholder}
+                      disabled={!connectionEditing}
                     />
                     <FieldDescription>
-                      Custom connections are stored in ~/.crescent/config.json.
+                      {connectionEditing ? t.connections.storedIn : t.connections.readOnlyHint}
                     </FieldDescription>
                   </Field>
                 </FieldGroup>
@@ -1354,24 +2021,33 @@ function App(): React.JSX.Element {
             </div>
             <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-3">
               <Button type="button" variant="outline" onClick={resetConnectionForm}>
-                Clear
+                {t.common.new}
               </Button>
               <div className="flex items-center gap-2">
+                {!connectionEditing && connectionForm.id && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setConnectionEditing(true)}
+                  >
+                    {t.common.edit}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => saveConnection(false)}
-                  disabled={!connectionFormReady}
+                  disabled={!connectionEditing || !connectionFormReady}
                 >
-                  Save
+                  {t.common.save}
                 </Button>
                 <Button
                   type="button"
                   onClick={() => saveConnection(true)}
-                  disabled={!connectionFormReady}
+                  disabled={!connectionEditing || !connectionFormReady}
                 >
                   <ServerIcon data-icon="inline-start" />
-                  Save and connect
+                  {t.common.saveAndConnect}
                 </Button>
               </div>
             </div>
@@ -1379,12 +2055,24 @@ function App(): React.JSX.Element {
         </div>
       )}
       <footer className="flex h-9 shrink-0 items-center justify-between border-t px-4 text-xs text-muted-foreground">
-        <span>Shell cwd: {activeTab.terminalCwd || 'starting...'}</span>
         <span className="inline-flex items-center gap-2">
-          {!activeTab.terminalReady && <Loader2Icon className="animate-spin" aria-hidden="true" />}
-          {activeTab.terminalReady
-            ? `Shell ready · ${activeTab.terminalMode.toUpperCase()}`
-            : 'Starting shell'}
+          <StatusDot state={shellState} />
+          {shellState === 'ready'
+            ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
+            : shellState === 'pending'
+              ? t.app.shellStarting
+              : t.app.shellStopped}
+          <span className="text-muted-foreground/70">
+            {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
+          </span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <StatusDot state={aiState} />
+          {aiState === 'ready'
+            ? t.app.aiReady
+            : aiState === 'pending'
+              ? t.app.aiPending
+              : t.app.aiNotReady}
         </span>
       </footer>
     </main>
@@ -1412,24 +2100,35 @@ function logClassName(kind: AgentLogEntry['kind']): string {
   }
 }
 
-function logRoleLabel(kind: AgentLogEntry['kind']): string {
+function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): React.JSX.Element {
+  const className =
+    state === 'ready'
+      ? 'bg-green-500 shadow-green-500/40'
+      : state === 'pending'
+        ? 'bg-yellow-400 shadow-yellow-400/40'
+        : 'bg-red-500 shadow-red-500/40'
+
+  return <span className={`size-2 rounded-full shadow-[0_0_8px] ${className}`} />
+}
+
+function logRoleLabel(kind: AgentLogEntry['kind'], t: Dictionary): string {
   switch (kind) {
     case 'user':
-      return 'You'
+      return t.roles.user
     case 'assistant':
-      return 'Crescent'
+      return t.roles.assistant
     case 'error':
-      return 'Error'
+      return t.roles.error
     case 'tool':
-      return 'Tool'
+      return t.roles.tool
     case 'command':
-      return 'Command'
+      return t.roles.command
     case 'plan':
-      return 'Plan'
+      return t.roles.plan
     case 'thought':
-      return 'Thought'
+      return t.roles.thought
     default:
-      return 'System'
+      return t.roles.system
   }
 }
 
@@ -1442,6 +2141,65 @@ function formatLogTime(value: string): string {
     minute: '2-digit',
     second: '2-digit'
   }).format(date)
+}
+
+function formatAgentMode(value: AgentConfig['agentMode']): string {
+  return value === 'plan-execute' ? 'Plan-and-Execute' : 'ReAct'
+}
+
+function formatAgentEventActionTitle(
+  event: Exclude<AgentEvent, { type: 'token' | 'done' }>,
+  t: Dictionary
+): string {
+  switch (event.type) {
+    case 'status':
+      return localizeAgentEventMessage(event.message, t)
+    case 'thought':
+      return localizeAgentEventMessage(event.message, t)
+    case 'error':
+      return `${t.input.error}: ${localizeAgentEventMessage(event.message, t)}`
+    default:
+      return t.input.genericAction
+  }
+}
+
+function localizeAgentEventMessage(message: string, t: Dictionary): string {
+  if (message === 'Dispatching tool call.') return t.input.toolDispatching
+  if (message === 'Running in chat-only terminal assistant mode.') return t.input.currentTerminal
+  if (message === 'Done.') return t.input.done
+  if (message === 'Agent run canceled.') return t.input.agentCanceled
+  if (message === 'Planning before execution...') return t.input.createdPlan
+  if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
+  if (/^Executing plan with ReAct step /.test(message)) return t.input.createdPlan
+  if (/^Reasoning and acting step /.test(message)) return t.roles.thought
+
+  return message
+}
+
+function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
+  const lines: string[] = []
+
+  if (run.actions.length > 0) {
+    lines.push(`**${t.input.actions}**`, '')
+    for (const action of run.actions) {
+      lines.push(`- ${action.title}`)
+    }
+    lines.push('', '<details>', `<summary>${t.input.actionDetails}</summary>`, '')
+    for (const [index, action] of run.actions.entries()) {
+      lines.push(`#### ${index + 1}. ${action.title}`, '', '```text', action.detail, '```', '')
+    }
+    lines.push('</details>')
+  }
+
+  if (run.result) {
+    lines.push('', `**${t.input.result}**`, '', run.result)
+  }
+
+  if (run.error) {
+    lines.push('', `**${t.input.error}**`, '', run.error)
+  }
+
+  return lines.join('\n').trim()
 }
 
 function formatConnectionTarget(connection: ConnectionConfig): string {
@@ -1479,6 +2237,111 @@ function parseLoginActions(value: string): string[] {
   return value.split(/\r?\n/).filter((line) => line.trim())
 }
 
+function parseProviderModels(value: string): AgentProviderModelConfig[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((id) => ({
+      id,
+      name: id,
+      reasoning: id.includes('gpt-5')
+    }))
+}
+
+function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {
+  return providers.flatMap((provider) =>
+    provider.models.map((model) => ({
+      id: model.id,
+      name: model.name || model.id,
+      providerId: provider.id,
+      providerName: provider.name || provider.id,
+      reasoning: Boolean(model.reasoning)
+    }))
+  )
+}
+
+function parseConnectionIntent(input: string): ConnectionIntent | undefined {
+  const trimmed = input.trim()
+  const explicit = /(登录|登陆|连接|使用|打开|进入|\bssh\b)/i.test(trimmed)
+  const executeAfterLogin =
+    /(检查|查看|巡检|排查|执行|处理|获取|统计|内存|磁盘|cpu|节点|pod|服务)/i.test(trimmed)
+  const operational =
+    executeAfterLogin && /(集群|节点|机器|主机|服务器|环境|ssh|连接)/i.test(trimmed)
+  if (!explicit && !operational) return undefined
+
+  const withoutPrefix = trimmed
+    .replace(
+      /^(请|帮我|麻烦)?\s*(登录|登陆|连接|使用|打开|进入|ssh|检查|查看|巡检|排查|执行|处理|获取|统计)\s*/i,
+      ''
+    )
+    .trim()
+  const withoutSuffix = withoutPrefix
+    .replace(/\s*(连接|集群|机器|主机|服务器|环境|节点|的.*|各个.*|所有.*)$/i, '')
+    .trim()
+  const namedTarget = trimmed.match(
+    /(?:登录|登陆|连接|使用|打开|进入|ssh|检查|查看|巡检|排查|执行|处理|获取|统计)?\s*([a-zA-Z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:集群|连接|机器|主机|服务器|环境|节点)/
+  )?.[1]
+  const candidates = Array.from(
+    new Set(
+      [namedTarget, withoutPrefix, withoutSuffix, trimmed].filter((value): value is string =>
+        Boolean(value)
+      )
+    )
+  )
+  const query = withoutSuffix || withoutPrefix
+
+  if (!query) return undefined
+
+  return { original: trimmed, query, candidates, explicit, executeAfterLogin }
+}
+
+function matchConnectionIntent(
+  intent: ConnectionIntent,
+  connections: ConnectionConfig[]
+): ConnectionConfig | undefined {
+  let bestMatch: { connection: ConnectionConfig; score: number } | undefined
+
+  for (const connection of connections) {
+    const score = scoreConnectionMatch(intent, connection)
+    if (score > (bestMatch?.score ?? 0)) bestMatch = { connection, score }
+  }
+
+  return bestMatch && bestMatch.score >= 35 ? bestMatch.connection : undefined
+}
+
+function scoreConnectionMatch(intent: ConnectionIntent, connection: ConnectionConfig): number {
+  const searchable = [
+    { value: connection.name, weight: 100 },
+    { value: connection.description ?? '', weight: 70 },
+    { value: connection.host, weight: 60 },
+    { value: connection.user ?? '', weight: 45 }
+  ]
+  let score = 0
+
+  for (const candidate of intent.candidates) {
+    const normalizedCandidate = normalizeConnectionSearchText(candidate)
+    if (!normalizedCandidate) continue
+
+    for (const item of searchable) {
+      const normalizedValue = normalizeConnectionSearchText(item.value)
+      if (!normalizedValue) continue
+      if (normalizedValue === normalizedCandidate) score = Math.max(score, item.weight)
+      if (normalizedValue.includes(normalizedCandidate)) score = Math.max(score, item.weight - 15)
+      if (normalizedCandidate.includes(normalizedValue)) score = Math.max(score, item.weight - 25)
+    }
+  }
+
+  return score
+}
+
+function normalizeConnectionSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/~\/\.ssh\/config|host|ssh|连接|集群|机器|主机|服务器|环境|节点/g, '')
+    .replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
+}
+
 function buildConnectionCommands(connection: ConnectionConfig): string[] {
   if (!connection.host) return []
 
@@ -1488,22 +2351,25 @@ function buildConnectionCommands(connection: ConnectionConfig): string[] {
 async function runConnectionCommandSequence(
   commands: string[],
   tabId: string,
-  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void
+  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
+  t: Dictionary
 ): Promise<void> {
   const [sshCommand, ...loginActions] = commands
   if (!sshCommand) return
 
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
-  appendLog({ kind: 'command', text: `Executed: ${sshCommand}` }, tabId)
+  appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}: ${sshCommand}` }, tabId)
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
-    const ready = await waitForTerminalIdle(tabId)
+    const ready = await waitForTerminalIdle(tabId, {
+      ignoredEcho: index === 0 ? sshCommand : undefined
+    })
     if (!ready) {
       appendLog(
         {
           kind: 'error',
-          text: `Timed out waiting for terminal output to settle before login action ${index + 1}. Automatic login actions stopped.`
+          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
         },
         tabId
       )
@@ -1514,22 +2380,39 @@ async function runConnectionCommandSequence(
     appendLog(
       {
         kind: 'command',
-        text: formatConnectionActionLog(action, index + 1)
+        text: formatConnectionActionLog(action, index + 1, t)
       },
       tabId
     )
   }
+
+  await waitForTerminalIdle(tabId, {
+    ignoredEcho: loginActions.length ? loginActions[loginActions.length - 1] : sshCommand,
+    idleMs: 1500,
+    timeoutMs: 60_000
+  })
 }
 
-function waitForTerminalIdle(tabId: string, idleMs = 900, timeoutMs = 30_000): Promise<boolean> {
+function waitForTerminalIdle(
+  tabId: string,
+  options: { ignoredEcho?: string; idleMs?: number; timeoutMs?: number } = {}
+): Promise<boolean> {
   return new Promise((resolve) => {
+    const idleMs = options.idleMs ?? 1200
+    const timeoutMs = options.timeoutMs ?? 30_000
     let receivedData = false
     let settled = false
     let idleTimer: number | undefined
+    let observedOutput = ''
     const timeout = window.setTimeout(() => settle(false), timeoutMs)
 
     const unsubscribe = window.api.terminal.onData((event) => {
       if (event.tabId !== tabId) return
+
+      observedOutput = `${observedOutput}${event.data}`.slice(-8000)
+      if (options.ignoredEcho && !hasOutputBeyondEcho(observedOutput, options.ignoredEcho)) {
+        return
+      }
 
       receivedData = true
       if (idleTimer) window.clearTimeout(idleTimer)
@@ -1548,12 +2431,28 @@ function waitForTerminalIdle(tabId: string, idleMs = 900, timeoutMs = 30_000): P
   })
 }
 
+function hasOutputBeyondEcho(output: string, echo: string): boolean {
+  const compactOutput = compactTerminalText(output)
+  const compactEcho = compactTerminalText(echo)
+  const echoIndex = compactOutput.indexOf(compactEcho)
+
+  if (echoIndex === -1) return compactOutput.length > 0
+
+  return compactOutput.slice(echoIndex + compactEcho.length).length > 0
+}
+
+function compactTerminalText(value: string): string {
+  return value
+    .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
+    .replace(/\s+/g, '')
+}
+
 function sendTerminalInput(value: string, tabId: string): void {
   window.api.terminal.write(`${value}\r`, tabId)
 }
 
-function formatConnectionActionLog(command: string, actionIndex: number): string {
-  return `Typed login action ${actionIndex}: ${maskPotentialSecret(command)}`
+function formatConnectionActionLog(command: string, actionIndex: number, t: Dictionary): string {
+  return `${t.terminal.connectionAction} ${actionIndex}: ${maskPotentialSecret(command)}`
 }
 
 function maskPotentialSecret(value: string): string {
@@ -1625,6 +2524,51 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
 
     if (!line.trim()) {
       index += 1
+      continue
+    }
+
+    if (/^\s*---+\s*$/.test(line)) {
+      nodes.push(<Separator key={nodes.length} />)
+      index += 1
+      continue
+    }
+
+    if (line.trim() === '<details>') {
+      index += 1
+      let summary = 'Details'
+      const contentLines: string[] = []
+
+      if (lines[index]?.trim().startsWith('<summary>')) {
+        summary = lines[index]
+          .trim()
+          .replace(/^<summary>/, '')
+          .replace(/<\/summary>$/, '')
+        index += 1
+      }
+
+      while (index < lines.length && lines[index].trim() !== '</details>') {
+        contentLines.push(lines[index])
+        index += 1
+      }
+      index += 1
+      nodes.push(
+        <details key={nodes.length} className="rounded-md border bg-muted/20 p-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            {summary}
+          </summary>
+          <div className="mt-2 space-y-2">{renderMarkdownBlocks(contentLines.join('\n'))}</div>
+        </details>
+      )
+      continue
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const tableLines: string[] = []
+      while (index < lines.length && isMarkdownTableLine(lines[index])) {
+        tableLines.push(lines[index])
+        index += 1
+      }
+      nodes.push(<MarkdownTable key={nodes.length} lines={tableLines} />)
       continue
     }
 
@@ -1735,11 +2679,69 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
 function isMarkdownBlockStart(line: string): boolean {
   return (
     /^```/.test(line) ||
+    /^\s*---+\s*$/.test(line) ||
+    isMarkdownTableLine(line) ||
+    /^<details>$/.test(line.trim()) ||
     /^(#{1,4})\s+/.test(line) ||
     /^>\s+/.test(line) ||
     /^\s*[-*]\s+/.test(line) ||
     /^\s*\d+\.\s+/.test(line)
   )
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  return Boolean(
+    lines[index] &&
+    lines[index + 1] &&
+    isMarkdownTableLine(lines[index]) &&
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
+  )
+}
+
+function isMarkdownTableLine(line: string): boolean {
+  return line.includes('|') && line.trim().split('|').filter(Boolean).length >= 2
+}
+
+function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
+  const [headerLine, , ...bodyLines] = lines
+  const headers = splitMarkdownTableRow(headerLine)
+  const rows = bodyLines.map(splitMarkdownTableRow)
+
+  return (
+    <div className="overflow-auto rounded-md border">
+      <table className="w-full border-collapse text-left text-xs">
+        <thead className="bg-muted/40">
+          <tr>
+            {headers.map((header, index) => (
+              <th key={index} className="border-b px-2 py-1.5 font-medium">
+                {renderInlineMarkdown(header)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-b last:border-b-0">
+              {headers.map((_, cellIndex) => (
+                <td key={cellIndex} className="px-2 py-1.5 align-top">
+                  {renderInlineMarkdown(row[cellIndex] ?? '')}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
 }
 
 function renderInlineMarkdown(value: string): React.ReactNode[] {
