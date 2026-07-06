@@ -8,7 +8,8 @@ describe('AgentMemory', () => {
       shortTerm: [],
       longTerm: {
         preferences: [],
-        notes: []
+        notes: [],
+        operations: []
       }
     }
     let persisted: AgentMemoryState | undefined

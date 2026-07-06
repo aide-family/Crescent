@@ -7,14 +7,14 @@ import type {
 } from 'openai/resources/chat/completions'
 
 import type { AgentConfig, ToolCatalogEntry } from './types'
-import { resolveModelProvider } from './openclaw-config'
+import { resolveAgentRuntimeProvider } from './runtime-provider'
 
 export class AgentBrain {
   private readonly client: OpenAI
   private readonly model: string
 
   constructor(config: AgentConfig) {
-    const provider = resolveModelProvider(config)
+    const provider = resolveAgentRuntimeProvider(config)
 
     this.client = new OpenAI({
       apiKey: provider.apiKey,
@@ -41,7 +41,10 @@ export class AgentBrain {
     if (input.catalog.length <= input.maxTools) return input.catalog.map((entry) => entry.name)
 
     const catalogText = input.catalog
-      .map((entry) => `${entry.name}: ${entry.method.toUpperCase()} ${entry.path} - ${entry.description}`)
+      .map(
+        (entry) =>
+          `${entry.name}: ${entry.method.toUpperCase()} ${entry.path} - ${entry.description}`
+      )
       .join('\n')
 
     const completion = await this.chat({
@@ -72,7 +75,9 @@ export type { ChatCompletionMessageParam, ChatCompletionTool }
 function parseSelectedTools(content: string): string[] {
   try {
     const parsed = JSON.parse(content)
-    return Array.isArray(parsed?.tools) ? parsed.tools.filter((name) => typeof name === 'string') : []
+    return Array.isArray(parsed?.tools)
+      ? parsed.tools.filter((name) => typeof name === 'string')
+      : []
   } catch {
     const matches = content.match(/[a-zA-Z0-9_-]{1,64}/g) ?? []
     return matches

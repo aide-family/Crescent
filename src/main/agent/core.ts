@@ -4,40 +4,46 @@ import { AgentBrain } from './brain'
 import type { AgentMemory } from './memory'
 import { resolveModelProvider } from './openclaw-config'
 import { AgentPlanner } from './planner'
-import { loadOpenApiToolRegistry } from './tool-registry'
-import { OpenApiToolExecutor } from './tool-executor'
-import type { AgentConfig, AgentEvent, OpenAiTool } from './types'
+import { AgentPromptBuilder } from './prompt-builder'
+import { AgentToolRuntime } from './tool-runtime'
+import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
 
 const MAX_TOOL_STEPS = 8
 
 export class TerminalAgentCore {
+  private readonly promptBuilder = new AgentPromptBuilder()
+
   constructor(
     private readonly config: AgentConfig,
     private readonly memory: AgentMemory,
-    private readonly emit: (event: AgentEvent) => void
+    private readonly emit: (event: AgentEvent) => void,
+    private readonly terminalExecutor?: TerminalCommandExecutor
   ) {}
 
-  async run(userInput: string): Promise<string> {
+  async run(userInput: string, terminalContext = ''): Promise<string> {
     assertConfig(this.config)
 
     const brain = new AgentBrain(this.config)
-    const registry = await loadOpenApiToolRegistry(this.config)
-    const planner = new AgentPlanner(brain)
-
-    this.emit({ type: 'status', message: `Loaded ${registry.tools.length} OpenAPI tools.` })
-
-    const selectedToolNames = await brain.selectRelevantTools({
-      userInput,
-      catalog: registry.catalog,
-      maxTools: Math.max(1, this.config.maxActiveTools)
-    })
-    const activeTools = selectTools(registry.tools, selectedToolNames)
-    const executor = new OpenApiToolExecutor(this.config, registry.operations)
     const memoryBlock = this.memory.getPromptBlock()
+    const toolRuntime = await AgentToolRuntime.create({
+      config: this.config,
+      brain,
+      userInput,
+      terminalExecutor: this.terminalExecutor,
+      emit: this.emit
+    })
+
+    if (!toolRuntime.hasTools()) {
+      const text = await this.runChatOnly({ brain, userInput, memoryBlock, terminalContext })
+      this.memory.rememberTurn(userInput, text)
+      return text
+    }
+
+    const planner = new AgentPlanner(brain)
 
     this.emit({
       type: 'status',
-      message: `Selected ${activeTools.length} active tools: ${activeTools.map((tool) => tool.function.name).join(', ')}`
+      message: `Selected ${toolRuntime.tools.length} active tools: ${toolRuntime.tools.map((tool) => tool.function.name).join(', ')}`
     })
 
     let planSteps: string[] | undefined
@@ -46,7 +52,7 @@ export class TerminalAgentCore {
       const plan = await planner.createPlan({
         userInput,
         memoryBlock,
-        catalog: registry.catalog.filter((entry) => selectedToolNames.includes(entry.name))
+        catalog: toolRuntime.catalog
       })
       planSteps = plan.steps
       this.emit({ type: 'plan', steps: plan.steps })
@@ -54,10 +60,10 @@ export class TerminalAgentCore {
 
     const finalText = await this.runReactLoop({
       brain,
-      executor,
-      activeTools,
+      toolRuntime,
       userInput,
       memoryBlock,
+      terminalContext,
       planSteps
     })
 
@@ -65,21 +71,51 @@ export class TerminalAgentCore {
     return finalText
   }
 
-  private async runReactLoop(input: {
+  private async runChatOnly(input: {
     brain: AgentBrain
-    executor: OpenApiToolExecutor
-    activeTools: OpenAiTool[]
     userInput: string
     memoryBlock: string
+    terminalContext: string
+  }): Promise<string> {
+    this.emit({ type: 'status', message: 'Running in chat-only terminal assistant mode.' })
+
+    const completion = await input.brain.chat({
+      messages: [
+        {
+          role: 'system',
+          content: this.promptBuilder.buildChatOnlyPrompt({
+            mode: this.config.agentMode,
+            memoryBlock: input.memoryBlock,
+            terminalContext: input.terminalContext
+          })
+        },
+        ...this.memory.getShortTermMessages(),
+        { role: 'user', content: input.userInput }
+      ]
+    })
+    const text = completion.choices[0]?.message.content ?? ''
+
+    this.emit({ type: 'token', text })
+    this.emit({ type: 'done', message: 'Done.' })
+    return text
+  }
+
+  private async runReactLoop(input: {
+    brain: AgentBrain
+    toolRuntime: AgentToolRuntime
+    userInput: string
+    memoryBlock: string
+    terminalContext: string
     planSteps?: string[]
   }): Promise<string> {
     const messages: ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: buildSystemPrompt({
+        content: this.promptBuilder.buildToolLoopPrompt({
           mode: this.config.agentMode,
           memoryBlock: input.memoryBlock,
-          planSteps: input.planSteps
+          planSteps: input.planSteps,
+          terminalContext: input.terminalContext
         })
       },
       ...this.memory.getShortTermMessages(),
@@ -100,7 +136,7 @@ export class TerminalAgentCore {
 
       const completion = await input.brain.chat({
         messages,
-        tools: input.activeTools,
+        tools: input.toolRuntime.tools,
         tool_choice: 'auto'
       })
       const message = completion.choices[0]?.message
@@ -122,10 +158,13 @@ export class TerminalAgentCore {
         this.emit({
           type: 'tool',
           name: toolCall.function.name,
-          message: 'Executing OpenAPI operation.'
+          message: 'Dispatching tool call.'
         })
 
-        const result = await input.executor.execute(toolCall.function.name, toolCall.function.arguments)
+        const result = await input.toolRuntime.execute(
+          toolCall.function.name,
+          toolCall.function.arguments
+        )
 
         messages.push({
           role: 'tool',
@@ -139,37 +178,15 @@ export class TerminalAgentCore {
   }
 }
 
-function buildSystemPrompt(input: {
-  mode: string
-  memoryBlock: string
-  planSteps?: string[]
-}): string {
-  return [
-    'You are TerminalAgent, an API-capable terminal agent.',
-    'Architecture: Brain for reasoning, Memory for context, Planning for task decomposition, Tools for external actions.',
-    input.mode === 'plan-execute'
-      ? 'Mode: Plan-and-Execute. Follow the plan, execute with tools, and adapt if an observation invalidates a step.'
-      : 'Mode: ReAct. Alternate reasoning and tool use until you can give a final answer.',
-    'Use OpenAPI tools only when useful. Explain API failures clearly. Keep final output concise and terminal-friendly.',
-    `Long-term memory:\n${input.memoryBlock}`,
-    input.planSteps?.length ? `Execution plan:\n${input.planSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function selectTools(tools: OpenAiTool[], selectedToolNames: string[]): OpenAiTool[] {
-  const selected = new Set(selectedToolNames)
-  const activeTools = tools.filter((tool) => selected.has(tool.function.name))
-
-  return activeTools.length > 0 ? activeTools : tools.slice(0, 5)
-}
-
 function assertConfig(config: AgentConfig): void {
   const provider = resolveModelProvider(config)
 
   if (!provider.apiKey.trim()) throw new Error('OpenAI-compatible API key is required.')
   if (!config.model.trim()) throw new Error('Model is required.')
-  if (!config.openApiBaseUrl.trim()) throw new Error('OpenAPI base URL is required.')
-  if (!config.openApiDocument.trim()) throw new Error('OpenAPI URL or JSON document is required.')
+  if (config.openApiBaseUrl.trim() && !config.openApiDocument.trim()) {
+    throw new Error('OpenAPI URL or JSON document is required when REST API base URL is set.')
+  }
+  if (!config.openApiBaseUrl.trim() && config.openApiDocument.trim()) {
+    throw new Error('OpenAPI base URL is required when an OpenAPI document is set.')
+  }
 }

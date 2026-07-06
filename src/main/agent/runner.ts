@@ -1,12 +1,17 @@
 import { TerminalAgentCore } from './core'
-import type { AgentConfig, AgentEvent } from './types'
+import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
 import type { AgentMemory } from './memory'
 
 export async function runTerminalAgent(
   config: AgentConfig,
   userInput: string,
   memory: AgentMemory,
-  emit: (event: AgentEvent) => void
+  terminalContext: string,
+  emit: (event: AgentEvent) => void,
+  terminalExecutor?: TerminalCommandExecutor
 ): Promise<string> {
-  return new TerminalAgentCore(config, memory, emit).run(userInput)
+  return new TerminalAgentCore(config, memory, emit, terminalExecutor).run(
+    userInput,
+    terminalContext
+  )
 }

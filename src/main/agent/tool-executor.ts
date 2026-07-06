@@ -15,20 +15,22 @@ export class OpenApiToolExecutor {
       return { ok: false, error: `Unknown tool ${toolName}` }
     }
 
-    const args = normalizeToolArgs(parseToolArguments(rawArguments))
-    const url = new URL(fillPathParams(operation.path, args.path), this.config.openApiBaseUrl)
-
-    for (const [key, value] of Object.entries(args.query)) {
-      if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
-    }
-
     try {
+      const args = normalizeToolArgs(parseToolArguments(rawArguments))
+      const url = new URL(fillPathParams(operation.path, args.path), this.config.openApiBaseUrl)
+
+      for (const [key, value] of Object.entries(args.query)) {
+        if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
+      }
+
       const response = await axios.request({
         method: operation.method,
         url: url.toString(),
         headers: {
           ...args.headers,
-          ...(operation.requestBodyContentType ? { 'content-type': operation.requestBodyContentType } : {})
+          ...(operation.requestBodyContentType
+            ? { 'content-type': operation.requestBodyContentType }
+            : {})
         },
         data: args.body,
         validateStatus: () => true
