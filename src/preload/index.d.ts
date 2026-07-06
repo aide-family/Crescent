@@ -10,7 +10,10 @@ import type {
   AgentRunInput,
   AgentValidationResult,
   ConnectionConfig,
-  ConnectionInput
+  ConnectionInput,
+  StoredAgentLogEntry,
+  StoredAgentRun,
+  StoredSessionTab
 } from '../main/agent/types'
 
 interface TerminalAgentApi {
@@ -64,6 +67,14 @@ interface TerminalAgentApi {
     list: () => Promise<ConnectionConfig[]>
     save: (input: ConnectionInput) => Promise<ConnectionConfig[]>
     delete: (id: string) => Promise<ConnectionConfig[]>
+  }
+  storage: {
+    saveTabs: (tabs: StoredSessionTab[]) => Promise<{ ok: boolean }>
+    saveAgentLog: (entry: StoredAgentLogEntry) => Promise<{ ok: boolean }>
+    updateAgentLog: (
+      input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
+    ) => Promise<{ ok: boolean }>
+    saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
   }
 }
 

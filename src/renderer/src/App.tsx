@@ -7,6 +7,10 @@ import {
   CheckIcon,
   CopyIcon,
   Loader2Icon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
   PlusIcon,
   ServerIcon,
   SettingsIcon,
@@ -164,6 +168,7 @@ function App(): React.JSX.Element {
   const terminalCwdRef = useRef('')
   const activeRunCanceledRef = useRef(new Set<string>())
   const activeRunIdRef = useRef(new Map<string, string>())
+  const activeRunInputRef = useRef(new Map<string, string>())
   const pipeInputBufferRef = useRef('')
   const pipeCursorRef = useRef(0)
   const pipeHistoryRef = useRef<string[]>([])
@@ -203,6 +208,7 @@ function App(): React.JSX.Element {
   const [connectionActionsText, setConnectionActionsText] = useState('')
   const [connectionImportText, setConnectionImportText] = useState('')
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
+  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
   const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
@@ -247,6 +253,7 @@ function App(): React.JSX.Element {
     : activeTab.sessionId
       ? 'not-ready'
       : 'pending'
+  const terminalVisible = hiddenPane !== 'terminal'
   const failedToLoadConfigText = t.terminal.failedToLoadConfig
   const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
   const failedToLoadModelsText = t.terminal.failedToLoadModels
@@ -294,13 +301,19 @@ function App(): React.JSX.Element {
   const appendLog = useCallback(
     (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): number => {
       const id = nextLogIdRef.current
+      const createdAt = new Date().toISOString()
       nextLogIdRef.current += 1
       updateTab(tabId, (tab) => ({
         ...tab,
-        agentLog: [...tab.agentLog, { id, ...entry, createdAt: new Date().toISOString() }].slice(
-          -120
-        )
+        agentLog: [...tab.agentLog, { id, ...entry, createdAt }].slice(-120)
       }))
+      void window.api.storage.saveAgentLog({
+        tabId,
+        logId: id,
+        kind: entry.kind,
+        text: entry.text,
+        createdAt
+      })
       return id
     },
     [updateTab]
@@ -312,6 +325,7 @@ function App(): React.JSX.Element {
         ...tab,
         agentLog: tab.agentLog.map((entry) => (entry.id === logId ? { ...entry, text } : entry))
       }))
+      void window.api.storage.updateAgentLog({ tabId, logId, text })
     },
     [updateTab]
   )
@@ -438,6 +452,20 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     tabsRef.current = tabs
+  }, [tabs])
+
+  useEffect(() => {
+    void window.api.storage.saveTabs(
+      tabs.map((tab) => ({
+        tabId: tab.id,
+        title: tab.title,
+        connectionId: tab.connectionId,
+        connectionName: tab.connectionName,
+        isSsh: tab.isSsh,
+        terminalCwd: tab.terminalCwd,
+        terminalMode: tab.terminalMode
+      }))
+    )
   }, [tabs])
 
   useEffect(() => {
@@ -634,7 +662,7 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const unsubscribe = window.api.agent.onEvent((event) => {
-      appendAgentEvent(event)
+      appendAgentEvent(event, event.tabId ?? activeTabIdRef.current)
     })
 
     return unsubscribe
@@ -645,6 +673,8 @@ function App(): React.JSX.Element {
   }, [activeTab?.agentLog])
 
   useEffect(() => {
+    if (!terminalVisible) return
+
     const host = terminalHostRef.current
     if (!host) return
     const tab = tabsRef.current.find((candidate) => candidate.id === activeTabId)
@@ -775,7 +805,15 @@ function App(): React.JSX.Element {
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [activeTabId, appendLog, executeConnectionCommands, handlePipeTerminalInput, t, updateTab])
+  }, [
+    activeTabId,
+    appendLog,
+    executeConnectionCommands,
+    handlePipeTerminalInput,
+    t,
+    terminalVisible,
+    updateTab
+  ])
 
   async function saveConfig(): Promise<void> {
     await saveAgentConfig(config)
@@ -821,6 +859,15 @@ function App(): React.JSX.Element {
     activeRunCanceledRef.current.add(tabId)
     const runId = activeRunIdRef.current.get(tabId)
     if (runId) void window.api.agent.cancel(runId)
+    if (runId) {
+      void window.api.storage.saveAgentRun({
+        runId,
+        tabId,
+        input: activeRunInputRef.current.get(tabId) ?? '',
+        status: 'canceled',
+        error: t.input.agentCanceled
+      })
+    }
     updateAgentRun(tabId, (run) => ({ ...run, error: t.input.agentCanceled }))
     updateTab(tabId, (tab) => ({ ...tab, agentBusy: false }))
   }
@@ -961,7 +1008,10 @@ function App(): React.JSX.Element {
     }
 
     updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
-    const connectionIntent = parseConnectionIntent(input)
+    const shouldResolveConnectionIntent = !tab?.isSsh && !tab?.connectionId
+    const connectionIntent = shouldResolveConnectionIntent
+      ? parseConnectionIntent(input)
+      : undefined
     if (connectionIntent) {
       const matchedConnection = await findConnectionForIntent(connectionIntent)
 
@@ -1032,6 +1082,14 @@ function App(): React.JSX.Element {
     activeRunCanceledRef.current.delete(tabId)
     const runId = `run-${crypto.randomUUID()}`
     activeRunIdRef.current.set(tabId, runId)
+    activeRunInputRef.current.set(tabId, input)
+    void window.api.storage.saveAgentRun({
+      runId,
+      tabId,
+      input,
+      status: 'running',
+      connectionId
+    })
     appendLog({ kind: 'user', text: input }, tabId)
     const runLogId = appendLog(
       {
@@ -1066,23 +1124,49 @@ function App(): React.JSX.Element {
       if (result.ok) {
         const text = result.text || t.input.done
         updateAgentRun(tabId, (run) => ({ ...run, result: text }))
+        void window.api.storage.saveAgentRun({
+          runId,
+          tabId,
+          input,
+          status: 'success',
+          connectionId,
+          output: text
+        })
       } else {
         updateAgentRun(tabId, (run) => ({
           ...run,
           error: result.error || t.input.failed
         }))
+        void window.api.storage.saveAgentRun({
+          runId,
+          tabId,
+          input,
+          status: 'error',
+          connectionId,
+          error: result.error || t.input.failed
+        })
       }
     } catch (error) {
       if (activeRunCanceledRef.current.has(tabId)) return
 
+      const message = error instanceof Error ? error.message : String(error)
       updateAgentRun(tabId, (run) => ({
         ...run,
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       }))
+      void window.api.storage.saveAgentRun({
+        runId,
+        tabId,
+        input,
+        status: 'error',
+        connectionId,
+        error: message
+      })
     } finally {
       activeAgentRunRef.current.delete(tabId)
       activeRunCanceledRef.current.delete(tabId)
       activeRunIdRef.current.delete(tabId)
+      activeRunInputRef.current.delete(tabId)
       updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: false }))
     }
   }
@@ -1557,214 +1641,257 @@ function App(): React.JSX.Element {
         </div>
       </header>
       <section className="flex min-h-0 flex-1">
-        <div
-          className="flex min-h-0 min-w-[35%] flex-col bg-[#111111]"
-          style={{ width: `${terminalPanePercent}%` }}
-        >
-          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
+        {hiddenPane !== 'terminal' && (
+          <div
+            className="flex min-h-0 flex-col bg-[#111111]"
+            style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
+          >
+            <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`h-7 rounded px-2 text-xs ${tab.id === activeTabId ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted/40'}`}
+                  onClick={() => setActiveTabId(tab.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+                  }}
+                >
+                  {tab.title}
+                </button>
+              ))}
+              <Button
                 type="button"
-                className={`h-7 rounded px-2 text-xs ${tab.id === activeTabId ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted/40'}`}
-                onClick={() => setActiveTabId(tab.id)}
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.connections.sshConnections}
+                title={t.connections.sshConnections}
+                onClick={() => setConnectionModalOpen(true)}
+              >
+                <PlusIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={hiddenPane === 'chat' ? t.app.showChat : t.app.hideChat}
+                title={hiddenPane === 'chat' ? t.app.showChat : t.app.hideChat}
+                onClick={() => {
+                  setHiddenPane((current) => (current === 'chat' ? null : 'chat'))
+                  window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+                  })
                 }}
               >
-                {tab.title}
-              </button>
-            ))}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.connections.sshConnections}
-              title={t.connections.sshConnections}
-              onClick={() => setConnectionModalOpen(true)}
-            >
-              <PlusIcon aria-hidden="true" />
-            </Button>
-            {tabMenu && (
-              <div
-                className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
-                style={{ left: tabMenu.x, top: tabMenu.y }}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <button
-                  type="button"
-                  className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={tabMenu.tabId === 'default'}
-                  onClick={() => closeTab(tabMenu.tabId)}
+                {hiddenPane === 'chat' ? (
+                  <PanelRightOpenIcon aria-hidden="true" />
+                ) : (
+                  <PanelRightCloseIcon aria-hidden="true" />
+                )}
+              </Button>
+              {tabMenu && (
+                <div
+                  className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
+                  style={{ left: tabMenu.x, top: tabMenu.y }}
+                  onClick={(event) => event.stopPropagation()}
                 >
-                  {t.common.closeTab}
-                </button>
-                <button
-                  type="button"
-                  className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
-                  onClick={() => closeOtherTabs(tabMenu.tabId)}
-                >
-                  {t.common.closeOtherTabs}
-                </button>
-              </div>
-            )}
-          </div>
-          <div ref={terminalHostRef} className="h-full min-h-0" />
-        </div>
-        <div
-          className="w-1.5 shrink-0 cursor-col-resize border-x border-border bg-muted/30 hover:bg-primary/40"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={
-            locale === 'zh-CN' ? '调整终端和对话区域宽度' : 'Resize terminal and chat panes'
-          }
-          onPointerDown={(event) => {
-            event.preventDefault()
-            splitDragRef.current = true
-            document.body.style.cursor = 'col-resize'
-            document.body.style.userSelect = 'none'
-          }}
-        />
-        <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
-          <div className="border-b p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold">{t.app.chatTitle}</h2>
-                <p className="text-xs text-muted-foreground">{t.app.chatSubtitle}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant={activeTab.terminalMode === 'pty' ? 'secondary' : 'destructive'}>
-                  {activeTab.terminalMode.toUpperCase()}
-                </Badge>
-                <Badge variant={activeTab.agentBusy ? 'secondary' : 'outline'}>
-                  {activeTab.agentBusy ? t.app.running : formatAgentMode(config.agentMode)}
-                </Badge>
-              </div>
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={tabMenu.tabId === 'default'}
+                    onClick={() => closeTab(tabMenu.tabId)}
+                  >
+                    {t.common.closeTab}
+                  </button>
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                    onClick={() => closeOtherTabs(tabMenu.tabId)}
+                  >
+                    {t.common.closeOtherTabs}
+                  </button>
+                </div>
+              )}
             </div>
+            <div ref={terminalHostRef} className="h-full min-h-0" />
           </div>
-          <div ref={agentLogRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-4 text-sm">
-            {activeTab.agentLog.map((entry) => (
-              <div key={entry.id} className={logClassName(entry.kind)}>
-                <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="font-medium uppercase tracking-wide">
-                      {logRoleLabel(entry.kind, t)}
-                    </span>
-                    <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
-                  </div>
+        )}
+        {!hiddenPane && (
+          <div
+            className="w-1.5 shrink-0 cursor-col-resize border-x border-border bg-muted/30 hover:bg-primary/40"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={
+              locale === 'zh-CN' ? '调整终端和对话区域宽度' : 'Resize terminal and chat panes'
+            }
+            onPointerDown={(event) => {
+              event.preventDefault()
+              splitDragRef.current = true
+              document.body.style.cursor = 'col-resize'
+              document.body.style.userSelect = 'none'
+            }}
+          />
+        )}
+        {hiddenPane !== 'chat' && (
+          <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
+            <div className="border-b p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">{t.app.chatTitle}</h2>
+                  <p className="text-xs text-muted-foreground">{t.app.chatSubtitle}</p>
+                </div>
+                <div className="flex items-center gap-2">
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={t.common.copy}
-                    title={t.common.copy}
-                    onClick={() => copyLogEntry(entry)}
+                    aria-label={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
+                    title={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
+                    onClick={() => {
+                      setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
+                    }}
                   >
-                    {activeTab.copiedLogId === entry.id ? (
-                      <CheckIcon aria-hidden="true" />
+                    {hiddenPane === 'terminal' ? (
+                      <PanelLeftOpenIcon aria-hidden="true" />
                     ) : (
-                      <CopyIcon aria-hidden="true" />
+                      <PanelLeftCloseIcon aria-hidden="true" />
                     )}
                   </Button>
-                </div>
-                <MarkdownContent value={entry.text} />
-                <div className="mt-3 flex justify-end border-t pt-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t.common.copyMarkdown}
-                    title={t.common.copyMarkdown}
-                    onClick={() => copyLogEntry(entry)}
-                  >
-                    {activeTab.copiedLogId === entry.id ? (
-                      <CheckIcon data-icon="inline-start" />
-                    ) : (
-                      <CopyIcon data-icon="inline-start" />
-                    )}
-                    {activeTab.copiedLogId === entry.id ? t.common.copied : t.common.copyMarkdown}
-                  </Button>
+                  <Badge variant={activeTab.terminalMode === 'pty' ? 'secondary' : 'destructive'}>
+                    {activeTab.terminalMode.toUpperCase()}
+                  </Badge>
+                  <Badge variant={activeTab.agentBusy ? 'secondary' : 'outline'}>
+                    {activeTab.agentBusy ? t.app.running : formatAgentMode(config.agentMode)}
+                  </Badge>
                 </div>
               </div>
-            ))}
-          </div>
-          <div className="space-y-3 border-t p-4">
-            <form onSubmit={submitAgent} className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Select value={activeProviderId} onValueChange={applyProvider}>
-                  <SelectTrigger className="h-8 min-w-0 flex-1">
-                    <SelectValue aria-label={t.app.provider} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>{t.app.provider}</SelectLabel>
-                      {providerOptions.map((provider) => (
-                        <SelectItem key={provider.id} value={provider.id}>
-                          {provider.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Select value={config.model} onValueChange={applyModel}>
-                  <SelectTrigger className="h-8 min-w-0 flex-1">
-                    <SelectValue aria-label={t.app.model} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>{t.app.model}</SelectLabel>
-                      {(filteredModels.length ? filteredModels : visibleModels).map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="rounded-lg border bg-background p-2 shadow-sm">
-                <Textarea
-                  value={activeTab.agentInput}
-                  onChange={(event) =>
-                    updateTab(activeTab.id, (tab) => ({ ...tab, agentInput: event.target.value }))
-                  }
-                  onKeyDown={handleAgentInputKeyDown}
-                  placeholder={t.input.askPlaceholder}
-                  className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
-                />
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
-                  <span>{activeTab.agentBusy ? t.input.contextHint : t.input.currentTerminal}</span>
-                  <div className="flex items-center gap-2">
-                    <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
-                    {activeTab.agentBusy && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => stopAgentRun()}
-                      >
-                        {t.common.stop}
-                      </Button>
-                    )}
+            </div>
+            <div ref={agentLogRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-4 text-sm">
+              {activeTab.agentLog.map((entry) => (
+                <div key={entry.id} className={logClassName(entry.kind)}>
+                  <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="font-medium uppercase tracking-wide">
+                        {logRoleLabel(entry.kind, t)}
+                      </span>
+                      <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
+                    </div>
                     <Button
-                      type="submit"
-                      size="icon"
-                      aria-label={activeTab.agentBusy ? t.input.contextAdd : t.common.send}
-                      disabled={!activeTab.agentInput.trim()}
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.common.copy}
+                      title={t.common.copy}
+                      onClick={() => copyLogEntry(entry)}
                     >
-                      {activeTab.agentBusy ? (
-                        <PlusIcon aria-hidden="true" />
+                      {activeTab.copiedLogId === entry.id ? (
+                        <CheckIcon aria-hidden="true" />
                       ) : (
-                        <ArrowUpIcon aria-hidden="true" />
+                        <CopyIcon aria-hidden="true" />
                       )}
                     </Button>
                   </div>
+                  <MarkdownContent value={entry.text} />
+                  <div className="mt-3 flex justify-end border-t pt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t.common.copyMarkdown}
+                      title={t.common.copyMarkdown}
+                      onClick={() => copyLogEntry(entry)}
+                    >
+                      {activeTab.copiedLogId === entry.id ? (
+                        <CheckIcon data-icon="inline-start" />
+                      ) : (
+                        <CopyIcon data-icon="inline-start" />
+                      )}
+                      {activeTab.copiedLogId === entry.id ? t.common.copied : t.common.copyMarkdown}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </form>
-          </div>
-        </aside>
+              ))}
+            </div>
+            <div className="space-y-3 border-t p-4">
+              <form onSubmit={submitAgent} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Select value={activeProviderId} onValueChange={applyProvider}>
+                    <SelectTrigger className="h-8 min-w-0 flex-1">
+                      <SelectValue aria-label={t.app.provider} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>{t.app.provider}</SelectLabel>
+                        {providerOptions.map((provider) => (
+                          <SelectItem key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Select value={config.model} onValueChange={applyModel}>
+                    <SelectTrigger className="h-8 min-w-0 flex-1">
+                      <SelectValue aria-label={t.app.model} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>{t.app.model}</SelectLabel>
+                        {(filteredModels.length ? filteredModels : visibleModels).map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="rounded-lg border bg-background p-2 shadow-sm">
+                  <Textarea
+                    value={activeTab.agentInput}
+                    onChange={(event) =>
+                      updateTab(activeTab.id, (tab) => ({ ...tab, agentInput: event.target.value }))
+                    }
+                    onKeyDown={handleAgentInputKeyDown}
+                    placeholder={t.input.askPlaceholder}
+                    className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
+                    <span>
+                      {activeTab.agentBusy ? t.input.contextHint : t.input.currentTerminal}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
+                      {activeTab.agentBusy && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => stopAgentRun()}
+                        >
+                          {t.common.stop}
+                        </Button>
+                      )}
+                      <Button
+                        type="submit"
+                        size="icon"
+                        aria-label={activeTab.agentBusy ? t.input.contextAdd : t.common.send}
+                        disabled={!activeTab.agentInput.trim()}
+                      >
+                        {activeTab.agentBusy ? (
+                          <PlusIcon aria-hidden="true" />
+                        ) : (
+                          <ArrowUpIcon aria-hidden="true" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </aside>
+        )}
       </section>
       {connectionModalOpen && (
         <div

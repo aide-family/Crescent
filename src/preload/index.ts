@@ -11,7 +11,10 @@ import type {
   AgentRunInput,
   AgentValidationResult,
   ConnectionConfig,
-  ConnectionInput
+  ConnectionInput,
+  StoredAgentLogEntry,
+  StoredAgentRun,
+  StoredSessionTab
 } from '../main/agent/types'
 
 // Custom APIs for renderer
@@ -119,6 +122,17 @@ const api = {
       ipcRenderer.invoke('connections:save', input),
     delete: (id: string): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('connections:delete', id)
+  },
+  storage: {
+    saveTabs: (tabs: StoredSessionTab[]): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:save-tabs', tabs),
+    saveAgentLog: (entry: StoredAgentLogEntry): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:save-agent-log', entry),
+    updateAgentLog: (
+      input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
+    ): Promise<{ ok: boolean }> => ipcRenderer.invoke('storage:update-agent-log', input),
+    saveAgentRun: (run: StoredAgentRun): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:save-agent-run', run)
   }
 }
 
