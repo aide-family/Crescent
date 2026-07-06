@@ -101,6 +101,11 @@
   textarea {
     font: inherit;
   }
+
+  .select-text,
+  .select-text * {
+    user-select: text;
+  }
 }
 
 .xterm {

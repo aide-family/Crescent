@@ -1,40 +1,27 @@
 import { ipcMain } from 'electron'
-import type Store from 'electron-store'
 
-import { AgentMemory, type AgentMemoryState } from './memory'
+import { generateTerminalCommand } from './command'
+import { AgentMemory } from './memory'
 import { defaultOpenClawLikeConfig, getAvailableModels } from './openclaw-config'
+import { AgentBrain } from './brain'
 import { runTerminalAgent } from './runner'
-import type { AgentConfig, AgentRunInput } from './types'
-
-type StoreShape = {
-  config: AgentConfig
-  memory: AgentMemoryState
-}
-
-const defaultConfig: AgentConfig = {
-  openAiApiKey: '',
-  openAiBaseUrl: '',
-  model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
-  agentMode: 'react',
-  maxActiveTools: 5,
-  openApiBaseUrl: '',
-  openApiDocument: ''
-}
-
-const defaultMemory: AgentMemoryState = {
-  shortTerm: [],
-  longTerm: {
-    preferences: [],
-    notes: []
-  }
-}
-
-let storePromise: Promise<Store<StoreShape>> | undefined
+import { loadOpenApiToolRegistry } from './tool-registry'
+import { executeCommandInTerminal } from '../terminal/ipc'
+import {
+  appendOperationRecord,
+  readAgentConfig,
+  readCrescentMemory,
+  readCustomConnections,
+  writeAgentConfig,
+  writeCrescentMemory,
+  normalizeAgentConfig
+} from '../crescent-store'
+import { loadSshConfigConnections } from '../connections/ssh-config'
+import type { AgentCommandInput, AgentConfig, AgentRunInput } from './types'
 
 export function registerAgentIpc(): void {
-  ipcMain.handle('agent:get-config', async () => {
-    const store = await getStore()
-    return store.get('config', defaultConfig)
+  ipcMain.handle('agent:get-config', () => {
+    return readAgentConfig()
   })
 
   ipcMain.handle('agent:get-models', () => {
@@ -54,19 +41,61 @@ export function registerAgentIpc(): void {
     })
   })
 
-  ipcMain.handle('agent:save-config', async (_, config: Partial<AgentConfig>) => {
-    const store = await getStore()
-    const nextConfig = normalizeConfig({
-      ...store.get('config', defaultConfig),
+  ipcMain.handle('agent:save-config', (_, config: Partial<AgentConfig>) => {
+    const nextConfig = normalizeAgentConfig({
+      ...readAgentConfig(),
       ...config
     })
 
-    store.set('config', nextConfig)
-    return nextConfig
+    return writeAgentConfig(nextConfig)
+  })
+
+  ipcMain.handle('agent:validate-config', async (_, config: Partial<AgentConfig>) => {
+    const nextConfig = normalizeAgentConfig({
+      ...readAgentConfig(),
+      ...config
+    })
+
+    try {
+      const registry = await loadOpenApiToolRegistry(nextConfig)
+
+      return {
+        ok: true,
+        toolCount: registry.tools.length,
+        tools: registry.catalog.slice(0, 8)
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle('agent:generate-command', async (_, payload: AgentCommandInput) => {
+    const config = readAgentConfig()
+    const instruction = payload?.instruction?.trim()
+
+    if (!instruction) return { ok: false, error: 'Command instruction is empty.' }
+
+    try {
+      const command = await generateTerminalCommand(new AgentBrain(config), createMemory(), {
+        instruction,
+        cwd: payload.cwd,
+        shell: payload.shell,
+        terminalContext: payload.terminalContext
+      })
+
+      return { ok: true, ...command }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
   })
 
   ipcMain.handle('agent:run', async (event, payload: AgentRunInput) => {
-    const store = await getStore()
     const input = payload?.input?.trim()
 
     if (!input) {
@@ -74,76 +103,62 @@ export function registerAgentIpc(): void {
     }
 
     if (input.startsWith('/remember ')) {
-      const memory = createMemory(store)
+      const memory = createMemory()
       memory.addLongTermNote(input.slice('/remember '.length))
       event.sender.send('agent:event', { type: 'done', message: 'Saved to long-term memory.' })
       return { ok: true, text: 'Saved to long-term memory.' }
     }
 
     try {
+      const connection = findConnection(payload?.connectionId)
       const text = await runTerminalAgent(
-        normalizeConfig(store.get('config', defaultConfig)),
+        readAgentConfig(),
         input,
-        createMemory(store),
+        createMemory(),
+        payload?.terminalContext ?? '',
         (agentEvent) => {
           event.sender.send('agent:event', agentEvent)
+        },
+        {
+          executeCommand: (command, timeoutMs) =>
+            executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
         }
       )
+      appendOperationRecord({
+        connectionId: payload?.connectionId,
+        connectionName: connection?.name,
+        status: 'success',
+        summary: input,
+        output: text
+      })
 
       return { ok: true, text }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const connection = findConnection(payload?.connectionId)
+      appendOperationRecord({
+        connectionId: payload?.connectionId,
+        connectionName: connection?.name,
+        status: 'error',
+        summary: input,
+        output: message
+      })
       event.sender.send('agent:event', { type: 'error', message })
       return { ok: false, error: message }
     }
   })
 }
 
-function getStore(): Promise<Store<StoreShape>> {
-  storePromise ??= import('electron-store').then(({ default: ElectronStore }) => {
-    return new ElectronStore<StoreShape>({
-      name: 'terminal-agent',
-      defaults: {
-        config: defaultConfig,
-        memory: defaultMemory
-      }
-    })
-  })
-
-  return storePromise
-}
-
-function createMemory(store: Store<StoreShape>): AgentMemory {
-  return new AgentMemory(normalizeMemory(store.get('memory', defaultMemory)), (nextMemory) => {
-    store.set('memory', normalizeMemory(nextMemory))
+function createMemory(): AgentMemory {
+  return new AgentMemory(readCrescentMemory(), (nextMemory) => {
+    writeCrescentMemory(nextMemory)
   })
 }
 
-function normalizeConfig(config: AgentConfig): AgentConfig {
-  return {
-    openAiApiKey: String(config.openAiApiKey ?? ''),
-    openAiBaseUrl: String(config.openAiBaseUrl ?? ''),
-    model: String(config.model ?? defaultConfig.model),
-    agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
-    maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultConfig.maxActiveTools),
-    openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
-    openApiDocument: String(config.openApiDocument ?? '')
-  }
-}
+function findConnection(id: string | undefined): { id: string; name: string } | undefined {
+  if (!id) return undefined
 
-function normalizeMemory(memory: AgentMemoryState): AgentMemoryState {
-  return {
-    shortTerm: Array.isArray(memory.shortTerm) ? memory.shortTerm.slice(-24) : [],
-    longTerm: {
-      preferences: Array.isArray(memory.longTerm?.preferences) ? memory.longTerm.preferences.slice(-100) : [],
-      notes: Array.isArray(memory.longTerm?.notes) ? memory.longTerm.notes.slice(-100) : []
-    }
-  }
-}
-
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const numeric = Number(value)
-
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.min(max, Math.max(min, Math.round(numeric)))
+  return [...loadSshConfigConnections(), ...readCustomConnections()].find(
+    (connection) => connection.id === id
+  )
 }
