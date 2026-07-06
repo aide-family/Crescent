@@ -24,13 +24,17 @@ export class AgentBrain {
   }
 
   chat(
-    params: Omit<ChatCompletionCreateParamsNonStreaming, 'model' | 'stream'>
+    params: Omit<ChatCompletionCreateParamsNonStreaming, 'model' | 'stream'>,
+    options?: { signal?: AbortSignal }
   ): Promise<ChatCompletion> {
-    return this.client.chat.completions.create({
-      model: this.model,
-      ...params,
-      stream: false
-    })
+    return this.client.chat.completions.create(
+      {
+        model: this.model,
+        ...params,
+        stream: false
+      },
+      options
+    )
   }
 
   async selectRelevantTools(input: {

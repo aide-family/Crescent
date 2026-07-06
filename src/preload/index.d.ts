@@ -3,6 +3,8 @@ import type {
   AgentCommandInput,
   AgentCommandResult,
   AgentConfig,
+  AgentConnectionIntentInput,
+  AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
@@ -50,7 +52,12 @@ interface TerminalAgentApi {
     saveConfig: (config: Partial<AgentConfig>) => Promise<AgentConfig>
     validateConfig: (config: Partial<AgentConfig>) => Promise<AgentValidationResult>
     generateCommand: (input: AgentCommandInput) => Promise<AgentCommandResult>
+    resolveConnectionIntent: (
+      input: AgentConnectionIntentInput
+    ) => Promise<AgentConnectionIntentResult>
     run: (input: AgentRunInput) => Promise<{ ok: boolean; text?: string; error?: string }>
+    cancel: (runId: string) => Promise<{ ok: boolean }>
+    supplement: (input: { runId: string; input: string }) => Promise<{ ok: boolean }>
     onEvent: (callback: (event: AgentEvent) => void) => () => void
   }
   connections: {

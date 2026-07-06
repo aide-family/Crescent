@@ -7,6 +7,7 @@ import { AgentPlanner } from './planner'
 import { AgentPromptBuilder } from './prompt-builder'
 import { AgentToolRuntime } from './tool-runtime'
 import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
+import type { AgentRunControls } from './runner'
 
 const MAX_TOOL_STEPS = 8
 
@@ -17,11 +18,13 @@ export class TerminalAgentCore {
     private readonly config: AgentConfig,
     private readonly memory: AgentMemory,
     private readonly emit: (event: AgentEvent) => void,
-    private readonly terminalExecutor?: TerminalCommandExecutor
+    private readonly terminalExecutor?: TerminalCommandExecutor,
+    private readonly controls?: AgentRunControls
   ) {}
 
   async run(userInput: string, terminalContext = ''): Promise<string> {
     assertConfig(this.config)
+    this.throwIfCanceled()
 
     const brain = new AgentBrain(this.config)
     const memoryBlock = this.memory.getPromptBlock()
@@ -78,21 +81,28 @@ export class TerminalAgentCore {
     terminalContext: string
   }): Promise<string> {
     this.emit({ type: 'status', message: 'Running in chat-only terminal assistant mode.' })
+    this.throwIfCanceled()
 
-    const completion = await input.brain.chat({
-      messages: [
-        {
-          role: 'system',
-          content: this.promptBuilder.buildChatOnlyPrompt({
-            mode: this.config.agentMode,
-            memoryBlock: input.memoryBlock,
-            terminalContext: input.terminalContext
-          })
-        },
-        ...this.memory.getShortTermMessages(),
-        { role: 'user', content: input.userInput }
-      ]
-    })
+    const completion = await input.brain.chat(
+      {
+        messages: [
+          {
+            role: 'system',
+            content: this.promptBuilder.buildChatOnlyPrompt({
+              mode: this.config.agentMode,
+              memoryBlock: input.memoryBlock,
+              terminalContext: input.terminalContext
+            })
+          },
+          ...this.memory.getShortTermMessages(),
+          { role: 'user', content: input.userInput }
+        ]
+      },
+      {
+        signal: this.controls?.signal
+      }
+    )
+    this.throwIfCanceled()
     const text = completion.choices[0]?.message.content ?? ''
 
     this.emit({ type: 'token', text })
@@ -126,6 +136,8 @@ export class TerminalAgentCore {
     ]
 
     for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
+      this.throwIfCanceled()
+      appendSupplementalInputs(messages, this.controls?.consumeSupplementalInputs?.())
       this.emit({
         type: 'thought',
         message:
@@ -134,11 +146,17 @@ export class TerminalAgentCore {
             : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
       })
 
-      const completion = await input.brain.chat({
-        messages,
-        tools: input.toolRuntime.tools,
-        tool_choice: 'auto'
-      })
+      const completion = await input.brain.chat(
+        {
+          messages,
+          tools: input.toolRuntime.tools,
+          tool_choice: 'auto'
+        },
+        {
+          signal: this.controls?.signal
+        }
+      )
+      this.throwIfCanceled()
       const message = completion.choices[0]?.message
 
       if (!message) throw new Error('Model returned an empty response.')
@@ -153,6 +171,7 @@ export class TerminalAgentCore {
       }
 
       for (const toolCall of message.tool_calls) {
+        this.throwIfCanceled()
         if (toolCall.type !== 'function') continue
 
         this.emit({
@@ -176,6 +195,25 @@ export class TerminalAgentCore {
 
     throw new Error('Tool calling loop exceeded the maximum step limit.')
   }
+
+  private throwIfCanceled(): void {
+    if (this.controls?.signal?.aborted) throw new Error('Agent run canceled.')
+  }
+}
+
+function appendSupplementalInputs(
+  messages: ChatCompletionMessageParam[],
+  supplementalInputs: string[] | undefined
+): void {
+  if (!supplementalInputs?.length) return
+
+  messages.push({
+    role: 'user',
+    content: [
+      'Additional context supplied by the user while this run was still active.',
+      ...supplementalInputs.map((input, index) => `Supplement ${index + 1}:\n${input}`)
+    ].join('\n\n')
+  })
 }
 
 function assertConfig(config: AgentConfig): void {
