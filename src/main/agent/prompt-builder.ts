@@ -1,6 +1,7 @@
 export interface AgentPromptInput {
   mode: string
   memoryBlock: string
+  skillContext?: string
   terminalContext: string
   planSteps?: string[]
 }
@@ -47,6 +48,7 @@ export class AgentPromptBuilder {
   private buildContextBlock(input: AgentPromptInput): string {
     return [
       `Long-term memory:\n${input.memoryBlock}`,
+      input.skillContext ? `Agent skills:\n${input.skillContext}` : '',
       input.terminalContext
         ? `Recent terminal context, use it to answer accurately but do not claim you executed new commands:\n${input.terminalContext}`
         : ''

@@ -4,6 +4,7 @@ import { generateTerminalCommand } from './command'
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './openclaw-config'
 import { AgentBrain } from './brain'
+import { buildAgentSkillContext, listAgentSkills } from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { executeCommandInTerminal } from '../terminal/ipc'
@@ -50,6 +51,10 @@ export function registerAgentIpc(): void {
     )
   })
 
+  ipcMain.handle('agent:list-skills', () => {
+    return listAgentSkills()
+  })
+
   ipcMain.handle('agent:save-config', (_, config: Partial<AgentConfig>) => {
     const nextConfig = normalizeAgentConfig({
       ...readAgentConfig(),
@@ -66,16 +71,39 @@ export function registerAgentIpc(): void {
     })
 
     try {
-      const registry = await loadOpenApiToolRegistry(nextConfig)
+      await validateModel(nextConfig)
+    } catch (error) {
+      return {
+        ok: false,
+        modelOk: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
 
+    const hasOpenApiConfig = Boolean(
+      nextConfig.openApiBaseUrl.trim() && nextConfig.openApiDocument.trim()
+    )
+    if (!hasOpenApiConfig) {
       return {
         ok: true,
+        modelOk: true,
+        toolCount: 0,
+        tools: []
+      }
+    }
+
+    try {
+      const registry = await loadOpenApiToolRegistry(nextConfig)
+      return {
+        ok: true,
+        modelOk: true,
         toolCount: registry.tools.length,
         tools: registry.catalog.slice(0, 8)
       }
     } catch (error) {
       return {
         ok: false,
+        modelOk: true,
         error: error instanceof Error ? error.message : String(error)
       }
     }
@@ -192,6 +220,7 @@ export function registerAgentIpc(): void {
       const controller = new AbortController()
       activeRuns.set(runId, { controller, supplements: [] })
       const connection = findConnection(payload?.connectionId)
+      const skillContext = buildAgentSkillContext(input)
       const text = await runTerminalAgent(
         readAgentConfig(),
         input,
@@ -206,6 +235,7 @@ export function registerAgentIpc(): void {
         },
         {
           signal: controller.signal,
+          skillContext: skillContext.promptBlock,
           consumeSupplementalInputs: () => {
             const run = activeRuns.get(runId)
             if (!run?.supplements.length) return []
@@ -292,6 +322,21 @@ function createMemory(): AgentMemory {
   return new AgentMemory(readCrescentMemory(), (nextMemory) => {
     writeCrescentMemory(nextMemory)
   })
+}
+
+async function validateModel(config: AgentConfig): Promise<void> {
+  const completion = await new AgentBrain(config).chat({
+    temperature: 0,
+    messages: [
+      {
+        role: 'user',
+        content: 'Reply with OK.'
+      }
+    ]
+  })
+
+  const text = completion.choices[0]?.message.content?.trim()
+  if (!text) throw new Error('Model returned an empty validation response.')
 }
 
 function findConnection(id: string | undefined): { id: string; name: string } | undefined {

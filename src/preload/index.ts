@@ -9,13 +9,14 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
+  AgentSkillOption,
   AgentValidationResult,
   ConnectionConfig,
   ConnectionInput,
   StoredAgentLogEntry,
   StoredAgentRun,
   StoredSessionTab
-} from '../main/agent/types'
+} from '../shared/agent-types'
 
 // Custom APIs for renderer
 const api = {
@@ -94,6 +95,7 @@ const api = {
   agent: {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
+    listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),
     saveConfig: (config: Partial<AgentConfig>): Promise<AgentConfig> =>
       ipcRenderer.invoke('agent:save-config', config),
     validateConfig: (config: Partial<AgentConfig>): Promise<AgentValidationResult> =>

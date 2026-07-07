@@ -4,6 +4,7 @@ import type { AgentMemory } from './memory'
 
 export interface AgentRunControls {
   signal?: AbortSignal
+  skillContext?: string
   consumeSupplementalInputs?: () => string[]
 }
 

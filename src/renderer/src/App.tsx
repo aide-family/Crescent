@@ -6,6 +6,7 @@ import {
   BotIcon,
   CheckIcon,
   CopyIcon,
+  LanguagesIcon,
   Loader2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
@@ -14,10 +15,11 @@ import {
   PlusIcon,
   ServerIcon,
   SettingsIcon,
-  TerminalIcon,
-  TestTube2Icon
+  TestTube2Icon,
+  XIcon
 } from 'lucide-react'
 
+import { ProductLogo } from '@renderer/components/ProductLogo'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
@@ -57,9 +59,10 @@ import type {
   AgentProviderConfig,
   AgentProviderModelConfig,
   AgentValidationResult,
+  AgentSkillOption,
   ConnectionConfig,
   ConnectionInput
-} from '../../main/agent/types'
+} from '../../shared/agent-types'
 
 const emptyConfig: AgentConfig = {
   providers: [
@@ -114,7 +117,17 @@ interface ConnectionIntent {
 
 interface PostConnectionTask {
   input: string
+  displayInput: string
   connection: ConnectionConfig
+}
+
+interface SlashCommandOption {
+  id: string
+  title: string
+  description: string
+  value: string
+  keywords: string[]
+  skill?: AgentSkillOption
 }
 
 interface AgentTerminalTab {
@@ -129,6 +142,7 @@ interface AgentTerminalTab {
   terminalMode: 'pty' | 'pipe'
   terminalOutput: string
   agentInput: string
+  skillRefs: AgentSkillOption[]
   agentBusy: boolean
   copiedLogId: number | null
   agentLog: AgentLogEntry[]
@@ -147,6 +161,7 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
     terminalMode: input?.terminalMode ?? 'pty',
     terminalOutput: input?.terminalOutput ?? '',
     agentInput: input?.agentInput ?? '',
+    skillRefs: input?.skillRefs ?? [],
     agentBusy: input?.agentBusy ?? false,
     copiedLogId: input?.copiedLogId ?? null,
     agentLog: input?.agentLog ?? []
@@ -169,6 +184,7 @@ function App(): React.JSX.Element {
   const activeRunCanceledRef = useRef(new Set<string>())
   const activeRunIdRef = useRef(new Map<string, string>())
   const activeRunInputRef = useRef(new Map<string, string>())
+  const validationRequestRef = useRef(0)
   const pipeInputBufferRef = useRef('')
   const pipeCursorRef = useRef(0)
   const pipeHistoryRef = useRef<string[]>([])
@@ -180,12 +196,19 @@ function App(): React.JSX.Element {
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const runAgentConversationRef = useRef<
-    ((input: string, tabId: string, connectionId?: string) => Promise<void>) | null
+    | ((
+        input: string,
+        tabId: string,
+        connectionId?: string,
+        displayInput?: string
+      ) => Promise<void>)
+    | null
   >(null)
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [models, setModels] = useState<AgentModelOption[]>([])
+  const [skills, setSkills] = useState<AgentSkillOption[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
   const [saved, setSaved] = useState(false)
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
@@ -209,6 +232,8 @@ function App(): React.JSX.Element {
   const [connectionImportText, setConnectionImportText] = useState('')
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
+  const [slashCommandOpen, setSlashCommandOpen] = useState(true)
+  const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
   const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
@@ -245,15 +270,35 @@ function App(): React.JSX.Element {
   )
   const aiState: 'ready' | 'pending' | 'not-ready' = validating
     ? 'pending'
-    : config.model.trim()
-      ? 'ready'
-      : 'not-ready'
+    : validation === undefined && config.model.trim()
+      ? 'pending'
+      : validation?.modelOk
+        ? 'ready'
+        : 'not-ready'
   const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
     ? 'ready'
     : activeTab.sessionId
       ? 'not-ready'
       : 'pending'
   const terminalVisible = hiddenPane !== 'terminal'
+  const slashCommandQuery = getSlashCommandQuery(activeTab.agentInput)
+  const slashCommandOptions = useMemo(
+    () =>
+      buildSlashCommandOptions({
+        activeProviderId,
+        activeTab,
+        config,
+        modelName: activeModel?.name ?? config.model,
+        skills,
+        t
+      }).filter((command) => matchesSlashCommand(command, slashCommandQuery)),
+    [activeModel?.name, activeProviderId, activeTab, config, skills, slashCommandQuery, t]
+  )
+  const slashMenuVisible =
+    slashCommandOpen && slashCommandQuery !== undefined && slashCommandOptions.length > 0
+  const selectedSlashCommandIndex = slashCommandOptions.length
+    ? Math.min(slashCommandIndex, slashCommandOptions.length - 1)
+    : 0
   const failedToLoadConfigText = t.terminal.failedToLoadConfig
   const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
   const failedToLoadModelsText = t.terminal.failedToLoadModels
@@ -398,7 +443,12 @@ function App(): React.JSX.Element {
     void Promise.all(
       tasks.map(async (task) => {
         await waitForTerminalIdle(targetTabId, { idleMs: 1500, timeoutMs: 60_000 })
-        await runAgentConversationRef.current?.(task.input, targetTabId, task.connection.id)
+        await runAgentConversationRef.current?.(
+          task.input,
+          targetTabId,
+          task.connection.id,
+          task.displayInput
+        )
       })
     )
   }, [])
@@ -640,6 +690,18 @@ function App(): React.JSX.Element {
         setConfig(nextConfig)
         setModels(flattenProviderModels(nextConfig.providers))
         setSettingsProviderId(nextConfig.providers[0]?.id ?? 'nova-litellm')
+        const requestId = validationRequestRef.current + 1
+        validationRequestRef.current = requestId
+        setValidating(true)
+        setValidation(undefined)
+        void window.api.agent
+          .validateConfig(nextConfig)
+          .then((result) => {
+            if (validationRequestRef.current === requestId) setValidation(result)
+          })
+          .finally(() => {
+            if (validationRequestRef.current === requestId) setValidating(false)
+          })
       })
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
@@ -650,6 +712,10 @@ function App(): React.JSX.Element {
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadModelsText}: ${String(error)}\x1b[0m`)
       })
+    window.api.agent
+      .listSkills()
+      .then(setSkills)
+      .catch(() => setSkills([]))
     window.api.connections
       .list()
       .then((items) => {
@@ -707,12 +773,7 @@ function App(): React.JSX.Element {
     terminal.open(host)
     fitAddon.fit()
 
-    if (tab.terminalOutput) {
-      terminal.write(tab.terminalOutput)
-    } else {
-      terminal.writeln(`\x1b[1m${t.terminal.shellTitle}\x1b[0m`)
-      terminal.writeln(t.terminal.shellIntro)
-    }
+    if (tab.terminalOutput) terminal.write(tab.terminalOutput)
 
     const terminalDataDisposable = terminal.onData((data) => {
       if (terminalModeRef.current === 'pipe') {
@@ -768,9 +829,6 @@ function App(): React.JSX.Element {
         terminalCwd: session.cwd,
         terminalReady: true
       }))
-      terminal.writeln(
-        `\r\n\x1b[2m${t.terminal.terminalMode}: ${session.mode.toUpperCase()}${session.mode === 'pipe' ? ` (${t.terminal.fallbackLimited})` : ''}\x1b[0m`
-      )
       const pendingConnection = pendingSshRef.current.get(tab.id)
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
@@ -834,20 +892,27 @@ function App(): React.JSX.Element {
     return nextConfig
   }
 
-  async function validateConfig(): Promise<void> {
+  async function validateConfig(nextConfigInput = config): Promise<void> {
+    const requestId = validationRequestRef.current + 1
+    validationRequestRef.current = requestId
     setValidating(true)
     setValidation(undefined)
 
     try {
-      const result = await window.api.agent.validateConfig(config)
-      setValidation(result)
+      const result = await window.api.agent.validateConfig(nextConfigInput)
+      if (validationRequestRef.current === requestId) setValidation(result)
     } finally {
-      setValidating(false)
+      if (validationRequestRef.current === requestId) setValidating(false)
     }
   }
 
   async function applyModel(modelId: string): Promise<void> {
-    await saveAgentConfig({ ...config, model: modelId })
+    const optimisticConfig = { ...config, model: modelId }
+
+    setConfig(optimisticConfig)
+    setValidation(undefined)
+    const nextConfig = await saveAgentConfig(optimisticConfig)
+    void validateConfig(nextConfig)
   }
 
   async function applyProvider(providerId: string): Promise<void> {
@@ -887,7 +952,11 @@ function App(): React.JSX.Element {
       .join('\n')
   }
 
-  function connectToConnection(connection: ConnectionConfig, postLoginInput?: string): string {
+  function connectToConnection(
+    connection: ConnectionConfig,
+    postLoginInput?: string,
+    postLoginDisplayInput?: string
+  ): string {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
     let targetTabId = currentTab?.id ?? 'default'
 
@@ -907,7 +976,7 @@ function App(): React.JSX.Element {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
       postConnectionTasksRef.current.set(targetTabId, [
         ...tasks,
-        { input: postLoginInput, connection }
+        { input: postLoginInput, displayInput: postLoginDisplayInput ?? postLoginInput, connection }
       ])
     }
 
@@ -987,11 +1056,14 @@ function App(): React.JSX.Element {
 
     const tabId = activeTabIdRef.current
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
-    const input = tab?.agentInput.trim() ?? ''
-    if (!input) return
+    const displayInput = tab?.agentInput.trim() ?? ''
+    if (!displayInput) return
+
+    const skillRefs = tab?.skillRefs ?? []
+    const input = buildAgentInputWithSkillRefs(displayInput, skillRefs, t)
 
     if (tab?.agentBusy) {
-      updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+      updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
       const runId = activeRunIdRef.current.get(tabId)
       if (runId) void window.api.agent.supplement({ runId, input })
       updateAgentRun(tabId, (run) => ({
@@ -1000,28 +1072,35 @@ function App(): React.JSX.Element {
           ...run.actions,
           {
             title: t.input.contextSupplement,
-            detail: `${t.input.contextSupplementDetail}\n${input}`
+            detail: formatVisibleInputWithSkillRefs(
+              `${t.input.contextSupplementDetail}\n${displayInput}`,
+              skillRefs,
+              t
+            )
           }
         ]
       }))
       return
     }
 
-    updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+    updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
     const shouldResolveConnectionIntent = !tab?.isSsh && !tab?.connectionId
     const connectionIntent = shouldResolveConnectionIntent
-      ? parseConnectionIntent(input)
+      ? parseConnectionIntent(displayInput)
       : undefined
     if (connectionIntent) {
       const matchedConnection = await findConnectionForIntent(connectionIntent)
 
       if (!matchedConnection) {
         if (!connectionIntent.explicit) {
-          await runAgentConversation(input, tabId, tab?.connectionId || undefined)
+          await runAgentConversation(input, tabId, tab?.connectionId || undefined, displayInput)
           return
         }
 
-        appendLog({ kind: 'user', text: input }, tabId)
+        appendLog(
+          { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
+          tabId
+        )
         appendLog(
           {
             kind: 'assistant',
@@ -1041,11 +1120,14 @@ function App(): React.JSX.Element {
           },
           tabId
         )
-        updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+        updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
         return
       }
 
-      if (!connectionIntent.executeAfterLogin) appendLog({ kind: 'user', text: input }, tabId)
+      appendLog(
+        { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
+        tabId
+      )
       appendLog(
         {
           kind: 'assistant',
@@ -1065,32 +1147,39 @@ function App(): React.JSX.Element {
         },
         tabId
       )
-      connectToConnection(matchedConnection, connectionIntent.executeAfterLogin ? input : undefined)
-      updateTab(tabId, (current) => ({ ...current, agentInput: '' }))
+      connectToConnection(
+        matchedConnection,
+        connectionIntent.executeAfterLogin ? input : undefined,
+        connectionIntent.executeAfterLogin
+          ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t)
+          : undefined
+      )
+      updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
       return
     }
 
-    await runAgentConversation(input, tabId, tab?.connectionId || undefined)
+    await runAgentConversation(input, tabId, tab?.connectionId || undefined, displayInput)
   }
 
   async function runAgentConversation(
     input: string,
     tabId: string,
-    connectionId?: string
+    connectionId?: string,
+    displayInput = input
   ): Promise<void> {
     updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: true }))
     activeRunCanceledRef.current.delete(tabId)
     const runId = `run-${crypto.randomUUID()}`
     activeRunIdRef.current.set(tabId, runId)
-    activeRunInputRef.current.set(tabId, input)
+    activeRunInputRef.current.set(tabId, displayInput)
     void window.api.storage.saveAgentRun({
       runId,
       tabId,
-      input,
+      input: displayInput,
       status: 'running',
       connectionId
     })
-    appendLog({ kind: 'user', text: input }, tabId)
+    appendLog({ kind: 'user', text: displayInput }, tabId)
     const runLogId = appendLog(
       {
         kind: 'assistant',
@@ -1127,7 +1216,7 @@ function App(): React.JSX.Element {
         void window.api.storage.saveAgentRun({
           runId,
           tabId,
-          input,
+          input: displayInput,
           status: 'success',
           connectionId,
           output: text
@@ -1140,7 +1229,7 @@ function App(): React.JSX.Element {
         void window.api.storage.saveAgentRun({
           runId,
           tabId,
-          input,
+          input: displayInput,
           status: 'error',
           connectionId,
           error: result.error || t.input.failed
@@ -1157,7 +1246,7 @@ function App(): React.JSX.Element {
       void window.api.storage.saveAgentRun({
         runId,
         tabId,
-        input,
+        input: displayInput,
         status: 'error',
         connectionId,
         error: message
@@ -1172,10 +1261,54 @@ function App(): React.JSX.Element {
   }
 
   function handleAgentInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (slashMenuVisible) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSlashCommandIndex((current) => (current + 1) % slashCommandOptions.length)
+        return
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSlashCommandIndex(
+          (current) => (current - 1 + slashCommandOptions.length) % slashCommandOptions.length
+        )
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSlashCommandOpen(false)
+        return
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        insertSlashCommand(slashCommandOptions[selectedSlashCommandIndex])
+        return
+      }
+    }
+
     if (event.key !== 'Enter' || event.shiftKey) return
 
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
+  }
+
+  function insertSlashCommand(command: SlashCommandOption): void {
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      agentInput: replaceSlashCommandInput(tab.agentInput, command.skill ? '' : command.value),
+      skillRefs: command.skill ? addUniqueSkillRef(tab.skillRefs, command.skill) : tab.skillRefs
+    }))
+    setSlashCommandOpen(false)
+  }
+
+  function removeSkillRef(skillId: string): void {
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      skillRefs: tab.skillRefs.filter((skill) => skill.id !== skillId)
+    }))
   }
 
   function updateConfig<K extends keyof AgentConfig>(key: K, value: AgentConfig[K]): void {
@@ -1398,18 +1531,18 @@ function App(): React.JSX.Element {
     <main className="flex h-full flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-3">
-          <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <TerminalIcon aria-hidden="true" />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold">Crescent</span>
-            <span className="text-xs text-muted-foreground">{t.app.titleDescription}</span>
-          </div>
+          <ProductLogo />
+          <span className="text-sm font-semibold">Crescent</span>
         </div>
         <div className="flex items-center gap-2">
           <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
-            <SelectTrigger className="h-8 w-28">
-              <SelectValue aria-label={t.app.language} />
+            <SelectTrigger
+              size="sm"
+              className="size-8 justify-center px-0 [&>svg:last-child]:hidden"
+              aria-label={t.app.language}
+              title={t.app.language}
+            >
+              <LanguagesIcon aria-hidden="true" />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
@@ -1424,9 +1557,13 @@ function App(): React.JSX.Element {
           </Select>
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
             <SheetTrigger asChild>
-              <Button variant="outline" size="sm">
-                <SettingsIcon data-icon="inline-start" />
-                {t.common.settings}
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={t.common.settings}
+                title={t.common.settings}
+              >
+                <SettingsIcon aria-hidden="true" />
               </Button>
             </SheetTrigger>
             <SheetContent className="w-full sm:max-w-xl">
@@ -1518,10 +1655,7 @@ function App(): React.JSX.Element {
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
-                    <Select
-                      value={config.model}
-                      onValueChange={(value) => updateConfig('model', value)}
-                    >
+                    <Select value={config.model} onValueChange={(value) => void applyModel(value)}>
                       <SelectTrigger id="model" className="w-full">
                         <SelectValue placeholder={t.settings.selectModel} />
                       </SelectTrigger>
@@ -1617,7 +1751,7 @@ function App(): React.JSX.Element {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={validateConfig}
+                  onClick={() => validateConfig()}
                   disabled={validating}
                 >
                   {validating ? (
@@ -1739,7 +1873,6 @@ function App(): React.JSX.Element {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">{t.app.chatTitle}</h2>
-                  <p className="text-xs text-muted-foreground">{t.app.chatSubtitle}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1777,39 +1910,42 @@ function App(): React.JSX.Element {
                       </span>
                       <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={t.common.copy}
-                      title={t.common.copy}
-                      onClick={() => copyLogEntry(entry)}
-                    >
-                      {activeTab.copiedLogId === entry.id ? (
-                        <CheckIcon aria-hidden="true" />
-                      ) : (
-                        <CopyIcon aria-hidden="true" />
-                      )}
-                    </Button>
+                    {isConversationLog(entry.kind) && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.common.copy}
+                        title={t.common.copy}
+                        onClick={() => copyLogEntry(entry)}
+                      >
+                        {activeTab.copiedLogId === entry.id ? (
+                          <CheckIcon aria-hidden="true" />
+                        ) : (
+                          <CopyIcon aria-hidden="true" />
+                        )}
+                      </Button>
+                    )}
                   </div>
-                  <MarkdownContent value={entry.text} />
-                  <div className="mt-3 flex justify-end border-t pt-2">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-label={t.common.copyMarkdown}
-                      title={t.common.copyMarkdown}
-                      onClick={() => copyLogEntry(entry)}
-                    >
-                      {activeTab.copiedLogId === entry.id ? (
-                        <CheckIcon data-icon="inline-start" />
-                      ) : (
-                        <CopyIcon data-icon="inline-start" />
-                      )}
-                      {activeTab.copiedLogId === entry.id ? t.common.copied : t.common.copyMarkdown}
-                    </Button>
-                  </div>
+                  <AgentLogContent entry={entry} t={t} />
+                  {isConversationLog(entry.kind) && (
+                    <div className="mt-2 flex justify-end border-t pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.common.copyMarkdown}
+                        title={t.common.copyMarkdown}
+                        onClick={() => copyLogEntry(entry)}
+                      >
+                        {activeTab.copiedLogId === entry.id ? (
+                          <CheckIcon aria-hidden="true" />
+                        ) : (
+                          <CopyIcon aria-hidden="true" />
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1831,9 +1967,15 @@ function App(): React.JSX.Element {
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <Select value={config.model} onValueChange={applyModel}>
+                  <Select value={config.model} onValueChange={(value) => void applyModel(value)}>
                     <SelectTrigger className="h-8 min-w-0 flex-1">
-                      <SelectValue aria-label={t.app.model} />
+                      <span className="sr-only">
+                        <SelectValue aria-label={t.app.model} />
+                      </span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <StatusDot state={aiState} />
+                        <span className="truncate">{activeModel?.name ?? config.model}</span>
+                      </span>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -1847,12 +1989,72 @@ function App(): React.JSX.Element {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="rounded-lg border bg-background p-2 shadow-sm">
+                <div className="relative rounded-lg border bg-background p-2 shadow-sm">
+                  {slashMenuVisible && (
+                    <div className="absolute bottom-full left-2 right-2 z-30 mb-2 overflow-hidden rounded-md border bg-popover text-xs text-popover-foreground shadow-lg">
+                      <div className="border-b px-3 py-2 text-muted-foreground">
+                        {t.input.slashCommandHint}
+                      </div>
+                      <div className="max-h-56 overflow-auto p-1">
+                        {slashCommandOptions.map((command, index) => (
+                          <button
+                            key={command.id}
+                            type="button"
+                            className={`block w-full rounded px-2 py-2 text-left transition-colors ${
+                              index === selectedSlashCommandIndex
+                                ? 'bg-secondary text-secondary-foreground'
+                                : 'hover:bg-muted/50'
+                            }`}
+                            onMouseDown={(event) => {
+                              event.preventDefault()
+                              insertSlashCommand(command)
+                            }}
+                          >
+                            <span className="block font-medium">/{command.id}</span>
+                            <span className="block text-muted-foreground">
+                              {command.description}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {activeTab.skillRefs.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2 px-1">
+                      {activeTab.skillRefs.map((skill) => (
+                        <Badge
+                          key={skill.id}
+                          variant="secondary"
+                          className="max-w-full gap-1 rounded-md pr-1"
+                          title={[skill.name, skill.description, skill.path]
+                            .filter(Boolean)
+                            .join('\n')}
+                        >
+                          <span className="truncate">
+                            {t.input.referencedSkill}: {skill.name}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4 hover:bg-background/70"
+                            aria-label={`${t.input.removeSkillRef}: ${skill.name}`}
+                            title={`${t.input.removeSkillRef}: ${skill.name}`}
+                            onClick={() => removeSkillRef(skill.id)}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                   <Textarea
                     value={activeTab.agentInput}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setSlashCommandOpen(true)
+                      setSlashCommandIndex(0)
                       updateTab(activeTab.id, (tab) => ({ ...tab, agentInput: event.target.value }))
-                    }
+                    }}
                     onKeyDown={handleAgentInputKeyDown}
                     placeholder={t.input.askPlaceholder}
                     className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
@@ -1866,8 +2068,9 @@ function App(): React.JSX.Element {
                       {activeTab.agentBusy && (
                         <Button
                           type="button"
-                          variant="outline"
-                          size="sm"
+                          variant="destructive"
+                          size="xs"
+                          className="h-5 px-2 text-[11px]"
                           onClick={() => stopAgentRun()}
                         >
                           {t.common.stop}
@@ -1875,11 +2078,13 @@ function App(): React.JSX.Element {
                       )}
                       <Button
                         type="submit"
-                        size="icon"
+                        size={activeTab.agentBusy ? 'icon-xs' : 'icon'}
                         aria-label={activeTab.agentBusy ? t.input.contextAdd : t.common.send}
-                        disabled={!activeTab.agentInput.trim()}
+                        disabled={!activeTab.agentBusy && !activeTab.agentInput.trim()}
                       >
-                        {activeTab.agentBusy ? (
+                        {activeTab.agentBusy && !activeTab.agentInput.trim() ? (
+                          <Loader2Icon className="animate-spin" aria-hidden="true" />
+                        ) : activeTab.agentBusy ? (
                           <PlusIcon aria-hidden="true" />
                         ) : (
                           <ArrowUpIcon aria-hidden="true" />
@@ -2181,7 +2386,7 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
-      <footer className="flex h-9 shrink-0 items-center justify-between border-t px-4 text-xs text-muted-foreground">
+      <footer className="flex h-9 shrink-0 items-center border-t px-4 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2">
           <StatusDot state={shellState} />
           {shellState === 'ready'
@@ -2192,14 +2397,6 @@ function App(): React.JSX.Element {
           <span className="text-muted-foreground/70">
             {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
           </span>
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <StatusDot state={aiState} />
-          {aiState === 'ready'
-            ? t.app.aiReady
-            : aiState === 'pending'
-              ? t.app.aiPending
-              : t.app.aiNotReady}
         </span>
       </footer>
     </main>
@@ -2225,6 +2422,36 @@ function logClassName(kind: AgentLogEntry['kind']): string {
     default:
       return `${base} bg-muted/40 text-muted-foreground`
   }
+}
+
+function isConversationLog(kind: AgentLogEntry['kind']): boolean {
+  return kind === 'user' || kind === 'assistant' || kind === 'error'
+}
+
+function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
+  if (isConversationLog(entry.kind)) return <MarkdownContent value={entry.text} />
+
+  const summary = summarizeBehaviorLog(entry.text, t)
+
+  return (
+    <details className="group rounded-md border bg-background/60">
+      <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium marker:text-muted-foreground">
+        {summary}
+      </summary>
+      <pre className="max-h-80 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+        {entry.text}
+      </pre>
+    </details>
+  )
+}
+
+function summarizeBehaviorLog(value: string, t: Dictionary): string {
+  const firstLine = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+
+  return firstLine || t.input.actionDetails
 }
 
 function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): React.JSX.Element {
@@ -2299,6 +2526,9 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
   if (/^Executing plan with ReAct step /.test(message)) return t.input.createdPlan
   if (/^Reasoning and acting step /.test(message)) return t.roles.thought
+  if (message === 'Analyzing tool results and preparing the final answer...') {
+    return t.input.synthesizingResult
+  }
 
   return message
 }
@@ -2386,6 +2616,161 @@ function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOpti
       reasoning: Boolean(model.reasoning)
     }))
   )
+}
+
+function getSlashCommandQuery(value: string): string | undefined {
+  if (!value.startsWith('/') || value.includes('\n')) return undefined
+
+  return value.slice(1).trim().toLowerCase()
+}
+
+function matchesSlashCommand(command: SlashCommandOption, query: string | undefined): boolean {
+  if (query === undefined) return false
+  if (!query) return true
+
+  const searchable = [command.id, command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(query)
+}
+
+function replaceSlashCommandInput(value: string, replacement: string): string {
+  if (!value.startsWith('/')) return `${replacement}\n${value}`.trim()
+
+  return `${replacement}\n${value.replace(/^\/[^\n]*/, '').replace(/^\n/, '')}`.trim()
+}
+
+function buildSlashCommandOptions(input: {
+  activeProviderId: string
+  activeTab: AgentTerminalTab
+  config: AgentConfig
+  modelName: string
+  skills: AgentSkillOption[]
+  t: Dictionary
+}): SlashCommandOption[] {
+  const connectionText = input.activeTab.connectionId
+    ? [
+        `${input.t.terminal.connectionTarget}: ${input.activeTab.connectionName ?? input.activeTab.connectionId}`,
+        `connectionId: ${input.activeTab.connectionId}`,
+        `tab: ${input.activeTab.title}`
+      ].join('\n')
+    : [
+        `${input.t.terminal.connectionTarget}: ${input.t.connections.noConnections}`,
+        `tab: ${input.activeTab.title}`
+      ].join('\n')
+  const terminalText = [
+    `${input.t.terminal.terminalMode}: ${input.activeTab.terminalMode.toUpperCase()}`,
+    `${input.t.app.workingDirectory}: ${input.activeTab.terminalCwd || '...'}`,
+    `tab: ${input.activeTab.title}`,
+    `ssh: ${input.activeTab.isSsh ? 'true' : 'false'}`
+  ].join('\n')
+
+  const skillOptions = input.skills.map((skill) => buildSkillSlashCommand(skill, input.t))
+
+  return [
+    {
+      id: 'mode',
+      title: input.t.input.slashMode,
+      description: input.t.input.slashModeDescription,
+      value: `${input.t.settings.agentMode}: ${formatAgentMode(input.config.agentMode)}`,
+      keywords: ['mode', 'agent', 'react', 'plan', '模式', '对话模式']
+    },
+    {
+      id: 'model',
+      title: input.t.input.slashModel,
+      description: input.t.input.slashModelDescription,
+      value: [
+        `${input.t.app.provider}: ${input.activeProviderId}`,
+        `${input.t.app.model}: ${input.modelName}`
+      ].join('\n'),
+      keywords: ['model', 'provider', '模型', '供应商']
+    },
+    {
+      id: 'terminal',
+      title: input.t.input.slashTerminal,
+      description: input.t.input.slashTerminalDescription,
+      value: terminalText,
+      keywords: ['terminal', 'shell', 'cwd', '终端', '目录']
+    },
+    {
+      id: 'connection',
+      title: input.t.input.slashConnection,
+      description: input.t.input.slashConnectionDescription,
+      value: connectionText,
+      keywords: ['connection', 'ssh', 'host', '连接', '主机']
+    },
+    ...skillOptions,
+    {
+      id: 'skill',
+      title: input.t.input.slashSkill,
+      description: input.t.input.slashSkillDescription,
+      value: '',
+      keywords: ['skill', 'skills', '技能']
+    },
+    {
+      id: 'skills',
+      title: input.t.input.slashSkills,
+      description: input.t.input.slashSkillsDescription,
+      value: '',
+      keywords: ['skill', 'skills', 'rules', '技能', '规则']
+    }
+  ]
+}
+
+function buildSkillSlashCommand(skill: AgentSkillOption, t: Dictionary): SlashCommandOption {
+  return {
+    id: `skill:${skill.name}`,
+    title: skill.name,
+    description: skill.description || t.input.slashSkillDescription,
+    value: '',
+    keywords: ['skill', 'skills', skill.name, skill.description, skill.source],
+    skill
+  }
+}
+
+function addUniqueSkillRef(
+  skillRefs: AgentSkillOption[],
+  skill: AgentSkillOption
+): AgentSkillOption[] {
+  if (skillRefs.some((current) => current.id === skill.id)) return skillRefs
+
+  return [...skillRefs, skill]
+}
+
+function buildAgentInputWithSkillRefs(
+  input: string,
+  skillRefs: AgentSkillOption[],
+  t: Dictionary
+): string {
+  if (skillRefs.length === 0) return input
+
+  const skillLines = skillRefs.flatMap((skill) => [
+    `- ${t.input.slashSkillUseLabel}: ${skill.name}`,
+    `  ${t.input.slashSkillPathLabel}: ${skill.path}`,
+    skill.description ? `  ${t.input.slashSkillDescriptionLabel}: ${skill.description}` : '',
+    `  ${t.input.slashSkillRequirement}`
+  ])
+
+  return [
+    `${t.input.referencedSkills}:`,
+    ...skillLines.filter(Boolean),
+    '',
+    `${t.input.slashSkillTaskLabel}:`,
+    input
+  ].join('\n')
+}
+
+function formatVisibleInputWithSkillRefs(
+  input: string,
+  skillRefs: AgentSkillOption[],
+  t: Dictionary
+): string {
+  if (skillRefs.length === 0) return input
+
+  const skills = skillRefs.map((skill) => `\`${skill.name}\``).join(', ')
+
+  return `${t.input.referencedSkills}: ${skills}\n\n${input}`
 }
 
 function parseConnectionIntent(input: string): ConnectionIntent | undefined {
@@ -2484,14 +2869,16 @@ async function runConnectionCommandSequence(
   const [sshCommand, ...loginActions] = commands
   if (!sshCommand) return
 
+  const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
   appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}: ${sshCommand}` }, tabId)
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
-    const ready = await waitForTerminalIdle(tabId, {
-      ignoredEcho: index === 0 ? sshCommand : undefined
-    })
+    const ready =
+      index === 0
+        ? await firstActionReady
+        : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
     if (!ready) {
       appendLog(
         {
@@ -2558,6 +2945,33 @@ function waitForTerminalIdle(
   })
 }
 
+function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeoutMs = 60_000
+    let settled = false
+    let observedOutput = ''
+    const timeout = window.setTimeout(() => settle(false), timeoutMs)
+
+    const unsubscribe = window.api.terminal.onData((event) => {
+      if (event.tabId !== tabId) return
+
+      observedOutput = `${observedOutput}${event.data}`.slice(-8000)
+      if (!hasInteractivePrompt(observedOutput)) return
+
+      settle(true)
+    })
+
+    function settle(value: boolean): void {
+      if (settled) return
+
+      settled = true
+      window.clearTimeout(timeout)
+      unsubscribe()
+      resolve(value)
+    }
+  })
+}
+
 function hasOutputBeyondEcho(output: string, echo: string): boolean {
   const compactOutput = compactTerminalText(output)
   const compactEcho = compactTerminalText(echo)
@@ -2566,6 +2980,25 @@ function hasOutputBeyondEcho(output: string, echo: string): boolean {
   if (echoIndex === -1) return compactOutput.length > 0
 
   return compactOutput.slice(echoIndex + compactEcho.length).length > 0
+}
+
+function hasInteractivePrompt(output: string): boolean {
+  const normalizedOutput = output
+    .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
+    .replace(/\r/g, '\n')
+  const lines = normalizedOutput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-6)
+
+  return lines.some((line) => {
+    if (/(yes\/no|continue connecting)/i.test(line)) return true
+
+    return /(?:password|passphrase|verification code|one-time password|otp|验证码|密码)\s*[:：]\s*$/i.test(
+      line
+    )
+  })
 }
 
 function compactTerminalText(value: string): string {
