@@ -8,13 +8,14 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
+  AgentSkillOption,
   AgentValidationResult,
   ConnectionConfig,
   ConnectionInput,
   StoredAgentLogEntry,
   StoredAgentRun,
   StoredSessionTab
-} from '../main/agent/types'
+} from '../shared/agent-types'
 
 interface TerminalAgentApi {
   terminal: {
@@ -52,6 +53,7 @@ interface TerminalAgentApi {
   agent: {
     getConfig: () => Promise<AgentConfig>
     getModels: () => Promise<AgentModelOption[]>
+    listSkills: () => Promise<AgentSkillOption[]>
     saveConfig: (config: Partial<AgentConfig>) => Promise<AgentConfig>
     validateConfig: (config: Partial<AgentConfig>) => Promise<AgentValidationResult>
     generateCommand: (input: AgentCommandInput) => Promise<AgentCommandResult>

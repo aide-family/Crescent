@@ -37,7 +37,12 @@ export class TerminalAgentCore {
     })
 
     if (!toolRuntime.hasTools()) {
-      const text = await this.runChatOnly({ brain, userInput, memoryBlock, terminalContext })
+      const text = await this.runChatOnly({
+        brain,
+        userInput,
+        memoryBlock,
+        terminalContext
+      })
       this.memory.rememberTurn(userInput, text)
       return text
     }
@@ -91,6 +96,7 @@ export class TerminalAgentCore {
             content: this.promptBuilder.buildChatOnlyPrompt({
               mode: this.config.agentMode,
               memoryBlock: input.memoryBlock,
+              skillContext: this.controls?.skillContext,
               terminalContext: input.terminalContext
             })
           },
@@ -124,6 +130,7 @@ export class TerminalAgentCore {
         content: this.promptBuilder.buildToolLoopPrompt({
           mode: this.config.agentMode,
           memoryBlock: input.memoryBlock,
+          skillContext: this.controls?.skillContext,
           planSteps: input.planSteps,
           terminalContext: input.terminalContext
         })
@@ -138,10 +145,12 @@ export class TerminalAgentCore {
     for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
       this.throwIfCanceled()
       appendSupplementalInputs(messages, this.controls?.consumeSupplementalInputs?.())
+      const hasToolObservations = messages.some((message) => message.role === 'tool')
       this.emit({
         type: 'thought',
-        message:
-          this.config.agentMode === 'plan-execute'
+        message: hasToolObservations
+          ? 'Analyzing tool results and preparing the final answer...'
+          : this.config.agentMode === 'plan-execute'
             ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
             : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
       })
