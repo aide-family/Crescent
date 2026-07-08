@@ -173,7 +173,9 @@ function formatSkillPromptBlock(
   const lines = [
     'Local agent skills are available on this machine.',
     'Use a skill when the user explicitly references it or when the task clearly matches its description.',
-    'When using a skill, follow its SKILL.md workflow and any referenced references/scripts/assets.',
+    'Crescent has already read the loaded SKILL.md files from the local filesystem in the app process and included their content below.',
+    'Do not call terminal commands such as cat, sed, awk, less, head, tail, or grep to read SKILL.md or other local skill instruction files.',
+    'When using a loaded skill, rely on the content in this Agent skills block and follow its workflow.',
     '',
     'Available skills:',
     ...catalogLines

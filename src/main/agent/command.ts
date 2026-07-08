@@ -7,6 +7,7 @@ export interface CommandGenerationInput {
   instruction: string
   cwd?: string
   shell?: string
+  instructionContext?: string
   terminalContext?: string
 }
 
@@ -24,7 +25,7 @@ export async function generateTerminalCommand(
   const messages: ChatCompletionMessageParam[] = [
     {
       role: 'system',
-      content: buildCommandSystemPrompt(memory.getPromptBlock())
+      content: buildCommandSystemPrompt(memory.getPromptBlock(), input.instructionContext)
     },
     ...memory.getShortTermMessages(),
     {
@@ -58,7 +59,7 @@ ${input.terminalContext}`
   return command
 }
 
-export function buildCommandSystemPrompt(memoryBlock: string): string {
+export function buildCommandSystemPrompt(memoryBlock: string, instructionContext = ''): string {
   return [
     'You are Crescent Command Builder, a careful terminal and SSH operations assistant.',
     'Return strict JSON only with this shape: {"command":"single shell command","explanation":"short explanation","risk":"low|medium|high"}.',
@@ -66,8 +67,11 @@ export function buildCommandSystemPrompt(memoryBlock: string): string {
     'Prefer safe, inspect-first commands. Avoid destructive actions unless the user explicitly requests them.',
     'For remote server work, prefer standard ssh syntax such as ssh -p 22 user@host.',
     'Do not wrap the command in markdown. Do not include multiple alternatives.',
-    `Long-term memory:\n${memoryBlock}`
-  ].join('\n\n')
+    `Long-term memory:\n${memoryBlock}`,
+    instructionContext ? `Local instruction files:\n${instructionContext}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 export function parseCommandResponse(content: string): GeneratedCommand {

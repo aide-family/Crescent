@@ -15,14 +15,14 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: TERMINAL_TOOL_NAME,
     description:
-      'Execute a non-interactive shell command in the current visible terminal session, wait for completion, and return exit code plus output.',
+      'Execute a non-interactive shell command in the current visible terminal session, wait for completion, and return exit code plus output. Prefer batched read-only checks so the agent can finish in fewer tool rounds.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The exact shell command to execute in the current terminal environment. Use safe, non-interactive commands.'
+            'The exact shell command to execute in the current terminal environment. Use safe, non-interactive commands. Batch related inspections into one command when practical.'
         },
         timeoutMs: {
           type: 'number',
@@ -103,7 +103,7 @@ export class AgentToolRuntime {
         emit({
           type: 'tool',
           name: TERMINAL_TOOL_NAME,
-          message: `Running: ${args.command}`
+          message: `Submitting command for review: ${args.command}`
         })
 
         const result = await terminalExecutor.executeCommand(args.command, args.timeoutMs)

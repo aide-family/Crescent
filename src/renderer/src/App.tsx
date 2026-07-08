@@ -6,6 +6,7 @@ import {
   BotIcon,
   CheckIcon,
   CopyIcon,
+  HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
   PanelLeftCloseIcon,
@@ -16,6 +17,7 @@ import {
   ServerIcon,
   SettingsIcon,
   TestTube2Icon,
+  TriangleAlertIcon,
   XIcon
 } from 'lucide-react'
 
@@ -60,8 +62,13 @@ import type {
   AgentProviderModelConfig,
   AgentValidationResult,
   AgentSkillOption,
+  CommandApprovalRequest,
+  CommandRiskLevel,
   ConnectionConfig,
-  ConnectionInput
+  ConnectionInput,
+  LocalInstructionDocument,
+  StoredAgentLogEntry,
+  StoredSessionHistoryItem
 } from '../../shared/agent-types'
 
 const emptyConfig: AgentConfig = {
@@ -82,6 +89,7 @@ const emptyConfig: AgentConfig = {
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
+  commandWhitelist: [],
   openApiBaseUrl: '',
   openApiDocument: ''
 }
@@ -207,9 +215,17 @@ function App(): React.JSX.Element {
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
+  const [commandWhitelistText, setCommandWhitelistText] = useState('')
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
+  const [instructionFiles, setInstructionFiles] = useState<LocalInstructionDocument[]>([])
+  const [selectedInstructionName, setSelectedInstructionName] = useState('IDENTITY.md')
+  const [instructionContent, setInstructionContent] = useState('')
+  const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [saved, setSaved] = useState(false)
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
@@ -230,6 +246,7 @@ function App(): React.JSX.Element {
   const [connectionSshOptionsText, setConnectionSshOptionsText] = useState('')
   const [connectionActionsText, setConnectionActionsText] = useState('')
   const [connectionImportText, setConnectionImportText] = useState('')
+  const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
@@ -267,6 +284,9 @@ function App(): React.JSX.Element {
   const settingsProviderModelsText = useMemo(
     () => settingsProvider.models.map((model) => model.id).join('\n'),
     [settingsProvider.models]
+  )
+  const selectedInstructionFile = instructionFiles.find(
+    (file) => file.name === selectedInstructionName
   )
   const aiState: 'ready' | 'pending' | 'not-ready' = validating
     ? 'pending'
@@ -335,6 +355,21 @@ function App(): React.JSX.Element {
     connectionForm.user,
     connectionSshOptionsText
   ])
+
+  const refreshSessionHistory = useCallback(async (): Promise<void> => {
+    setHistoryLoading(true)
+    try {
+      const items = await window.api.storage.listSessionHistory(100)
+      setHistoryItems(items)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
+  function setHistorySheetOpen(open: boolean): void {
+    setHistoryOpen(open)
+    if (open) void refreshSessionHistory()
+  }
 
   const updateTab = useCallback(
     (tabId: string, updater: (tab: AgentTerminalTab) => AgentTerminalTab): void => {
@@ -405,6 +440,20 @@ function App(): React.JSX.Element {
         return
       }
 
+      if (event.type === 'command-review') {
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          actions: [
+            ...run.actions,
+            {
+              title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
+              detail: formatCommandAuditDetail(event.command, event.audit, t)
+            }
+          ]
+        }))
+        return
+      }
+
       if (event.type === 'tool') {
         updateAgentRun(tabId, (run) => ({
           ...run,
@@ -435,23 +484,44 @@ function App(): React.JSX.Element {
 
   runAgentConversationRef.current = runAgentConversation
 
-  const drainPostConnectionTasks = useCallback((targetTabId: string): void => {
-    const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
-    if (tasks.length === 0) return
+  const drainPostConnectionTasks = useCallback(
+    (targetTabId: string): void => {
+      const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
+      if (tasks.length === 0) return
 
-    postConnectionTasksRef.current.delete(targetTabId)
-    void Promise.all(
-      tasks.map(async (task) => {
-        await waitForTerminalIdle(targetTabId, { idleMs: 1500, timeoutMs: 60_000 })
-        await runAgentConversationRef.current?.(
-          task.input,
-          targetTabId,
-          task.connection.id,
-          task.displayInput
-        )
-      })
-    )
-  }, [])
+      postConnectionTasksRef.current.delete(targetTabId)
+      void Promise.all(
+        tasks.map(async (task) => {
+          const ready = await waitForTerminalReadyForAgent(targetTabId)
+          if (!ready) {
+            appendLog(
+              {
+                kind: 'error',
+                text: t.terminal.postLoginNotReady
+              },
+              targetTabId
+            )
+            return
+          }
+
+          appendLog(
+            {
+              kind: 'status',
+              text: t.terminal.postLoginTaskStarting
+            },
+            targetTabId
+          )
+          await runAgentConversationRef.current?.(
+            task.input,
+            targetTabId,
+            task.connection.id,
+            task.displayInput
+          )
+        })
+      )
+    },
+    [appendLog, t]
+  )
 
   const executeConnectionCommands = useCallback(
     (connection: ConnectionConfig, targetTabId: string): void => {
@@ -688,6 +758,7 @@ function App(): React.JSX.Element {
       .getConfig()
       .then((nextConfig) => {
         setConfig(nextConfig)
+        setCommandWhitelistText(nextConfig.commandWhitelist.join('\n'))
         setModels(flattenProviderModels(nextConfig.providers))
         setSettingsProviderId(nextConfig.providers[0]?.id ?? 'nova-litellm')
         const requestId = validationRequestRef.current + 1
@@ -716,6 +787,13 @@ function App(): React.JSX.Element {
       .listSkills()
       .then(setSkills)
       .catch(() => setSkills([]))
+    window.api.agent
+      .listInstructionFiles()
+      .then((files) => {
+        setInstructionFiles(files)
+        setInstructionContent(files.find((file) => file.name === 'IDENTITY.md')?.content ?? '')
+      })
+      .catch(() => setInstructionFiles([]))
     window.api.connections
       .list()
       .then((items) => {
@@ -733,6 +811,12 @@ function App(): React.JSX.Element {
 
     return unsubscribe
   }, [appendAgentEvent])
+
+  useEffect(() => {
+    return window.api.agent.onCommandApprovalRequest((request) => {
+      setCommandApproval(request)
+    })
+  }, [])
 
   useEffect(() => {
     agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
@@ -874,14 +958,33 @@ function App(): React.JSX.Element {
   ])
 
   async function saveConfig(): Promise<void> {
-    await saveAgentConfig(config)
+    await saveAgentConfig({
+      ...config,
+      commandWhitelist: parseCommandWhitelist(commandWhitelistText)
+    })
     setSaved(true)
     setTimeout(() => setSaved(false), 1400)
+  }
+
+  async function saveInstructionFile(): Promise<void> {
+    const savedFile = await window.api.agent.saveInstructionFile({
+      name: selectedInstructionName,
+      content: instructionContent
+    })
+
+    setInstructionFiles((current) =>
+      current.some((file) => file.name === savedFile.name)
+        ? current.map((file) => (file.name === savedFile.name ? savedFile : file))
+        : [...current, savedFile]
+    )
+    setInstructionSaved(true)
+    setTimeout(() => setInstructionSaved(false), 1400)
   }
 
   async function saveAgentConfig(nextConfigInput: AgentConfig): Promise<AgentConfig> {
     const nextConfig = await window.api.agent.saveConfig(nextConfigInput)
     setConfig(nextConfig)
+    setCommandWhitelistText(nextConfig.commandWhitelist.join('\n'))
     setModels(flattenProviderModels(nextConfig.providers))
     setSettingsProviderId(
       (current) =>
@@ -890,6 +993,68 @@ function App(): React.JSX.Element {
         'nova-litellm'
     )
     return nextConfig
+  }
+
+  async function openHistorySession(item: StoredSessionHistoryItem): Promise<void> {
+    const detail = await window.api.storage.getSessionHistory(item.tabId)
+    if (!detail) return
+
+    const connection = detail.connectionId
+      ? await findConnectionById(detail.connectionId)
+      : undefined
+    const restoredLogs = detail.logs.map(hydrateStoredAgentLog)
+    if (detail.connectionId && !connection) {
+      restoredLogs.push({
+        id: Math.max(0, ...restoredLogs.map((log) => log.id)) + 1,
+        kind: 'error',
+        text: `${t.history.connectionMissing}: ${detail.connectionName ?? detail.connectionId}`,
+        createdAt: new Date().toISOString()
+      })
+    }
+    const nextLogId = Math.max(0, ...restoredLogs.map((log) => log.id)) + 1
+    nextLogIdRef.current = Math.max(nextLogIdRef.current, nextLogId)
+    const existingTab = tabsRef.current.find((tab) => tab.id === detail.tabId)
+    const restoredTab = createTerminalTab({
+      id: detail.tabId,
+      title: detail.title,
+      connectionId: detail.connectionId,
+      connectionName: detail.connectionName,
+      isSsh: detail.isSsh,
+      terminalCwd: detail.terminalCwd,
+      terminalMode: detail.terminalMode ?? 'pty',
+      terminalReady: false,
+      terminalOutput: '',
+      agentLog: restoredLogs
+    })
+
+    setTabs((current) =>
+      existingTab
+        ? current.map((tab) => (tab.id === detail.tabId ? { ...tab, agentLog: restoredLogs } : tab))
+        : [...current, restoredTab]
+    )
+    setActiveTabId(detail.tabId)
+    setHistoryOpen(false)
+    setHiddenPane(null)
+
+    if (connection) {
+      const activeSession = tabsRef.current.find((tab) => tab.id === detail.tabId)?.sessionId
+      if (!activeSession) {
+        pendingSshRef.current.set(detail.tabId, connection)
+      }
+    }
+  }
+
+  async function findConnectionById(id: string): Promise<ConnectionConfig | undefined> {
+    let candidates = connections
+
+    try {
+      candidates = await window.api.connections.list()
+      setConnections(candidates)
+    } catch {
+      candidates = connections
+    }
+
+    return candidates.find((connection) => connection.id === id)
   }
 
   async function validateConfig(nextConfigInput = config): Promise<void> {
@@ -925,6 +1090,9 @@ function App(): React.JSX.Element {
     const runId = activeRunIdRef.current.get(tabId)
     if (runId) void window.api.agent.cancel(runId)
     if (runId) {
+      setCommandApproval((current) => (current?.runId === runId ? null : current))
+    }
+    if (runId) {
       void window.api.storage.saveAgentRun({
         runId,
         tabId,
@@ -937,8 +1105,16 @@ function App(): React.JSX.Element {
     updateTab(tabId, (tab) => ({ ...tab, agentBusy: false }))
   }
 
-  async function getTerminalContextForAgent(): Promise<string> {
-    const context = await window.api.terminal.getContext(activeTabIdRef.current)
+  function resolveCommandApproval(approved: boolean): void {
+    if (!commandApproval) return
+
+    const requestId = commandApproval.id
+    setCommandApproval(null)
+    void window.api.agent.resolveCommandApproval({ requestId, approved })
+  }
+
+  async function getTerminalContextForAgent(tabId = activeTabIdRef.current): Promise<string> {
+    const context = await window.api.terminal.getContext(tabId)
     const output = context.output.slice(-12000).trim()
 
     return [
@@ -1149,7 +1325,9 @@ function App(): React.JSX.Element {
       )
       connectToConnection(
         matchedConnection,
-        connectionIntent.executeAfterLogin ? input : undefined,
+        connectionIntent.executeAfterLogin
+          ? buildPostLoginAgentInput(input, matchedConnection, t)
+          : undefined,
         connectionIntent.executeAfterLogin
           ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t)
           : undefined
@@ -1199,7 +1377,7 @@ function App(): React.JSX.Element {
     })
 
     try {
-      const terminalContext = await getTerminalContextForAgent()
+      const terminalContext = await getTerminalContextForAgent(tabId)
       const result = await window.api.agent.run({
         runId,
         input,
@@ -1705,6 +1883,81 @@ function App(): React.JSX.Element {
                     />
                     <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
                   </Field>
+                  <Field>
+                    <FieldLabel htmlFor="command-whitelist">
+                      {t.settings.commandWhitelist}
+                    </FieldLabel>
+                    <Textarea
+                      id="command-whitelist"
+                      className="min-h-28 resize-y font-mono text-xs"
+                      value={commandWhitelistText}
+                      onChange={(event) => {
+                        const text = event.target.value
+                        setCommandWhitelistText(text)
+                        updateConfig('commandWhitelist', parseCommandWhitelist(text))
+                      }}
+                      placeholder={'pwd\ndf -h\nfree -h\nkubectl get *\n/^op do web .*$/'}
+                    />
+                    <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
+                  </Field>
+                  <Separator />
+                  <Field>
+                    <FieldLabel htmlFor="instruction-file">
+                      {t.settings.instructionFiles}
+                    </FieldLabel>
+                    <Select
+                      value={selectedInstructionName}
+                      onValueChange={(name) => {
+                        setSelectedInstructionName(name)
+                        setInstructionContent(
+                          instructionFiles.find((file) => file.name === name)?.content ?? ''
+                        )
+                        setInstructionSaved(false)
+                      }}
+                    >
+                      <SelectTrigger id="instruction-file" className="w-full">
+                        <SelectValue placeholder={t.settings.instructionFiles} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>{t.settings.instructionFiles}</SelectLabel>
+                          {instructionFiles.map((file) => (
+                            <SelectItem key={file.name} value={file.name}>
+                              {file.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      {selectedInstructionFile?.path ?? '~/.crescent'}
+                      {' · '}
+                      {selectedInstructionFile?.exists
+                        ? t.settings.instructionFileExists
+                        : t.settings.instructionFileNew}
+                    </FieldDescription>
+                    <Textarea
+                      className="min-h-56 resize-y font-mono text-xs"
+                      value={instructionContent}
+                      onChange={(event) => {
+                        setInstructionContent(event.target.value)
+                        setInstructionSaved(false)
+                      }}
+                      placeholder={t.settings.instructionFilePlaceholder}
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={saveInstructionFile}
+                      >
+                        {instructionSaved
+                          ? t.settings.instructionFileSaved
+                          : t.settings.saveInstructionFile}
+                      </Button>
+                    </div>
+                  </Field>
                   <Separator />
                   <Field>
                     <FieldLabel htmlFor="open-api-base-url">{t.settings.openApiBaseUrl}</FieldLabel>
@@ -1805,6 +2058,85 @@ function App(): React.JSX.Element {
               >
                 <PlusIcon aria-hidden="true" />
               </Button>
+              <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
+                <SheetTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.history.title}
+                    title={t.history.title}
+                  >
+                    <HistoryIcon aria-hidden="true" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="w-[420px] sm:max-w-[420px]">
+                  <SheetHeader>
+                    <SheetTitle>{t.history.title}</SheetTitle>
+                    <SheetDescription>{t.history.description}</SheetDescription>
+                  </SheetHeader>
+                  <div className="min-h-0 flex-1 space-y-2 overflow-auto px-4">
+                    {historyLoading && (
+                      <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+                        <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+                        {t.history.loading}
+                      </div>
+                    )}
+                    {!historyLoading && historyItems.length === 0 && (
+                      <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                        {t.history.empty}
+                      </div>
+                    )}
+                    {!historyLoading &&
+                      historyItems.map((item) => (
+                        <button
+                          key={item.tabId}
+                          type="button"
+                          className="block w-full rounded-md border bg-card p-3 text-left text-sm transition hover:border-primary/60 hover:bg-muted/30"
+                          onClick={() => void openHistorySession(item)}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate font-medium">{item.title}</span>
+                            {item.isSsh && (
+                              <Badge variant="secondary" className="shrink-0">
+                                SSH
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                            <time dateTime={item.lastMessageAt ?? item.updatedAt}>
+                              {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
+                            </time>
+                            {item.connectionName && (
+                              <span className="truncate">· {item.connectionName}</span>
+                            )}
+                            <span className="shrink-0">
+                              · {item.runCount} {t.history.runs}
+                            </span>
+                          </div>
+                          {item.lastMessage && (
+                            <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                              {summarizeHistoryMessage(item.lastMessage)}
+                            </p>
+                          )}
+                        </button>
+                      ))}
+                  </div>
+                  <SheetFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void refreshSessionHistory()}
+                      disabled={historyLoading}
+                    >
+                      {historyLoading && (
+                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                      )}
+                      {t.history.refresh}
+                    </Button>
+                  </SheetFooter>
+                </SheetContent>
+              </Sheet>
               <Button
                 type="button"
                 variant="ghost"
@@ -1900,51 +2232,56 @@ function App(): React.JSX.Element {
                 </div>
               </div>
             </div>
-            <div ref={agentLogRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-4 text-sm">
+            <div ref={agentLogRef} className="min-h-0 flex-1 space-y-2 overflow-auto p-4 text-sm">
               {activeTab.agentLog.map((entry) => (
-                <div key={entry.id} className={logClassName(entry.kind)}>
-                  <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="font-medium uppercase tracking-wide">
-                        {logRoleLabel(entry.kind, t)}
-                      </span>
-                      <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
-                    </div>
-                    {isConversationLog(entry.kind) && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.common.copy}
-                        title={t.common.copy}
-                        onClick={() => copyLogEntry(entry)}
-                      >
-                        {activeTab.copiedLogId === entry.id ? (
-                          <CheckIcon aria-hidden="true" />
-                        ) : (
-                          <CopyIcon aria-hidden="true" />
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                  <AgentLogContent entry={entry} t={t} />
-                  {isConversationLog(entry.kind) && (
-                    <div className="mt-2 flex justify-end border-t pt-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.common.copyMarkdown}
-                        title={t.common.copyMarkdown}
-                        onClick={() => copyLogEntry(entry)}
-                      >
-                        {activeTab.copiedLogId === entry.id ? (
-                          <CheckIcon aria-hidden="true" />
-                        ) : (
-                          <CopyIcon aria-hidden="true" />
-                        )}
-                      </Button>
-                    </div>
+                <div
+                  key={entry.id}
+                  className={isConversationLog(entry.kind) ? logClassName(entry.kind) : ''}
+                >
+                  {isConversationLog(entry.kind) ? (
+                    <>
+                      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="font-medium uppercase tracking-wide">
+                            {logRoleLabel(entry.kind, t)}
+                          </span>
+                          <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={t.common.copy}
+                          title={t.common.copy}
+                          onClick={() => copyLogEntry(entry)}
+                        >
+                          {activeTab.copiedLogId === entry.id ? (
+                            <CheckIcon aria-hidden="true" />
+                          ) : (
+                            <CopyIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                      </div>
+                      <AgentLogContent entry={entry} t={t} />
+                      <div className="mt-2 flex justify-end border-t pt-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={t.common.copyMarkdown}
+                          title={t.common.copyMarkdown}
+                          onClick={() => copyLogEntry(entry)}
+                        >
+                          {activeTab.copiedLogId === entry.id ? (
+                            <CheckIcon aria-hidden="true" />
+                          ) : (
+                            <CopyIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <ActionLogRow entry={entry} t={t} />
                   )}
                 </div>
               ))}
@@ -2386,6 +2723,86 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
+      {commandApproval && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="command-review-title"
+        >
+          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <TriangleAlertIcon className="size-4 text-destructive" aria-hidden="true" />
+                  <h2 id="command-review-title" className="text-sm font-semibold">
+                    {t.commandReview.title}
+                  </h2>
+                  <Badge variant={riskBadgeVariant(commandApproval.audit.risk)}>
+                    {riskLabel(commandApproval.audit.risk, t)}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t.commandReview.description}
+                  {commandApproval.tabId ? ` · Tab: ${commandApproval.tabId}` : ''}
+                </p>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.command}
+                </h3>
+                <pre className="max-h-36 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs">
+                  {commandApproval.command}
+                </pre>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.auditSummary}
+                </h3>
+                <p className="text-sm">{commandApproval.audit.summary}</p>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.riskPoints}
+                </h3>
+                <ul className="space-y-1 text-sm">
+                  {commandApproval.audit.riskPoints.map((point, index) => (
+                    <li key={`${point}-${index}`} className="rounded-md bg-muted/30 px-3 py-2">
+                      {point}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.impactAnalysis}
+                </h3>
+                <p className="text-sm">{commandApproval.audit.impactAnalysis}</p>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.recommendation}
+                </h3>
+                <p className="text-sm">{commandApproval.audit.recommendation}</p>
+              </section>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
+              <Button type="button" variant="outline" onClick={() => resolveCommandApproval(false)}>
+                {t.commandReview.reject}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => resolveCommandApproval(true)}
+              >
+                {t.commandReview.approve}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <footer className="flex h-9 shrink-0 items-center border-t px-4 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2">
           <StatusDot state={shellState} />
@@ -2428,10 +2845,31 @@ function isConversationLog(kind: AgentLogEntry['kind']): boolean {
   return kind === 'user' || kind === 'assistant' || kind === 'error'
 }
 
+function ActionLogRow({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
+  const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
+
+  return (
+    <details className={`group rounded-md border text-xs ${actionLogClassName(entry.kind)}`}>
+      <summary className="grid cursor-pointer select-none grid-cols-[5.5rem_4.75rem_minmax(0,1fr)] items-center gap-2 px-3 py-1.5 marker:text-muted-foreground">
+        <span className="truncate font-medium uppercase tracking-wide">
+          {logRoleLabel(entry.kind, t)}
+        </span>
+        <time className="text-muted-foreground" dateTime={entry.createdAt}>
+          {formatLogTime(entry.createdAt)}
+        </time>
+        <span className="truncate text-foreground/90">{summary}</span>
+      </summary>
+      <pre className="max-h-72 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+        {entry.text}
+      </pre>
+    </details>
+  )
+}
+
 function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
   if (isConversationLog(entry.kind)) return <MarkdownContent value={entry.text} />
 
-  const summary = summarizeBehaviorLog(entry.text, t)
+  const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
 
   return (
     <details className="group rounded-md border bg-background/60">
@@ -2445,11 +2883,35 @@ function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }):
   )
 }
 
-function summarizeBehaviorLog(value: string, t: Dictionary): string {
+function actionLogClassName(kind: AgentLogEntry['kind']): string {
+  switch (kind) {
+    case 'tool':
+      return 'border-amber-500/25 bg-amber-500/5'
+    case 'command':
+      return 'border-cyan-500/25 bg-cyan-500/5'
+    case 'plan':
+      return 'border-purple-500/25 bg-purple-500/5'
+    case 'thought':
+      return 'border-blue-500/25 bg-blue-500/5'
+    default:
+      return 'border-border bg-muted/20'
+  }
+}
+
+function summarizeBehaviorLog(value: string, kind: AgentLogEntry['kind'], t: Dictionary): string {
   const firstLine = value
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean)
+
+  if (kind === 'command') {
+    if (!firstLine) return t.terminal.commandExecuted
+    if (firstLine.startsWith(`${t.terminal.commandExecuted}:`)) return t.terminal.commandExecuted
+    if (firstLine.startsWith(`${t.terminal.connectionAction} `)) {
+      return firstLine.split(':')[0] || t.terminal.connectionAction
+    }
+    return firstLine
+  }
 
   return firstLine || t.input.actionDetails
 }
@@ -2497,8 +2959,99 @@ function formatLogTime(value: string): string {
   }).format(date)
 }
 
+function formatHistoryTime(value: string): string {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date)
+}
+
+function summarizeHistoryMessage(value: string): string {
+  const compact = value
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*_`[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (compact.length <= 120) return compact
+  return `${compact.slice(0, 120)}...`
+}
+
+function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry {
+  return {
+    id: entry.logId,
+    kind: normalizeStoredAgentLogKind(entry.kind),
+    text: entry.text,
+    createdAt: entry.createdAt
+  }
+}
+
+function normalizeStoredAgentLogKind(kind: string): AgentLogEntry['kind'] {
+  if (
+    kind === 'user' ||
+    kind === 'assistant' ||
+    kind === 'error' ||
+    kind === 'status' ||
+    kind === 'thought' ||
+    kind === 'tool' ||
+    kind === 'plan' ||
+    kind === 'command'
+  ) {
+    return kind
+  }
+
+  return 'status'
+}
+
 function formatAgentMode(value: AgentConfig['agentMode']): string {
   return value === 'plan-execute' ? 'Plan-and-Execute' : 'ReAct'
+}
+
+function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
+  switch (risk) {
+    case 'low':
+      return t.commandReview.lowRisk
+    case 'medium':
+      return t.commandReview.mediumRisk
+    case 'high':
+      return t.commandReview.highRisk
+  }
+}
+
+function riskBadgeVariant(risk: CommandRiskLevel): 'outline' | 'secondary' | 'destructive' {
+  if (risk === 'high') return 'destructive'
+  if (risk === 'medium') return 'secondary'
+  return 'outline'
+}
+
+function formatCommandAuditDetail(
+  command: string,
+  audit: CommandApprovalRequest['audit'],
+  t: Dictionary
+): string {
+  return [
+    `${t.commandReview.command}:`,
+    command,
+    '',
+    `${t.commandReview.auditSummary}:`,
+    audit.summary,
+    '',
+    `${t.commandReview.riskLevel}: ${riskLabel(audit.risk, t)}`,
+    '',
+    `${t.commandReview.riskPoints}:`,
+    ...audit.riskPoints.map((point) => `- ${point}`),
+    '',
+    `${t.commandReview.impactAnalysis}:`,
+    audit.impactAnalysis,
+    '',
+    `${t.commandReview.recommendation}:`,
+    audit.recommendation
+  ].join('\n')
 }
 
 function formatAgentEventActionTitle(
@@ -2519,6 +3072,14 @@ function formatAgentEventActionTitle(
 
 function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Dispatching tool call.') return t.input.toolDispatching
+  if (message.startsWith('Submitting command for review:')) return t.commandReview.submitted
+  if (message === 'Command review subprocess is analyzing risk.') return t.commandReview.analyzing
+  if (message.startsWith('Command matched whitelist:')) return t.commandReview.whitelisted
+  if (message === 'Command audit passed without user approval.') {
+    return t.commandReview.autoApproved
+  }
+  if (message === 'Command approved by user.') return t.commandReview.approved
+  if (message === 'Command rejected by user.') return t.commandReview.rejected
   if (message === 'Running in chat-only terminal assistant mode.') return t.input.currentTerminal
   if (message === 'Done.') return t.input.done
   if (message === 'Agent run canceled.') return t.input.agentCanceled
@@ -2604,6 +3165,13 @@ function parseProviderModels(value: string): AgentProviderModelConfig[] {
       name: id,
       reasoning: id.includes('gpt-5')
     }))
+}
+
+function parseCommandWhitelist(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
 }
 
 function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {
@@ -2773,6 +3341,20 @@ function formatVisibleInputWithSkillRefs(
   return `${t.input.referencedSkills}: ${skills}\n\n${input}`
 }
 
+function buildPostLoginAgentInput(
+  input: string,
+  connection: ConnectionConfig,
+  t: Dictionary
+): string {
+  return [
+    t.terminal.postLoginAgentInstruction,
+    `${t.terminal.connectionTarget}: ${connection.name} (${formatConnectionTarget(connection)})`,
+    '',
+    t.terminal.postLoginOriginalTask,
+    input
+  ].join('\n')
+}
+
 function parseConnectionIntent(input: string): ConnectionIntent | undefined {
   const trimmed = input.trim()
   const explicit = /(登录|登陆|连接|使用|打开|进入|\bssh\b)/i.test(trimmed)
@@ -2871,7 +3453,7 @@ async function runConnectionCommandSequence(
 
   const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
-  appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}: ${sshCommand}` }, tabId)
+  appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}\n${sshCommand}` }, tabId)
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
@@ -2945,6 +3527,24 @@ function waitForTerminalIdle(
   })
 }
 
+async function waitForTerminalReadyForAgent(tabId: string): Promise<boolean> {
+  const deadline = Date.now() + 15_000
+
+  while (Date.now() < deadline) {
+    const context = await window.api.terminal.getContext(tabId)
+    const output = context.output.slice(-8000)
+    if (!hasInteractivePrompt(output)) return true
+
+    await sleep(500)
+  }
+
+  return false
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
 function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
   return new Promise((resolve) => {
     const timeoutMs = 60_000
@@ -3012,7 +3612,7 @@ function sendTerminalInput(value: string, tabId: string): void {
 }
 
 function formatConnectionActionLog(command: string, actionIndex: number, t: Dictionary): string {
-  return `${t.terminal.connectionAction} ${actionIndex}: ${maskPotentialSecret(command)}`
+  return `${t.terminal.connectionAction} ${actionIndex}\n${maskPotentialSecret(command)}`
 }
 
 function maskPotentialSecret(value: string): string {

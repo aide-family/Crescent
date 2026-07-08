@@ -1,6 +1,13 @@
-import { ipcMain } from 'electron'
+import { ipcMain, type WebContents } from 'electron'
 
 import { generateTerminalCommand } from './command'
+import { CommandAuditor } from './command-auditor'
+import { matchCommandWhitelist } from './command-whitelist'
+import {
+  buildLocalInstructionContext,
+  listEditableInstructionFiles,
+  saveEditableInstructionFile
+} from './instruction-files'
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './openclaw-config'
 import { AgentBrain } from './brain'
@@ -24,6 +31,9 @@ import type {
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
   AgentRunInput,
+  CommandApprovalDecision,
+  CommandApprovalRequest,
+  CommandAuditResult,
   ConnectionConfig
 } from './types'
 
@@ -33,6 +43,13 @@ interface ActiveAgentRun {
 }
 
 const activeRuns = new Map<string, ActiveAgentRun>()
+const pendingCommandApprovals = new Map<
+  string,
+  {
+    resolve: (approved: boolean) => void
+    timeout: NodeJS.Timeout
+  }
+>()
 
 export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-config', () => {
@@ -54,6 +71,20 @@ export function registerAgentIpc(): void {
   ipcMain.handle('agent:list-skills', () => {
     return listAgentSkills()
   })
+
+  ipcMain.handle('agent:list-instruction-files', () => {
+    return listEditableInstructionFiles()
+  })
+
+  ipcMain.handle(
+    'agent:save-instruction-file',
+    (_, payload: { name?: string; content?: string }) => {
+      return saveEditableInstructionFile({
+        name: payload?.name ?? '',
+        content: payload?.content ?? ''
+      })
+    }
+  )
 
   ipcMain.handle('agent:save-config', (_, config: Partial<AgentConfig>) => {
     const nextConfig = normalizeAgentConfig({
@@ -126,6 +157,19 @@ export function registerAgentIpc(): void {
     return { ok: true }
   })
 
+  ipcMain.handle('agent:resolve-command-approval', (_, payload: CommandApprovalDecision) => {
+    const requestId = payload?.requestId?.trim()
+    if (!requestId) return { ok: false }
+
+    const pending = pendingCommandApprovals.get(requestId)
+    if (!pending) return { ok: false }
+
+    clearTimeout(pending.timeout)
+    pendingCommandApprovals.delete(requestId)
+    pending.resolve(Boolean(payload.approved))
+    return { ok: true }
+  })
+
   ipcMain.handle('agent:generate-command', async (_, payload: AgentCommandInput) => {
     const config = readAgentConfig()
     const instruction = payload?.instruction?.trim()
@@ -137,6 +181,7 @@ export function registerAgentIpc(): void {
         instruction,
         cwd: payload.cwd,
         shell: payload.shell,
+        instructionContext: buildLocalInstructionContext(),
         terminalContext: payload.terminalContext
       })
 
@@ -221,8 +266,11 @@ export function registerAgentIpc(): void {
       activeRuns.set(runId, { controller, supplements: [] })
       const connection = findConnection(payload?.connectionId)
       const skillContext = buildAgentSkillContext(input)
+      const instructionContext = buildLocalInstructionContext()
+      const agentConfig = readAgentConfig()
+      const commandAuditor = new CommandAuditor(agentConfig)
       const text = await runTerminalAgent(
-        readAgentConfig(),
+        agentConfig,
         input,
         createMemory(),
         payload?.terminalContext ?? '',
@@ -230,11 +278,83 @@ export function registerAgentIpc(): void {
           event.sender.send('agent:event', { ...agentEvent, runId, tabId: payload?.tabId })
         },
         {
-          executeCommand: (command, timeoutMs) =>
-            executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
+          executeCommand: async (command, timeoutMs) => {
+            const whitelistRule = matchCommandWhitelist(command, agentConfig.commandWhitelist)
+            if (whitelistRule) {
+              event.sender.send('agent:event', {
+                type: 'status',
+                message: `Command matched whitelist: ${whitelistRule}`,
+                runId,
+                tabId: payload?.tabId
+              })
+              return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
+            }
+
+            event.sender.send('agent:event', {
+              type: 'status',
+              message: 'Command review subprocess is analyzing risk.',
+              runId,
+              tabId: payload?.tabId
+            })
+            const audit = await commandAuditor.audit({
+              command,
+              userInput: input,
+              terminalContext: payload?.terminalContext ?? ''
+            })
+            event.sender.send('agent:event', {
+              type: 'command-review',
+              command,
+              audit,
+              runId,
+              tabId: payload?.tabId
+            })
+            if (!audit.requiresApproval) {
+              event.sender.send('agent:event', {
+                type: 'status',
+                message: 'Command audit passed without user approval.',
+                runId,
+                tabId: payload?.tabId
+              })
+              return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
+            }
+
+            const approved = await requestCommandApproval({
+              webContents: event.sender,
+              runId,
+              tabId: payload?.tabId,
+              command,
+              timeoutMs,
+              audit,
+              signal: controller.signal
+            })
+
+            if (!approved) {
+              event.sender.send('agent:event', {
+                type: 'status',
+                message: 'Command rejected by user.',
+                runId,
+                tabId: payload?.tabId
+              })
+              return {
+                ok: false,
+                command,
+                output: '',
+                error: 'Command execution rejected by user.'
+              }
+            }
+
+            event.sender.send('agent:event', {
+              type: 'status',
+              message: 'Command approved by user.',
+              runId,
+              tabId: payload?.tabId
+            })
+            return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
+          }
         },
         {
           signal: controller.signal,
+          instructionContext,
           skillContext: skillContext.promptBlock,
           consumeSupplementalInputs: () => {
             const run = activeRuns.get(runId)
@@ -268,6 +388,51 @@ export function registerAgentIpc(): void {
     } finally {
       activeRuns.delete(runId)
     }
+  })
+}
+
+function requestCommandApproval(input: {
+  webContents: WebContents
+  runId: string
+  tabId?: string
+  command: string
+  timeoutMs?: number
+  audit: CommandAuditResult
+  signal?: AbortSignal
+}): Promise<boolean> {
+  if (input.webContents.isDestroyed()) return Promise.resolve(false)
+
+  const requestId = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const request: CommandApprovalRequest = {
+    id: requestId,
+    runId: input.runId,
+    tabId: input.tabId,
+    command: input.command,
+    timeoutMs: input.timeoutMs,
+    audit: input.audit
+  }
+
+  return new Promise((resolve) => {
+    const finish = (approved: boolean): void => {
+      input.signal?.removeEventListener('abort', onAbort)
+      resolve(approved)
+    }
+    const timeout = setTimeout(
+      () => {
+        pendingCommandApprovals.delete(requestId)
+        finish(false)
+      },
+      10 * 60 * 1000
+    )
+    const onAbort = (): void => {
+      clearTimeout(timeout)
+      pendingCommandApprovals.delete(requestId)
+      finish(false)
+    }
+
+    pendingCommandApprovals.set(requestId, { resolve: finish, timeout })
+    input.signal?.addEventListener('abort', onAbort, { once: true })
+    input.webContents.send('agent:command-approval-request', request)
   })
 }
 

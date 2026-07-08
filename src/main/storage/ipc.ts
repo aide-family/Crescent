@@ -1,6 +1,13 @@
 import { ipcMain } from 'electron'
 
-import { saveAgentLog, saveAgentRun, saveSessionTabs, updateAgentLog } from '../crescent-sqlite'
+import {
+  listSessionHistory,
+  readSessionHistoryDetail,
+  saveAgentLog,
+  saveAgentRun,
+  saveSessionTabs,
+  updateAgentLog
+} from '../crescent-sqlite'
 import type { StoredAgentLogEntry, StoredAgentRun, StoredSessionTab } from '../agent/types'
 
 export function registerStorageIpc(): void {
@@ -25,5 +32,13 @@ export function registerStorageIpc(): void {
   ipcMain.handle('storage:save-agent-run', (_, run: StoredAgentRun) => {
     saveAgentRun(run)
     return { ok: true }
+  })
+
+  ipcMain.handle('storage:list-session-history', (_, limit?: number) => {
+    return listSessionHistory(limit)
+  })
+
+  ipcMain.handle('storage:get-session-history', (_, tabId: string) => {
+    return readSessionHistoryDetail(tabId)
   })
 }

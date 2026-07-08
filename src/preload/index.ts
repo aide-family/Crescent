@@ -11,10 +11,15 @@ import type {
   AgentRunInput,
   AgentSkillOption,
   AgentValidationResult,
+  CommandApprovalDecision,
+  CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
+  LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  StoredSessionHistoryDetail,
+  StoredSessionHistoryItem,
   StoredSessionTab
 } from '../shared/agent-types'
 
@@ -96,6 +101,13 @@ const api = {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
     listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),
+    listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
+      ipcRenderer.invoke('agent:list-instruction-files'),
+    saveInstructionFile: (input: {
+      name: string
+      content: string
+    }): Promise<LocalInstructionDocument> =>
+      ipcRenderer.invoke('agent:save-instruction-file', input),
     saveConfig: (config: Partial<AgentConfig>): Promise<AgentConfig> =>
       ipcRenderer.invoke('agent:save-config', config),
     validateConfig: (config: Partial<AgentConfig>): Promise<AgentValidationResult> =>
@@ -111,11 +123,22 @@ const api = {
     cancel: (runId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:cancel', runId),
     supplement: (input: { runId: string; input: string }): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:supplement', input),
+    resolveCommandApproval: (input: CommandApprovalDecision): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:resolve-command-approval', input),
     onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentEvent): void => callback(event)
 
       ipcRenderer.on('agent:event', listener)
       return () => ipcRenderer.removeListener('agent:event', listener)
+    },
+    onCommandApprovalRequest: (
+      callback: (request: CommandApprovalRequest) => void
+    ): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, request: CommandApprovalRequest): void =>
+        callback(request)
+
+      ipcRenderer.on('agent:command-approval-request', listener)
+      return () => ipcRenderer.removeListener('agent:command-approval-request', listener)
     }
   },
   connections: {
@@ -134,7 +157,11 @@ const api = {
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ): Promise<{ ok: boolean }> => ipcRenderer.invoke('storage:update-agent-log', input),
     saveAgentRun: (run: StoredAgentRun): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('storage:save-agent-run', run)
+      ipcRenderer.invoke('storage:save-agent-run', run),
+    listSessionHistory: (limit?: number): Promise<StoredSessionHistoryItem[]> =>
+      ipcRenderer.invoke('storage:list-session-history', limit),
+    getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>
+      ipcRenderer.invoke('storage:get-session-history', tabId)
   }
 }
 

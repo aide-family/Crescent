@@ -43,6 +43,27 @@ const zhCN = {
     closeOtherTabs: '确认关闭其他所有 Tab？这些 Tab 的终端会话会被停止。',
     deleteConnection: '确认删除这个自定义连接？此操作不可恢复。'
   },
+  commandReview: {
+    approved: '命令已由用户批准',
+    analyzing: '命令审核子进程正在分析风险',
+    approve: '批准执行',
+    auditSummary: '审核摘要',
+    autoApproved: '命令审核通过，已自动放行',
+    command: '待执行命令',
+    description: 'AI 子审核进程已完成风险分析。批准后命令才会写入当前终端。',
+    highRisk: '高风险',
+    impactAnalysis: '影响分析',
+    lowRisk: '低风险',
+    mediumRisk: '中风险',
+    recommendation: '审核建议',
+    reject: '拒绝',
+    rejected: '命令已由用户拒绝',
+    riskLevel: '风险等级',
+    riskPoints: '风险点',
+    submitted: '命令已提交审核',
+    title: '命令审核',
+    whitelisted: '命中命令白名单，已直接放行'
+  },
   connections: {
     actionsCount: '登录动作',
     connect: '连接',
@@ -84,9 +105,24 @@ const zhCN = {
     failedToLoadModels: '加载模型失败',
     failedToStartShell: '启动 Shell 失败',
     outputSettleTimeout: '等待终端输出静默超时，自动登录动作已停止。',
+    postLoginAgentInstruction:
+      '当前终端已经完成目标连接登录。不要再次登录、不要切换连接；请基于当前终端继续完成用户要求的登录后排查、验证和必要处理。若涉及删除或清理文件，先检查范围和影响，只清理确认可以清除的日志文件，并给出执行结果总结。',
+    postLoginNotReady: '登录后任务未启动：当前终端仍像是在等待密码、验证码或交互输入。',
+    postLoginOriginalTask: '用户原始任务',
+    postLoginTaskStarting: '登录已完成，开始执行后续任务。',
     recentOutputEmpty: '最近输出：<空>',
     shellExited: 'Shell 已退出，退出码',
     terminalMode: '终端模式'
+  },
+  history: {
+    connectionMissing: '历史会话关联的连接配置不存在，无法自动重连',
+    description:
+      '切换到历史会话会恢复对话内容；若历史会话关联 SSH 连接，会重新打开终端并按当前连接配置登录。',
+    empty: '暂无历史会话。',
+    loading: '正在加载历史会话',
+    refresh: '刷新历史',
+    runs: '次运行',
+    title: '会话历史'
   },
   input: {
     actionDetails: '动作明细',
@@ -151,8 +187,17 @@ const zhCN = {
     apiKey: 'OpenAI API Key',
     baseUrl: 'OpenAI 兼容 Base URL',
     baseUrlHint: '留空时使用所选内置供应商默认地址。',
+    commandWhitelist: '命令白名单',
+    commandWhitelistHint:
+      '一行一条规则。普通文本为精确匹配；末尾 * 表示前缀匹配；/.../ 表示正则匹配。命中的命令会跳过 AI 风险审核并直接执行。',
     document: 'OpenAPI URL 或 JSON',
     dynamicToolLimit: '动态工具数量限制',
+    instructionFileExists: '已创建',
+    instructionFileNew: '未创建，保存后会创建',
+    instructionFilePlaceholder:
+      '在这里编写本地指令。保存后会写入 ~/.crescent，并在后续 Agent 会话中自动注入上下文。',
+    instructionFileSaved: '已保存',
+    instructionFiles: '本地指令文件',
     maxToolsHint: '只把最相关的 OpenAPI 工具发送给模型。',
     model: '模型',
     modelHint: '默认模型布局与 OpenClaw 兼容，API Key 仅保存在本地。',
@@ -164,6 +209,7 @@ const zhCN = {
     providerList: '供应商列表',
     providerModels: '模型列表',
     providerName: '供应商名称',
+    saveInstructionFile: '保存指令文件',
     saveSettings: '保存设置',
     saved: '已保存',
     selectModel: '选择模型',
