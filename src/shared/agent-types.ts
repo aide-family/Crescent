@@ -9,6 +9,7 @@ export interface AgentConfig {
   model: string
   agentMode: AgentMode
   maxActiveTools: number
+  commandWhitelist: string[]
   openApiBaseUrl: string
   openApiDocument: string
 }
@@ -115,6 +116,31 @@ export interface TerminalCommandExecutor {
   executeCommand(command: string, timeoutMs?: number): Promise<TerminalCommandResult>
 }
 
+export type CommandRiskLevel = 'low' | 'medium' | 'high'
+
+export interface CommandAuditResult {
+  summary: string
+  risk: CommandRiskLevel
+  requiresApproval: boolean
+  riskPoints: string[]
+  impactAnalysis: string
+  recommendation: string
+}
+
+export interface CommandApprovalRequest {
+  id: string
+  runId: string
+  tabId?: string
+  command: string
+  timeoutMs?: number
+  audit: CommandAuditResult
+}
+
+export interface CommandApprovalDecision {
+  requestId: string
+  approved: boolean
+}
+
 export interface AgentValidationResult {
   ok: boolean
   modelOk?: boolean
@@ -145,11 +171,19 @@ export interface AgentSkillContext {
   promptBlock: string
 }
 
+export interface LocalInstructionDocument {
+  name: string
+  path: string
+  content: string
+  exists: boolean
+}
+
 export type AgentEvent =
   | ({ type: 'status'; message: string } & AgentEventMeta)
   | ({ type: 'thought'; message: string } & AgentEventMeta)
   | ({ type: 'plan'; steps: string[] } & AgentEventMeta)
   | ({ type: 'tool'; name: string; message: string } & AgentEventMeta)
+  | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)
   | ({ type: 'error'; message: string } & AgentEventMeta)
   | ({ type: 'done'; message: string } & AgentEventMeta)
@@ -214,4 +248,15 @@ export interface StoredAgentRun {
   connectionId?: string
   output?: string
   error?: string
+}
+
+export interface StoredSessionHistoryItem extends StoredSessionTab {
+  updatedAt: string
+  lastMessage?: string
+  lastMessageAt?: string
+  runCount: number
+}
+
+export interface StoredSessionHistoryDetail extends StoredSessionHistoryItem {
+  logs: StoredAgentLogEntry[]
 }

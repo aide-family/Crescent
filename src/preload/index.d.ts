@@ -10,10 +10,15 @@ import type {
   AgentRunInput,
   AgentSkillOption,
   AgentValidationResult,
+  CommandApprovalDecision,
+  CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
+  LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  StoredSessionHistoryDetail,
+  StoredSessionHistoryItem,
   StoredSessionTab
 } from '../shared/agent-types'
 
@@ -54,6 +59,11 @@ interface TerminalAgentApi {
     getConfig: () => Promise<AgentConfig>
     getModels: () => Promise<AgentModelOption[]>
     listSkills: () => Promise<AgentSkillOption[]>
+    listInstructionFiles: () => Promise<LocalInstructionDocument[]>
+    saveInstructionFile: (input: {
+      name: string
+      content: string
+    }) => Promise<LocalInstructionDocument>
     saveConfig: (config: Partial<AgentConfig>) => Promise<AgentConfig>
     validateConfig: (config: Partial<AgentConfig>) => Promise<AgentValidationResult>
     generateCommand: (input: AgentCommandInput) => Promise<AgentCommandResult>
@@ -63,7 +73,9 @@ interface TerminalAgentApi {
     run: (input: AgentRunInput) => Promise<{ ok: boolean; text?: string; error?: string }>
     cancel: (runId: string) => Promise<{ ok: boolean }>
     supplement: (input: { runId: string; input: string }) => Promise<{ ok: boolean }>
+    resolveCommandApproval: (input: CommandApprovalDecision) => Promise<{ ok: boolean }>
     onEvent: (callback: (event: AgentEvent) => void) => () => void
+    onCommandApprovalRequest: (callback: (request: CommandApprovalRequest) => void) => () => void
   }
   connections: {
     list: () => Promise<ConnectionConfig[]>
@@ -77,6 +89,8 @@ interface TerminalAgentApi {
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ) => Promise<{ ok: boolean }>
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
+    listSessionHistory: (limit?: number) => Promise<StoredSessionHistoryItem[]>
+    getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
   }
 }
 

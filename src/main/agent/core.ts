@@ -9,7 +9,8 @@ import { AgentToolRuntime } from './tool-runtime'
 import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
 import type { AgentRunControls } from './runner'
 
-const MAX_TOOL_STEPS = 8
+const MAX_TOOL_STEPS = 5
+const MAX_TOOL_ROUNDS_BEFORE_SYNTHESIS = 3
 
 export class TerminalAgentCore {
   private readonly promptBuilder = new AgentPromptBuilder()
@@ -96,6 +97,7 @@ export class TerminalAgentCore {
             content: this.promptBuilder.buildChatOnlyPrompt({
               mode: this.config.agentMode,
               memoryBlock: input.memoryBlock,
+              instructionContext: this.controls?.instructionContext,
               skillContext: this.controls?.skillContext,
               terminalContext: input.terminalContext
             })
@@ -130,6 +132,7 @@ export class TerminalAgentCore {
         content: this.promptBuilder.buildToolLoopPrompt({
           mode: this.config.agentMode,
           memoryBlock: input.memoryBlock,
+          instructionContext: this.controls?.instructionContext,
           skillContext: this.controls?.skillContext,
           planSteps: input.planSteps,
           terminalContext: input.terminalContext
@@ -142,25 +145,38 @@ export class TerminalAgentCore {
       }
     ]
 
+    let toolRounds = 0
+
     for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
       this.throwIfCanceled()
       appendSupplementalInputs(messages, this.controls?.consumeSupplementalInputs?.())
-      const hasToolObservations = messages.some((message) => message.role === 'tool')
+      const hasToolObservations = toolRounds > 0
+      const shouldForceFinal = toolRounds >= MAX_TOOL_ROUNDS_BEFORE_SYNTHESIS
       this.emit({
         type: 'thought',
-        message: hasToolObservations
+        message: shouldForceFinal
           ? 'Analyzing tool results and preparing the final answer...'
-          : this.config.agentMode === 'plan-execute'
-            ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
-            : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
+          : hasToolObservations
+            ? 'Analyzing tool results and preparing the final answer...'
+            : this.config.agentMode === 'plan-execute'
+              ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
+              : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
       })
 
+      const stepMessages = buildStepMessages(messages, {
+        hasToolObservations,
+        shouldForceFinal
+      })
       const completion = await input.brain.chat(
-        {
-          messages,
-          tools: input.toolRuntime.tools,
-          tool_choice: 'auto'
-        },
+        shouldForceFinal
+          ? {
+              messages: stepMessages
+            }
+          : {
+              messages: stepMessages,
+              tools: input.toolRuntime.tools,
+              tool_choice: 'auto'
+            },
         {
           signal: this.controls?.signal
         }
@@ -178,6 +194,8 @@ export class TerminalAgentCore {
         this.emit({ type: 'done', message: 'Done.' })
         return text
       }
+
+      toolRounds += 1
 
       for (const toolCall of message.tool_calls) {
         this.throwIfCanceled()
@@ -202,12 +220,72 @@ export class TerminalAgentCore {
       }
     }
 
-    throw new Error('Tool calling loop exceeded the maximum step limit.')
+    return this.synthesizeFinalAnswer(input.brain, messages)
   }
 
   private throwIfCanceled(): void {
     if (this.controls?.signal?.aborted) throw new Error('Agent run canceled.')
   }
+
+  private async synthesizeFinalAnswer(
+    brain: AgentBrain,
+    messages: ChatCompletionMessageParam[]
+  ): Promise<string> {
+    this.emit({
+      type: 'thought',
+      message: 'Analyzing tool results and preparing the final answer...'
+    })
+    this.throwIfCanceled()
+
+    const completion = await brain.chat(
+      {
+        messages: [
+          ...messages,
+          {
+            role: 'system',
+            content:
+              'The tool loop budget is exhausted. Do not call any more tools. Produce the best final answer from the available observations in the same natural language as the user’s latest request. If the task is incomplete, clearly state what was completed, what is still unknown, and the next concrete command or action.'
+          }
+        ]
+      },
+      {
+        signal: this.controls?.signal
+      }
+    )
+    this.throwIfCanceled()
+
+    const text = completion.choices[0]?.message.content ?? ''
+    this.emit({ type: 'token', text })
+    this.emit({ type: 'done', message: 'Done.' })
+    return text
+  }
+}
+
+function buildStepMessages(
+  messages: ChatCompletionMessageParam[],
+  input: { hasToolObservations: boolean; shouldForceFinal: boolean }
+): ChatCompletionMessageParam[] {
+  if (input.shouldForceFinal) {
+    return [
+      ...messages,
+      {
+        role: 'system',
+        content:
+          'You already have enough tool interaction rounds for this request. Stop using tools now and write the final answer in the same natural language as the user’s latest request. Summarize the result, evidence, failures if any, and the next concrete action only if needed.'
+      }
+    ]
+  }
+
+  if (!input.hasToolObservations) return messages
+
+  return [
+    ...messages,
+    {
+      role: 'system',
+      content:
+        'You have tool observations. Prefer producing the final answer now. Call one more tool only when a specific missing fact prevents a correct conclusion. If more terminal work is necessary, batch related read-only checks into one command and avoid repeated probing.'
+    }
+  ]
 }
 
 function appendSupplementalInputs(

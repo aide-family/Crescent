@@ -18,6 +18,7 @@ const config: AgentConfig = {
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
+  commandWhitelist: [],
   openApiBaseUrl: 'https://api.example.test/v1/',
   openApiDocument: '{}'
 }

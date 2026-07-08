@@ -1,9 +1,18 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
-import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { dirname } from 'path'
 import { randomUUID } from 'crypto'
 
 import { defaultOpenClawLikeConfig, getDefaultAgentProviders } from './agent/openclaw-config'
+import {
+  appendOperationRecordToDb,
+  readCommandWhitelistFromDb,
+  readCrescentDbFlag,
+  readCrescentMemoryFromDb,
+  writeCommandWhitelistToDb,
+  writeCrescentDbFlag,
+  writeCrescentMemoryToDb
+} from './crescent-sqlite'
+import { getCrescentConfigPath, getCrescentMemoryPath } from './crescent-paths'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -15,6 +24,8 @@ import type {
   OperationRecord
 } from './agent/types'
 
+export { getCrescentDir, getCrescentConfigPath, getCrescentMemoryPath } from './crescent-paths'
+
 export interface CrescentConfigFile {
   agent: AgentConfig
   connections: ConnectionConfig[]
@@ -25,11 +36,33 @@ export interface CrescentMemoryFile {
   longTerm: AgentLongTermMemory
 }
 
+export const defaultCommandWhitelist: string[] = [
+  'pwd',
+  'whoami',
+  'hostname',
+  'date',
+  'uptime',
+  'df -h',
+  'df -i',
+  'free -h',
+  'hostname; date; uptime',
+  'df -h; df -i',
+  '/^ls( -[A-Za-z]+)?( [^;&|`$]+)?$/',
+  '/^ps aux --sort=-(%mem|%cpu) \\| head -[0-9]+$/',
+  '/^free -h; ps aux --sort=-%mem \\| head -[0-9]+$/',
+  '/^du -xhd1 [^;&|`$]+( 2>\\/dev\\/null)? \\| sort -h$/',
+  '/^find [^;&|`$]+ -type f -name ["\\\']?\\*\\.log\\*["\\\']? -size \\+[0-9]+M -mtime \\+[0-9]+ -print$/',
+  '/^kubectl get [A-Za-z0-9_.-]+( -A| --all-namespaces)?$/',
+  '/^kubectl describe [A-Za-z0-9_.-]+ [A-Za-z0-9_.-]+( -n [A-Za-z0-9_.-]+)?$/',
+  '/^op do web "?(hostname; date; uptime|df -h; df -i|free -h|ps aux --sort=-%mem \\| head -[0-9]+)"?$/'
+]
+
 export const defaultAgentConfig: AgentConfig = {
   providers: getDefaultAgentProviders(),
   model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
   agentMode: 'react',
   maxActiveTools: 5,
+  commandWhitelist: defaultCommandWhitelist,
   openApiBaseUrl: '',
   openApiDocument: ''
 }
@@ -43,38 +76,47 @@ export const defaultMemoryFile: CrescentMemoryFile = {
   }
 }
 
-export function getCrescentDir(): string {
-  return join(homedir(), '.crescent')
-}
-
-export function getCrescentConfigPath(): string {
-  return join(getCrescentDir(), 'config.json')
-}
-
-export function getCrescentMemoryPath(): string {
-  return join(getCrescentDir(), 'memory.json')
-}
-
 export function readCrescentConfig(): CrescentConfigFile {
   return normalizeConfigFile(readJsonFile(getCrescentConfigPath(), {}))
 }
 
 export function writeCrescentConfig(config: CrescentConfigFile): CrescentConfigFile {
   const normalized = normalizeConfigFile(config)
-  writeJsonFile(getCrescentConfigPath(), normalized)
+  writeJsonFile(getCrescentConfigPath(), stripDbBackedConfig(normalized))
 
   return normalized
 }
 
 export function readAgentConfig(): AgentConfig {
-  return readCrescentConfig().agent
+  const config = readCrescentConfig()
+  const legacyWhitelist = config.agent.commandWhitelist
+
+  migrateCommandWhitelistIfNeeded(legacyWhitelist)
+
+  return {
+    ...config.agent,
+    commandWhitelist: readCommandWhitelistFromDb()
+  }
 }
 
 export function writeAgentConfig(config: AgentConfig): AgentConfig {
   const current = readCrescentConfig()
-  const next = writeCrescentConfig({ ...current, agent: normalizeAgentConfig(config) })
+  const normalized = normalizeAgentConfig(config)
+  const commandWhitelist = writeCommandWhitelistToDb(normalized.commandWhitelist)
 
-  return next.agent
+  writeCrescentDbFlag('command_whitelist_migrated', true)
+  const next = writeCrescentConfig({
+    ...current,
+    agent: {
+      ...normalized,
+      commandWhitelist: []
+    }
+  })
+
+  return {
+    ...next.agent,
+    commandWhitelist
+  }
 }
 
 export function readCustomConnections(): ConnectionConfig[] {
@@ -103,33 +145,28 @@ export function deleteCustomConnection(id: string): void {
 }
 
 export function readCrescentMemory(): CrescentMemoryFile {
-  return normalizeMemoryFile(readJsonFile(getCrescentMemoryPath(), {}))
+  migrateMemoryIfNeeded()
+
+  return readCrescentMemoryFromDb()
 }
 
 export function writeCrescentMemory(memory: CrescentMemoryFile): CrescentMemoryFile {
-  const normalized = normalizeMemoryFile(memory)
-  writeJsonFile(getCrescentMemoryPath(), normalized)
+  writeCrescentDbFlag('memory_migrated', true)
 
-  return normalized
+  return writeCrescentMemoryToDb(normalizeMemoryFile(memory))
 }
 
 export function appendOperationRecord(
   record: Omit<OperationRecord, 'id' | 'createdAt'>
 ): OperationRecord {
-  const memory = readCrescentMemory()
   const operation: OperationRecord = {
     id: `op-${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...record
   }
 
-  writeCrescentMemory({
-    ...memory,
-    longTerm: {
-      ...memory.longTerm,
-      operations: [operation, ...memory.longTerm.operations].slice(0, 500)
-    }
-  })
+  migrateMemoryIfNeeded()
+  appendOperationRecordToDb(operation)
 
   return operation
 }
@@ -146,9 +183,18 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
       : defaultModel,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
     maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools),
+    commandWhitelist: normalizeStringList(
+      config.commandWhitelist ?? defaultAgentConfig.commandWhitelist
+    ),
     openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
     openApiDocument: String(config.openApiDocument ?? '')
   }
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+
+  return value.map((item) => String(item).trim()).filter(Boolean)
 }
 
 function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderConfig[] {
@@ -205,6 +251,49 @@ function normalizeConfigFile(value: unknown): CrescentConfigFile {
       ? record.connections.map(normalizeConnection).filter((connection) => connection.host)
       : []
   }
+}
+
+function stripDbBackedConfig(config: CrescentConfigFile): CrescentConfigFile {
+  const agent = { ...config.agent } as Partial<AgentConfig>
+  delete agent.commandWhitelist
+
+  return {
+    ...config,
+    agent: agent as AgentConfig
+  }
+}
+
+function migrateCommandWhitelistIfNeeded(legacyWhitelist: string[]): void {
+  if (readCrescentDbFlag('command_whitelist_migrated')) return
+
+  if (legacyWhitelist.length > 0 && readCommandWhitelistFromDb().length === 0) {
+    writeCommandWhitelistToDb(legacyWhitelist)
+  }
+  writeCrescentDbFlag('command_whitelist_migrated', true)
+  writeCrescentConfig({
+    ...readCrescentConfig(),
+    agent: {
+      ...readCrescentConfig().agent,
+      commandWhitelist: []
+    }
+  })
+}
+
+function migrateMemoryIfNeeded(): void {
+  if (readCrescentDbFlag('memory_migrated')) return
+
+  const legacyMemory = normalizeMemoryFile(readJsonFile(getCrescentMemoryPath(), {}))
+  const currentMemory = readCrescentMemoryFromDb()
+  const hasCurrentMemory =
+    currentMemory.shortTerm.length > 0 ||
+    currentMemory.longTerm.preferences.length > 0 ||
+    currentMemory.longTerm.notes.length > 0 ||
+    currentMemory.longTerm.operations.length > 0
+
+  if (!hasCurrentMemory) {
+    writeCrescentMemoryToDb(legacyMemory, { replaceOperations: true })
+  }
+  writeCrescentDbFlag('memory_migrated', true)
 }
 
 function normalizeMemoryFile(value: unknown): CrescentMemoryFile {

@@ -43,6 +43,28 @@ const en = {
     closeOtherTabs: 'Close all other tabs? Their terminal sessions will be stopped.',
     deleteConnection: 'Delete this custom connection? This action cannot be undone.'
   },
+  commandReview: {
+    approved: 'Command approved by user',
+    analyzing: 'Command review subprocess is analyzing risk',
+    approve: 'Approve and run',
+    auditSummary: 'Audit summary',
+    autoApproved: 'Command audit passed and was auto-approved',
+    command: 'Command to execute',
+    description:
+      'The AI command review subprocess has analyzed the risk. The command is written to the terminal only after approval.',
+    highRisk: 'High risk',
+    impactAnalysis: 'Impact analysis',
+    lowRisk: 'Low risk',
+    mediumRisk: 'Medium risk',
+    recommendation: 'Recommendation',
+    reject: 'Reject',
+    rejected: 'Command rejected by user',
+    riskLevel: 'Risk level',
+    riskPoints: 'Risk points',
+    submitted: 'Command submitted for review',
+    title: 'Command review',
+    whitelisted: 'Command matched the whitelist and was allowed directly'
+  },
   connections: {
     actionsCount: 'login actions',
     connect: 'Connect',
@@ -90,9 +112,26 @@ const en = {
     failedToStartShell: 'Failed to start shell',
     outputSettleTimeout:
       'Timed out waiting for terminal output to settle. Automatic login actions stopped.',
+    postLoginAgentInstruction:
+      'The current terminal has already completed the target login. Do not log in again or switch connections; continue in this terminal to complete the requested post-login investigation, verification, and necessary handling. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
+    postLoginNotReady:
+      'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
+    postLoginOriginalTask: 'Original user task',
+    postLoginTaskStarting: 'Login completed; starting the follow-up task.',
     recentOutputEmpty: 'recent output: <empty>',
     shellExited: 'Shell exited with code',
     terminalMode: 'Terminal mode'
+  },
+  history: {
+    connectionMissing:
+      'The connection configuration linked to this history session no longer exists; automatic reconnect is unavailable',
+    description:
+      'Switching to a history session restores the chat. If it was linked to SSH, Crescent opens a terminal and logs in using the current connection configuration.',
+    empty: 'No history sessions yet.',
+    loading: 'Loading history sessions',
+    refresh: 'Refresh history',
+    runs: 'runs',
+    title: 'Session history'
   },
   input: {
     actionDetails: 'Action details',
@@ -158,8 +197,17 @@ const en = {
     apiKey: 'OpenAI API key',
     baseUrl: 'OpenAI-compatible base URL',
     baseUrlHint: 'Leave blank to use the selected built-in provider default.',
+    commandWhitelist: 'Command whitelist',
+    commandWhitelistHint:
+      'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
     document: 'OpenAPI URL or JSON',
     dynamicToolLimit: 'Dynamic tool limit',
+    instructionFileExists: 'Created',
+    instructionFileNew: 'Not created; saving will create it',
+    instructionFilePlaceholder:
+      'Write local instructions here. Saving writes to ~/.crescent and injects the content into later Agent sessions.',
+    instructionFileSaved: 'Saved',
+    instructionFiles: 'Local instruction files',
     maxToolsHint: 'Only the most relevant OpenAPI tools are sent to the model.',
     model: 'Model',
     modelHint: 'Defaults mirror the OpenClaw provider layout; API keys stay local.',
@@ -171,6 +219,7 @@ const en = {
     providerList: 'Provider list',
     providerModels: 'Model list',
     providerName: 'Provider name',
+    saveInstructionFile: 'Save instruction file',
     saveSettings: 'Save settings',
     saved: 'Saved',
     selectModel: 'Select a model',
