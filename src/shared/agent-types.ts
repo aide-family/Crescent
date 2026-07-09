@@ -163,6 +163,26 @@ export interface AgentSkillOption {
   description: string
   path: string
   source: string
+  removable?: boolean
+}
+
+export interface AgentSkillSearchResult {
+  id: string
+  name: string
+  description: string
+  source: string
+  url?: string
+  installSource: string
+  installSkill?: string
+  installs?: number
+}
+
+export interface AgentSkillInstallResult {
+  ok: boolean
+  output: string
+  skills: AgentSkillOption[]
+  fallbackInstalledAll?: boolean
+  requestedSkill?: string
 }
 
 export interface AgentSkillContext {

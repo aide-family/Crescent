@@ -8,7 +8,9 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
+  AgentSkillInstallResult,
   AgentSkillOption,
+  AgentSkillSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalRequest,
@@ -59,6 +61,12 @@ interface TerminalAgentApi {
     getConfig: () => Promise<AgentConfig>
     getModels: () => Promise<AgentModelOption[]>
     listSkills: () => Promise<AgentSkillOption[]>
+    searchSkills: (query: string) => Promise<AgentSkillSearchResult[]>
+    installSkill: (input: {
+      installSource: string
+      installSkill?: string
+    }) => Promise<AgentSkillInstallResult>
+    deleteSkill: (path: string) => Promise<AgentSkillOption[]>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
     saveInstructionFile: (input: {
       name: string

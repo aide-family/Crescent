@@ -9,7 +9,9 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentRunInput,
+  AgentSkillInstallResult,
   AgentSkillOption,
+  AgentSkillSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalRequest,
@@ -101,6 +103,14 @@ const api = {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
     listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),
+    searchSkills: (query: string): Promise<AgentSkillSearchResult[]> =>
+      ipcRenderer.invoke('agent:search-skills', query),
+    installSkill: (input: {
+      installSource: string
+      installSkill?: string
+    }): Promise<AgentSkillInstallResult> => ipcRenderer.invoke('agent:install-skill', input),
+    deleteSkill: (path: string): Promise<AgentSkillOption[]> =>
+      ipcRenderer.invoke('agent:delete-skill', path),
     listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
       ipcRenderer.invoke('agent:list-instruction-files'),
     saveInstructionFile: (input: {

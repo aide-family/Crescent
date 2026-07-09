@@ -11,7 +11,13 @@ import {
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './openclaw-config'
 import { AgentBrain } from './brain'
-import { buildAgentSkillContext, listAgentSkills } from './skills'
+import {
+  buildAgentSkillContext,
+  deleteAgentSkill,
+  installAgentSkill,
+  listAgentSkills,
+  searchAgentSkills
+} from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { executeCommandInTerminal } from '../terminal/ipc'
@@ -70,6 +76,24 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:list-skills', () => {
     return listAgentSkills()
+  })
+
+  ipcMain.handle('agent:search-skills', (_, query: string) => {
+    return searchAgentSkills(query ?? '')
+  })
+
+  ipcMain.handle(
+    'agent:install-skill',
+    (_, payload: { installSource?: string; installSkill?: string }) => {
+      return installAgentSkill({
+        installSource: payload?.installSource ?? '',
+        installSkill: payload?.installSkill ?? ''
+      })
+    }
+  )
+
+  ipcMain.handle('agent:delete-skill', (_, path: string) => {
+    return deleteAgentSkill(path ?? '')
   })
 
   ipcMain.handle('agent:list-instruction-files', () => {

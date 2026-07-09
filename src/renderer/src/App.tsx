@@ -6,6 +6,7 @@ import {
   BotIcon,
   CheckIcon,
   CopyIcon,
+  DownloadIcon,
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
@@ -16,8 +17,10 @@ import {
   PlusIcon,
   ServerIcon,
   SettingsIcon,
+  SearchIcon,
   TestTube2Icon,
   TriangleAlertIcon,
+  Trash2Icon,
   XIcon
 } from 'lucide-react'
 
@@ -60,6 +63,7 @@ import type {
   AgentModelOption,
   AgentProviderConfig,
   AgentProviderModelConfig,
+  AgentSkillSearchResult,
   AgentValidationResult,
   AgentSkillOption,
   CommandApprovalRequest,
@@ -113,6 +117,11 @@ interface AgentRunViewState {
 interface AgentRunAction {
   title: string
   detail: string
+}
+
+type SkillManageMessage = {
+  type: 'info' | 'success' | 'error'
+  text: string
 }
 
 interface ConnectionIntent {
@@ -218,6 +227,14 @@ function App(): React.JSX.Element {
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
+  const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
+  const [skillSearchQuery, setSkillSearchQuery] = useState('Browser')
+  const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillSearchResult[]>([])
+  const [skillSearchLoading, setSkillSearchLoading] = useState(false)
+  const [skillInstallingId, setSkillInstallingId] = useState<string | null>(null)
+  const [skillDeletingPath, setSkillDeletingPath] = useState<string | null>(null)
+  const [copiedSkillCommandId, setCopiedSkillCommandId] = useState<string | null>(null)
+  const [skillManageMessage, setSkillManageMessage] = useState<SkillManageMessage | null>(null)
   const [instructionFiles, setInstructionFiles] = useState<LocalInstructionDocument[]>([])
   const [selectedInstructionName, setSelectedInstructionName] = useState('IDENTITY.md')
   const [instructionContent, setInstructionContent] = useState('')
@@ -355,6 +372,10 @@ function App(): React.JSX.Element {
     connectionForm.user,
     connectionSshOptionsText
   ])
+  const filteredLocalSkills = useMemo(
+    () => filterLocalSkills(skills, localSkillSearchQuery),
+    [localSkillSearchQuery, skills]
+  )
 
   const refreshSessionHistory = useCallback(async (): Promise<void> => {
     setHistoryLoading(true)
@@ -979,6 +1000,102 @@ function App(): React.JSX.Element {
     )
     setInstructionSaved(true)
     setTimeout(() => setInstructionSaved(false), 1400)
+  }
+
+  async function refreshSkills(): Promise<void> {
+    try {
+      setSkills(await window.api.agent.listSkills())
+      setSkillManageMessage({ type: 'success', text: t.settings.skillsRefreshed })
+    } catch (error) {
+      setSkillManageMessage({ type: 'error', text: String(error) })
+    }
+  }
+
+  async function searchSkills(): Promise<void> {
+    const query = skillSearchQuery.trim()
+    if (!query) return
+
+    setSkillSearchLoading(true)
+    setSkillManageMessage({ type: 'info', text: t.settings.skillsSearching })
+    try {
+      const results = await window.api.agent.searchSkills(query)
+      setSkillSearchResults(results)
+      setSkillManageMessage(
+        results.length
+          ? { type: 'success', text: t.settings.skillsSearchComplete }
+          : { type: 'info', text: t.settings.skillsNoResults }
+      )
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setSkillSearchLoading(false)
+    }
+  }
+
+  async function installSkill(result: AgentSkillSearchResult): Promise<void> {
+    setSkillInstallingId(result.id)
+    setSkillManageMessage({
+      type: 'info',
+      text: `${t.settings.skillInstalling}: ${result.name}`
+    })
+    try {
+      const response = await window.api.agent.installSkill({
+        installSource: result.installSource,
+        installSkill: result.installSkill
+      })
+      setSkills(response.skills)
+      setSkillManageMessage({
+        type: 'success',
+        text: [
+          `${t.settings.skillInstalled}: ${result.name}`,
+          response.fallbackInstalledAll && response.requestedSkill
+            ? `${t.settings.skillFallbackInstalledAll}: ${response.requestedSkill}`
+            : '',
+          response.output
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      })
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: `${t.settings.skillInstallFailed}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      })
+    } finally {
+      setSkillInstallingId(null)
+    }
+  }
+
+  async function copySkillInstallCommand(result: AgentSkillSearchResult): Promise<void> {
+    await copyText(buildSkillInstallCommand(result))
+    setCopiedSkillCommandId(result.id)
+    window.setTimeout(() => {
+      setCopiedSkillCommandId((current) => (current === result.id ? null : current))
+    }, 1400)
+  }
+
+  async function deleteSkill(skill: AgentSkillOption): Promise<void> {
+    if (!skill.removable) return
+    if (!window.confirm(`${t.confirm.deleteSkill}\n\n${skill.name}`)) return
+
+    setSkillDeletingPath(skill.path)
+    setSkillManageMessage({ type: 'info', text: `${t.settings.skillDeleting}: ${skill.name}` })
+    try {
+      setSkills(await window.api.agent.deleteSkill(skill.path))
+      setSkillManageMessage({ type: 'success', text: `${t.settings.skillDeleted}: ${skill.name}` })
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setSkillDeletingPath(null)
+    }
   }
 
   async function saveAgentConfig(nextConfigInput: AgentConfig): Promise<AgentConfig> {
@@ -1899,6 +2016,163 @@ function App(): React.JSX.Element {
                       placeholder={'pwd\ndf -h\nfree -h\nkubectl get *\n/^op do web .*$/'}
                     />
                     <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
+                  </Field>
+                  <Separator />
+                  <Field>
+                    <FieldLabel>{t.settings.skillsManagement}</FieldLabel>
+                    <FieldDescription>{t.settings.skillsManagementHint}</FieldDescription>
+                    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {t.settings.localSkills} · {filteredLocalSkills.length}/{skills.length}
+                        </div>
+                        <Button type="button" variant="outline" size="sm" onClick={refreshSkills}>
+                          <SearchIcon data-icon="inline-start" />
+                          {t.settings.refreshSkills}
+                        </Button>
+                      </div>
+                      <Input
+                        value={localSkillSearchQuery}
+                        onChange={(event) => setLocalSkillSearchQuery(event.target.value)}
+                        placeholder={t.settings.localSkillsSearchPlaceholder}
+                      />
+                      <div className="max-h-48 space-y-2 overflow-auto">
+                        {skills.length === 0 ? (
+                          <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                            {t.settings.noLocalSkills}
+                          </div>
+                        ) : filteredLocalSkills.length === 0 ? (
+                          <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                            {t.settings.noMatchedLocalSkills}
+                          </div>
+                        ) : (
+                          filteredLocalSkills.map((skill) => (
+                            <div
+                              key={skill.path}
+                              className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
+                            >
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate font-medium">{skill.name}</span>
+                                  {!skill.removable && (
+                                    <Badge variant="outline">{t.settings.protectedSkill}</Badge>
+                                  )}
+                                </div>
+                                {skill.description && (
+                                  <div className="line-clamp-2 text-muted-foreground">
+                                    {skill.description}
+                                  </div>
+                                )}
+                                <div className="truncate font-mono text-[11px] text-muted-foreground">
+                                  {skill.path}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                disabled={!skill.removable || skillDeletingPath === skill.path}
+                                aria-label={t.settings.deleteSkill}
+                                title={t.settings.deleteSkill}
+                                onClick={() => void deleteSkill(skill)}
+                              >
+                                {skillDeletingPath === skill.path ? (
+                                  <Loader2Icon className="animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Trash2Icon aria-hidden="true" />
+                                )}
+                              </Button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <Separator />
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            value={skillSearchQuery}
+                            onChange={(event) => setSkillSearchQuery(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                void searchSkills()
+                              }
+                            }}
+                            placeholder="Browser"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={searchSkills}
+                            disabled={skillSearchLoading}
+                          >
+                            {skillSearchLoading ? (
+                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                            ) : (
+                              <SearchIcon data-icon="inline-start" />
+                            )}
+                            {t.settings.searchSkills}
+                          </Button>
+                        </div>
+                        <FieldDescription>{t.settings.skillsSearchHint}</FieldDescription>
+                        {skillSearchResults.length > 0 && (
+                          <div className="max-h-64 space-y-2 overflow-auto">
+                            {skillSearchResults.map((result) => (
+                              <div
+                                key={result.id}
+                                className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
+                              >
+                                <div className="min-w-0 space-y-1">
+                                  <div className="truncate font-medium">{result.name}</div>
+                                  {result.description && (
+                                    <div className="line-clamp-2 text-muted-foreground">
+                                      {result.description}
+                                    </div>
+                                  )}
+                                  <div className="truncate font-mono text-[11px] text-muted-foreground">
+                                    {buildSkillInstallCommand(result)}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label={t.settings.copySkillInstallCommand}
+                                    title={t.settings.copySkillInstallCommand}
+                                    onClick={() => void copySkillInstallCommand(result)}
+                                  >
+                                    {copiedSkillCommandId === result.id ? (
+                                      <CheckIcon aria-hidden="true" />
+                                    ) : (
+                                      <CopyIcon aria-hidden="true" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={skillInstallingId === result.id}
+                                    onClick={() => void installSkill(result)}
+                                  >
+                                    {skillInstallingId === result.id ? (
+                                      <Loader2Icon
+                                        className="animate-spin"
+                                        data-icon="inline-start"
+                                      />
+                                    ) : (
+                                      <DownloadIcon data-icon="inline-start" />
+                                    )}
+                                    {t.settings.installSkill}
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <SkillManageStatus message={skillManageMessage} />
+                      </div>
+                    </div>
                   </Field>
                   <Separator />
                   <Field>
@@ -2859,10 +3133,33 @@ function ActionLogRow({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): Re
         </time>
         <span className="truncate text-foreground/90">{summary}</span>
       </summary>
-      <pre className="max-h-72 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+      <pre className="select-text max-h-72 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
         {entry.text}
       </pre>
     </details>
+  )
+}
+
+function SkillManageStatus({
+  message
+}: {
+  message: SkillManageMessage | null
+}): React.JSX.Element | null {
+  if (!message) return null
+
+  const className =
+    message.type === 'success'
+      ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300'
+      : message.type === 'error'
+        ? 'border-destructive/40 bg-destructive/10 text-destructive'
+        : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+
+  return (
+    <pre
+      className={`select-text max-h-32 overflow-auto rounded-md border p-2 text-xs leading-relaxed whitespace-pre-wrap ${className}`}
+    >
+      {message.text}
+    </pre>
   )
 }
 
@@ -2876,7 +3173,7 @@ function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }):
       <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium marker:text-muted-foreground">
         {summary}
       </summary>
-      <pre className="max-h-80 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+      <pre className="select-text max-h-80 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
         {entry.text}
       </pre>
     </details>
@@ -3172,6 +3469,36 @@ function parseCommandWhitelist(value: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+}
+
+function filterLocalSkills(skills: AgentSkillOption[], query: string): AgentSkillOption[] {
+  const normalizedQuery = normalizeSkillSearchQuery(query)
+  if (!normalizedQuery) return skills
+
+  return skills.filter((skill) =>
+    normalizeSkillSearchQuery([skill.name, skill.description].filter(Boolean).join(' ')).includes(
+      normalizedQuery
+    )
+  )
+}
+
+function normalizeSkillSearchQuery(value: string): string {
+  return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
+}
+
+function buildSkillInstallCommand(result: AgentSkillSearchResult): string {
+  return [
+    'npx',
+    '-y',
+    'skills',
+    'add',
+    shellQuote(result.installSource),
+    '--yes',
+    '--global',
+    result.installSkill ? `--skill ${shellQuote(result.installSkill)}` : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {

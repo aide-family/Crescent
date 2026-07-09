@@ -41,7 +41,8 @@ const zhCN = {
   confirm: {
     closeTab: '确认关闭这个 Tab？该 Tab 的终端会话会被停止。',
     closeOtherTabs: '确认关闭其他所有 Tab？这些 Tab 的终端会话会被停止。',
-    deleteConnection: '确认删除这个自定义连接？此操作不可恢复。'
+    deleteConnection: '确认删除这个自定义连接？此操作不可恢复。',
+    deleteSkill: '确认删除这个 Skill？此操作会移除本地 Skill 目录，且不可恢复。'
   },
   commandReview: {
     approved: '命令已由用户批准',
@@ -190,6 +191,7 @@ const zhCN = {
     commandWhitelist: '命令白名单',
     commandWhitelistHint:
       '一行一条规则。普通文本为精确匹配；末尾 * 表示前缀匹配；/.../ 表示正则匹配。命中的命令会跳过 AI 风险审核并直接执行。',
+    copySkillInstallCommand: '复制安装命令',
     document: 'OpenAPI URL 或 JSON',
     dynamicToolLimit: '动态工具数量限制',
     instructionFileExists: '已创建',
@@ -214,7 +216,31 @@ const zhCN = {
     saved: '已保存',
     selectModel: '选择模型',
     selectedTools: '已加载 OpenAPI 工具',
+    deleteSkill: '删除 Skill',
+    installSkill: '安装',
+    localSkills: '本地 Skills',
+    localSkillsSearchPlaceholder: '搜索本地 Skills：名称或描述',
     modelGroup: 'OpenClaw 兼容默认模型',
+    noMatchedLocalSkills: '没有匹配的本地 Skills。',
+    noLocalSkills: '未发现本地 Skills。',
+    protectedSkill: '受保护',
+    refreshSkills: '刷新',
+    searchSkills: '搜索',
+    skillDeleted: 'Skill 已删除',
+    skillDeleting: '正在删除 Skill',
+    skillFallbackInstalledAll: '指定 Skill 在该来源中不存在，已改为安装该来源中的可用 Skills',
+    skillInstalled: 'Skill 已安装',
+    skillInstallFailed: 'Skill 安装失败',
+    skillInstalling: '正在安装 Skill',
+    skillsManagement: 'Skills 管理',
+    skillsManagementHint:
+      '管理本机可用的 Agent Skills。系统内置 Skill 受保护不可删除，安装来源使用 skills.sh 搜索结果。',
+    skillsNoResults: '未找到匹配的 Skills。',
+    skillsRefreshed: 'Skills 已刷新',
+    skillsSearchComplete: 'Skills 搜索完成',
+    skillsSearchHint:
+      '从 skills.sh 搜索并安装新的 Skill。默认示例为 Browser，可安装浏览器相关能力。',
+    skillsSearching: '正在搜索 Skills',
     title: 'Agent 设置',
     titleDescription: '配置模型供应商和用于生成工具的 OpenAPI 文档。',
     validateTools: '验证工具',

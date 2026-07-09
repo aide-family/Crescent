@@ -41,7 +41,8 @@ const en = {
   confirm: {
     closeTab: 'Close this tab? The terminal session in this tab will be stopped.',
     closeOtherTabs: 'Close all other tabs? Their terminal sessions will be stopped.',
-    deleteConnection: 'Delete this custom connection? This action cannot be undone.'
+    deleteConnection: 'Delete this custom connection? This action cannot be undone.',
+    deleteSkill: 'Delete this skill? This removes the local skill directory and cannot be undone.'
   },
   commandReview: {
     approved: 'Command approved by user',
@@ -200,6 +201,7 @@ const en = {
     commandWhitelist: 'Command whitelist',
     commandWhitelistHint:
       'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
+    copySkillInstallCommand: 'Copy install command',
     document: 'OpenAPI URL or JSON',
     dynamicToolLimit: 'Dynamic tool limit',
     instructionFileExists: 'Created',
@@ -224,7 +226,32 @@ const en = {
     saved: 'Saved',
     selectModel: 'Select a model',
     selectedTools: 'Loaded OpenAPI tools',
+    deleteSkill: 'Delete skill',
+    installSkill: 'Install',
+    localSkills: 'Local skills',
+    localSkillsSearchPlaceholder: 'Search local skills by name or description',
     modelGroup: 'OpenClaw-compatible defaults',
+    noMatchedLocalSkills: 'No matching local skills.',
+    noLocalSkills: 'No local skills found.',
+    protectedSkill: 'Protected',
+    refreshSkills: 'Refresh',
+    searchSkills: 'Search',
+    skillDeleted: 'Skill deleted',
+    skillDeleting: 'Deleting skill',
+    skillFallbackInstalledAll:
+      'The requested skill was not found in this source; installed available skills from the source instead',
+    skillInstalled: 'Skill installed',
+    skillInstallFailed: 'Skill install failed',
+    skillInstalling: 'Installing skill',
+    skillsManagement: 'Skills management',
+    skillsManagementHint:
+      'Manage Agent Skills available on this machine. Built-in system skills are protected; installs use skills.sh search results.',
+    skillsNoResults: 'No matching skills found.',
+    skillsRefreshed: 'Skills refreshed',
+    skillsSearchComplete: 'Skills search complete',
+    skillsSearchHint:
+      'Search skills.sh and install a new skill. The default example is Browser for browser-related skills.',
+    skillsSearching: 'Searching skills',
     title: 'Agent settings',
     titleDescription:
       'Configure the model provider and the OpenAPI document used to generate tools.',
