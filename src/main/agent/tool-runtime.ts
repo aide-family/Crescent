@@ -26,7 +26,8 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
         },
         timeoutMs: {
           type: 'number',
-          description: 'Optional timeout in milliseconds. Defaults to 120000.'
+          description:
+            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000. Long-running commands are interrupted on timeout.'
         }
       },
       required: ['command']

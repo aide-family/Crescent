@@ -16,6 +16,11 @@ interface TerminalSession {
   kill: () => void
 }
 
+interface TerminalExitNotification {
+  exitCode: number
+  signal?: number | string
+}
+
 export interface TerminalCommandExecutionResult {
   ok: boolean
   command: string
@@ -25,6 +30,7 @@ export interface TerminalCommandExecutionResult {
   output: string
   error?: string
   timedOut?: boolean
+  terminalExited?: boolean
 }
 
 const sessions = new Map<string, TerminalSession>()
@@ -33,8 +39,11 @@ const DEFAULT_TAB_ID = 'default'
 const PIPE_PROMPT_PREFIX = '__TERMINAL_AGENT_PROMPT__'
 const MAX_CONTEXT_BUFFER = 24_000
 const TERMINAL_COMMAND_TIMEOUT_MS = 120_000
+const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
+const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const terminalOutputBuffers = new Map<string, string>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
+const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
 
 export function executeCommandInTerminal(
   senderId: number,
@@ -46,6 +55,7 @@ export function executeCommandInTerminal(
   const key = getSessionKey(senderId, normalizedTabId)
   const session = sessions.get(key)
   const normalizedCommand = command.trim()
+  const effectiveTimeoutMs = normalizeCommandTimeout(timeoutMs)
 
   if (!session) {
     return Promise.resolve({
@@ -93,6 +103,9 @@ export function executeCommandInTerminal(
       const waiters = terminalDataWaiters.get(key)
       waiters?.delete(onData)
       if (waiters?.size === 0) terminalDataWaiters.delete(key)
+      const exitWaiters = terminalExitWaiters.get(key)
+      exitWaiters?.delete(onExit)
+      if (exitWaiters?.size === 0) terminalExitWaiters.delete(key)
       resolve(result)
     }
 
@@ -113,20 +126,47 @@ export function executeCommandInTerminal(
     }
 
     const timeout = setTimeout(() => {
+      interruptCommandSession(key, session)
       settle({
         ok: false,
         command: normalizedCommand,
         mode: session.mode,
         cwd: session.cwd,
         output: extractPartialCommandOutput(buffer, startMarker),
-        error: `Command timed out after ${timeoutMs}ms.`,
+        error: `Command timed out after ${effectiveTimeoutMs}ms and was interrupted.`,
         timedOut: true
       })
-    }, timeoutMs)
+    }, effectiveTimeoutMs)
+
+    const onExit = (event: TerminalExitNotification): void => {
+      settle({
+        ok: false,
+        command: normalizedCommand,
+        mode: session.mode,
+        cwd: session.cwd,
+        exitCode: event.exitCode,
+        output: extractPartialCommandOutput(buffer, startMarker),
+        error: `Terminal session exited while the command was running. Exit code: ${event.exitCode}.`,
+        terminalExited: true
+      })
+    }
 
     const waiters = terminalDataWaiters.get(key) ?? new Set<(data: string) => void>()
     waiters.add(onData)
     terminalDataWaiters.set(key, waiters)
+    const exitWaiters =
+      terminalExitWaiters.get(key) ?? new Set<(event: TerminalExitNotification) => void>()
+    exitWaiters.add(onExit)
+    terminalExitWaiters.set(key, exitWaiters)
+
+    if (session.mode === 'pty') {
+      session.write('stty -echo\r')
+      setTimeout(() => {
+        if (settled || sessions.get(key)?.id !== session.id) return
+        session.write(createCommandWrapper(normalizedCommand, startMarker, endMarker, session.mode))
+      }, 40)
+      return
+    }
 
     session.write(createCommandWrapper(normalizedCommand, startMarker, endMarker, session.mode))
   })
@@ -177,7 +217,16 @@ export function registerTerminalIpc(): void {
 
     const tabId = normalizeTabId(typeof payload === 'string' ? undefined : payload?.tabId)
     const session = sessions.get(getSessionKey(event.sender.id, tabId))
-    if (!session) return
+    if (!session) {
+      sendIfAlive(
+        event.sender,
+        tabId,
+        getSessionKey(event.sender.id, tabId),
+        'terminal:data',
+        '\r\n\x1b[31mTerminal session is not active. Command input was blocked.\x1b[0m\r\n'
+      )
+      return
+    }
 
     if (session.mode === 'pipe' && isInteractiveCommand(data)) {
       sendIfAlive(
@@ -202,7 +251,16 @@ export function registerTerminalIpc(): void {
       const tabId = normalizeTabId(payload?.tabId)
       const key = getSessionKey(event.sender.id, tabId)
       const session = sessions.get(key)
-      if (!session) return
+      if (!session) {
+        sendIfAlive(
+          event.sender,
+          tabId,
+          key,
+          'terminal:data',
+          '\r\n\x1b[31mTerminal session is not active. Command paste was blocked.\x1b[0m\r\n'
+        )
+        return
+      }
 
       if (!payload?.execute && session.mode === 'pipe') {
         sendIfAlive(
@@ -235,7 +293,7 @@ export function registerTerminalIpc(): void {
     const key = getSessionKey(event.sender.id, tabId)
     const session = sessions.get(key)
     if (!session) {
-      return { mode: 'none', output: '', cwd: '', shell: '' }
+      return { mode: 'none', output: terminalOutputBuffers.get(key) ?? '', cwd: '', shell: '' }
     }
 
     return {
@@ -283,6 +341,7 @@ function stopSession(key: string): void {
   session.kill()
   sessions.delete(key)
   terminalDataWaiters.delete(key)
+  terminalExitWaiters.delete(key)
   terminalOutputBuffers.delete(key)
 }
 
@@ -335,6 +394,7 @@ function createPtySession(input: {
     sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', data)
   })
   const exitDisposable = pty.onExit(({ exitCode, signal }) => {
+    notifyTerminalExit(input.key, { exitCode, signal })
     sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:exit', {
       tabId: input.tabId,
       sessionId: input.sessionId,
@@ -404,6 +464,10 @@ function createPipeSession(input: {
     sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', data.toString())
   })
   child.on('exit', (exitCode, signal) => {
+    notifyTerminalExit(input.key, {
+      exitCode: exitCode ?? 0,
+      signal: signal ?? undefined
+    })
     sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:exit', {
       tabId: input.tabId,
       sessionId: input.sessionId,
@@ -452,8 +516,34 @@ function createPipeSession(input: {
 function deleteIfCurrent(key: string, sessionId: number): void {
   if (sessions.get(key)?.id === sessionId) {
     sessions.delete(key)
-    terminalOutputBuffers.delete(key)
   }
+}
+
+function notifyTerminalExit(key: string, event: TerminalExitNotification): void {
+  const waiters = terminalExitWaiters.get(key)
+  if (!waiters) return
+
+  terminalExitWaiters.delete(key)
+  waiters.forEach((listener) => listener(event))
+}
+
+function interruptCommandSession(key: string, session: TerminalSession): void {
+  if (sessions.get(key)?.id !== session.id) return
+
+  if (session.mode === 'pty') {
+    session.write('\x03')
+    setTimeout(() => {
+      if (sessions.get(key)?.id === session.id) session.write('stty echo 2>/dev/null\r')
+    }, 80)
+  }
+}
+
+function normalizeCommandTimeout(timeoutMs: number): number {
+  if (!Number.isFinite(timeoutMs)) return TERMINAL_COMMAND_TIMEOUT_MS
+  return Math.max(
+    TERMINAL_COMMAND_MIN_TIMEOUT_MS,
+    Math.min(TERMINAL_COMMAND_MAX_TIMEOUT_MS, Math.round(timeoutMs))
+  )
 }
 
 function isInteractiveCommand(data: string): boolean {
@@ -482,7 +572,27 @@ function createCommandWrapper(
     'unset __crescent_status'
   ].join('\n')
 
-  return mode === 'pty' ? `${wrapper.replace(/\n/g, '\r')}\r` : `${wrapper}\n`
+  if (mode === 'pipe') return `${wrapper}\n`
+
+  return `${createPtyScriptRunner(wrapper)}\r`
+}
+
+function createPtyScriptRunner(script: string): string {
+  const encodedScript = Buffer.from(script, 'utf8').toString('base64')
+
+  return [
+    '__crescent_script=$(mktemp "${TMPDIR:-/tmp}/crescent.XXXXXX")',
+    '&&',
+    `{ printf %s '${encodedScript}' | base64 -d > "$__crescent_script" 2>/dev/null || printf %s '${encodedScript}' | base64 -D > "$__crescent_script"; }`,
+    '&&',
+    '. "$__crescent_script"',
+    ';',
+    'rm -f "$__crescent_script"',
+    ';',
+    'stty echo 2>/dev/null',
+    ';',
+    'unset __crescent_script __crescent_status'
+  ].join(' ')
 }
 
 function parseCommandBuffer(
@@ -504,7 +614,9 @@ function parseCommandBuffer(
   return {
     done: true,
     exitCode: Number(statusMatch[1]),
-    output: normalized.slice(startIndex + startMarker.length, endIndex).trim()
+    output: removeAutomationNoise(
+      normalized.slice(startIndex + startMarker.length, endIndex)
+    ).trim()
   }
 }
 
@@ -512,8 +624,8 @@ function extractPartialCommandOutput(buffer: string, startMarker: string): strin
   const normalized = stripAnsi(buffer).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const startIndex = normalized.indexOf(startMarker)
 
-  if (startIndex === -1) return normalized.trim()
-  return normalized.slice(startIndex + startMarker.length).trim()
+  if (startIndex === -1) return removeAutomationNoise(normalized).trim()
+  return removeAutomationNoise(normalized.slice(startIndex + startMarker.length)).trim()
 }
 
 function stripAnsi(value: string): string {
@@ -581,19 +693,57 @@ function sendIfAlive(
 }
 
 function filterAutomationControlOutput(data: string): string {
-  return data
-    .split(/(\r?\n)/)
-    .filter((part) => {
-      if (/^\r?\n$/.test(part)) return true
+  const parts = removeAutomationNoise(data).split(/(\r?\n)/)
+  let output = ''
+  let skippedControlLine = false
 
-      return !(
-        part.includes('__CRESCENT_CMD_START_') ||
-        part.includes('__CRESCENT_CMD_END_') ||
-        part.includes('__crescent_status=') ||
-        part.includes('unset __crescent_status')
-      )
-    })
-    .join('')
+  for (const part of parts) {
+    if (/^\r?\n$/.test(part)) {
+      if (skippedControlLine) {
+        skippedControlLine = false
+        continue
+      }
+      output += part
+      continue
+    }
+
+    if (isAutomationControlOutput(part)) {
+      skippedControlLine = true
+      continue
+    }
+
+    skippedControlLine = false
+    output += part
+  }
+
+  return output
+}
+
+function isAutomationControlOutput(value: string): boolean {
+  const normalized = stripAnsi(value)
+
+  return (
+    normalized.includes('__CRESCENT_CMD_START_') ||
+    normalized.includes('__CRESCENT_CMD_END_') ||
+    normalized.includes('__crescent_script=$(mktemp') ||
+    normalized.includes('__crescent_status=') ||
+    normalized.includes('stty -echo') ||
+    normalized.includes('stty echo 2>/dev/null') ||
+    normalized.includes('unset __crescent_status') ||
+    /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized)
+  )
+}
+
+function removeAutomationNoise(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !/_zsh_autosuggest_highlight_apply:\d+: POSTDISPLAY: parameter not set/.test(
+          stripAnsi(line)
+        )
+    )
+    .join('\n')
 }
 
 function normalizeTabId(tabId: string | undefined): string {

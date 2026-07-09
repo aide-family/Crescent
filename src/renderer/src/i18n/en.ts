@@ -99,8 +99,7 @@ const en = {
     connectionAction: 'Typed login action',
     connectionIntentResult: 'Matched a connection from your input and started login.',
     connectionMatched: 'Matched connection',
-    connectionNoActions:
-      'Starting SSH connection without login actions. Password prompts will wait for manual input.',
+    connectionNoActions: 'Starting SSH connection without login actions.',
     connectionNoMatch:
       'No matching SSH connection was found. Check existing connections or custom connection names.',
     connectionStarting: 'Starting connection with login actions',
@@ -113,6 +112,13 @@ const en = {
     failedToStartShell: 'Failed to start shell',
     outputSettleTimeout:
       'Timed out waiting for terminal output to settle. Automatic login actions stopped.',
+    terminalDisconnected:
+      'Terminal session disconnected. Command injection to this terminal stopped.',
+    terminalReconnectFailed: 'Terminal auto-restore failed',
+    terminalReconnecting:
+      'Terminal connection disconnected. Restoring it with the current connection config.',
+    terminalReconnectUnavailable:
+      'Terminal is abnormal and this session has no usable connection config. Automatic command execution stopped.',
     postLoginAgentInstruction:
       'The current terminal has already completed the target login. Do not log in again or switch connections; continue in this terminal to complete the requested post-login investigation, verification, and necessary handling. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
     postLoginNotReady:
