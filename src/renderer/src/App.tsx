@@ -212,6 +212,8 @@ function App(): React.JSX.Element {
   const tabsRef = useRef<AgentTerminalTab[]>([])
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
+  const reconnectingTabsRef = useRef(new Set<string>())
+  const restoreTerminalConnectionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
   const runAgentConversationRef = useRef<
     | ((
         input: string,
@@ -545,7 +547,7 @@ function App(): React.JSX.Element {
   )
 
   const executeConnectionCommands = useCallback(
-    (connection: ConnectionConfig, targetTabId: string): void => {
+    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
       const commands = buildConnectionCommands(connection)
       if (commands.length === 0) return
 
@@ -573,16 +575,15 @@ function App(): React.JSX.Element {
       }))
       appendLog(
         {
-          kind: connection.actions?.length ? 'status' : 'error',
+          kind: 'status',
           text: connection.actions?.length
             ? `${t.terminal.connectionStarting}: ${connection.actions.length}`
             : t.terminal.connectionNoActions
         },
         targetTabId
       )
-      void runConnectionCommandSequence(commands, targetTabId, appendLog, t).then(() => {
-        drainPostConnectionTasks(targetTabId)
-      })
+      await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
+      drainPostConnectionTasks(targetTabId)
     },
     [appendLog, drainPostConnectionTasks, locale, t, updateTab]
   )
@@ -594,6 +595,10 @@ function App(): React.JSX.Element {
   useEffect(() => {
     tabsRef.current = tabs
   }, [tabs])
+
+  useEffect(() => {
+    restoreTerminalConnectionRef.current = restoreTerminalConnection
+  })
 
   useEffect(() => {
     void window.api.storage.saveTabs(
@@ -903,10 +908,21 @@ function App(): React.JSX.Element {
       }
     })
     const stopTerminalExit = window.api.terminal.onExit((event) => {
-      updateTab(event.tabId, (current) => ({ ...current, terminalReady: false }))
+      updateTab(event.tabId, (current) => ({
+        ...current,
+        sessionId: undefined,
+        terminalReady: false
+      }))
       if (event.tabId === activeTabIdRef.current) {
         terminal.writeln(`\r\n\x1b[31m${t.terminal.shellExited} ${event.exitCode}.\x1b[0m`)
       }
+      const exitedTab = tabsRef.current.find((current) => current.id === event.tabId)
+      if (exitedTab?.connectionId) {
+        void restoreTerminalConnectionRef.current?.(event.tabId)
+        return
+      }
+
+      appendLog({ kind: 'error', text: t.terminal.terminalReconnectUnavailable }, event.tabId)
     })
 
     const startShell = async (): Promise<void> => {
@@ -937,7 +953,7 @@ function App(): React.JSX.Element {
       const pendingConnection = pendingSshRef.current.get(tab.id)
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
-        executeConnectionCommands(pendingConnection, tab.id)
+        void executeConnectionCommands(pendingConnection, tab.id)
       }
     }
 
@@ -1245,6 +1261,77 @@ function App(): React.JSX.Element {
       .join('\n')
   }
 
+  async function ensureTerminalReadyForAgent(tabId: string): Promise<void> {
+    const context = await window.api.terminal.getContext(tabId)
+    if (context.mode !== 'none') return
+
+    const tab = tabsRef.current.find((current) => current.id === tabId)
+    if (tab?.connectionId) {
+      const restored = await restoreTerminalConnection(tabId)
+      if (restored) return
+    }
+
+    throw new Error(t.terminal.terminalReconnectUnavailable)
+  }
+
+  async function restoreTerminalConnection(tabId: string): Promise<boolean> {
+    if (reconnectingTabsRef.current.has(tabId)) return waitForTerminalRestore(tabId)
+
+    const tab = tabsRef.current.find((current) => current.id === tabId)
+    if (!tab?.connectionId) return false
+
+    reconnectingTabsRef.current.add(tabId)
+    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, tabId)
+
+    try {
+      const connection = await findConnectionById(tab.connectionId)
+      if (!connection) {
+        throw new Error(`${t.history.connectionMissing}: ${tab.connectionName ?? tab.connectionId}`)
+      }
+
+      const dimensions =
+        tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
+      const session = await window.api.terminal.start({
+        cols: dimensions?.cols ?? 80,
+        rows: dimensions?.rows ?? 24,
+        tabId
+      })
+      updateTab(tabId, (current) => ({
+        ...current,
+        sessionId: session.sessionId,
+        terminalMode: session.mode,
+        terminalCwd: session.cwd,
+        terminalReady: true
+      }))
+      await executeConnectionCommands(connection, tabId)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      appendLog({ kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` }, tabId)
+      updateTab(tabId, (current) => ({
+        ...current,
+        sessionId: undefined,
+        terminalReady: false
+      }))
+      return false
+    } finally {
+      reconnectingTabsRef.current.delete(tabId)
+    }
+  }
+
+  async function waitForTerminalRestore(tabId: string): Promise<boolean> {
+    const deadline = Date.now() + 90_000
+
+    while (Date.now() < deadline) {
+      const context = await window.api.terminal.getContext(tabId)
+      if (context.mode !== 'none') return true
+      if (!reconnectingTabsRef.current.has(tabId)) return false
+      await sleep(500)
+    }
+
+    return false
+  }
+
   function connectToConnection(
     connection: ConnectionConfig,
     postLoginInput?: string,
@@ -1275,7 +1362,7 @@ function App(): React.JSX.Element {
 
     const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
     if (targetTab?.sessionId) {
-      executeConnectionCommands(connection, targetTabId)
+      void executeConnectionCommands(connection, targetTabId)
     } else {
       pendingSshRef.current.set(targetTabId, connection)
     }
@@ -1494,13 +1581,15 @@ function App(): React.JSX.Element {
     })
 
     try {
+      await ensureTerminalReadyForAgent(tabId)
       const terminalContext = await getTerminalContextForAgent(tabId)
       const result = await window.api.agent.run({
         runId,
         input,
         terminalContext,
         connectionId,
-        tabId
+        tabId,
+        locale
       })
 
       if (activeRunCanceledRef.current.has(tabId)) return
@@ -2537,22 +2626,6 @@ function App(): React.JSX.Element {
                         </Button>
                       </div>
                       <AgentLogContent entry={entry} t={t} />
-                      <div className="mt-2 flex justify-end border-t pt-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={t.common.copyMarkdown}
-                          title={t.common.copyMarkdown}
-                          onClick={() => copyLogEntry(entry)}
-                        >
-                          {activeTab.copiedLogId === entry.id ? (
-                            <CheckIcon aria-hidden="true" />
-                          ) : (
-                            <CopyIcon aria-hidden="true" />
-                          )}
-                        </Button>
-                      </div>
                     </>
                   ) : (
                     <ActionLogRow entry={entry} t={t} />
@@ -3022,14 +3095,16 @@ function App(): React.JSX.Element {
                 </p>
               </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
+            <div className="select-text min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase text-muted-foreground">
                   {t.commandReview.command}
                 </h3>
-                <pre className="max-h-36 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs">
-                  {commandApproval.command}
-                </pre>
+                <Textarea
+                  readOnly
+                  value={commandApproval.command}
+                  className="min-h-24 max-h-64 resize-y bg-muted/30 font-mono text-xs"
+                />
               </section>
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase text-muted-foreground">

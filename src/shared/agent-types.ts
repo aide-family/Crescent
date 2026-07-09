@@ -72,6 +72,7 @@ export interface AgentRunInput {
   terminalContext?: string
   connectionId?: string
   tabId?: string
+  locale?: string
 }
 
 export interface AgentConnectionIntentInput {
@@ -110,6 +111,7 @@ export interface TerminalCommandResult {
   output: string
   error?: string
   timedOut?: boolean
+  terminalExited?: boolean
 }
 
 export interface TerminalCommandExecutor {

@@ -87,12 +87,12 @@ const api = {
         tabId: string
         sessionId: number
         exitCode: number
-        signal?: number
+        signal?: number | string
       }) => void
     ): (() => void) => {
       const listener = (
         _: Electron.IpcRendererEvent,
-        event: { tabId: string; sessionId: number; exitCode: number; signal?: number }
+        event: { tabId: string; sessionId: number; exitCode: number; signal?: number | string }
       ): void => callback(event)
 
       ipcRenderer.on('terminal:exit', listener)

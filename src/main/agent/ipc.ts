@@ -288,6 +288,7 @@ export function registerAgentIpc(): void {
     try {
       const controller = new AbortController()
       activeRuns.set(runId, { controller, supplements: [] })
+      const runLanguage = resolveRunLanguage(payload?.locale, input)
       const connection = findConnection(payload?.connectionId)
       const skillContext = buildAgentSkillContext(input)
       const instructionContext = buildLocalInstructionContext()
@@ -323,7 +324,8 @@ export function registerAgentIpc(): void {
             const audit = await commandAuditor.audit({
               command,
               userInput: input,
-              terminalContext: payload?.terminalContext ?? ''
+              terminalContext: payload?.terminalContext ?? '',
+              locale: payload?.locale
             })
             event.sender.send('agent:event', {
               type: 'command-review',
@@ -363,7 +365,10 @@ export function registerAgentIpc(): void {
                 ok: false,
                 command,
                 output: '',
-                error: 'Command execution rejected by user.'
+                error:
+                  runLanguage === 'zh-CN'
+                    ? '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。'
+                    : 'Command execution was rejected by the user. Continue from this result and do not assume the command ran.'
               }
             }
 
@@ -413,6 +418,12 @@ export function registerAgentIpc(): void {
       activeRuns.delete(runId)
     }
   })
+}
+
+function resolveRunLanguage(locale: string | undefined, input: string): 'zh-CN' | 'en' {
+  if (locale?.toLowerCase().startsWith('zh')) return 'zh-CN'
+  if (locale?.toLowerCase().startsWith('en')) return 'en'
+  return /[\u3400-\u9fff]/.test(input) ? 'zh-CN' : 'en'
 }
 
 function requestCommandApproval(input: {

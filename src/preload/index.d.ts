@@ -53,7 +53,7 @@ interface TerminalAgentApi {
         tabId: string
         sessionId: number
         exitCode: number
-        signal?: number
+        signal?: number | string
       }) => void
     ) => () => void
   }
