@@ -147,11 +147,16 @@ const en = {
       'Use a temporary sub-terminal when leaving the current terminal context, comparing targets, or writing local artifacts.',
     breakdownTargetConnection: 'Target connection',
     breakdownTargetSystem: 'Target system',
+    closeAllSubterminals: 'Close all temporary sub-terminals',
+    closeSubterminal: 'Close temporary sub-terminal',
+    collapseSubterminals: 'Collapse temporary sub-terminals',
+    expandSubterminals: 'Expand temporary sub-terminals',
     postLoginNotReady:
       'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
     postLoginOriginalTask: 'Original user task',
     postLoginTaskStarting: 'Login completed; starting the follow-up task.',
     recentOutputEmpty: 'recent output: <empty>',
+    resizeSubterminalHeight: 'Resize temporary sub-terminal height',
     resizeSubterminals: 'Resize temporary sub-terminals',
     shellExited: 'Shell exited with code',
     subterminalActive: 'Active',
@@ -234,6 +239,9 @@ const en = {
     apiKey: 'OpenAI API key',
     baseUrl: 'OpenAI-compatible base URL',
     baseUrlHint: 'Leave blank to use the selected built-in provider default.',
+    closeTerminalConfirm: 'Warn before closing terminals',
+    closeTerminalConfirmHint:
+      'When enabled, Crescent confirms before closing one or more terminal tabs. When disabled, it stops the matching terminal sessions immediately.',
     commandWhitelist: 'Command whitelist',
     commandWhitelistHint:
       'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',

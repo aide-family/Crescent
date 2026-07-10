@@ -244,7 +244,7 @@ export function registerAgentIpc(): void {
             {
               role: 'system',
               content:
-                'You resolve whether an operations request implies logging into one configured SSH connection. Return strict JSON only: {"connectionId":"...","confidence":0-100,"reason":"..."}. If no connection is clearly implied, return {"connectionId":null,"confidence":0,"reason":"no match"}. Prefer exact cluster, environment, host alias, hostname, or description matches. Do not invent ids.'
+                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login. Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","reason":"..."}. Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection. Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting. Infer semantically from the full request and current configured connections; do not rely on keywords alone. Prefer exact cluster, environment, host alias, hostname, or description matches. Do not invent ids.'
             },
             {
               role: 'user',
@@ -664,30 +664,53 @@ function parseConnectionIntentResponse(
 ): AgentConnectionIntentResult {
   try {
     const parsed = JSON.parse(content) as {
+      shouldConnect?: unknown
       connectionId?: unknown
       confidence?: unknown
+      executeAfterLogin?: unknown
+      userGoal?: unknown
       reason?: unknown
     }
+    const shouldConnect = parsed.shouldConnect === true
     const connectionId = typeof parsed.connectionId === 'string' ? parsed.connectionId : undefined
     const confidence = Number(parsed.confidence)
+    const executeAfterLogin = parsed.executeAfterLogin === true
     const knownIds = new Set(connections.map((connection) => connection.id))
+    const userGoal = typeof parsed.userGoal === 'string' ? parsed.userGoal : undefined
+
+    if (!shouldConnect) {
+      return {
+        ok: false,
+        shouldConnect: false,
+        confidence: Number.isFinite(confidence) ? confidence : 0,
+        executeAfterLogin: false,
+        userGoal,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : 'no connection needed'
+      }
+    }
 
     if (!connectionId || !knownIds.has(connectionId) || !Number.isFinite(confidence)) {
       return {
         ok: false,
+        shouldConnect: true,
         confidence: Number.isFinite(confidence) ? confidence : 0,
+        executeAfterLogin,
+        userGoal,
         reason: typeof parsed.reason === 'string' ? parsed.reason : 'no match'
       }
     }
 
     return {
       ok: confidence >= 60,
+      shouldConnect: true,
       connectionId,
       confidence,
+      executeAfterLogin,
+      userGoal,
       reason: typeof parsed.reason === 'string' ? parsed.reason : undefined
     }
   } catch {
-    return { ok: false, confidence: 0, reason: 'invalid model response' }
+    return { ok: false, shouldConnect: false, confidence: 0, reason: 'invalid model response' }
   }
 }
 
