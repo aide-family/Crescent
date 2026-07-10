@@ -5,6 +5,8 @@ import {
   ArrowUpIcon,
   BotIcon,
   CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   CopyIcon,
   DownloadIcon,
   HistoryIcon,
@@ -60,6 +62,7 @@ import {
 } from '@renderer/i18n'
 import type {
   AgentConfig,
+  AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
   AgentProviderConfig,
@@ -98,6 +101,7 @@ const emptyConfig: AgentConfig = {
   openApiBaseUrl: '',
   openApiDocument: ''
 }
+const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
 
 type AgentLogEntry =
   | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
@@ -123,14 +127,6 @@ interface AgentRunAction {
 type SkillManageMessage = {
   type: 'info' | 'success' | 'error'
   text: string
-}
-
-interface ConnectionIntent {
-  original: string
-  query: string
-  candidates: string[]
-  explicit: boolean
-  executeAfterLogin: boolean
 }
 
 interface PostConnectionTask {
@@ -171,6 +167,7 @@ interface TemporarySubterminal {
   id: string
   name: string
   output: string
+  rawOutput: string
   cwd: string
   status: 'active' | 'exited'
   widthPercent?: number
@@ -245,6 +242,10 @@ function App(): React.JSX.Element {
     leftStart: number
     rightStart: number
   } | null>(null)
+  const subterminalHeightResizeRef = useRef<{
+    startY: number
+    startHeight: number
+  } | null>(null)
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
@@ -303,11 +304,16 @@ function App(): React.JSX.Element {
   const [connectionImportText, setConnectionImportText] = useState('')
   const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
+  const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
+  const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('connections')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
+  const [closeTerminalConfirmEnabled, setCloseTerminalConfirmEnabled] = useState(
+    () => localStorage.getItem(CLOSE_TERMINAL_CONFIRM_STORAGE_KEY) !== 'false'
+  )
   const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
     createTerminalTab({ id: 'default', title: 'Local' })
@@ -481,6 +487,7 @@ function App(): React.JSX.Element {
           id,
           name,
           output: '',
+          rawOutput: '',
           cwd: '',
           status: 'active'
         }
@@ -502,7 +509,8 @@ function App(): React.JSX.Element {
       upsertSubterminal(parentTabId, name, id, (subterminal) => ({
         ...subterminal,
         status: 'active',
-        output: `${subterminal.output}${data}`.slice(-80_000)
+        rawOutput: `${subterminal.rawOutput}${data}`.slice(-120_000),
+        output: formatReadableSubterminalOutput(`${subterminal.rawOutput}${data}`).slice(-80_000)
       }))
     },
     [upsertSubterminal]
@@ -532,6 +540,26 @@ function App(): React.JSX.Element {
       }))
     },
     [upsertSubterminal]
+  )
+
+  const closeSubterminal = useCallback(
+    (parentTabId: string, subterminalId: string): void => {
+      window.api.terminal.stop(subterminalId)
+      updateTab(parentTabId, (tab) => ({
+        ...tab,
+        subTerminals: tab.subTerminals.filter((subterminal) => subterminal.id !== subterminalId)
+      }))
+    },
+    [updateTab]
+  )
+
+  const closeAllSubterminals = useCallback(
+    (parentTabId: string): void => {
+      const parentTab = tabsRef.current.find((tab) => tab.id === parentTabId)
+      parentTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
+      updateTab(parentTabId, (tab) => ({ ...tab, subTerminals: [] }))
+    },
+    [updateTab]
   )
 
   const resizeSubterminalPair = useCallback(
@@ -712,7 +740,10 @@ function App(): React.JSX.Element {
   const executeConnectionCommands = useCallback(
     async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
       const commands = buildConnectionCommands(connection)
-      if (commands.length === 0) return
+      if (commands.length === 0) {
+        drainPostConnectionTasks(targetTabId)
+        return
+      }
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
       if (targetTab?.terminalMode !== 'pty') {
@@ -782,6 +813,13 @@ function App(): React.JSX.Element {
   }, [locale])
 
   useEffect(() => {
+    localStorage.setItem(
+      CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
+      closeTerminalConfirmEnabled ? 'true' : 'false'
+    )
+  }, [closeTerminalConfirmEnabled])
+
+  useEffect(() => {
     if (terminalPage !== 'connections') return
 
     window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
@@ -818,6 +856,24 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
+      const subterminalHeightResize = subterminalHeightResizeRef.current
+      if (subterminalHeightResize) {
+        const maxHeight = Math.max(
+          120,
+          Math.min(window.innerHeight * 0.65, window.innerHeight - 180)
+        )
+        const nextHeight = Math.max(
+          96,
+          Math.min(
+            maxHeight,
+            subterminalHeightResize.startHeight - (event.clientY - subterminalHeightResize.startY)
+          )
+        )
+        setSubterminalPanelHeight(nextHeight)
+        window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+        return
+      }
+
       const subterminalResize = subterminalResizeRef.current
       if (subterminalResize) {
         const deltaPercent = ((event.clientX - subterminalResize.startX) / window.innerWidth) * 100
@@ -841,6 +897,7 @@ function App(): React.JSX.Element {
     const handlePointerUp = (): void => {
       splitDragRef.current = false
       subterminalResizeRef.current = null
+      subterminalHeightResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
@@ -1662,9 +1719,10 @@ function App(): React.JSX.Element {
     setTerminalPage('terminal')
   }
 
-  async function findConnectionForIntent(
-    intent: ConnectionIntent
-  ): Promise<ConnectionConfig | undefined> {
+  async function resolveConnectionIntentForInput(input: string): Promise<{
+    analysis?: AgentConnectionIntentResult
+    connection?: ConnectionConfig
+  }> {
     let candidates = connections
 
     try {
@@ -1674,16 +1732,25 @@ function App(): React.JSX.Element {
       candidates = connections
     }
 
-    const localMatch = matchConnectionIntent(intent, candidates)
-    if (localMatch) return localMatch
-
     try {
-      const resolved = await window.api.agent.resolveConnectionIntent({ input: intent.original })
-      if (!resolved.ok || !resolved.connectionId) return undefined
+      const analysis = await window.api.agent.resolveConnectionIntent({ input })
+      if (!analysis.shouldConnect || !analysis.ok || !analysis.connectionId) {
+        return { analysis }
+      }
 
-      return candidates.find((connection) => connection.id === resolved.connectionId)
-    } catch {
-      return undefined
+      return {
+        analysis,
+        connection: candidates.find((connection) => connection.id === analysis.connectionId)
+      }
+    } catch (error) {
+      return {
+        analysis: {
+          ok: false,
+          shouldConnect: false,
+          confidence: 0,
+          reason: error instanceof Error ? error.message : String(error)
+        }
+      }
     }
   }
 
@@ -1758,17 +1825,13 @@ function App(): React.JSX.Element {
     updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
     const shouldResolveConnectionIntent = !tab?.isSsh && !tab?.connectionId
     const connectionIntent = shouldResolveConnectionIntent
-      ? parseConnectionIntent(displayInput)
+      ? await resolveConnectionIntentForInput(displayInput)
       : undefined
-    if (connectionIntent) {
-      const matchedConnection = await findConnectionForIntent(connectionIntent)
+    if (connectionIntent?.analysis?.shouldConnect) {
+      const matchedConnection = connectionIntent.connection
+      const executeAfterLogin = connectionIntent.analysis.executeAfterLogin === true
 
       if (!matchedConnection) {
-        if (!connectionIntent.explicit) {
-          await runAgentConversation(input, tabId, tab?.connectionId || undefined, displayInput)
-          return
-        }
-
         appendLog(
           { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
           tabId
@@ -1782,7 +1845,7 @@ function App(): React.JSX.Element {
                 actions: [
                   {
                     title: t.terminal.connectionMatched,
-                    detail: connectionIntent.query
+                    detail: connectionIntent.analysis.reason ?? displayInput
                   }
                 ],
                 error: t.terminal.connectionNoMatch
@@ -1809,7 +1872,13 @@ function App(): React.JSX.Element {
               actions: [
                 {
                   title: t.terminal.connectionMatched,
-                  detail: `${matchedConnection.name}\n${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`
+                  detail: [
+                    matchedConnection.name,
+                    `${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`,
+                    connectionIntent.analysis.reason
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
                 }
               ],
               result: t.terminal.connectionIntentResult
@@ -1821,12 +1890,8 @@ function App(): React.JSX.Element {
       )
       connectToConnection(
         matchedConnection,
-        connectionIntent.executeAfterLogin
-          ? buildPostLoginAgentInput(input, matchedConnection, t)
-          : undefined,
-        connectionIntent.executeAfterLogin
-          ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t)
-          : undefined
+        executeAfterLogin ? buildPostLoginAgentInput(input, matchedConnection, t) : undefined,
+        executeAfterLogin ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) : undefined
       )
       updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
       return
@@ -2157,7 +2222,7 @@ function App(): React.JSX.Element {
   }
 
   function closeTab(tabId: string): void {
-    if (!window.confirm(t.confirm.closeTab)) return
+    if (closeTerminalConfirmEnabled && !window.confirm(t.confirm.closeTab)) return
 
     const closingTab = tabsRef.current.find((tab) => tab.id === tabId)
     window.api.terminal.stop(tabId)
@@ -2181,7 +2246,7 @@ function App(): React.JSX.Element {
   }
 
   function closeOtherTabs(tabId: string): void {
-    if (!window.confirm(t.confirm.closeOtherTabs)) return
+    if (closeTerminalConfirmEnabled && !window.confirm(t.confirm.closeOtherTabs)) return
 
     for (const tab of tabsRef.current) {
       if (tab.id !== tabId) {
@@ -2372,6 +2437,26 @@ function App(): React.JSX.Element {
                       <ToggleGroupItem value="plan-execute">Plan-and-Execute</ToggleGroupItem>
                     </ToggleGroup>
                     <FieldDescription>{t.settings.planExecuteHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <label
+                      htmlFor="close-terminal-confirm"
+                      className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                    >
+                      <span className="space-y-1">
+                        <span className="block text-sm font-medium">
+                          {t.settings.closeTerminalConfirm}
+                        </span>
+                        <FieldDescription>{t.settings.closeTerminalConfirmHint}</FieldDescription>
+                      </span>
+                      <Input
+                        id="close-terminal-confirm"
+                        type="checkbox"
+                        checked={closeTerminalConfirmEnabled}
+                        onChange={(event) => setCloseTerminalConfirmEnabled(event.target.checked)}
+                        className="mt-0.5 size-4 shrink-0 accent-primary"
+                      />
+                    </label>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="max-active-tools">
@@ -2697,23 +2782,32 @@ function App(): React.JSX.Element {
             style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
           >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
-              {terminalTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={`h-7 rounded px-2 text-xs ${terminalPage === 'terminal' && tab.id === activeTabId ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted/40'}`}
-                  onClick={() => {
-                    setActiveTabId(tab.id)
-                    setTerminalPage('terminal')
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
-                  }}
-                >
-                  {tab.title}
-                </button>
-              ))}
+              {terminalTabs.map((tab) => {
+                const selected = terminalPage === 'terminal' && tab.id === activeTabId
+
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
+                      selected
+                        ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
+                        : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
+                    }`}
+                    onClick={() => {
+                      setActiveTabId(tab.id)
+                      setTerminalPage('terminal')
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+                    }}
+                  >
+                    <TerminalActivityDot active={tab.terminalReady} />
+                    <span className="truncate">{tab.title}</span>
+                  </button>
+                )
+              })}
               {terminalPage === 'connections' && (
                 <button
                   type="button"
@@ -2857,72 +2951,153 @@ function App(): React.JSX.Element {
               <div className="flex min-h-0 flex-1 flex-col">
                 <div ref={terminalHostRef} className="min-h-0 flex-1" />
                 {activeTab.subTerminals.length > 0 && (
-                  <div className="max-h-64 shrink-0 overflow-auto border-t border-white/10 bg-background p-2">
-                    <div className="flex min-w-full gap-0">
-                      {activeTab.subTerminals.map((subterminal, index) => {
-                        const widths = getSubterminalWidths(activeTab.subTerminals)
-                        const width = widths[index]
-                        const nextSubterminal = activeTab.subTerminals[index + 1]
-
-                        return (
-                          <div
-                            key={subterminal.id}
-                            className="flex min-w-0"
-                            style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
-                          >
-                            <section className="min-w-0 flex-1 rounded-md border bg-card text-xs">
-                              <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
-                                <div className="min-w-0">
-                                  <p className="truncate font-medium">
-                                    {t.terminal.temporarySubterminal}: {subterminal.name}
-                                  </p>
-                                  {subterminal.cwd && (
-                                    <p className="truncate text-[10px] text-muted-foreground">
-                                      {subterminal.cwd}
-                                    </p>
-                                  )}
-                                </div>
-                                <Badge
-                                  variant={
-                                    subterminal.status === 'active' ? 'secondary' : 'outline'
-                                  }
-                                >
-                                  {subterminal.status === 'active'
-                                    ? t.terminal.subterminalActive
-                                    : t.terminal.subterminalExited}
-                                </Badge>
-                              </div>
-                              <pre className="max-h-48 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                                {subterminal.output || t.terminal.recentOutputEmpty}
-                              </pre>
-                            </section>
-                            {nextSubterminal && (
-                              <div
-                                className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
-                                role="separator"
-                                aria-orientation="vertical"
-                                aria-label={t.terminal.resizeSubterminals}
-                                title={t.terminal.resizeSubterminals}
-                                onPointerDown={(event) => {
-                                  event.preventDefault()
-                                  event.currentTarget.setPointerCapture(event.pointerId)
-                                  subterminalResizeRef.current = {
-                                    tabId: activeTab.id,
-                                    leftId: subterminal.id,
-                                    rightId: nextSubterminal.id,
-                                    startX: event.clientX,
-                                    leftStart: width,
-                                    rightStart: widths[index + 1]
-                                  }
-                                  document.body.style.cursor = 'col-resize'
-                                  document.body.style.userSelect = 'none'
-                                }}
-                              />
-                            )}
-                          </div>
-                        )
-                      })}
+                  <div
+                    className="shrink-0 border-t border-white/10 bg-background"
+                    style={{ height: subterminalCollapsed ? undefined : subterminalPanelHeight }}
+                  >
+                    {!subterminalCollapsed && (
+                      <div
+                        className="h-1.5 cursor-row-resize bg-border/60 hover:bg-primary/60"
+                        role="separator"
+                        aria-orientation="horizontal"
+                        aria-label={t.terminal.resizeSubterminalHeight}
+                        title={t.terminal.resizeSubterminalHeight}
+                        onPointerDown={(event) => {
+                          event.preventDefault()
+                          event.currentTarget.setPointerCapture(event.pointerId)
+                          subterminalHeightResizeRef.current = {
+                            startY: event.clientY,
+                            startHeight: subterminalPanelHeight
+                          }
+                          document.body.style.cursor = 'row-resize'
+                          document.body.style.userSelect = 'none'
+                        }}
+                      />
+                    )}
+                    <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
+                      <div className="min-w-0 truncate text-xs font-medium">
+                        {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={
+                            subterminalCollapsed
+                              ? t.terminal.expandSubterminals
+                              : t.terminal.collapseSubterminals
+                          }
+                          title={
+                            subterminalCollapsed
+                              ? t.terminal.expandSubterminals
+                              : t.terminal.collapseSubterminals
+                          }
+                          onClick={() => setSubterminalCollapsed((current) => !current)}
+                        >
+                          {subterminalCollapsed ? (
+                            <ChevronUpIcon aria-hidden="true" />
+                          ) : (
+                            <ChevronDownIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={t.terminal.closeAllSubterminals}
+                          title={t.terminal.closeAllSubterminals}
+                          onClick={() => closeAllSubterminals(activeTab.id)}
+                        >
+                          <Trash2Icon aria-hidden="true" />
+                        </Button>
+                      </div>
                     </div>
+                    {!subterminalCollapsed && (
+                      <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
+                        <div className="flex h-full min-w-full gap-0">
+                          {activeTab.subTerminals.map((subterminal, index) => {
+                            const widths = getSubterminalWidths(activeTab.subTerminals)
+                            const width = widths[index]
+                            const nextSubterminal = activeTab.subTerminals[index + 1]
+
+                            return (
+                              <div
+                                key={subterminal.id}
+                                className="flex min-w-0"
+                                style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
+                              >
+                                <section className="flex min-w-0 flex-1 flex-col rounded-md border bg-card text-xs">
+                                  <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
+                                    <div className="min-w-0">
+                                      <p className="truncate font-medium">
+                                        {t.terminal.temporarySubterminal}: {subterminal.name}
+                                      </p>
+                                      {subterminal.cwd && (
+                                        <p className="truncate text-[10px] text-muted-foreground">
+                                          {subterminal.cwd}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-1">
+                                      <Badge
+                                        variant={
+                                          subterminal.status === 'active' ? 'secondary' : 'outline'
+                                        }
+                                      >
+                                        {subterminal.status === 'active'
+                                          ? t.terminal.subterminalActive
+                                          : t.terminal.subterminalExited}
+                                      </Badge>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        aria-label={t.terminal.closeSubterminal}
+                                        title={t.terminal.closeSubterminal}
+                                        onClick={() =>
+                                          closeSubterminal(activeTab.id, subterminal.id)
+                                        }
+                                      >
+                                        <XIcon aria-hidden="true" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  <pre className="min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                                    {subterminal.output || t.terminal.recentOutputEmpty}
+                                  </pre>
+                                </section>
+                                {nextSubterminal && (
+                                  <div
+                                    className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
+                                    role="separator"
+                                    aria-orientation="vertical"
+                                    aria-label={t.terminal.resizeSubterminals}
+                                    title={t.terminal.resizeSubterminals}
+                                    onPointerDown={(event) => {
+                                      event.preventDefault()
+                                      event.currentTarget.setPointerCapture(event.pointerId)
+                                      subterminalResizeRef.current = {
+                                        tabId: activeTab.id,
+                                        leftId: subterminal.id,
+                                        rightId: nextSubterminal.id,
+                                        startX: event.clientX,
+                                        leftStart: width,
+                                        rightStart: widths[index + 1]
+                                      }
+                                      document.body.style.cursor = 'col-resize'
+                                      document.body.style.userSelect = 'none'
+                                    }}
+                                  />
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -3815,6 +3990,17 @@ function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): Rea
   return <span className={`size-2 rounded-full shadow-[0_0_8px] ${className}`} />
 }
 
+function TerminalActivityDot({ active }: { active: boolean }): React.JSX.Element {
+  return (
+    <span
+      className={`size-1.5 shrink-0 rounded-full ${
+        active ? 'bg-green-500 shadow-[0_0_8px] shadow-green-500/50' : 'bg-muted-foreground/30'
+      }`}
+      aria-hidden="true"
+    />
+  )
+}
+
 function logRoleLabel(kind: AgentLogEntry['kind'], t: Dictionary): string {
   switch (kind) {
     case 'user':
@@ -4059,6 +4245,144 @@ function getSubterminalWidths(subterminals: TemporarySubterminal[]): number[] {
   if (total <= 0) return subterminals.map(() => defaultWidth)
 
   return widths.map((width) => (width / total) * 100)
+}
+
+function formatReadableSubterminalOutput(raw: string): string {
+  const plain = normalizeTerminalControlText(raw)
+  const commandOutput = extractLatestCrescentCommandOutput(plain)
+  const source = commandOutput ?? plain
+  const lines = source
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => !isSubterminalDisplayNoise(line))
+
+  return collapseBlankLines(lines).join('\n').trim()
+}
+
+function normalizeTerminalControlText(value: string): string {
+  const withoutControls = applyBackspaces(stripTerminalControlSequences(value))
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+
+  return removeControlCharacters(withoutControls)
+}
+
+function stripTerminalControlSequences(value: string): string {
+  let output = ''
+
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code !== 27) {
+      output += value[index]
+      continue
+    }
+
+    const next = value[index + 1]
+    if (next === ']') {
+      index += 2
+      while (index < value.length) {
+        if (value.charCodeAt(index) === 7) break
+        if (value.charCodeAt(index) === 27 && value[index + 1] === '\\') {
+          index += 1
+          break
+        }
+        index += 1
+      }
+      continue
+    }
+
+    if (next === '[') {
+      index += 1
+      while (index + 1 < value.length) {
+        index += 1
+        const finalCode = value.charCodeAt(index)
+        if (finalCode >= 64 && finalCode <= 126) break
+      }
+      continue
+    }
+
+    if (next === '(' || next === ')') {
+      index += 2
+      continue
+    }
+
+    if (next === '=' || next === '>') {
+      index += 1
+      continue
+    }
+
+    index += 1
+  }
+
+  return output
+}
+
+function applyBackspaces(value: string): string {
+  let output = ''
+
+  for (const char of value) {
+    if (char === '\b') {
+      output = output.slice(0, -1)
+      continue
+    }
+    output += char
+  }
+
+  return output
+}
+
+function removeControlCharacters(value: string): string {
+  let output = ''
+
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+    if (char === '\n' || char === '\t' || code >= 32) output += char
+  }
+
+  return output
+}
+
+function extractLatestCrescentCommandOutput(value: string): string | undefined {
+  const startMatches = [...value.matchAll(/__CRESCENT_CMD_START_[A-Za-z0-9_]+__/g)]
+  const latestStart = startMatches.at(-1)
+  if (latestStart?.index === undefined) return undefined
+
+  const startIndex = latestStart.index + latestStart[0].length
+  const rest = value.slice(startIndex)
+  const endMatch = rest.match(/__CRESCENT_CMD_END_[A-Za-z0-9_]+__:\d+/)
+  if (endMatch?.index === undefined) return rest
+
+  return rest.slice(0, endMatch.index)
+}
+
+function isSubterminalDisplayNoise(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed) return false
+
+  return (
+    trimmed === '%' ||
+    /^➜\s+/.test(trimmed) ||
+    /^stty\s+-?echo(?:\s+2>\/dev\/null)?$/.test(trimmed) ||
+    trimmed.includes('__crescent_script=$(mktemp') ||
+    trimmed.includes('$__crescent_script') ||
+    trimmed.includes('__crescent_status=') ||
+    trimmed.includes('__CRESCENT_CMD_START_') ||
+    trimmed.includes('__CRESCENT_CMD_END_') ||
+    /printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(trimmed) ||
+    /base64\s+-[dD]\s+>/.test(trimmed) ||
+    /^[A-Za-z0-9+/=]{100,}$/.test(trimmed)
+  )
+}
+
+function collapseBlankLines(lines: string[]): string[] {
+  const result: string[] = []
+
+  for (const line of lines) {
+    if (!line.trim() && !result.at(-1)?.trim()) continue
+    result.push(line)
+  }
+
+  return result
 }
 
 function mergeConnectionInput(
@@ -4350,49 +4674,14 @@ function buildUserRequirementBreakdown(
   return lines.join('\n')
 }
 
-function parseConnectionIntent(input: string): ConnectionIntent | undefined {
-  const trimmed = input.trim()
-  const explicit = /(登录|登陆|连接|使用|打开|进入|\bssh\b)/i.test(trimmed)
-  const executeAfterLogin =
-    /(检查|查看|巡检|排查|执行|处理|获取|统计|生成|总结|保存|写入|输出|导出|记录|报告|文档|内存|磁盘|cpu|节点|pod|服务)/i.test(
-      trimmed
-    )
-  const operational =
-    executeAfterLogin && /(集群|节点|机器|主机|服务器|环境|ssh|连接)/i.test(trimmed)
-  if (!explicit && !operational) return undefined
-
-  const withoutPrefix = trimmed
-    .replace(
-      /^(请|帮我|麻烦)?\s*(登录|登陆|连接|使用|打开|进入|ssh|检查|查看|巡检|排查|执行|处理|获取|统计)\s*/i,
-      ''
-    )
-    .trim()
-  const withoutSuffix = withoutPrefix
-    .replace(/\s*(连接|集群|机器|主机|服务器|环境|节点|的.*|各个.*|所有.*)$/i, '')
-    .trim()
-  const namedTarget = trimmed.match(
-    /(?:登录|登陆|连接|使用|打开|进入|ssh|检查|查看|巡检|排查|执行|处理|获取|统计)?\s*([a-zA-Z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:集群|连接|机器|主机|服务器|环境|节点)/
-  )?.[1]
-  const candidates = Array.from(
-    new Set(
-      [namedTarget, withoutPrefix, withoutSuffix, trimmed].filter((value): value is string =>
-        Boolean(value)
-      )
-    )
-  )
-  const query = withoutSuffix || withoutPrefix
-
-  if (!query) return undefined
-
-  return { original: trimmed, query, candidates, explicit, executeAfterLogin }
-}
-
 function extractTargetSystem(input: string): string {
   return (
     input.match(
-      /(?:检查|查看|巡检|排查|处理|获取|统计)\s*([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)/i
+      /(?:检查|查看|巡检|排查|处理|获取|统计|增加|新增|创建|添加|开通|配置|修改|变更|授权)\s*([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)/i
     )?.[1] ??
-    input.match(/([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:健康|状态|巡检|检查)/i)?.[1] ??
+    input.match(
+      /([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:健康|状态|巡检|检查|账号|账户|用户|管理员|权限|角色)/i
+    )?.[1] ??
     ''
   )
 }
@@ -4415,56 +4704,18 @@ function extractRequestedActions(input: string): string[] {
   const actions: string[] = []
   if (/(登录|登陆|连接|进入|\bssh\b)/i.test(input)) actions.push('login')
   if (/(检查|查看|巡检|排查|健康|状态|统计|获取)/i.test(input)) actions.push('inspect')
+  if (
+    /(增加|新增|创建|添加|开通|授权).*(账号|账户|用户|管理员|权限|角色)|账号|账户|用户|管理员|权限|角色/i.test(
+      input
+    )
+  ) {
+    actions.push('change-account-or-permission')
+  }
+  if (/(配置|修改|变更|处理|执行)/i.test(input)) actions.push('operate')
   if (/(总结|生成|报告|文档|记录)/i.test(input)) actions.push('summarize')
   if (/(保存|写入|写到|放在|输出|导出|存到)/i.test(input)) actions.push('write-artifact')
 
   return actions.length ? actions : ['complete-request']
-}
-
-function matchConnectionIntent(
-  intent: ConnectionIntent,
-  connections: ConnectionConfig[]
-): ConnectionConfig | undefined {
-  let bestMatch: { connection: ConnectionConfig; score: number } | undefined
-
-  for (const connection of connections) {
-    const score = scoreConnectionMatch(intent, connection)
-    if (score > (bestMatch?.score ?? 0)) bestMatch = { connection, score }
-  }
-
-  return bestMatch && bestMatch.score >= 35 ? bestMatch.connection : undefined
-}
-
-function scoreConnectionMatch(intent: ConnectionIntent, connection: ConnectionConfig): number {
-  const searchable = [
-    { value: connection.name, weight: 100 },
-    { value: connection.description ?? '', weight: 70 },
-    { value: connection.host, weight: 60 },
-    { value: connection.user ?? '', weight: 45 }
-  ]
-  let score = 0
-
-  for (const candidate of intent.candidates) {
-    const normalizedCandidate = normalizeConnectionSearchText(candidate)
-    if (!normalizedCandidate) continue
-
-    for (const item of searchable) {
-      const normalizedValue = normalizeConnectionSearchText(item.value)
-      if (!normalizedValue) continue
-      if (normalizedValue === normalizedCandidate) score = Math.max(score, item.weight)
-      if (normalizedValue.includes(normalizedCandidate)) score = Math.max(score, item.weight - 15)
-      if (normalizedCandidate.includes(normalizedValue)) score = Math.max(score, item.weight - 25)
-    }
-  }
-
-  return score
-}
-
-function normalizeConnectionSearchText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/~\/\.ssh\/config|host|ssh|连接|集群|机器|主机|服务器|环境|节点/g, '')
-    .replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
 }
 
 function buildConnectionCommands(connection: ConnectionConfig): string[] {
@@ -4485,6 +4736,11 @@ async function runConnectionCommandSequence(
   const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
   appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}\n${sshCommand}` }, tabId)
+
+  if (loginActions.length === 0) {
+    await waitForTerminalReadyAfterSsh(tabId, sshCommand)
+    return
+  }
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
@@ -4518,6 +4774,17 @@ async function runConnectionCommandSequence(
     idleMs: 1500,
     timeoutMs: 60_000
   })
+}
+
+async function waitForTerminalReadyAfterSsh(tabId: string, sshCommand: string): Promise<boolean> {
+  const idle = await waitForTerminalIdle(tabId, {
+    ignoredEcho: sshCommand,
+    idleMs: 1500,
+    timeoutMs: 60_000
+  })
+  if (!idle) return false
+
+  return waitForTerminalReadyForAgent(tabId)
 }
 
 function waitForTerminalIdle(

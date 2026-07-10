@@ -81,8 +81,11 @@ export interface AgentConnectionIntentInput {
 
 export interface AgentConnectionIntentResult {
   ok: boolean
+  shouldConnect?: boolean
   connectionId?: string
   confidence?: number
+  executeAfterLogin?: boolean
+  userGoal?: string
   reason?: string
   error?: string
 }
