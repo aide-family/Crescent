@@ -1,4 +1,8 @@
-import { ipcMain, type WebContents } from 'electron'
+import { promises as fs } from 'fs'
+import { homedir } from 'os'
+import { dirname, isAbsolute, resolve } from 'path'
+
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
 
 import { generateTerminalCommand } from './command'
 import { CommandAuditor } from './command-auditor'
@@ -20,7 +24,11 @@ import {
 } from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
-import { executeCommandInTerminal } from '../terminal/ipc'
+import {
+  executeCommandInTemporaryTerminal,
+  executeCommandInTerminal,
+  executeCommandInTerminalWithPermissionRequest
+} from '../terminal/ipc'
 import {
   appendOperationRecord,
   readAgentConfig,
@@ -40,7 +48,9 @@ import type {
   CommandApprovalDecision,
   CommandApprovalRequest,
   CommandAuditResult,
-  ConnectionConfig
+  ConnectionConfig,
+  LocalFileWriter,
+  LocalFileWriteResult
 } from './types'
 
 interface ActiveAgentRun {
@@ -294,6 +304,87 @@ export function registerAgentIpc(): void {
       const instructionContext = buildLocalInstructionContext()
       const agentConfig = readAgentConfig()
       const commandAuditor = new CommandAuditor(agentConfig)
+      const executeReviewedCommand = async (
+        command: string,
+        timeoutMs: number | undefined,
+        execute: () => ReturnType<typeof executeCommandInTerminal>
+      ): ReturnType<typeof executeCommandInTerminal> => {
+        const whitelistRule = matchCommandWhitelist(command, agentConfig.commandWhitelist)
+        if (whitelistRule) {
+          event.sender.send('agent:event', {
+            type: 'status',
+            message: `Command matched whitelist: ${whitelistRule}`,
+            runId,
+            tabId: payload?.tabId
+          })
+          return execute()
+        }
+
+        event.sender.send('agent:event', {
+          type: 'status',
+          message: 'Command review subprocess is analyzing risk.',
+          runId,
+          tabId: payload?.tabId
+        })
+        const audit = await commandAuditor.audit({
+          command,
+          userInput: input,
+          terminalContext: payload?.terminalContext ?? '',
+          locale: payload?.locale
+        })
+        event.sender.send('agent:event', {
+          type: 'command-review',
+          command,
+          audit,
+          runId,
+          tabId: payload?.tabId
+        })
+        if (!audit.requiresApproval) {
+          event.sender.send('agent:event', {
+            type: 'status',
+            message: 'Command audit passed without user approval.',
+            runId,
+            tabId: payload?.tabId
+          })
+          return execute()
+        }
+
+        const approved = await requestCommandApproval({
+          webContents: event.sender,
+          runId,
+          tabId: payload?.tabId,
+          command,
+          timeoutMs,
+          audit,
+          signal: controller.signal
+        })
+
+        if (!approved) {
+          event.sender.send('agent:event', {
+            type: 'status',
+            message: 'Command rejected by user.',
+            runId,
+            tabId: payload?.tabId
+          })
+          return {
+            ok: false,
+            command,
+            output: '',
+            error:
+              runLanguage === 'zh-CN'
+                ? '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。'
+                : 'Command execution was rejected by the user. Continue from this result and do not assume the command ran.'
+          }
+        }
+
+        event.sender.send('agent:event', {
+          type: 'status',
+          message: 'Command approved by user.',
+          runId,
+          tabId: payload?.tabId
+        })
+        return execute()
+      }
       const text = await runTerminalAgent(
         agentConfig,
         input,
@@ -304,83 +395,30 @@ export function registerAgentIpc(): void {
         },
         {
           executeCommand: async (command, timeoutMs) => {
-            const whitelistRule = matchCommandWhitelist(command, agentConfig.commandWhitelist)
-            if (whitelistRule) {
-              event.sender.send('agent:event', {
-                type: 'status',
-                message: `Command matched whitelist: ${whitelistRule}`,
-                runId,
-                tabId: payload?.tabId
-              })
-              return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
-            }
-
-            event.sender.send('agent:event', {
-              type: 'status',
-              message: 'Command review subprocess is analyzing risk.',
-              runId,
-              tabId: payload?.tabId
-            })
-            const audit = await commandAuditor.audit({
-              command,
-              userInput: input,
-              terminalContext: payload?.terminalContext ?? '',
-              locale: payload?.locale
-            })
-            event.sender.send('agent:event', {
-              type: 'command-review',
-              command,
-              audit,
-              runId,
-              tabId: payload?.tabId
-            })
-            if (!audit.requiresApproval) {
-              event.sender.send('agent:event', {
-                type: 'status',
-                message: 'Command audit passed without user approval.',
-                runId,
-                tabId: payload?.tabId
-              })
-              return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
-            }
-
-            const approved = await requestCommandApproval({
-              webContents: event.sender,
-              runId,
-              tabId: payload?.tabId,
-              command,
-              timeoutMs,
-              audit,
-              signal: controller.signal
-            })
-
-            if (!approved) {
-              event.sender.send('agent:event', {
-                type: 'status',
-                message: 'Command rejected by user.',
-                runId,
-                tabId: payload?.tabId
-              })
-              return {
-                ok: false,
+            return executeReviewedCommand(command, timeoutMs, () =>
+              executeCommandInTerminalWithPermissionRequest(
+                event.sender,
                 command,
-                output: '',
-                error:
-                  runLanguage === 'zh-CN'
-                    ? '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。'
-                    : 'Command execution was rejected by the user. Continue from this result and do not assume the command ran.'
-              }
-            }
-
-            event.sender.send('agent:event', {
-              type: 'status',
-              message: 'Command approved by user.',
-              runId,
-              tabId: payload?.tabId
-            })
-            return executeCommandInTerminal(event.sender.id, command, timeoutMs, payload?.tabId)
+                timeoutMs,
+                payload?.tabId
+              )
+            )
           }
         },
+        {
+          executeCommand: async (command, options) => {
+            return executeReviewedCommand(command, options.timeoutMs, () =>
+              executeCommandInTemporaryTerminal(
+                event.sender,
+                payload?.tabId,
+                options.terminalName,
+                command,
+                options.timeoutMs
+              )
+            )
+          }
+        },
+        createLocalFileWriter(event.sender),
         {
           signal: controller.signal,
           instructionContext,
@@ -418,6 +456,141 @@ export function registerAgentIpc(): void {
       activeRuns.delete(runId)
     }
   })
+}
+
+function createLocalFileWriter(webContents: WebContents): LocalFileWriter {
+  return {
+    writeFile: (path, content, options) =>
+      writeLocalArtifactFile(webContents, path, content, {
+        overwrite: options?.overwrite === true
+      })
+  }
+}
+
+async function writeLocalArtifactFile(
+  webContents: WebContents,
+  rawPath: string,
+  content: string,
+  options: { overwrite: boolean }
+): Promise<LocalFileWriteResult> {
+  const targetPath = resolveLocalArtifactPath(rawPath)
+  if (!targetPath) {
+    return { ok: false, path: rawPath, error: 'Local file path is empty.' }
+  }
+
+  const parent = dirname(targetPath)
+  const firstAttempt = await tryWriteLocalArtifact(targetPath, content, options)
+  if (firstAttempt.ok || !isLocalFilePermissionError(firstAttempt.error)) return firstAttempt
+
+  const authorizationPath = await requestLocalWriteAuthorization(webContents, parent)
+  if (!authorizationPath) {
+    return {
+      ...firstAttempt,
+      permissionRequested: true,
+      error: [
+        firstAttempt.error,
+        'Local folder access was not granted. Please grant access to the target folder and retry.'
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+  }
+
+  const secondAttempt = await tryWriteLocalArtifact(targetPath, content, options)
+  return {
+    ...secondAttempt,
+    permissionRequested: true,
+    authorizationPath,
+    error: secondAttempt.ok
+      ? secondAttempt.error
+      : [
+          secondAttempt.error,
+          `Local folder access was requested for: ${authorizationPath}. Retry if macOS requires confirmation.`
+        ]
+          .filter(Boolean)
+          .join('\n')
+  }
+}
+
+async function tryWriteLocalArtifact(
+  targetPath: string,
+  content: string,
+  options: { overwrite: boolean }
+): Promise<LocalFileWriteResult> {
+  try {
+    await fs.mkdir(dirname(targetPath), { recursive: true })
+    const exists = await pathExists(targetPath)
+    if (exists && !options.overwrite) {
+      return {
+        ok: false,
+        path: targetPath,
+        error:
+          'Target file already exists. Choose a unique filename or set overwrite only when the user explicitly requested replacement.'
+      }
+    }
+
+    await fs.writeFile(targetPath, content, 'utf-8')
+    return {
+      ok: true,
+      path: targetPath,
+      bytes: Buffer.byteLength(content, 'utf-8'),
+      overwritten: exists
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      path: targetPath,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fs.access(path)
+    return true
+  } catch (error) {
+    if (isErrorWithCode(error) && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function requestLocalWriteAuthorization(
+  webContents: WebContents,
+  defaultPath: string
+): Promise<string | undefined> {
+  const options: OpenDialogOptions = {
+    title: 'Authorize local folder access',
+    message:
+      'Crescent could not write to the requested local folder. Select the target folder to grant access, then the write will be retried.',
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory']
+  }
+  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
+  const selection = browserWindow
+    ? await dialog.showOpenDialog(browserWindow, options)
+    : await dialog.showOpenDialog(options)
+
+  return selection.canceled ? undefined : selection.filePaths[0]
+}
+
+function resolveLocalArtifactPath(path: string): string {
+  const trimmed = path.trim()
+  if (!trimmed) return ''
+
+  const expanded = trimmed.replace(/^~(?=\/|$)/, homedir()).replace(/^\$HOME(?=\/|$)/, homedir())
+
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(homedir(), expanded)
+}
+
+function isLocalFilePermissionError(error: string | undefined): boolean {
+  return /(EACCES|EPERM|Permission denied|Operation not permitted|权限不够|没有权限|操作不允许)/i.test(
+    error ?? ''
+  )
+}
+
+function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error
 }
 
 function resolveRunLanguage(locale: string | undefined, input: string): 'zh-CN' | 'en' {

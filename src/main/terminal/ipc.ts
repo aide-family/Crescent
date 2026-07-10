@@ -1,5 +1,7 @@
-import { ipcMain, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'child_process'
+import { dirname, resolve } from 'path'
+import { homedir } from 'os'
 import { spawn as spawnPty } from 'node-pty'
 
 import { resolveShellLaunchConfig } from './shell'
@@ -31,6 +33,8 @@ export interface TerminalCommandExecutionResult {
   error?: string
   timedOut?: boolean
   terminalExited?: boolean
+  subterminalName?: string
+  subterminalTabId?: string
 }
 
 const sessions = new Map<string, TerminalSession>()
@@ -44,6 +48,11 @@ const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const terminalOutputBuffers = new Map<string, string>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
+const MAX_TEMPORARY_SUBTERMINALS = 3
+const temporarySubterminals = new Map<
+  string,
+  Array<{ name: string; tabId: string; busy: boolean; lastUsedAt: number }>
+>()
 
 export function executeCommandInTerminal(
   senderId: number,
@@ -170,6 +179,133 @@ export function executeCommandInTerminal(
 
     session.write(createCommandWrapper(normalizedCommand, startMarker, endMarker, session.mode))
   })
+}
+
+export async function executeCommandInTerminalWithPermissionRequest(
+  webContents: WebContents,
+  command: string,
+  timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
+  tabId = DEFAULT_TAB_ID
+): Promise<TerminalCommandExecutionResult> {
+  let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, tabId)
+
+  if (isLocalFilePermissionFailure(result)) {
+    result = await requestLocalFileAccessAndAnnotateResult(webContents, command, result)
+  }
+
+  return result
+}
+
+export async function executeCommandInTemporaryTerminal(
+  webContents: WebContents,
+  parentTabId: string | undefined,
+  terminalName: string,
+  command: string,
+  timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS
+): Promise<TerminalCommandExecutionResult> {
+  const parent = normalizeTabId(parentTabId)
+  const name = normalizeTemporaryTerminalName(terminalName)
+  const slot = ensureTemporarySubterminal(webContents, parent, name)
+
+  if (!slot.ok) {
+    return {
+      ok: false,
+      command: command.trim(),
+      output: '',
+      error: slot.error
+    }
+  }
+
+  const entry = slot.entry
+  if (entry.busy) {
+    return {
+      ok: false,
+      command: command.trim(),
+      output: '',
+      error: `Temporary sub-terminal "${name}" is already running a command.`
+    }
+  }
+
+  entry.busy = true
+  entry.lastUsedAt = Date.now()
+
+  try {
+    let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, entry.tabId)
+
+    if (isLocalFilePermissionFailure(result)) {
+      result = await requestLocalFileAccessAndAnnotateResult(webContents, command, result)
+    }
+
+    return {
+      ...result,
+      subterminalName: name,
+      subterminalTabId: entry.tabId
+    }
+  } finally {
+    entry.busy = false
+    entry.lastUsedAt = Date.now()
+  }
+}
+
+async function requestLocalFileAccessAndAnnotateResult(
+  webContents: WebContents,
+  command: string,
+  result: TerminalCommandExecutionResult
+): Promise<TerminalCommandExecutionResult> {
+  const defaultPath = extractLikelyLocalDirectory(command)
+  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
+  const options: OpenDialogOptions = {
+    title: 'Authorize local folder access',
+    message:
+      'Crescent could not access a local folder used by this command. Select the target folder to grant access, then retry the operation.',
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory']
+  }
+  const selection = browserWindow
+    ? await dialog.showOpenDialog(browserWindow, options)
+    : await dialog.showOpenDialog(options)
+
+  const note = selection.canceled
+    ? 'Local folder access was not granted. Please grant access to the target folder and retry.'
+    : `Local folder access was requested for: ${selection.filePaths[0]}. Retry the command after authorization.`
+
+  return {
+    ...result,
+    error: [result.error, note].filter(Boolean).join('\n'),
+    output: [result.output, note].filter(Boolean).join('\n')
+  }
+}
+
+function isLocalFilePermissionFailure(result: TerminalCommandExecutionResult): boolean {
+  const text = `${result.error ?? ''}\n${result.output}`
+
+  return (
+    !result.ok &&
+    /(EACCES|EPERM|Permission denied|Operation not permitted|权限不够|没有权限|操作不允许)/i.test(
+      text
+    )
+  )
+}
+
+function extractLikelyLocalDirectory(command: string): string | undefined {
+  const candidates = [
+    command.match(/\$HOME\/([^\s'"<>|;&]+)/)?.[1],
+    command.match(/~\/([^\s'"<>|;&]+)/)?.[1],
+    command
+      .match(/Path\.home\(\)\s*\/\s*['"]([^'"]+)['"]\s*\/\s*['"]([^'"]+)['"]/)
+      ?.slice(1)
+      .join('/'),
+    command.match(/["'](\/[^"']+)["']/)?.[1]
+  ].filter((value): value is string => Boolean(value))
+
+  const candidate = candidates[0]
+  if (!candidate) return undefined
+
+  const expanded = candidate.startsWith('/')
+    ? candidate
+    : resolve(homedir(), candidate.replace(/^~\//, ''))
+
+  return /\.[A-Za-z0-9]{1,8}$/.test(expanded) ? dirname(expanded) : expanded
 }
 
 export function registerTerminalIpc(): void {
@@ -343,6 +479,80 @@ function stopSession(key: string): void {
   terminalDataWaiters.delete(key)
   terminalExitWaiters.delete(key)
   terminalOutputBuffers.delete(key)
+}
+
+function ensureTemporarySubterminal(
+  webContents: WebContents,
+  parentTabId: string,
+  terminalName: string
+):
+  | { ok: true; entry: { name: string; tabId: string; busy: boolean; lastUsedAt: number } }
+  | { ok: false; error: string } {
+  const poolKey = getSessionKey(webContents.id, parentTabId)
+  const pool = temporarySubterminals.get(poolKey) ?? []
+  const existing = pool.find((entry) => entry.name === terminalName)
+
+  if (existing) {
+    if (!sessions.has(getSessionKey(webContents.id, existing.tabId))) {
+      startTemporaryTerminalSession(webContents, existing.tabId)
+    }
+    return { ok: true, entry: existing }
+  }
+
+  if (pool.length >= MAX_TEMPORARY_SUBTERMINALS) {
+    return {
+      ok: false,
+      error: `At most ${MAX_TEMPORARY_SUBTERMINALS} temporary sub-terminals can run under one terminal. Reuse one of: ${pool
+        .map((entry) => entry.name)
+        .join(', ')}.`
+    }
+  }
+
+  const entry = {
+    name: terminalName,
+    tabId: createTemporarySubterminalTabId(parentTabId, terminalName),
+    busy: false,
+    lastUsedAt: Date.now()
+  }
+  pool.push(entry)
+  temporarySubterminals.set(poolKey, pool)
+  startTemporaryTerminalSession(webContents, entry.tabId)
+
+  return { ok: true, entry }
+}
+
+function startTemporaryTerminalSession(webContents: WebContents, tabId: string): void {
+  const key = getSessionKey(webContents.id, tabId)
+  stopSession(key)
+
+  const launchConfig = resolveShellLaunchConfig()
+  const sessionId = nextSessionId
+  nextSessionId += 1
+  const session = createTerminalSession({
+    sessionId,
+    shell: launchConfig.shell,
+    args: launchConfig.args,
+    cwd: launchConfig.cwd,
+    env: launchConfig.env,
+    cols: 100,
+    rows: 24,
+    webContents,
+    tabId,
+    key
+  })
+
+  terminalOutputBuffers.set(key, '')
+  sessions.set(key, session)
+}
+
+function normalizeTemporaryTerminalName(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, '-').slice(0, 40)
+
+  return normalized || 'temporary'
+}
+
+function createTemporarySubterminalTabId(parentTabId: string, terminalName: string): string {
+  return `${parentTabId}::subterminal::${encodeURIComponent(terminalName)}`
 }
 
 function createTerminalSession(input: {

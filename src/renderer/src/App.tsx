@@ -19,6 +19,7 @@ import {
   SettingsIcon,
   SearchIcon,
   TestTube2Icon,
+  TerminalIcon,
   TriangleAlertIcon,
   Trash2Icon,
   XIcon
@@ -163,6 +164,16 @@ interface AgentTerminalTab {
   agentBusy: boolean
   copiedLogId: number | null
   agentLog: AgentLogEntry[]
+  subTerminals: TemporarySubterminal[]
+}
+
+interface TemporarySubterminal {
+  id: string
+  name: string
+  output: string
+  cwd: string
+  status: 'active' | 'exited'
+  widthPercent?: number
 }
 
 function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab {
@@ -181,7 +192,22 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
     skillRefs: input?.skillRefs ?? [],
     agentBusy: input?.agentBusy ?? false,
     copiedLogId: input?.copiedLogId ?? null,
-    agentLog: input?.agentLog ?? []
+    agentLog: input?.agentLog ?? [],
+    subTerminals: input?.subTerminals ?? []
+  }
+}
+
+const emptyLocalTab = createTerminalTab({ id: 'default', title: 'Local' })
+
+function getNextTerminalTitle(baseTitle: string, tabs: AgentTerminalTab[]): string {
+  const normalizedBase = baseTitle.trim() || 'Terminal'
+  const titles = new Set(tabs.map((tab) => tab.title))
+
+  if (!titles.has(normalizedBase)) return normalizedBase
+
+  for (let index = 1; ; index += 1) {
+    const candidate = `${normalizedBase} ${index}`
+    if (!titles.has(candidate)) return candidate
   }
 }
 
@@ -193,6 +219,7 @@ function formatPipePrompt(cwd: string): string {
 
 function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
+  const connectionSearchInputRef = useRef<HTMLInputElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const terminalSessionIdRef = useRef<number | null>(null)
@@ -210,6 +237,14 @@ function App(): React.JSX.Element {
   const agentLogRef = useRef<HTMLDivElement | null>(null)
   const activeTabIdRef = useRef('default')
   const tabsRef = useRef<AgentTerminalTab[]>([])
+  const subterminalResizeRef = useRef<{
+    tabId: string
+    leftId: string
+    rightId: string
+    startX: number
+    leftStart: number
+    rightStart: number
+  } | null>(null)
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
@@ -249,6 +284,7 @@ function App(): React.JSX.Element {
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
   const [connections, setConnections] = useState<ConnectionConfig[]>([])
+  const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
   const [connectionEditing, setConnectionEditing] = useState(true)
@@ -268,6 +304,7 @@ function App(): React.JSX.Element {
   const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
+  const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('connections')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
@@ -281,7 +318,15 @@ function App(): React.JSX.Element {
     x: number
     y: number
   } | null>(null)
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? emptyLocalTab
+  const terminalTabs = useMemo(
+    () =>
+      tabs.filter(
+        (tab) =>
+          tab.id !== 'default' || terminalPage === 'terminal' || tab.sessionId || tab.terminalOutput
+      ),
+    [tabs, terminalPage]
+  )
   const t = dictionaries[locale]
   const providerOptions = useMemo(
     () =>
@@ -319,7 +364,7 @@ function App(): React.JSX.Element {
     : activeTab.sessionId
       ? 'not-ready'
       : 'pending'
-  const terminalVisible = hiddenPane !== 'terminal'
+  const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const slashCommandQuery = getSlashCommandQuery(activeTab.agentInput)
   const slashCommandOptions = useMemo(
     () =>
@@ -378,6 +423,28 @@ function App(): React.JSX.Element {
     () => filterLocalSkills(skills, localSkillSearchQuery),
     [localSkillSearchQuery, skills]
   )
+  const connectionSearchText = connectionSearchQuery.trim().toLowerCase()
+  const localTerminalMatchesSearch =
+    !connectionSearchText ||
+    [
+      t.connections.localTerminal,
+      t.connections.defaultTerminal,
+      'local',
+      'terminal',
+      'default',
+      '本地',
+      '默认',
+      '终端'
+    ].some((value) => value.toLowerCase().includes(connectionSearchText))
+  const filteredConnections = useMemo(
+    () =>
+      connectionSearchText
+        ? connections.filter((connection) =>
+            matchesConnectionSearch(connection, connectionSearchText)
+          )
+        : connections,
+    [connectionSearchText, connections]
+  )
 
   const refreshSessionHistory = useCallback(async (): Promise<void> => {
     setHistoryLoading(true)
@@ -399,6 +466,102 @@ function App(): React.JSX.Element {
       setTabs((current) => current.map((tab) => (tab.id === tabId ? updater(tab) : tab)))
     },
     []
+  )
+
+  const upsertSubterminal = useCallback(
+    (
+      parentTabId: string,
+      name: string,
+      id: string,
+      updater: (subterminal: TemporarySubterminal) => TemporarySubterminal
+    ): void => {
+      updateTab(parentTabId, (tab) => {
+        const existing = tab.subTerminals.find((subterminal) => subterminal.id === id)
+        const base: TemporarySubterminal = existing ?? {
+          id,
+          name,
+          output: '',
+          cwd: '',
+          status: 'active'
+        }
+        const nextSubterminal = updater(base)
+        const nextSubTerminals = existing
+          ? tab.subTerminals.map((subterminal) =>
+              subterminal.id === id ? nextSubterminal : subterminal
+            )
+          : [...tab.subTerminals, nextSubterminal].slice(-3)
+
+        return { ...tab, subTerminals: nextSubTerminals }
+      })
+    },
+    [updateTab]
+  )
+
+  const updateSubterminalOutput = useCallback(
+    (parentTabId: string, name: string, id: string, data: string): void => {
+      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
+        ...subterminal,
+        status: 'active',
+        output: `${subterminal.output}${data}`.slice(-80_000)
+      }))
+    },
+    [upsertSubterminal]
+  )
+
+  const updateSubterminalCwd = useCallback(
+    (parentTabId: string, name: string, id: string, cwd: string): void => {
+      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
+        ...subterminal,
+        cwd,
+        status: 'active'
+      }))
+    },
+    [upsertSubterminal]
+  )
+
+  const updateSubterminalStatus = useCallback(
+    (
+      parentTabId: string,
+      name: string,
+      id: string,
+      status: TemporarySubterminal['status']
+    ): void => {
+      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
+        ...subterminal,
+        status
+      }))
+    },
+    [upsertSubterminal]
+  )
+
+  const resizeSubterminalPair = useCallback(
+    (
+      tabId: string,
+      leftId: string,
+      rightId: string,
+      leftWidth: number,
+      rightWidth: number
+    ): void => {
+      updateTab(tabId, (tab) => {
+        const currentWidths = getSubterminalWidths(tab.subTerminals)
+        const total = leftWidth + rightWidth
+        const nextLeft = Math.max(18, Math.min(total - 18, leftWidth))
+        const nextRight = total - nextLeft
+
+        return {
+          ...tab,
+          subTerminals: tab.subTerminals.map((subterminal, index) => {
+            if (subterminal.id === leftId) return { ...subterminal, widthPercent: nextLeft }
+            if (subterminal.id === rightId) return { ...subterminal, widthPercent: nextRight }
+            return {
+              ...subterminal,
+              widthPercent: subterminal.widthPercent ?? currentWidths[index]
+            }
+          })
+        }
+      })
+    },
+    [updateTab]
   )
 
   const appendLog = useCallback(
@@ -568,7 +731,7 @@ function App(): React.JSX.Element {
 
       updateTab(targetTabId, (tab) => ({
         ...tab,
-        title: connection.name,
+        title: tab.connectionId || tab.isSsh ? tab.title : connection.name,
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -619,6 +782,28 @@ function App(): React.JSX.Element {
   }, [locale])
 
   useEffect(() => {
+    if (terminalPage !== 'connections') return
+
+    window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
+  }, [terminalPage])
+
+  useEffect(() => {
+    const handleConnectionSearchShortcut = (event: globalThis.KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        showConnectionList()
+        window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
+      }
+    }
+
+    window.addEventListener('keydown', handleConnectionSearchShortcut)
+
+    return () => {
+      window.removeEventListener('keydown', handleConnectionSearchShortcut)
+    }
+  })
+
+  useEffect(() => {
     if (!tabMenu) return
 
     const closeMenu = (): void => setTabMenu(null)
@@ -633,6 +818,19 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
+      const subterminalResize = subterminalResizeRef.current
+      if (subterminalResize) {
+        const deltaPercent = ((event.clientX - subterminalResize.startX) / window.innerWidth) * 100
+        resizeSubterminalPair(
+          subterminalResize.tabId,
+          subterminalResize.leftId,
+          subterminalResize.rightId,
+          subterminalResize.leftStart + deltaPercent,
+          subterminalResize.rightStart - deltaPercent
+        )
+        return
+      }
+
       if (!splitDragRef.current) return
 
       const width = window.innerWidth
@@ -642,6 +840,7 @@ function App(): React.JSX.Element {
     }
     const handlePointerUp = (): void => {
       splitDragRef.current = false
+      subterminalResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
@@ -653,7 +852,7 @@ function App(): React.JSX.Element {
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
     }
-  }, [])
+  }, [resizeSubterminalPair])
 
   const redrawPipeInput = useCallback((terminal: Terminal): void => {
     const buffer = pipeInputBufferRef.current
@@ -894,6 +1093,12 @@ function App(): React.JSX.Element {
       window.api.terminal.write(data, activeTabIdRef.current)
     })
     const stopTerminalData = window.api.terminal.onData((event) => {
+      const subterminal = parseSubterminalTabId(event.tabId)
+      if (subterminal) {
+        updateSubterminalOutput(subterminal.parentTabId, subterminal.name, event.tabId, event.data)
+        return
+      }
+
       updateTab(event.tabId, (current) => ({
         ...current,
         terminalOutput: `${current.terminalOutput}${event.data}`.slice(-200_000)
@@ -901,6 +1106,12 @@ function App(): React.JSX.Element {
       if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd }) => {
+      const subterminal = parseSubterminalTabId(tabId)
+      if (subterminal) {
+        updateSubterminalCwd(subterminal.parentTabId, subterminal.name, tabId, cwd)
+        return
+      }
+
       updateTab(tabId, (current) => ({ ...current, terminalCwd: cwd }))
       if (tabId === activeTabIdRef.current) {
         terminalCwdRef.current = cwd
@@ -908,6 +1119,12 @@ function App(): React.JSX.Element {
       }
     })
     const stopTerminalExit = window.api.terminal.onExit((event) => {
+      const subterminal = parseSubterminalTabId(event.tabId)
+      if (subterminal) {
+        updateSubterminalStatus(subterminal.parentTabId, subterminal.name, event.tabId, 'exited')
+        return
+      }
+
       updateTab(event.tabId, (current) => ({
         ...current,
         sessionId: undefined,
@@ -991,6 +1208,9 @@ function App(): React.JSX.Element {
     handlePipeTerminalInput,
     t,
     terminalVisible,
+    updateSubterminalCwd,
+    updateSubterminalOutput,
+    updateSubterminalStatus,
     updateTab
   ])
 
@@ -1338,19 +1558,35 @@ function App(): React.JSX.Element {
     postLoginDisplayInput?: string
   ): string {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
-    let targetTabId = currentTab?.id ?? 'default'
+    let targetTabId = currentTab?.id ?? ''
+    let targetTab = currentTab
 
     if (currentTab?.isSsh) {
       const nextTab = createTerminalTab({
-        title: connection.name,
+        title: getNextTerminalTitle(connection.name, tabsRef.current),
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
       })
       targetTabId = nextTab.id
+      targetTab = nextTab
       setTabs((current) => [...current, nextTab])
       setActiveTabId(nextTab.id)
+    } else if (!currentTab) {
+      const nextTab = createTerminalTab({
+        title: getNextTerminalTitle(connection.name, tabsRef.current),
+        connectionId: connection.id,
+        connectionName: connection.name,
+        isSsh: true
+      })
+      targetTabId = nextTab.id
+      targetTab = nextTab
+      setTabs((current) => [...current, nextTab])
+      setActiveTabId(nextTab.id)
+    } else {
+      setActiveTabId(currentTab.id)
     }
+    setTerminalPage('terminal')
 
     if (postLoginInput) {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
@@ -1360,7 +1596,6 @@ function App(): React.JSX.Element {
       ])
     }
 
-    const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
     if (targetTab?.sessionId) {
       void executeConnectionCommands(connection, targetTabId)
     } else {
@@ -1368,6 +1603,63 @@ function App(): React.JSX.Element {
     }
 
     return targetTabId
+  }
+
+  function showConnectionList(): void {
+    setTerminalPage('connections')
+    void window.api.connections
+      .list()
+      .then(setConnections)
+      .catch((error) => {
+        writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
+      })
+  }
+
+  function openLocalTerminal(): void {
+    setTerminalPage('terminal')
+    const defaultTab = tabsRef.current.find((tab) => tab.id === 'default')
+    const canUseDefaultTab =
+      defaultTab &&
+      !defaultTab.sessionId &&
+      !defaultTab.terminalOutput &&
+      defaultTab.agentLog.length === 0 &&
+      !defaultTab.connectionId
+
+    if (canUseDefaultTab) {
+      setActiveTabId('default')
+      return
+    }
+
+    const nextTab = createTerminalTab({
+      title: getNextTerminalTitle('Local', tabsRef.current)
+    })
+
+    setTabs((current) => [...current, nextTab])
+    setActiveTabId(nextTab.id)
+  }
+
+  function openConnectionTerminal(connection: ConnectionConfig): void {
+    setTerminalPage('terminal')
+    const nextTab = createTerminalTab({
+      title: getNextTerminalTitle(connection.name, tabsRef.current),
+      connectionId: connection.id,
+      connectionName: connection.name,
+      isSsh: true
+    })
+
+    pendingSshRef.current.set(nextTab.id, connection)
+    setTabs((current) => [...current, nextTab])
+    setActiveTabId(nextTab.id)
+  }
+
+  function connectFromConnectionManager(connection: ConnectionConfig): void {
+    if (terminalPage === 'connections') {
+      openConnectionTerminal(connection)
+      return
+    }
+
+    connectToConnection(connection)
+    setTerminalPage('terminal')
   }
 
   async function findConnectionForIntent(
@@ -1412,7 +1704,7 @@ function App(): React.JSX.Element {
     )
 
     if (connectAfterSave && savedConnection) {
-      connectToConnection(savedConnection)
+      connectFromConnectionManager(savedConnection)
       setConnectionModalOpen(false)
       resetConnectionForm()
       return
@@ -1865,18 +2157,25 @@ function App(): React.JSX.Element {
   }
 
   function closeTab(tabId: string): void {
-    if (tabId === 'default') return
     if (!window.confirm(t.confirm.closeTab)) return
 
+    const closingTab = tabsRef.current.find((tab) => tab.id === tabId)
     window.api.terminal.stop(tabId)
+    closingTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
     pendingSshRef.current.delete(tabId)
     setTabs((current) => {
       const next = current.filter((tab) => tab.id !== tabId)
       if (activeTabIdRef.current === tabId) {
         const fallback = next.find((tab) => tab.id !== 'default') ?? next[0]
-        setActiveTabId(fallback?.id ?? 'default')
+        if (fallback) {
+          setActiveTabId(fallback.id)
+          setTerminalPage('terminal')
+        } else {
+          setActiveTabId('default')
+          setTerminalPage('connections')
+        }
       }
-      return next.length ? next : [createTerminalTab({ id: 'default', title: 'Local' })]
+      return next
     })
     setTabMenu(null)
   }
@@ -1887,6 +2186,7 @@ function App(): React.JSX.Element {
     for (const tab of tabsRef.current) {
       if (tab.id !== tabId) {
         window.api.terminal.stop(tab.id)
+        tab.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
         pendingSshRef.current.delete(tab.id)
       }
     }
@@ -2397,12 +2697,15 @@ function App(): React.JSX.Element {
             style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
           >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
-              {tabs.map((tab) => (
+              {terminalTabs.map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
-                  className={`h-7 rounded px-2 text-xs ${tab.id === activeTabId ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted/40'}`}
-                  onClick={() => setActiveTabId(tab.id)}
+                  className={`h-7 rounded px-2 text-xs ${terminalPage === 'terminal' && tab.id === activeTabId ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted/40'}`}
+                  onClick={() => {
+                    setActiveTabId(tab.id)
+                    setTerminalPage('terminal')
+                  }}
                   onContextMenu={(event) => {
                     event.preventDefault()
                     setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
@@ -2411,13 +2714,21 @@ function App(): React.JSX.Element {
                   {tab.title}
                 </button>
               ))}
+              {terminalPage === 'connections' && (
+                <button
+                  type="button"
+                  className="h-7 rounded bg-secondary px-2 text-xs text-secondary-foreground"
+                >
+                  {t.connections.connectionList}
+                </button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                aria-label={t.connections.sshConnections}
-                title={t.connections.sshConnections}
-                onClick={() => setConnectionModalOpen(true)}
+                aria-label={t.connections.openConnectionList}
+                title={t.connections.openConnectionList}
+                onClick={showConnectionList}
               >
                 <PlusIcon aria-hidden="true" />
               </Button>
@@ -2528,7 +2839,6 @@ function App(): React.JSX.Element {
                   <button
                     type="button"
                     className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={tabMenu.tabId === 'default'}
                     onClick={() => closeTab(tabMenu.tabId)}
                   >
                     {t.common.closeTab}
@@ -2543,7 +2853,203 @@ function App(): React.JSX.Element {
                 </div>
               )}
             </div>
-            <div ref={terminalHostRef} className="h-full min-h-0" />
+            {terminalPage === 'terminal' ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div ref={terminalHostRef} className="min-h-0 flex-1" />
+                {activeTab.subTerminals.length > 0 && (
+                  <div className="max-h-64 shrink-0 overflow-auto border-t border-white/10 bg-background p-2">
+                    <div className="flex min-w-full gap-0">
+                      {activeTab.subTerminals.map((subterminal, index) => {
+                        const widths = getSubterminalWidths(activeTab.subTerminals)
+                        const width = widths[index]
+                        const nextSubterminal = activeTab.subTerminals[index + 1]
+
+                        return (
+                          <div
+                            key={subterminal.id}
+                            className="flex min-w-0"
+                            style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
+                          >
+                            <section className="min-w-0 flex-1 rounded-md border bg-card text-xs">
+                              <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">
+                                    {t.terminal.temporarySubterminal}: {subterminal.name}
+                                  </p>
+                                  {subterminal.cwd && (
+                                    <p className="truncate text-[10px] text-muted-foreground">
+                                      {subterminal.cwd}
+                                    </p>
+                                  )}
+                                </div>
+                                <Badge
+                                  variant={
+                                    subterminal.status === 'active' ? 'secondary' : 'outline'
+                                  }
+                                >
+                                  {subterminal.status === 'active'
+                                    ? t.terminal.subterminalActive
+                                    : t.terminal.subterminalExited}
+                                </Badge>
+                              </div>
+                              <pre className="max-h-48 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                                {subterminal.output || t.terminal.recentOutputEmpty}
+                              </pre>
+                            </section>
+                            {nextSubterminal && (
+                              <div
+                                className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label={t.terminal.resizeSubterminals}
+                                title={t.terminal.resizeSubterminals}
+                                onPointerDown={(event) => {
+                                  event.preventDefault()
+                                  event.currentTarget.setPointerCapture(event.pointerId)
+                                  subterminalResizeRef.current = {
+                                    tabId: activeTab.id,
+                                    leftId: subterminal.id,
+                                    rightId: nextSubterminal.id,
+                                    startX: event.clientX,
+                                    leftStart: width,
+                                    rightStart: widths[index + 1]
+                                  }
+                                  document.body.style.cursor = 'col-resize'
+                                  document.body.style.userSelect = 'none'
+                                }}
+                              />
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
+                <div className="mx-auto max-w-3xl space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold">{t.connections.connectionList}</h2>
+                      <p className="text-xs text-muted-foreground">
+                        {t.connections.connectionListDescription}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConnectionModalOpen(true)}
+                    >
+                      <SettingsIcon data-icon="inline-start" />
+                      {t.connections.manageConnections}
+                    </Button>
+                  </div>
+                  <div className="relative">
+                    <SearchIcon
+                      className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <Input
+                      ref={connectionSearchInputRef}
+                      value={connectionSearchQuery}
+                      onChange={(event) => setConnectionSearchQuery(event.target.value)}
+                      placeholder={t.connections.searchPlaceholder}
+                      className="h-9 pl-9 pr-9"
+                    />
+                    {connectionSearchQuery && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="absolute right-1 top-1/2 -translate-y-1/2"
+                        aria-label={t.common.close}
+                        title={t.common.close}
+                        onClick={() => setConnectionSearchQuery('')}
+                      >
+                        <XIcon aria-hidden="true" />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {localTerminalMatchesSearch && (
+                      <button
+                        type="button"
+                        className={`flex w-full items-center justify-between gap-3 rounded-md border bg-card p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
+                          activeTabId === 'default'
+                            ? 'border-primary/70 ring-1 ring-primary/30'
+                            : ''
+                        }`}
+                        onClick={openLocalTerminal}
+                      >
+                        <span className="flex min-w-0 items-center gap-3">
+                          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
+                            <TerminalIcon className="size-4" aria-hidden="true" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">
+                              {t.connections.localTerminal}
+                            </span>
+                            <span className="block truncate text-muted-foreground">
+                              {t.connections.defaultTerminal}
+                            </span>
+                          </span>
+                        </span>
+                        <Badge variant="outline">{t.app.workingDirectory}</Badge>
+                      </button>
+                    )}
+                    {connections.length === 0 && !connectionSearchText ? (
+                      <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                        {t.connections.noConnections}
+                      </p>
+                    ) : filteredConnections.length === 0 && !localTerminalMatchesSearch ? (
+                      <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                        {t.connections.noSearchResults}
+                      </p>
+                    ) : (
+                      filteredConnections.map((connection) => {
+                        const connectionTab = tabs.find((tab) => tab.connectionId === connection.id)
+                        const selected = connectionTab?.id === activeTabId
+
+                        return (
+                          <button
+                            key={connection.id}
+                            type="button"
+                            className={`flex w-full items-center justify-between gap-3 rounded-md border bg-card p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
+                              selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                            }`}
+                            onClick={() => openConnectionTerminal(connection)}
+                          >
+                            <span className="flex min-w-0 items-center gap-3">
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
+                                <ServerIcon className="size-4" aria-hidden="true" />
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate font-medium">
+                                  {connection.name}
+                                </span>
+                                <span className="block truncate text-muted-foreground">
+                                  {formatConnectionTarget(connection)}
+                                </span>
+                              </span>
+                            </span>
+                            <span className="flex shrink-0 items-center gap-2">
+                              {connectionTab && <Badge variant="secondary">{t.app.running}</Badge>}
+                              <Badge variant="outline">
+                                {connection.source === 'ssh-config'
+                                  ? '~/.ssh/config'
+                                  : t.connections.customConnectionName}
+                              </Badge>
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
         {!hiddenPane && (
@@ -2857,7 +3363,7 @@ function App(): React.JSX.Element {
                             size="sm"
                             onClick={(event) => {
                               event.stopPropagation()
-                              connectToConnection(connection)
+                              connectFromConnectionManager(connection)
                               setConnectionModalOpen(false)
                             }}
                           >
@@ -3153,17 +3659,27 @@ function App(): React.JSX.Element {
         </div>
       )}
       <footer className="flex h-9 shrink-0 items-center border-t px-4 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          <StatusDot state={shellState} />
-          {shellState === 'ready'
-            ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
-            : shellState === 'pending'
-              ? t.app.shellStarting
-              : t.app.shellStopped}
-          <span className="text-muted-foreground/70">
-            {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
+        {terminalPage === 'connections' ? (
+          <span className="inline-flex items-center gap-2">
+            <StatusDot state="pending" />
+            {t.connections.connectionList}
+            <span className="text-muted-foreground/70">
+              {connections.length} {t.connections.sshConnections}
+            </span>
           </span>
-        </span>
+        ) : (
+          <span className="inline-flex items-center gap-2">
+            <StatusDot state={shellState} />
+            {shellState === 'ready'
+              ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
+              : shellState === 'pending'
+                ? t.app.shellStarting
+                : t.app.shellStopped}
+            <span className="text-muted-foreground/70">
+              {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
+            </span>
+          </span>
+        )}
       </footer>
     </main>
   )
@@ -3499,6 +4015,52 @@ function formatConnectionTarget(connection: ConnectionConfig): string {
   return `${user}${connection.host}${port}`
 }
 
+function matchesConnectionSearch(connection: ConnectionConfig, query: string): boolean {
+  return [
+    connection.name,
+    connection.host,
+    connection.user ?? '',
+    connection.description ?? '',
+    connection.source,
+    formatConnectionTarget(connection)
+  ].some((value) => value.toLowerCase().includes(query))
+}
+
+function parseSubterminalTabId(tabId: string): { parentTabId: string; name: string } | undefined {
+  const marker = '::subterminal::'
+  const markerIndex = tabId.indexOf(marker)
+
+  if (markerIndex === -1) return undefined
+
+  const parentTabId = tabId.slice(0, markerIndex)
+  const encodedName = tabId.slice(markerIndex + marker.length)
+
+  try {
+    return {
+      parentTabId,
+      name: decodeURIComponent(encodedName)
+    }
+  } catch {
+    return {
+      parentTabId,
+      name: encodedName
+    }
+  }
+}
+
+function getSubterminalWidths(subterminals: TemporarySubterminal[]): number[] {
+  if (subterminals.length === 0) return []
+  if (subterminals.length === 1) return [100]
+
+  const defaultWidth = 100 / subterminals.length
+  const widths = subterminals.map((subterminal) => subterminal.widthPercent ?? defaultWidth)
+  const total = widths.reduce((sum, width) => sum + width, 0)
+
+  if (total <= 0) return subterminals.map(() => defaultWidth)
+
+  return widths.map((width) => (width / total) * 100)
+}
+
 function mergeConnectionInput(
   saved: ConnectionConfig | undefined,
   fallback: ConnectionConfig
@@ -3752,16 +4314,49 @@ function buildPostLoginAgentInput(
     t.terminal.postLoginAgentInstruction,
     `${t.terminal.connectionTarget}: ${connection.name} (${formatConnectionTarget(connection)})`,
     '',
+    buildUserRequirementBreakdown(input, connection, t),
+    '',
     t.terminal.postLoginOriginalTask,
     input
   ].join('\n')
+}
+
+function buildUserRequirementBreakdown(
+  input: string,
+  connection: ConnectionConfig,
+  t: Dictionary
+): string {
+  const artifactDestination = extractArtifactDestination(input)
+  const targetSystem = extractTargetSystem(input)
+  const requestedActions = extractRequestedActions(input)
+  const lines = [
+    t.terminal.requirementBreakdown,
+    `1. ${t.terminal.breakdownTargetConnection}: ${connection.name} (${formatConnectionTarget(connection)})`,
+    `2. ${t.terminal.breakdownTargetSystem}: ${targetSystem || t.terminal.breakdownInferFromTask}`,
+    `3. ${t.terminal.breakdownActions}: ${requestedActions.join(' -> ')}`,
+    `4. ${t.terminal.breakdownArtifact}: ${
+      artifactDestination
+        ? `${t.terminal.breakdownArtifactDestination}: ${artifactDestination}`
+        : t.terminal.breakdownNoExplicitArtifact
+    }`,
+    '',
+    t.terminal.breakdownExecutionRules,
+    `- ${t.terminal.breakdownRuleUseCurrentTerminal}`,
+    `- ${t.terminal.breakdownRuleUseSubterminal}`,
+    `- ${t.terminal.breakdownRulePreserveDestination}`,
+    `- ${t.terminal.breakdownRuleNoFabrication}`
+  ]
+
+  return lines.join('\n')
 }
 
 function parseConnectionIntent(input: string): ConnectionIntent | undefined {
   const trimmed = input.trim()
   const explicit = /(登录|登陆|连接|使用|打开|进入|\bssh\b)/i.test(trimmed)
   const executeAfterLogin =
-    /(检查|查看|巡检|排查|执行|处理|获取|统计|内存|磁盘|cpu|节点|pod|服务)/i.test(trimmed)
+    /(检查|查看|巡检|排查|执行|处理|获取|统计|生成|总结|保存|写入|输出|导出|记录|报告|文档|内存|磁盘|cpu|节点|pod|服务)/i.test(
+      trimmed
+    )
   const operational =
     executeAfterLogin && /(集群|节点|机器|主机|服务器|环境|ssh|连接)/i.test(trimmed)
   if (!explicit && !operational) return undefined
@@ -3790,6 +4385,40 @@ function parseConnectionIntent(input: string): ConnectionIntent | undefined {
   if (!query) return undefined
 
   return { original: trimmed, query, candidates, explicit, executeAfterLogin }
+}
+
+function extractTargetSystem(input: string): string {
+  return (
+    input.match(
+      /(?:检查|查看|巡检|排查|处理|获取|统计)\s*([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)/i
+    )?.[1] ??
+    input.match(/([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:健康|状态|巡检|检查)/i)?.[1] ??
+    ''
+  )
+}
+
+function extractArtifactDestination(input: string): string {
+  const pathMatch = input.match(
+    /(?:放在|保存到|写到|写入|输出到|导出到|存到)\s*([~./$A-Za-z0-9_\-\u4e00-\u9fa5][^\s，。；,;]*)/i
+  )
+  if (pathMatch?.[1]) return normalizeArtifactDestination(pathMatch[1])
+
+  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s，。；,;]*)/)
+  return loosePathMatch?.[1] ? normalizeArtifactDestination(loosePathMatch[1]) : ''
+}
+
+function normalizeArtifactDestination(value: string): string {
+  return value.replace(/(?:目录下|目录|路径下|路径|下)$/u, '')
+}
+
+function extractRequestedActions(input: string): string[] {
+  const actions: string[] = []
+  if (/(登录|登陆|连接|进入|\bssh\b)/i.test(input)) actions.push('login')
+  if (/(检查|查看|巡检|排查|健康|状态|统计|获取)/i.test(input)) actions.push('inspect')
+  if (/(总结|生成|报告|文档|记录)/i.test(input)) actions.push('summarize')
+  if (/(保存|写入|写到|放在|输出|导出|存到)/i.test(input)) actions.push('write-artifact')
+
+  return actions.length ? actions : ['complete-request']
 }
 
 function matchConnectionIntent(

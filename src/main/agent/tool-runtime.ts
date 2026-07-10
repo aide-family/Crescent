@@ -4,12 +4,16 @@ import { OpenApiToolExecutor } from './tool-executor'
 import type {
   AgentConfig,
   AgentEvent,
+  LocalFileWriter,
   OpenAiTool,
+  SubterminalCommandExecutor,
   TerminalCommandExecutor,
   ToolCatalogEntry
 } from './types'
 
 const TERMINAL_TOOL_NAME = 'execute_terminal_command'
+const SUBTERMINAL_TOOL_NAME = 'execute_subterminal_command'
+const LOCAL_FILE_WRITE_TOOL_NAME = 'write_local_file'
 const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   type: 'function',
   function: {
@@ -34,6 +38,63 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
     }
   }
 }
+const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
+  type: 'function',
+  function: {
+    name: SUBTERMINAL_TOOL_NAME,
+    description:
+      'Execute a non-interactive shell command in a named temporary local-shell sub-terminal displayed under the current terminal. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
+    parameters: {
+      type: 'object',
+      properties: {
+        terminalName: {
+          type: 'string',
+          description:
+            'Short stable name for the temporary sub-terminal, such as host-a, cluster-b, or local. Reuse the same name for related commands.'
+        },
+        command: {
+          type: 'string',
+          description:
+            'The exact shell command to execute in the temporary sub-terminal. Use safe, non-interactive commands.'
+        },
+        timeoutMs: {
+          type: 'number',
+          description:
+            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000.'
+        }
+      },
+      required: ['terminalName', 'command']
+    }
+  }
+}
+const LOCAL_FILE_WRITE_TOOL: OpenAiTool = {
+  type: 'function',
+  function: {
+    name: LOCAL_FILE_WRITE_TOOL_NAME,
+    description:
+      'Write generated local artifacts such as Markdown reports directly to the Crescent user machine. Use this for user-requested local files instead of shell heredocs, python heredocs, or temporary sub-terminal file writes. Preserve the exact user-requested destination path. Creates parent directories as needed and does not overwrite existing files unless overwrite is true.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description:
+            'Absolute path or ~/ path on the local Crescent machine where the artifact should be written.'
+        },
+        content: {
+          type: 'string',
+          description: 'Full file content to write. Do not omit sections that the user requested.'
+        },
+        overwrite: {
+          type: 'boolean',
+          description:
+            'Set true only when the user explicitly asked to replace an existing local file. Defaults to false.'
+        }
+      },
+      required: ['path', 'content']
+    }
+  }
+}
 
 interface ToolHandler {
   schema: OpenAiTool
@@ -46,6 +107,8 @@ export interface AgentToolRuntimeInput {
   brain: AgentBrain
   userInput: string
   terminalExecutor?: TerminalCommandExecutor
+  subterminalExecutor?: SubterminalCommandExecutor
+  localFileWriter?: LocalFileWriter
   emit: (event: AgentEvent) => void
 }
 
@@ -57,6 +120,12 @@ export class AgentToolRuntime {
 
     if (input.terminalExecutor) {
       runtime.registerTerminalTool(input.terminalExecutor, input.emit)
+    }
+    if (input.subterminalExecutor) {
+      runtime.registerSubterminalTool(input.subterminalExecutor, input.emit)
+    }
+    if (input.localFileWriter) {
+      runtime.registerLocalFileWriteTool(input.localFileWriter, input.emit)
     }
 
     if (hasOpenApiConfig(input.config)) {
@@ -117,6 +186,67 @@ export class AgentToolRuntime {
     })
   }
 
+  private registerSubterminalTool(
+    subterminalExecutor: SubterminalCommandExecutor,
+    emit: (event: AgentEvent) => void
+  ): void {
+    this.handlers.set(SUBTERMINAL_TOOL_NAME, {
+      schema: SUBTERMINAL_COMMAND_TOOL,
+      catalog: {
+        name: SUBTERMINAL_TOOL_NAME,
+        method: 'post',
+        path: 'terminal://temporary-subterminal',
+        description: SUBTERMINAL_COMMAND_TOOL.function.description ?? ''
+      },
+      execute: async (rawArguments) => {
+        const args = parseSubterminalCommandArgs(rawArguments)
+        emit({
+          type: 'tool',
+          name: SUBTERMINAL_TOOL_NAME,
+          message: `Submitting command in temporary sub-terminal "${args.terminalName}": ${args.command}`
+        })
+
+        const result = await subterminalExecutor.executeCommand(args.command, {
+          terminalName: args.terminalName,
+          timeoutMs: args.timeoutMs
+        })
+
+        return {
+          ...result,
+          output: truncateToolOutput(result.output)
+        }
+      }
+    })
+  }
+
+  private registerLocalFileWriteTool(
+    localFileWriter: LocalFileWriter,
+    emit: (event: AgentEvent) => void
+  ): void {
+    this.handlers.set(LOCAL_FILE_WRITE_TOOL_NAME, {
+      schema: LOCAL_FILE_WRITE_TOOL,
+      catalog: {
+        name: LOCAL_FILE_WRITE_TOOL_NAME,
+        method: 'post',
+        path: 'file://local-artifact',
+        description: LOCAL_FILE_WRITE_TOOL.function.description ?? ''
+      },
+      execute: async (rawArguments) => {
+        const args = parseLocalFileWriteArgs(rawArguments)
+        emit({
+          type: 'tool',
+          name: LOCAL_FILE_WRITE_TOOL_NAME,
+          message: `Writing local artifact: ${args.path}`
+        })
+
+        return localFileWriter.writeFile(args.path, args.content, {
+          overwrite: args.overwrite,
+          encoding: 'utf-8'
+        })
+      }
+    })
+  }
+
   private async registerOpenApiTools(input: AgentToolRuntimeInput): Promise<void> {
     const registry = await loadOpenApiToolRegistry(input.config)
     const executor = new OpenApiToolExecutor(input.config, registry.operations)
@@ -163,6 +293,51 @@ function parseTerminalCommandArgs(rawArguments: string): { command: string; time
     }
   } catch {
     return { command: '' }
+  }
+}
+
+function parseSubterminalCommandArgs(rawArguments: string): {
+  terminalName: string
+  command: string
+  timeoutMs?: number
+} {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+
+    if (!isRecord(parsed)) return { terminalName: 'temporary', command: '' }
+
+    const timeoutMs = Number(parsed.timeoutMs)
+
+    return {
+      terminalName:
+        typeof parsed.terminalName === 'string' && parsed.terminalName.trim()
+          ? parsed.terminalName.trim()
+          : 'temporary',
+      command: typeof parsed.command === 'string' ? parsed.command.trim() : '',
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined
+    }
+  } catch {
+    return { terminalName: 'temporary', command: '' }
+  }
+}
+
+function parseLocalFileWriteArgs(rawArguments: string): {
+  path: string
+  content: string
+  overwrite: boolean
+} {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+
+    if (!isRecord(parsed)) return { path: '', content: '', overwrite: false }
+
+    return {
+      path: typeof parsed.path === 'string' ? parsed.path.trim() : '',
+      content: typeof parsed.content === 'string' ? parsed.content : '',
+      overwrite: parsed.overwrite === true
+    }
+  } catch {
+    return { path: '', content: '', overwrite: false }
   }
 }
 

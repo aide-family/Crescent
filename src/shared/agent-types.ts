@@ -112,10 +112,37 @@ export interface TerminalCommandResult {
   error?: string
   timedOut?: boolean
   terminalExited?: boolean
+  subterminalName?: string
+  subterminalTabId?: string
 }
 
 export interface TerminalCommandExecutor {
   executeCommand(command: string, timeoutMs?: number): Promise<TerminalCommandResult>
+}
+
+export interface SubterminalCommandExecutor {
+  executeCommand(
+    command: string,
+    options: { terminalName: string; timeoutMs?: number }
+  ): Promise<TerminalCommandResult>
+}
+
+export interface LocalFileWriteResult {
+  ok: boolean
+  path: string
+  bytes?: number
+  overwritten?: boolean
+  permissionRequested?: boolean
+  authorizationPath?: string
+  error?: string
+}
+
+export interface LocalFileWriter {
+  writeFile(
+    path: string,
+    content: string,
+    options?: { overwrite?: boolean; encoding?: 'utf-8' }
+  ): Promise<LocalFileWriteResult>
 }
 
 export type CommandRiskLevel = 'low' | 'medium' | 'high'
