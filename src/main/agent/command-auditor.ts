@@ -27,6 +27,7 @@ export class CommandAuditor {
               'Return strict JSON only: {"summary":"...","risk":"low|medium|high","requiresApproval":true|false,"riskPoints":["..."],"impactAnalysis":"...","recommendation":"..."}.',
               'Set requiresApproval=false only for clearly read-only inspection commands that do not change files, services, network, credentials, users, permissions, packages, cluster state, or remote systems.',
               'Set requiresApproval=true for medium and high risk commands, any ambiguous command, any command with shell redirection that writes files, destructive flags, privilege escalation, service control, package installation, network mutation, remote execution, credential handling, or data deletion.',
+              'If the user requested a specific report/file destination but the command writes somewhere else, include that as a risk point and recommend correcting the command before execution.',
               'Classify destructive file operations, privilege escalation, credential exposure, network changes, service restarts, data deletion, package installation, and remote execution as medium or high risk as appropriate.',
               `Write all human-readable JSON field values in ${language === 'zh-CN' ? 'Simplified Chinese' : 'English'}. Keep the JSON keys and risk enum values unchanged.`,
               'Do not approve or reject. Only analyze risk and whether user approval is required.'

@@ -38,6 +38,8 @@ export type {
   ConnectionInput,
   ConnectionSource,
   HttpMethod,
+  LocalFileWriter,
+  LocalFileWriteResult,
   OpenApiOperationMeta,
   OperationRecord,
   StoredAgentLogEntry,
@@ -45,6 +47,7 @@ export type {
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionTab,
+  SubterminalCommandExecutor,
   TerminalCommandExecutor,
   TerminalCommandResult,
   ToolCatalogEntry

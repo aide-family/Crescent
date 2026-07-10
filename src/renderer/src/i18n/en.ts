@@ -69,10 +69,13 @@ const en = {
   connections: {
     actionsCount: 'login actions',
     connect: 'Connect',
+    connectionList: 'Connections',
+    connectionListDescription: 'Choose the default local terminal or switch to an SSH terminal.',
     copiedConnection: 'Paste copied connection',
     copiedConnectionPlaceholder:
       'Paste copied connection JSON to edit it as a new custom connection',
     customConnectionName: 'Custom connection name',
+    defaultTerminal: 'Default terminal (local)',
     description: 'Description',
     descriptionPlaceholder: 'Optional note',
     existing: 'Existing',
@@ -82,10 +85,15 @@ const en = {
     loginActions: 'Login actions',
     loginActionsDescription:
       'One line per terminal input after ssh starts. Crescent types these lines in order.',
+    localTerminal: 'Local terminal',
+    manageConnections: 'Manage connections',
     namePlaceholder: 'production',
     noConnections: 'No connections found.',
+    noSearchResults: 'No matching connections.',
+    openConnectionList: 'Open connection list',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
+    searchPlaceholder: 'Search by name, host, user, or description',
     storedIn: 'Custom connections are stored in ~/.crescent/config.json.',
     sshConnections: 'SSH connections',
     sshConnectionsDescription: 'Choose an existing connection or create a custom command sequence.',
@@ -120,13 +128,35 @@ const en = {
     terminalReconnectUnavailable:
       'Terminal is abnormal and this session has no usable connection config. Automatic command execution stopped.',
     postLoginAgentInstruction:
-      'The current terminal has already completed the target login. Do not log in again or switch connections; continue in this terminal to complete the requested post-login investigation, verification, and necessary handling. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
+      'The current terminal has already completed the target login. Do not log in again or switch connections; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
+    requirementBreakdown: 'User requirement breakdown (must complete accordingly)',
+    breakdownActions: 'Work steps',
+    breakdownArtifact: 'Artifact requirement',
+    breakdownArtifactDestination: 'Destination',
+    breakdownExecutionRules: 'Execution rules',
+    breakdownInferFromTask: 'Infer from the user task and current connection context',
+    breakdownNoExplicitArtifact:
+      'No artifact path was specified; if the task needs an artifact, confirm first or use a reasonable location from the current context',
+    breakdownRuleNoFabrication:
+      'Do not fabricate credentials, targets, paths, namespaces, hosts, or defaults; use configured sources or state what is missing.',
+    breakdownRulePreserveDestination:
+      'If the user specified an artifact location, filename, or context, preserve that intent; do not substitute a temporary directory, current directory, or another host.',
+    breakdownRuleUseCurrentTerminal:
+      'Run target-system inspection in the currently logged-in terminal and collect enough evidence before summarizing.',
+    breakdownRuleUseSubterminal:
+      'Use a temporary sub-terminal when leaving the current terminal context, comparing targets, or writing local artifacts.',
+    breakdownTargetConnection: 'Target connection',
+    breakdownTargetSystem: 'Target system',
     postLoginNotReady:
       'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
     postLoginOriginalTask: 'Original user task',
     postLoginTaskStarting: 'Login completed; starting the follow-up task.',
     recentOutputEmpty: 'recent output: <empty>',
+    resizeSubterminals: 'Resize temporary sub-terminals',
     shellExited: 'Shell exited with code',
+    subterminalActive: 'Active',
+    subterminalExited: 'Exited',
+    temporarySubterminal: 'Temporary sub-terminal',
     terminalMode: 'Terminal mode'
   },
   history: {

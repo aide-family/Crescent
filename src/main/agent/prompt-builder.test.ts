@@ -33,4 +33,20 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('After a terminal command returns enough evidence')
     expect(prompt).toContain('Do not use terminal commands to read Crescent local skill files')
   })
+
+  it('separates target execution context from artifact destination context', () => {
+    const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
+      mode: 'react',
+      memoryBlock: '',
+      terminalContext: ''
+    })
+
+    expect(prompt).toContain('Interpret execution context and artifact destination separately')
+    expect(prompt).toContain('destination context the user requested')
+    expect(prompt).toContain('use write_local_file')
+    expect(prompt).toContain('do not send large file content through shell heredocs')
+    expect(prompt).toContain('Preserve user-specified destinations')
+    expect(prompt).toContain('Do not replace them with convenient temporary paths')
+    expect(prompt).toContain('invented credentials')
+  })
 })

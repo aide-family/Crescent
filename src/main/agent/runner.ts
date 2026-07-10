@@ -1,5 +1,11 @@
 import { TerminalAgentCore } from './core'
-import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
+import type {
+  AgentConfig,
+  AgentEvent,
+  LocalFileWriter,
+  SubterminalCommandExecutor,
+  TerminalCommandExecutor
+} from './types'
 import type { AgentMemory } from './memory'
 
 export interface AgentRunControls {
@@ -16,10 +22,17 @@ export async function runTerminalAgent(
   terminalContext: string,
   emit: (event: AgentEvent) => void,
   terminalExecutor?: TerminalCommandExecutor,
+  subterminalExecutor?: SubterminalCommandExecutor,
+  localFileWriter?: LocalFileWriter,
   controls?: AgentRunControls
 ): Promise<string> {
-  return new TerminalAgentCore(config, memory, emit, terminalExecutor, controls).run(
-    userInput,
-    terminalContext
-  )
+  return new TerminalAgentCore(
+    config,
+    memory,
+    emit,
+    terminalExecutor,
+    subterminalExecutor,
+    localFileWriter,
+    controls
+  ).run(userInput, terminalContext)
 }

@@ -6,7 +6,13 @@ import { resolveModelProvider } from './openclaw-config'
 import { AgentPlanner } from './planner'
 import { AgentPromptBuilder } from './prompt-builder'
 import { AgentToolRuntime } from './tool-runtime'
-import type { AgentConfig, AgentEvent, TerminalCommandExecutor } from './types'
+import type {
+  AgentConfig,
+  AgentEvent,
+  LocalFileWriter,
+  SubterminalCommandExecutor,
+  TerminalCommandExecutor
+} from './types'
 import type { AgentRunControls } from './runner'
 
 const MAX_TOOL_STEPS = 5
@@ -20,6 +26,8 @@ export class TerminalAgentCore {
     private readonly memory: AgentMemory,
     private readonly emit: (event: AgentEvent) => void,
     private readonly terminalExecutor?: TerminalCommandExecutor,
+    private readonly subterminalExecutor?: SubterminalCommandExecutor,
+    private readonly localFileWriter?: LocalFileWriter,
     private readonly controls?: AgentRunControls
   ) {}
 
@@ -34,6 +42,8 @@ export class TerminalAgentCore {
       brain,
       userInput,
       terminalExecutor: this.terminalExecutor,
+      subterminalExecutor: this.subterminalExecutor,
+      localFileWriter: this.localFileWriter,
       emit: this.emit
     })
 

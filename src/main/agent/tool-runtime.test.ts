@@ -5,6 +5,8 @@ import { getDefaultAgentProviders } from './openclaw-config'
 import type {
   AgentConfig,
   AgentEvent,
+  LocalFileWriter,
+  SubterminalCommandExecutor,
   TerminalCommandExecutor,
   TerminalCommandResult
 } from './types'
@@ -53,6 +55,96 @@ describe('AgentToolRuntime', () => {
     expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool', name: 'execute_terminal_command' })
+    )
+  })
+
+  it('registers and dispatches the temporary sub-terminal tool', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const commandResult: TerminalCommandResult = {
+      ok: true,
+      command: 'pwd',
+      mode: 'pty',
+      cwd: '/tmp',
+      exitCode: 0,
+      output: 'ok',
+      subterminalName: 'local'
+    }
+    const terminalExecutor: TerminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string) => ({ ...commandResult, command }))
+    }
+    const subterminalExecutor: SubterminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string, options) => ({
+        ...commandResult,
+        command,
+        subterminalName: options.terminalName
+      }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'save report locally',
+      terminalExecutor,
+      subterminalExecutor,
+      emit
+    })
+    const result = await runtime.execute(
+      'execute_subterminal_command',
+      JSON.stringify({ terminalName: 'local', command: 'pwd' })
+    )
+
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual([
+      'execute_terminal_command',
+      'execute_subterminal_command'
+    ])
+    expect(subterminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', {
+      terminalName: 'local',
+      timeoutMs: undefined
+    })
+    expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
+  })
+
+  it('registers and dispatches the local file writer tool', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const localFileWriter: LocalFileWriter = {
+      writeFile: vi.fn(async (path: string, content: string, options) => ({
+        ok: true,
+        path,
+        bytes: Buffer.byteLength(content, 'utf-8'),
+        overwritten: options?.overwrite === true
+      }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'write report to ~/Documents/work',
+      localFileWriter,
+      emit
+    })
+    const result = await runtime.execute(
+      'write_local_file',
+      JSON.stringify({
+        path: '~/Documents/work/report.md',
+        content: '# Report\n\nok',
+        overwrite: false
+      })
+    )
+
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(['write_local_file'])
+    expect(localFileWriter.writeFile).toHaveBeenCalledWith(
+      '~/Documents/work/report.md',
+      '# Report\n\nok',
+      { overwrite: false, encoding: 'utf-8' }
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      path: '~/Documents/work/report.md',
+      bytes: 12,
+      overwritten: false
+    })
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'tool', name: 'write_local_file' })
     )
   })
 })
