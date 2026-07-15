@@ -41,8 +41,12 @@ const en = {
   confirm: {
     closeTab: 'Close this tab? The terminal session in this tab will be stopped.',
     closeOtherTabs: 'Close all other tabs? Their terminal sessions will be stopped.',
+    closeTabsTitle: 'Close tabs',
     deleteConnection: 'Delete this custom connection? This action cannot be undone.',
-    deleteSkill: 'Delete this skill? This removes the local skill directory and cannot be undone.'
+    deleteHistory:
+      'Delete this history session? This will not close any currently open terminal, but saved chat records will be removed.',
+    deleteSkill: 'Delete this skill? This removes the local skill directory and cannot be undone.',
+    dontAskAgain: "Don't ask again"
   },
   commandReview: {
     approved: 'Command approved by user',
@@ -57,8 +61,13 @@ const en = {
     impactAnalysis: 'Impact analysis',
     lowRisk: 'Low risk',
     mediumRisk: 'Medium risk',
+    operationReason: 'Operation reason',
     recommendation: 'Recommendation',
     reject: 'Reject',
+    rejectionReason: 'Rejection reason',
+    rejectionReasonPlaceholder:
+      'Explain why this command is rejected, for example wrong command, wrong scope, or should be read-only',
+    readOnlyAllowed: 'Command audit classified this as read-only inspection and allowed it',
     rejected: 'Command rejected by user',
     riskLevel: 'Risk level',
     riskPoints: 'Risk points',
@@ -91,6 +100,8 @@ const en = {
     noConnections: 'No connections found.',
     noSearchResults: 'No matching connections.',
     openConnectionList: 'Open connection list',
+    password: 'Password',
+    passwordPlaceholder: 'Optional; leave empty to skip automatic password input',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
     searchPlaceholder: 'Search by name, host, user, or description',
@@ -190,14 +201,23 @@ const en = {
     createdPlan: 'Created execution plan',
     done: 'Done.',
     error: 'Error',
+    elapsed: 'Elapsed',
     failed: 'Agent run failed.',
     genericAction: 'Agent action',
     result: 'Result',
     referencedSkill: 'Ref',
     referencedSkills: 'Referenced skills',
     removeSkillRef: 'Remove skill reference',
+    resumeInstruction:
+      'The user typed "continue". Use the current restored terminal and the recent conversation below to continue the previous unfinished work. Do not repeat steps that already have evidence. If the terminal was just restored, first run lightweight inspection to confirm the current context, then continue.',
+    resumeLatestInput: 'Latest user input',
+    resumeNoContext:
+      'No recent conversation context is available. Explain that there is no work context to resume and ask what the user wants to continue.',
+    resumePreviousGoal: 'Previous user goal',
+    resumeRecentContext: 'Recent conversation context',
     startedRun: 'Started agent run',
     terminalContext: 'Collecting terminal context.',
+    thinking: 'AI is thinking',
     slashCommandHint: 'Type / to reference context, mode, or skills',
     slashConnection: 'Reference current connection',
     slashConnectionDescription: 'Insert current SSH connection information',

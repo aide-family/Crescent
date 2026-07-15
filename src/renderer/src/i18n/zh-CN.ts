@@ -41,8 +41,12 @@ const zhCN = {
   confirm: {
     closeTab: '确认关闭这个 Tab？该 Tab 的终端会话会被停止。',
     closeOtherTabs: '确认关闭其他所有 Tab？这些 Tab 的终端会话会被停止。',
+    closeTabsTitle: '关闭 Tab',
     deleteConnection: '确认删除这个自定义连接？此操作不可恢复。',
-    deleteSkill: '确认删除这个 Skill？此操作会移除本地 Skill 目录，且不可恢复。'
+    deleteHistory:
+      '确认删除这条历史会话记录？此操作不会关闭当前已打开的终端，但会移除保存的对话记录。',
+    deleteSkill: '确认删除这个 Skill？此操作会移除本地 Skill 目录，且不可恢复。',
+    dontAskAgain: '不再提示'
   },
   commandReview: {
     approved: '命令已由用户批准',
@@ -56,8 +60,13 @@ const zhCN = {
     impactAnalysis: '影响分析',
     lowRisk: '低风险',
     mediumRisk: '中风险',
+    operationReason: '操作原因',
     recommendation: '审核建议',
     reject: '拒绝',
+    rejectionReason: '拒绝原因',
+    rejectionReasonPlaceholder:
+      '说明为什么拒绝该命令，例如：命令错误、范围不对、应该使用只读查询等',
+    readOnlyAllowed: '审核子进程判定为只读查询，已直接放行',
     rejected: '命令已由用户拒绝',
     riskLevel: '风险等级',
     riskPoints: '风险点',
@@ -88,6 +97,8 @@ const zhCN = {
     noConnections: '未找到连接。',
     noSearchResults: '没有匹配的连接。',
     openConnectionList: '打开连接列表',
+    password: '密码',
+    passwordPlaceholder: '可选，留空则不自动输入密码',
     port: '端口',
     readOnlyHint: '选中的连接默认只读。点击编辑后才允许修改。',
     searchPlaceholder: '搜索连接名、主机、用户或描述',
@@ -177,11 +188,18 @@ const zhCN = {
     currentTerminal: '命令会在当前终端执行。',
     createdPlan: '已生成执行计划',
     error: '错误',
+    elapsed: '耗时',
     genericAction: 'Agent 动作',
     result: '结果',
     referencedSkill: '引用',
     referencedSkills: '引用的 Skills',
     removeSkillRef: '移除 Skill 引用',
+    resumeInstruction:
+      '用户输入了“继续”。请先基于当前已恢复的终端和下方最近会话记录，继续上一轮未完成的工作；不要重复已经完成且有证据的步骤。如果终端刚恢复，先用轻量查询确认当前上下文，再继续推进。',
+    resumeLatestInput: '本次用户输入',
+    resumeNoContext: '最近会话记录为空；请说明缺少可续接上下文，并询问用户要继续哪项工作。',
+    resumePreviousGoal: '上一轮用户目标',
+    resumeRecentContext: '最近会话记录',
     startedRun: '开始运行 Agent',
     done: '已完成。',
     failed: 'Agent 运行失败。',
@@ -207,6 +225,7 @@ const zhCN = {
     slashTerminalDescription: '插入当前终端会话信息',
     synthesizingResult: '正在分析命令输出并整理结论',
     terminalContext: '正在收集终端上下文。',
+    thinking: 'AI 正在思考',
     toolDispatching: '正在调用工具',
     toolsConfigured: '工具已配置',
     usedTool: '调用工具'

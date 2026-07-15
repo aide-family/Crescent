@@ -36,6 +36,7 @@ export interface ConnectionConfig {
   name: string
   host: string
   user?: string
+  password?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]
@@ -48,6 +49,7 @@ export interface ConnectionInput {
   name: string
   host: string
   user?: string
+  password?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]
@@ -152,6 +154,7 @@ export type CommandRiskLevel = 'low' | 'medium' | 'high'
 
 export interface CommandAuditResult {
   summary: string
+  operationReason: string
   risk: CommandRiskLevel
   requiresApproval: boolean
   riskPoints: string[]
@@ -171,6 +174,7 @@ export interface CommandApprovalRequest {
 export interface CommandApprovalDecision {
   requestId: string
   approved: boolean
+  rejectionReason?: string
 }
 
 export interface AgentValidationResult {

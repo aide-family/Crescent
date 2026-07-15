@@ -32,6 +32,7 @@ const api = {
       cols?: number
       rows?: number
       tabId?: string
+      initialCommand?: string
     }): Promise<{
       sessionId: number
       tabId: string
@@ -73,10 +74,12 @@ const api = {
       ipcRenderer.on('terminal:data', listener)
       return () => ipcRenderer.removeListener('terminal:data', listener)
     },
-    onPrompt: (callback: (event: { tabId: string; cwd: string }) => void): (() => void) => {
+    onPrompt: (
+      callback: (event: { tabId: string; cwd: string; prompt?: string }) => void
+    ): (() => void) => {
       const listener = (
         _: Electron.IpcRendererEvent,
-        event: { tabId: string; cwd: string }
+        event: { tabId: string; cwd: string; prompt?: string }
       ): void => callback(event)
 
       ipcRenderer.on('terminal:prompt', listener)
@@ -171,7 +174,9 @@ const api = {
     listSessionHistory: (limit?: number): Promise<StoredSessionHistoryItem[]> =>
       ipcRenderer.invoke('storage:list-session-history', limit),
     getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>
-      ipcRenderer.invoke('storage:get-session-history', tabId)
+      ipcRenderer.invoke('storage:get-session-history', tabId),
+    deleteSessionHistory: (tabId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:delete-session-history', tabId)
   }
 }
 

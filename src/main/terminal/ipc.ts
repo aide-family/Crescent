@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'child_process'
 import { dirname, resolve } from 'path'
-import { homedir } from 'os'
+import { homedir, hostname, userInfo } from 'os'
 import { spawn as spawnPty } from 'node-pty'
 
 import { resolveShellLaunchConfig } from './shell'
@@ -13,6 +13,8 @@ interface TerminalSession {
   cwd: string
   shell: string
   write: (data: string) => void
+  display: (data: string) => void
+  interrupt: () => void
   resize: (cols: number, rows: number) => void
   clear: () => void
   kill: () => void
@@ -21,6 +23,13 @@ interface TerminalSession {
 interface TerminalExitNotification {
   exitCode: number
   signal?: number | string
+}
+
+export interface TerminalAutomationFilterState {
+  startMarker: string
+  endMarker: string
+  phase: 'before-start' | 'body'
+  pending: string
 }
 
 export interface TerminalCommandExecutionResult {
@@ -45,9 +54,13 @@ const MAX_CONTEXT_BUFFER = 24_000
 const TERMINAL_COMMAND_TIMEOUT_MS = 120_000
 const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
 const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
+const TERMINAL_COMMAND_INTERRUPT_GRACE_MS = 2_000
+const TERMINAL_COMMAND_START_TIMEOUT_MS = 8_000
+const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 const terminalOutputBuffers = new Map<string, string>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
+const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
 const MAX_TEMPORARY_SUBTERMINALS = 3
 const temporarySubterminals = new Map<
   string,
@@ -103,49 +116,123 @@ export function executeCommandInTerminal(
     const endMarker = `__CRESCENT_CMD_END_${commandId}__`
     let buffer = ''
     let settled = false
+    let timeoutTriggered = false
+    let commandStarted = false
+    let interruptGraceTimeout: NodeJS.Timeout | undefined
+    let continuationPromptTimeout: NodeJS.Timeout | undefined
 
     const settle = (result: TerminalCommandExecutionResult): void => {
       if (settled) return
 
       settled = true
       clearTimeout(timeout)
+      clearTimeout(startTimeout)
+      if (interruptGraceTimeout) clearTimeout(interruptGraceTimeout)
+      if (continuationPromptTimeout) clearTimeout(continuationPromptTimeout)
       const waiters = terminalDataWaiters.get(key)
       waiters?.delete(onData)
       if (waiters?.size === 0) terminalDataWaiters.delete(key)
       const exitWaiters = terminalExitWaiters.get(key)
       exitWaiters?.delete(onExit)
       if (exitWaiters?.size === 0) terminalExitWaiters.delete(key)
+      terminalAutomationFilterStates.delete(key)
+      const readableResult = formatReadableCommandResult(result)
+      if (readableResult) session.display(readableResult)
       resolve(result)
     }
 
     const onData = (data: string): void => {
       buffer += data
+      if (buffer.includes(startMarker)) commandStarted = true
       const parsed = parseCommandBuffer(buffer, startMarker, endMarker)
 
-      if (!parsed.done) return
+      if (!parsed.done) {
+        if (
+          commandStarted &&
+          !timeoutTriggered &&
+          !continuationPromptTimeout &&
+          hasShellContinuationPrompt(buffer)
+        ) {
+          continuationPromptTimeout = setTimeout(
+            interruptStalledContinuationPrompt,
+            TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS
+          )
+        }
+        return
+      }
 
       settle({
-        ok: parsed.exitCode === 0,
+        ok: !timeoutTriggered && parsed.exitCode === 0,
         command: normalizedCommand,
         mode: session.mode,
         cwd: session.cwd,
         exitCode: parsed.exitCode,
-        output: parsed.output
+        output: parsed.output,
+        error: timeoutTriggered
+          ? `Command exceeded ${effectiveTimeoutMs}ms and was interrupted with Ctrl+C.`
+          : undefined,
+        timedOut: timeoutTriggered || undefined
       })
     }
 
-    const timeout = setTimeout(() => {
+    const interruptStalledContinuationPrompt = (): void => {
+      if (!commandStarted || settled) return
+
+      timeoutTriggered = true
+      session.display(
+        formatReadableContinuationPromptFailure(TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS)
+      )
       interruptCommandSession(key, session)
-      settle({
-        ok: false,
-        command: normalizedCommand,
-        mode: session.mode,
-        cwd: session.cwd,
-        output: extractPartialCommandOutput(buffer, startMarker),
-        error: `Command timed out after ${effectiveTimeoutMs}ms and was interrupted.`,
-        timedOut: true
-      })
+      interruptGraceTimeout = setTimeout(() => {
+        settle({
+          ok: false,
+          command: normalizedCommand,
+          mode: session.mode,
+          cwd: session.cwd,
+          output: extractPartialCommandOutput(buffer, startMarker),
+          error:
+            'Command appears stuck at a shell continuation prompt; Crescent sent Ctrl+C to recover.',
+          timedOut: true
+        })
+      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
+    }
+
+    const timeout = setTimeout(() => {
+      timeoutTriggered = true
+      session.display(formatReadableCommandInterrupt(effectiveTimeoutMs))
+      interruptCommandSession(key, session)
+      interruptGraceTimeout = setTimeout(() => {
+        settle({
+          ok: false,
+          command: normalizedCommand,
+          mode: session.mode,
+          cwd: session.cwd,
+          output: extractPartialCommandOutput(buffer, startMarker),
+          error: `Command exceeded ${effectiveTimeoutMs}ms and did not finish after Ctrl+C.`,
+          timedOut: true
+        })
+      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
     }, effectiveTimeoutMs)
+
+    const startTimeout = setTimeout(() => {
+      if (commandStarted || settled) return
+
+      timeoutTriggered = true
+      session.display(formatReadableCommandStartFailure(TERMINAL_COMMAND_START_TIMEOUT_MS))
+      interruptCommandSession(key, session)
+      interruptGraceTimeout = setTimeout(() => {
+        settle({
+          ok: false,
+          command: normalizedCommand,
+          mode: session.mode,
+          cwd: session.cwd,
+          output: '',
+          error:
+            'Command did not reach the execution start marker. The shell may be waiting for an unfinished quote or continuation prompt; Crescent sent Ctrl+C to recover.',
+          timedOut: true
+        })
+      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
+    }, TERMINAL_COMMAND_START_TIMEOUT_MS)
 
     const onExit = (event: TerminalExitNotification): void => {
       settle({
@@ -155,7 +242,10 @@ export function executeCommandInTerminal(
         cwd: session.cwd,
         exitCode: event.exitCode,
         output: extractPartialCommandOutput(buffer, startMarker),
-        error: `Terminal session exited while the command was running. Exit code: ${event.exitCode}.`,
+        error: timeoutTriggered
+          ? `Command exceeded ${effectiveTimeoutMs}ms and the terminal exited after Ctrl+C. Exit code: ${event.exitCode}.`
+          : `Terminal session exited while the command was running. Exit code: ${event.exitCode}.`,
+        timedOut: timeoutTriggered || undefined,
         terminalExited: true
       })
     }
@@ -169,15 +259,21 @@ export function executeCommandInTerminal(
     terminalExitWaiters.set(key, exitWaiters)
 
     if (session.mode === 'pty') {
-      session.write('stty -echo\r')
-      setTimeout(() => {
-        if (settled || sessions.get(key)?.id !== session.id) return
-        session.write(createCommandWrapper(normalizedCommand, startMarker, endMarker, session.mode))
-      }, 40)
+      terminalAutomationFilterStates.set(key, {
+        startMarker,
+        endMarker,
+        phase: 'before-start',
+        pending: ''
+      })
+      session.display(formatReadableCommandInput(normalizedCommand))
+      session.write(
+        createPtyScriptRunner(createCommandWrapper(normalizedCommand, startMarker, endMarker))
+      )
       return
     }
 
-    session.write(createCommandWrapper(normalizedCommand, startMarker, endMarker, session.mode))
+    session.display(formatReadableCommandInput(normalizedCommand))
+    session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
   })
 }
 
@@ -311,7 +407,10 @@ function extractLikelyLocalDirectory(command: string): string | undefined {
 export function registerTerminalIpc(): void {
   ipcMain.handle(
     'terminal:start',
-    (event, options?: { cols?: number; rows?: number; tabId?: string }) => {
+    (
+      event,
+      options?: { cols?: number; rows?: number; tabId?: string; initialCommand?: string }
+    ) => {
       const senderId = event.sender.id
       const tabId = normalizeTabId(options?.tabId)
       const key = getSessionKey(senderId, tabId)
@@ -323,7 +422,7 @@ export function registerTerminalIpc(): void {
       const session = createTerminalSession({
         sessionId,
         shell: launchConfig.shell,
-        args: launchConfig.args,
+        args: resolveTerminalArgs(launchConfig.args, options?.initialCommand),
         cwd: launchConfig.cwd,
         env: launchConfig.env,
         cols: sanitizeDimension(options?.cols, 80),
@@ -334,6 +433,7 @@ export function registerTerminalIpc(): void {
       })
 
       terminalOutputBuffers.set(key, '')
+      terminalAutomationFilterStates.delete(key)
       sessions.set(key, session)
 
       return {
@@ -479,6 +579,7 @@ function stopSession(key: string): void {
   terminalDataWaiters.delete(key)
   terminalExitWaiters.delete(key)
   terminalOutputBuffers.delete(key)
+  terminalAutomationFilterStates.delete(key)
 }
 
 function ensureTemporarySubterminal(
@@ -542,6 +643,7 @@ function startTemporaryTerminalSession(webContents: WebContents, tabId: string):
   })
 
   terminalOutputBuffers.set(key, '')
+  terminalAutomationFilterStates.delete(key)
   sessions.set(key, session)
 }
 
@@ -579,6 +681,13 @@ function createTerminalSession(input: {
     )
     return createPipeSession(input)
   }
+}
+
+function resolveTerminalArgs(defaultArgs: string[], initialCommand: string | undefined): string[] {
+  const command = initialCommand?.trim()
+  if (!command) return defaultArgs
+
+  return process.platform === 'win32' ? [command] : ['-lc', command]
 }
 
 function createPtySession(input: {
@@ -621,6 +730,8 @@ function createPtySession(input: {
     cwd: input.cwd,
     shell: input.shell,
     write: (data) => pty.write(data),
+    display: (data) => sendVisibleTerminalData(input.webContents, input.tabId, input.key, data),
+    interrupt: () => pty.write('\x03'),
     resize: (cols, rows) => pty.resize(cols, rows),
     clear: () => pty.clear(),
     kill: () => {
@@ -663,7 +774,8 @@ function createPipeSession(input: {
         if (session) session.cwd = currentCwd
         sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
           tabId: input.tabId,
-          cwd: currentCwd
+          cwd: currentCwd,
+          prompt: formatPipePrompt(currentCwd)
         })
       } else {
         sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', `${line}\r\n`)
@@ -695,7 +807,8 @@ function createPipeSession(input: {
   )
   sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
     tabId: input.tabId,
-    cwd: currentCwd
+    cwd: currentCwd,
+    prompt: formatPipePrompt(currentCwd)
   })
 
   return {
@@ -704,13 +817,16 @@ function createPipeSession(input: {
     pid: child.pid ?? -1,
     cwd: currentCwd,
     shell,
+    display: (data) => sendVisibleTerminalData(input.webContents, input.tabId, input.key, data),
+    interrupt: () => interruptPipeProcess(child),
     write: (data) => {
       const command = data.replace(/\r?\n$/, '')
 
       if (!command.trim()) {
         sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
           tabId: input.tabId,
-          cwd: currentCwd
+          cwd: currentCwd,
+          prompt: formatPipePrompt(currentCwd)
         })
         return
       }
@@ -726,6 +842,7 @@ function createPipeSession(input: {
 function deleteIfCurrent(key: string, sessionId: number): void {
   if (sessions.get(key)?.id === sessionId) {
     sessions.delete(key)
+    terminalAutomationFilterStates.delete(key)
   }
 }
 
@@ -740,11 +857,20 @@ function notifyTerminalExit(key: string, event: TerminalExitNotification): void 
 function interruptCommandSession(key: string, session: TerminalSession): void {
   if (sessions.get(key)?.id !== session.id) return
 
-  if (session.mode === 'pty') {
-    session.write('\x03')
-    setTimeout(() => {
-      if (sessions.get(key)?.id === session.id) session.write('stty echo 2>/dev/null\r')
-    }, 80)
+  session.interrupt()
+}
+
+function interruptPipeProcess(child: ChildProcessWithoutNullStreams): void {
+  if (child.killed) return
+
+  try {
+    child.kill('SIGINT')
+  } catch {
+    try {
+      child.stdin.write('\x03')
+    } catch {
+      // Best effort interruption for pipe fallback.
+    }
   }
 }
 
@@ -768,41 +894,34 @@ function sanitizeCommand(value: unknown): string {
   return value.replace(/[\r\n]+/g, ' && ').trim()
 }
 
-function createCommandWrapper(
-  command: string,
-  startMarker: string,
-  endMarker: string,
-  mode: 'pty' | 'pipe'
-): string {
-  const wrapper = [
+function createCommandWrapper(command: string, startMarker: string, endMarker: string): string {
+  return [
     `printf '\\n${startMarker}\\n'`,
     command,
     '__crescent_status=$?',
     `printf '\\n${endMarker}:%s\\n' "$__crescent_status"`,
     'unset __crescent_status'
   ].join('\n')
-
-  if (mode === 'pipe') return `${wrapper}\n`
-
-  return `${createPtyScriptRunner(wrapper)}\r`
 }
 
 function createPtyScriptRunner(script: string): string {
   const encodedScript = Buffer.from(script, 'utf8').toString('base64')
 
-  return [
-    '__crescent_script=$(mktemp "${TMPDIR:-/tmp}/crescent.XXXXXX")',
-    '&&',
-    `{ printf %s '${encodedScript}' | base64 -d > "$__crescent_script" 2>/dev/null || printf %s '${encodedScript}' | base64 -D > "$__crescent_script"; }`,
-    '&&',
-    '. "$__crescent_script"',
-    ';',
-    'rm -f "$__crescent_script"',
-    ';',
-    'stty echo 2>/dev/null',
-    ';',
-    'unset __crescent_script __crescent_status'
-  ].join(' ')
+  return (
+    [
+      '__crescent_script=$(mktemp "${TMPDIR:-/tmp}/crescent.XXXXXX")',
+      '&&',
+      `{ printf %s '${encodedScript}' | base64 -d > "$__crescent_script" 2>/dev/null || printf %s '${encodedScript}' | base64 -D > "$__crescent_script"; }`,
+      '&&',
+      '. "$__crescent_script"',
+      ';',
+      'rm -f "$__crescent_script"',
+      ';',
+      'stty echo 2>/dev/null',
+      ';',
+      'unset __crescent_script __crescent_status'
+    ].join(' ') + '\r'
+  )
 }
 
 function parseCommandBuffer(
@@ -880,6 +999,18 @@ function appendTerminalContext(key: string, data: string): void {
   terminalOutputBuffers.set(key, next.slice(-MAX_CONTEXT_BUFFER))
 }
 
+function sendVisibleTerminalData(
+  webContents: WebContents,
+  tabId: string,
+  key: string,
+  data: string
+): void {
+  if (webContents.isDestroyed() || !data) return
+
+  appendTerminalContext(key, data)
+  webContents.send('terminal:data', { tabId, data })
+}
+
 function sendIfAlive(
   webContents: WebContents,
   tabId: string,
@@ -890,19 +1021,24 @@ function sendIfAlive(
   if (webContents.isDestroyed()) return
 
   if (channel === 'terminal:data' && typeof payload === 'string') {
-    terminalDataWaiters.get(key)?.forEach((listener) => listener(payload))
-    const visiblePayload = filterAutomationControlOutput(payload)
-    if (!visiblePayload) return
+    const visiblePayload = filterAutomationControlOutput(key, payload)
+    if (visiblePayload) sendVisibleTerminalData(webContents, tabId, key, visiblePayload)
 
-    appendTerminalContext(key, visiblePayload)
-    webContents.send(channel, { tabId, data: visiblePayload })
+    terminalDataWaiters.get(key)?.forEach((listener) => listener(payload))
     return
   }
 
   webContents.send(channel, payload)
 }
 
-function filterAutomationControlOutput(data: string): string {
+function filterAutomationControlOutput(key: string, data: string): string {
+  const state = terminalAutomationFilterStates.get(key)
+  if (state) return filterAutomationControlOutputWithState(data, state)
+
+  return filterAutomationControlLines(data)
+}
+
+function filterAutomationControlLines(data: string): string {
   const parts = removeAutomationNoise(data).split(/(\r?\n)/)
   let output = ''
   let skippedControlLine = false
@@ -929,6 +1065,115 @@ function filterAutomationControlOutput(data: string): string {
   return output
 }
 
+export function filterAutomationControlOutputWithState(
+  data: string,
+  state: TerminalAutomationFilterState
+): string {
+  state.pending += removeAutomationNoise(data)
+
+  if (state.phase === 'before-start') {
+    const startIndex = state.pending.indexOf(state.startMarker)
+    if (startIndex === -1) {
+      state.pending = keepMarkerTail(state.pending, state.startMarker)
+      return ''
+    }
+
+    state.pending = state.pending.slice(startIndex + state.startMarker.length)
+    state.pending = state.pending.replace(/^(\r\n|\n|\r)/, '')
+    state.phase = 'body'
+  }
+
+  const endIndex = state.pending.indexOf(state.endMarker)
+  if (endIndex !== -1) {
+    const beforeEndMarker = state.pending.slice(0, endIndex)
+    const afterEndMarker = state.pending.slice(endIndex)
+    const afterEndLine = afterEndMarker.replace(
+      new RegExp(`${escapeRegExp(state.endMarker)}:?\\d*\\r?\\n?`),
+      ''
+    )
+    state.pending = ''
+    return stripAutomationDisplayNoise(beforeEndMarker) + filterAutomationControlLines(afterEndLine)
+  }
+
+  const holdLength = Math.max(state.endMarker.length - 1, 0)
+  if (state.pending.length <= holdLength) return ''
+
+  const safeLength = state.pending.length - holdLength
+  const candidate = state.pending.slice(0, safeLength)
+  const lastNewlineIndex = Math.max(candidate.lastIndexOf('\n'), candidate.lastIndexOf('\r'))
+  if (lastNewlineIndex === -1) return ''
+
+  const emitLength = lastNewlineIndex + 1
+  const output = state.pending.slice(0, emitLength)
+  state.pending = state.pending.slice(emitLength)
+
+  return stripAutomationDisplayNoise(output)
+}
+
+function keepMarkerTail(value: string, marker: string): string {
+  const maxLength = Math.max(marker.length - 1, 0)
+  if (value.length <= maxLength) return value
+
+  return value.slice(-maxLength)
+}
+
+function stripAutomationDisplayNoise(value: string): string {
+  return value
+    .split(/(\r?\n|\r)/)
+    .filter((part) => !isAutomationControlOutput(part))
+    .map((part) => (/^\r?\n$|^\r$/.test(part) ? part : stripPromptPrefix(part)))
+    .join('')
+}
+
+export function formatReadableCommandInput(command: string): string {
+  return `${command.replace(/\r?\n/g, '\r\n')}\r\n`
+}
+
+function stripPromptPrefix(value: string): string {
+  return value
+    .replace(/^\s*(?:[\w.-]+@[\w.-]+(?:\[[^\]]+\])?:[^\r\n#$>]*[#$]|[$#]|➜\s+\S+)\s+/, '')
+    .replace(/^\s*(?:>\s*)+/, '')
+}
+
+function formatReadableCommandInterrupt(timeoutMs: number): string {
+  return `\r\n\x1b[33m[Crescent] command exceeded ${formatDuration(timeoutMs)}; sending Ctrl+C.\x1b[0m\r\n`
+}
+
+function formatReadableCommandStartFailure(timeoutMs: number): string {
+  return `\r\n\x1b[33m[Crescent] command did not start within ${formatDuration(timeoutMs)}; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
+}
+
+function formatReadableContinuationPromptFailure(timeoutMs: number): string {
+  return `\r\n\x1b[33m[Crescent] shell continuation prompt persisted for ${formatDuration(timeoutMs)}; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
+}
+
+function formatReadableCommandResult(result: TerminalCommandExecutionResult): string {
+  if (result.ok && !result.timedOut && !result.terminalExited) return ''
+
+  const status = result.timedOut
+    ? 'timeout'
+    : result.terminalExited
+      ? `terminal exited: ${result.exitCode ?? 'unknown'}`
+      : `command failed: exit code ${result.exitCode ?? 'unknown'}`
+
+  return `\r\n\x1b[33m[Crescent] ${status}\x1b[0m\r\n`
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds >= 1000 && milliseconds % 1000 === 0) return `${milliseconds / 1000}s`
+  return `${milliseconds}ms`
+}
+
+function formatPipePrompt(cwd: string): string {
+  const username = userInfo().username || 'user'
+  const host = hostname() || 'localhost'
+  const home = homedir()
+  const displayCwd =
+    cwd === home ? '~' : cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd
+
+  return `\x1b[38;5;45m${username}@${host}\x1b[0m:\x1b[38;5;111m${displayCwd}\x1b[0m $ `
+}
+
 function isAutomationControlOutput(value: string): boolean {
   const normalized = stripAnsi(value)
 
@@ -937,23 +1182,51 @@ function isAutomationControlOutput(value: string): boolean {
     normalized.includes('__CRESCENT_CMD_END_') ||
     normalized.includes('__crescent_script=$(mktemp') ||
     normalized.includes('__crescent_status=') ||
-    normalized.includes('stty -echo') ||
-    normalized.includes('stty echo 2>/dev/null') ||
     normalized.includes('unset __crescent_status') ||
-    /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized)
+    /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized) ||
+    /printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(normalized) ||
+    /base64\s+-[dD]\s+>/.test(normalized) ||
+    /^[A-Za-z0-9+/=]{100,}$/.test(normalized.trim())
   )
 }
 
 function removeAutomationNoise(value: string): string {
-  return value
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        !/_zsh_autosuggest_highlight_apply:\d+: POSTDISPLAY: parameter not set/.test(
-          stripAnsi(line)
-        )
-    )
-    .join('\n')
+  const parts = value.split(/(\r\n|\n|\r)/)
+  let output = ''
+  let skippedLine = false
+
+  for (const part of parts) {
+    if (/^(\r\n|\n|\r)$/.test(part)) {
+      if (!skippedLine) output += part
+      skippedLine = false
+      continue
+    }
+
+    if (
+      /_zsh_autosuggest_highlight_apply:\d+: POSTDISPLAY: parameter not set/.test(stripAnsi(part))
+    ) {
+      skippedLine = true
+      continue
+    }
+
+    output += part
+  }
+
+  return output
+}
+
+function hasShellContinuationPrompt(value: string): boolean {
+  const normalized = stripAnsi(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const tail = normalized.slice(-800)
+  const lines = tail.split('\n')
+  const lastLine = lines[lines.length - 1] ?? ''
+  const promptPattern =
+    /^\s*(>|quote>|dquote>|bquote>|cmdand\s+cursh\s+cmdor\s+quote>|heredoc>)\s*$/
+
+  if (promptPattern.test(lastLine)) return true
+
+  const previousLine = lines[lines.length - 2] ?? ''
+  return promptPattern.test(previousLine) && lastLine.trim() === ''
 }
 
 function normalizeTabId(tabId: string | undefined): string {

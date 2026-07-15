@@ -26,7 +26,12 @@ import type {
 
 interface TerminalAgentApi {
   terminal: {
-    start: (options?: { cols?: number; rows?: number; tabId?: string }) => Promise<{
+    start: (options?: {
+      cols?: number
+      rows?: number
+      tabId?: string
+      initialCommand?: string
+    }) => Promise<{
       sessionId: number
       tabId: string
       mode: 'pty' | 'pipe'
@@ -47,7 +52,9 @@ interface TerminalAgentApi {
     stop: (tabId?: string) => void
     clear: (tabId?: string) => void
     onData: (callback: (event: { tabId: string; data: string }) => void) => () => void
-    onPrompt: (callback: (event: { tabId: string; cwd: string }) => void) => () => void
+    onPrompt: (
+      callback: (event: { tabId: string; cwd: string; prompt?: string }) => void
+    ) => () => void
     onExit: (
       callback: (event: {
         tabId: string
@@ -99,6 +106,7 @@ interface TerminalAgentApi {
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
     listSessionHistory: (limit?: number) => Promise<StoredSessionHistoryItem[]>
     getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
+    deleteSessionHistory: (tabId: string) => Promise<{ ok: boolean }>
   }
 }
 
