@@ -36,26 +36,7 @@ export interface CrescentMemoryFile {
   longTerm: AgentLongTermMemory
 }
 
-export const defaultCommandWhitelist: string[] = [
-  'pwd',
-  'whoami',
-  'hostname',
-  'date',
-  'uptime',
-  'df -h',
-  'df -i',
-  'free -h',
-  'hostname; date; uptime',
-  'df -h; df -i',
-  '/^ls( -[A-Za-z]+)?( [^;&|`$]+)?$/',
-  '/^ps aux --sort=-(%mem|%cpu) \\| head -[0-9]+$/',
-  '/^free -h; ps aux --sort=-%mem \\| head -[0-9]+$/',
-  '/^du -xhd1 [^;&|`$]+( 2>\\/dev\\/null)? \\| sort -h$/',
-  '/^find [^;&|`$]+ -type f -name ["\\\']?\\*\\.log\\*["\\\']? -size \\+[0-9]+M -mtime \\+[0-9]+ -print$/',
-  '/^kubectl get [A-Za-z0-9_.-]+( -A| --all-namespaces)?$/',
-  '/^kubectl describe [A-Za-z0-9_.-]+ [A-Za-z0-9_.-]+( -n [A-Za-z0-9_.-]+)?$/',
-  '/^op do web "?(hostname; date; uptime|df -h; df -i|free -h|ps aux --sort=-%mem \\| head -[0-9]+)"?$/'
-]
+export const defaultCommandWhitelist: string[] = []
 
 export const defaultAgentConfig: AgentConfig = {
   providers: getDefaultAgentProviders(),
@@ -326,6 +307,7 @@ function normalizeConnection(value: unknown): ConnectionConfig {
     name: String(record.name || record.host || ''),
     host: String(record.host || ''),
     user: record.user ? String(record.user) : undefined,
+    password: record.password ? String(record.password) : undefined,
     port: Number.isFinite(port) && port > 0 ? Math.round(port) : undefined,
     identityFile: record.identityFile ? String(record.identityFile) : undefined,
     sshOptions: Array.isArray(record.sshOptions)

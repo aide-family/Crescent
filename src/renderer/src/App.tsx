@@ -115,8 +115,10 @@ type AgentLogEntry =
 interface AgentRunViewState {
   logId: number
   actions: AgentRunAction[]
+  startedAt?: number
   result?: string
   error?: string
+  elapsedMs?: number
 }
 
 interface AgentRunAction {
@@ -129,10 +131,18 @@ type SkillManageMessage = {
   text: string
 }
 
+interface CloseTabsConfirmRequest {
+  mode: 'tab' | 'other-tabs'
+  tabId: string
+  dontAskAgain: boolean
+}
+
 interface PostConnectionTask {
   input: string
   displayInput: string
   connection: ConnectionConfig
+  appendUserLog: boolean
+  startedAt: number
 }
 
 interface SlashCommandOption {
@@ -158,6 +168,7 @@ interface AgentTerminalTab {
   agentInput: string
   skillRefs: AgentSkillOption[]
   agentBusy: boolean
+  agentThinking: boolean
   copiedLogId: number | null
   agentLog: AgentLogEntry[]
   subTerminals: TemporarySubterminal[]
@@ -188,6 +199,7 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
     agentInput: input?.agentInput ?? '',
     skillRefs: input?.skillRefs ?? [],
     agentBusy: input?.agentBusy ?? false,
+    agentThinking: input?.agentThinking ?? false,
     copiedLogId: input?.copiedLogId ?? null,
     agentLog: input?.agentLog ?? [],
     subTerminals: input?.subTerminals ?? []
@@ -214,6 +226,10 @@ function formatPipePrompt(cwd: string): string {
   return `\x1b[38;5;45m${home}\x1b[0m $ `
 }
 
+function getPipePrompt(prompt: string, cwd: string): string {
+  return prompt || formatPipePrompt(cwd)
+}
+
 function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const connectionSearchInputRef = useRef<HTMLInputElement | null>(null)
@@ -222,6 +238,7 @@ function App(): React.JSX.Element {
   const terminalSessionIdRef = useRef<number | null>(null)
   const terminalModeRef = useRef<'pty' | 'pipe'>('pty')
   const terminalCwdRef = useRef('')
+  const pipePromptRef = useRef('')
   const activeRunCanceledRef = useRef(new Set<string>())
   const activeRunIdRef = useRef(new Map<string, string>())
   const activeRunInputRef = useRef(new Map<string, string>())
@@ -255,7 +272,9 @@ function App(): React.JSX.Element {
         input: string,
         tabId: string,
         connectionId?: string,
-        displayInput?: string
+        displayInput?: string,
+        appendUserLog?: boolean,
+        startedAt?: number
       ) => Promise<void>)
     | null
   >(null)
@@ -293,6 +312,7 @@ function App(): React.JSX.Element {
     name: '',
     host: '',
     user: '',
+    password: '',
     port: 22,
     identityFile: '',
     sshOptions: [],
@@ -303,6 +323,7 @@ function App(): React.JSX.Element {
   const [connectionActionsText, setConnectionActionsText] = useState('')
   const [connectionImportText, setConnectionImportText] = useState('')
   const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
+  const [commandRejectionReason, setCommandRejectionReason] = useState('')
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
@@ -314,6 +335,8 @@ function App(): React.JSX.Element {
   const [closeTerminalConfirmEnabled, setCloseTerminalConfirmEnabled] = useState(
     () => localStorage.getItem(CLOSE_TERMINAL_CONFIRM_STORAGE_KEY) !== 'false'
   )
+  const [closeTabsConfirmRequest, setCloseTabsConfirmRequest] =
+    useState<CloseTabsConfirmRequest | null>(null)
   const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
     createTerminalTab({ id: 'default', title: 'Local' })
@@ -325,6 +348,7 @@ function App(): React.JSX.Element {
     y: number
   } | null>(null)
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? emptyLocalTab
+  const activeAgentPending = activeTab.agentBusy || activeTab.agentThinking
   const terminalTabs = useMemo(
     () =>
       tabs.filter(
@@ -412,6 +436,7 @@ function App(): React.JSX.Element {
       name: connectionForm.name.trim() || 'preview',
       host,
       user: connectionForm.user?.trim() || undefined,
+      password: connectionForm.password?.trim() || undefined,
       port: connectionForm.port || undefined,
       identityFile: connectionForm.identityFile?.trim() || undefined,
       sshOptions: parseSshOptions(connectionSshOptionsText)
@@ -421,6 +446,7 @@ function App(): React.JSX.Element {
     connectionForm.id,
     connectionForm.identityFile,
     connectionForm.name,
+    connectionForm.password,
     connectionForm.port,
     connectionForm.user,
     connectionSshOptionsText
@@ -661,7 +687,7 @@ function App(): React.JSX.Element {
             ...run.actions,
             {
               title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
-              detail: formatCommandAuditDetail(event.command, event.audit, t)
+              detail: formatCommandAuditActionDetail(event.command, event.audit, t)
             }
           ]
         }))
@@ -669,6 +695,8 @@ function App(): React.JSX.Element {
       }
 
       if (event.type === 'tool') {
+        if (event.message.startsWith('Submitting command for review:')) return
+
         updateAgentRun(tabId, (run) => ({
           ...run,
           actions: [
@@ -711,7 +739,11 @@ function App(): React.JSX.Element {
             appendLog(
               {
                 kind: 'error',
-                text: t.terminal.postLoginNotReady
+                text: appendElapsedFooter(
+                  t.terminal.postLoginNotReady,
+                  Date.now() - task.startedAt,
+                  t
+                )
               },
               targetTabId
             )
@@ -729,7 +761,9 @@ function App(): React.JSX.Element {
             task.input,
             targetTabId,
             task.connection.id,
-            task.displayInput
+            task.displayInput,
+            task.appendUserLog,
+            task.startedAt
           )
         })
       )
@@ -737,13 +771,16 @@ function App(): React.JSX.Element {
     [appendLog, t]
   )
 
-  const executeConnectionCommands = useCallback(
-    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
-      const commands = buildConnectionCommands(connection)
-      if (commands.length === 0) {
-        drainPostConnectionTasks(targetTabId)
-        return
-      }
+  const executeConnectionAutomation = useCallback(
+    async (
+      connection: ConnectionConfig,
+      targetTabId: string,
+      includeSshCommand: boolean
+    ): Promise<void> => {
+      const commands = includeSshCommand
+        ? buildConnectionCommands(connection)
+        : buildConnectionLoginActions(connection)
+      if (commands.length === 0) return
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
       if (targetTab?.terminalMode !== 'pty') {
@@ -776,10 +813,31 @@ function App(): React.JSX.Element {
         },
         targetTabId
       )
-      await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
+
+      if (includeSshCommand) {
+        await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
+        return
+      }
+
+      await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t)
+    },
+    [appendLog, locale, t, updateTab]
+  )
+
+  const executeConnectionCommands = useCallback(
+    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
+      await executeConnectionAutomation(connection, targetTabId, true)
       drainPostConnectionTasks(targetTabId)
     },
-    [appendLog, drainPostConnectionTasks, locale, t, updateTab]
+    [drainPostConnectionTasks, executeConnectionAutomation]
+  )
+
+  const executeConnectionLoginActions = useCallback(
+    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
+      await executeConnectionAutomation(connection, targetTabId, false)
+      drainPostConnectionTasks(targetTabId)
+    },
+    [drainPostConnectionTasks, executeConnectionAutomation]
   )
 
   useEffect(() => {
@@ -915,7 +973,9 @@ function App(): React.JSX.Element {
     const buffer = pipeInputBufferRef.current
     const cursor = pipeCursorRef.current
 
-    terminal.write(`\r\x1b[2K${formatPipePrompt(terminalCwdRef.current)}${buffer}`)
+    terminal.write(
+      `\r\x1b[2K${getPipePrompt(pipePromptRef.current, terminalCwdRef.current)}${buffer}`
+    )
     const left = buffer.length - cursor
     if (left > 0) terminal.write(`\x1b[${left}D`)
   }, [])
@@ -1097,6 +1157,7 @@ function App(): React.JSX.Element {
   useEffect(() => {
     return window.api.agent.onCommandApprovalRequest((request) => {
       setCommandApproval(request)
+      setCommandRejectionReason('')
     })
   }, [])
 
@@ -1162,7 +1223,7 @@ function App(): React.JSX.Element {
       }))
       if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
     })
-    const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd }) => {
+    const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
       const subterminal = parseSubterminalTabId(tabId)
       if (subterminal) {
         updateSubterminalCwd(subterminal.parentTabId, subterminal.name, tabId, cwd)
@@ -1172,7 +1233,8 @@ function App(): React.JSX.Element {
       updateTab(tabId, (current) => ({ ...current, terminalCwd: cwd }))
       if (tabId === activeTabIdRef.current) {
         terminalCwdRef.current = cwd
-        terminal.write(`\r\n${formatPipePrompt(cwd)}`)
+        pipePromptRef.current = prompt || formatPipePrompt(cwd)
+        terminal.write(`\r\n${pipePromptRef.current}`)
       }
     })
     const stopTerminalExit = window.api.terminal.onExit((event) => {
@@ -1204,19 +1266,23 @@ function App(): React.JSX.Element {
         terminalSessionIdRef.current = tab.sessionId
         terminalModeRef.current = tab.terminalMode
         terminalCwdRef.current = tab.terminalCwd
+        pipePromptRef.current = formatPipePrompt(tab.terminalCwd)
         return
       }
 
       const dimensions = fitAddon.proposeDimensions()
+      const pendingConnection = pendingSshRef.current.get(tab.id)
       const session = await window.api.terminal.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
-        tabId: tab.id
+        tabId: tab.id,
+        initialCommand: pendingConnection ? buildSshCommand(pendingConnection) : undefined
       })
 
       terminalSessionIdRef.current = session.sessionId
       terminalModeRef.current = session.mode
       terminalCwdRef.current = session.cwd
+      pipePromptRef.current = formatPipePrompt(session.cwd)
       updateTab(tab.id, (current) => ({
         ...current,
         sessionId: session.sessionId,
@@ -1224,10 +1290,9 @@ function App(): React.JSX.Element {
         terminalCwd: session.cwd,
         terminalReady: true
       }))
-      const pendingConnection = pendingSshRef.current.get(tab.id)
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
-        void executeConnectionCommands(pendingConnection, tab.id)
+        void executeConnectionLoginActions(pendingConnection, tab.id)
       }
     }
 
@@ -1262,6 +1327,7 @@ function App(): React.JSX.Element {
     activeTabId,
     appendLog,
     executeConnectionCommands,
+    executeConnectionLoginActions,
     handlePipeTerminalInput,
     t,
     terminalVisible,
@@ -1454,6 +1520,13 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function deleteHistorySession(item: StoredSessionHistoryItem): Promise<void> {
+    if (!window.confirm(`${t.confirm.deleteHistory}\n\n${item.title}`)) return
+
+    await window.api.storage.deleteSessionHistory(item.tabId)
+    setHistoryItems((current) => current.filter((candidate) => candidate.tabId !== item.tabId))
+  }
+
   async function findConnectionById(id: string): Promise<ConnectionConfig | undefined> {
     let candidates = connections
 
@@ -1501,6 +1574,7 @@ function App(): React.JSX.Element {
     if (runId) void window.api.agent.cancel(runId)
     if (runId) {
       setCommandApproval((current) => (current?.runId === runId ? null : current))
+      setCommandRejectionReason('')
     }
     if (runId) {
       void window.api.storage.saveAgentRun({
@@ -1511,16 +1585,22 @@ function App(): React.JSX.Element {
         error: t.input.agentCanceled
       })
     }
-    updateAgentRun(tabId, (run) => ({ ...run, error: t.input.agentCanceled }))
-    updateTab(tabId, (tab) => ({ ...tab, agentBusy: false }))
+    updateAgentRun(tabId, (run) => ({
+      ...run,
+      error: t.input.agentCanceled,
+      elapsedMs: Date.now() - (run.startedAt ?? Date.now())
+    }))
+    updateTab(tabId, (tab) => ({ ...tab, agentBusy: false, agentThinking: false }))
   }
 
   function resolveCommandApproval(approved: boolean): void {
     if (!commandApproval) return
 
     const requestId = commandApproval.id
+    const rejectionReason = approved ? '' : commandRejectionReason.trim()
     setCommandApproval(null)
-    void window.api.agent.resolveCommandApproval({ requestId, approved })
+    setCommandRejectionReason('')
+    void window.api.agent.resolveCommandApproval({ requestId, approved, rejectionReason })
   }
 
   async function getTerminalContextForAgent(tabId = activeTabIdRef.current): Promise<string> {
@@ -1546,9 +1626,48 @@ function App(): React.JSX.Element {
     if (tab?.connectionId) {
       const restored = await restoreTerminalConnection(tabId)
       if (restored) return
+    } else if (tab) {
+      const restored = await restoreLocalTerminal(tabId)
+      if (restored) return
     }
 
     throw new Error(t.terminal.terminalReconnectUnavailable)
+  }
+
+  async function restoreLocalTerminal(tabId: string): Promise<boolean> {
+    if (reconnectingTabsRef.current.has(tabId)) return waitForTerminalRestore(tabId)
+
+    reconnectingTabsRef.current.add(tabId)
+    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, tabId)
+
+    try {
+      const dimensions =
+        tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
+      const session = await window.api.terminal.start({
+        cols: dimensions?.cols ?? 80,
+        rows: dimensions?.rows ?? 24,
+        tabId
+      })
+      updateTab(tabId, (current) => ({
+        ...current,
+        sessionId: session.sessionId,
+        terminalMode: session.mode,
+        terminalCwd: session.cwd,
+        terminalReady: true
+      }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      appendLog({ kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` }, tabId)
+      updateTab(tabId, (current) => ({
+        ...current,
+        sessionId: undefined,
+        terminalReady: false
+      }))
+      return false
+    } finally {
+      reconnectingTabsRef.current.delete(tabId)
+    }
   }
 
   async function restoreTerminalConnection(tabId: string): Promise<boolean> {
@@ -1612,7 +1731,9 @@ function App(): React.JSX.Element {
   function connectToConnection(
     connection: ConnectionConfig,
     postLoginInput?: string,
-    postLoginDisplayInput?: string
+    postLoginDisplayInput?: string,
+    postLoginAppendUserLog = true,
+    postLoginStartedAt = Date.now()
   ): string {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
     let targetTabId = currentTab?.id ?? ''
@@ -1649,7 +1770,13 @@ function App(): React.JSX.Element {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
       postConnectionTasksRef.current.set(targetTabId, [
         ...tasks,
-        { input: postLoginInput, displayInput: postLoginDisplayInput ?? postLoginInput, connection }
+        {
+          input: postLoginInput,
+          displayInput: postLoginDisplayInput ?? postLoginInput,
+          connection,
+          appendUserLog: postLoginAppendUserLog,
+          startedAt: postLoginStartedAt
+        }
       ])
     }
 
@@ -1799,7 +1926,10 @@ function App(): React.JSX.Element {
     if (!displayInput) return
 
     const skillRefs = tab?.skillRefs ?? []
-    const input = buildAgentInputWithSkillRefs(displayInput, skillRefs, t)
+    const resumeRequested = isContinueIntent(displayInput)
+    const baseInput = buildAgentInputWithSkillRefs(displayInput, skillRefs, t)
+    const input = resumeRequested && tab ? buildResumeAgentInput(tab, baseInput, t) : baseInput
+    const startedAt = Date.now()
 
     if (tab?.agentBusy) {
       updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
@@ -1823,19 +1953,25 @@ function App(): React.JSX.Element {
     }
 
     updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
-    const shouldResolveConnectionIntent = !tab?.isSsh && !tab?.connectionId
-    const connectionIntent = shouldResolveConnectionIntent
-      ? await resolveConnectionIntentForInput(displayInput)
-      : undefined
+    appendLog(
+      { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
+      tabId
+    )
+    updateTab(tabId, (current) => ({ ...current, agentThinking: true }))
+    const shouldResolveConnectionIntent = !resumeRequested && !tab?.isSsh && !tab?.connectionId
+    let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
+    try {
+      connectionIntent = shouldResolveConnectionIntent
+        ? await resolveConnectionIntentForInput(displayInput)
+        : undefined
+    } finally {
+      updateTab(tabId, (current) => ({ ...current, agentThinking: false }))
+    }
     if (connectionIntent?.analysis?.shouldConnect) {
       const matchedConnection = connectionIntent.connection
       const executeAfterLogin = connectionIntent.analysis.executeAfterLogin === true
 
       if (!matchedConnection) {
-        appendLog(
-          { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
-          tabId
-        )
         appendLog(
           {
             kind: 'assistant',
@@ -1848,7 +1984,8 @@ function App(): React.JSX.Element {
                     detail: connectionIntent.analysis.reason ?? displayInput
                   }
                 ],
-                error: t.terminal.connectionNoMatch
+                error: t.terminal.connectionNoMatch,
+                elapsedMs: Date.now() - startedAt
               },
               t
             )
@@ -1859,10 +1996,6 @@ function App(): React.JSX.Element {
         return
       }
 
-      appendLog(
-        { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
-        tabId
-      )
       appendLog(
         {
           kind: 'assistant',
@@ -1881,7 +2014,8 @@ function App(): React.JSX.Element {
                     .join('\n')
                 }
               ],
-              result: t.terminal.connectionIntentResult
+              result: t.terminal.connectionIntentResult,
+              elapsedMs: Date.now() - startedAt
             },
             t
           )
@@ -1891,22 +2025,38 @@ function App(): React.JSX.Element {
       connectToConnection(
         matchedConnection,
         executeAfterLogin ? buildPostLoginAgentInput(input, matchedConnection, t) : undefined,
-        executeAfterLogin ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) : undefined
+        executeAfterLogin ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) : undefined,
+        false,
+        startedAt
       )
       updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
       return
     }
 
-    await runAgentConversation(input, tabId, tab?.connectionId || undefined, displayInput)
+    await runAgentConversation(
+      input,
+      tabId,
+      tab?.connectionId || undefined,
+      displayInput,
+      false,
+      startedAt
+    )
   }
 
   async function runAgentConversation(
     input: string,
     tabId: string,
     connectionId?: string,
-    displayInput = input
+    displayInput = input,
+    appendUserLog = true,
+    startedAt = Date.now()
   ): Promise<void> {
-    updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: true }))
+    updateTab(tabId, (current) => ({
+      ...current,
+      agentInput: '',
+      agentBusy: true,
+      agentThinking: false
+    }))
     activeRunCanceledRef.current.delete(tabId)
     const runId = `run-${crypto.randomUUID()}`
     activeRunIdRef.current.set(tabId, runId)
@@ -1918,7 +2068,7 @@ function App(): React.JSX.Element {
       status: 'running',
       connectionId
     })
-    appendLog({ kind: 'user', text: displayInput }, tabId)
+    if (appendUserLog) appendLog({ kind: 'user', text: displayInput }, tabId)
     const runLogId = appendLog(
       {
         kind: 'assistant',
@@ -1934,7 +2084,8 @@ function App(): React.JSX.Element {
     )
     activeAgentRunRef.current.set(tabId, {
       logId: runLogId,
-      actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }]
+      actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }],
+      startedAt
     })
 
     try {
@@ -1953,7 +2104,11 @@ function App(): React.JSX.Element {
 
       if (result.ok) {
         const text = result.text || t.input.done
-        updateAgentRun(tabId, (run) => ({ ...run, result: text }))
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          result: text,
+          elapsedMs: Date.now() - startedAt
+        }))
         void window.api.storage.saveAgentRun({
           runId,
           tabId,
@@ -1965,7 +2120,8 @@ function App(): React.JSX.Element {
       } else {
         updateAgentRun(tabId, (run) => ({
           ...run,
-          error: result.error || t.input.failed
+          error: result.error || t.input.failed,
+          elapsedMs: Date.now() - startedAt
         }))
         void window.api.storage.saveAgentRun({
           runId,
@@ -1982,7 +2138,8 @@ function App(): React.JSX.Element {
       const message = error instanceof Error ? error.message : String(error)
       updateAgentRun(tabId, (run) => ({
         ...run,
-        error: message
+        error: message,
+        elapsedMs: Date.now() - startedAt
       }))
       void window.api.storage.saveAgentRun({
         runId,
@@ -1997,7 +2154,12 @@ function App(): React.JSX.Element {
       activeRunCanceledRef.current.delete(tabId)
       activeRunIdRef.current.delete(tabId)
       activeRunInputRef.current.delete(tabId)
-      updateTab(tabId, (current) => ({ ...current, agentInput: '', agentBusy: false }))
+      updateTab(tabId, (current) => ({
+        ...current,
+        agentInput: '',
+        agentBusy: false,
+        agentThinking: false
+      }))
     }
   }
 
@@ -2113,6 +2275,7 @@ function App(): React.JSX.Element {
       name,
       host,
       user: connectionForm.user?.trim() || undefined,
+      password: connectionForm.password?.trim() || undefined,
       port: connectionForm.port || undefined,
       identityFile: connectionForm.identityFile?.trim() || undefined,
       sshOptions,
@@ -2126,6 +2289,7 @@ function App(): React.JSX.Element {
       name: '',
       host: '',
       user: '',
+      password: '',
       port: 22,
       identityFile: '',
       sshOptions: [],
@@ -2145,6 +2309,7 @@ function App(): React.JSX.Element {
       name: connection.name,
       host: connection.host,
       user: connection.user,
+      password: connection.password,
       port: connection.port ?? 22,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2171,6 +2336,7 @@ function App(): React.JSX.Element {
       name,
       host: connection.host,
       user: connection.user,
+      password: connection.password,
       port: connection.port ?? 22,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2188,6 +2354,7 @@ function App(): React.JSX.Element {
       name: connection.name,
       host: connection.host,
       user: connection.user,
+      password: connection.password,
       port: connection.port,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2205,6 +2372,7 @@ function App(): React.JSX.Element {
         name: parsed.name ? `${parsed.name} copy` : '',
         host: String(parsed.host ?? ''),
         user: parsed.user,
+        password: parsed.password,
         port: parsed.port ?? 22,
         identityFile: parsed.identityFile,
         sshOptions: parsed.sshOptions,
@@ -2221,9 +2389,7 @@ function App(): React.JSX.Element {
     }
   }
 
-  function closeTab(tabId: string): void {
-    if (closeTerminalConfirmEnabled && !window.confirm(t.confirm.closeTab)) return
-
+  function performCloseTab(tabId: string): void {
     const closingTab = tabsRef.current.find((tab) => tab.id === tabId)
     window.api.terminal.stop(tabId)
     closingTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
@@ -2245,9 +2411,7 @@ function App(): React.JSX.Element {
     setTabMenu(null)
   }
 
-  function closeOtherTabs(tabId: string): void {
-    if (closeTerminalConfirmEnabled && !window.confirm(t.confirm.closeOtherTabs)) return
-
+  function performCloseOtherTabs(tabId: string): void {
     for (const tab of tabsRef.current) {
       if (tab.id !== tabId) {
         window.api.terminal.stop(tab.id)
@@ -2262,6 +2426,36 @@ function App(): React.JSX.Element {
     })
     setActiveTabId(tabId)
     setTabMenu(null)
+  }
+
+  function requestCloseTabs(mode: CloseTabsConfirmRequest['mode'], tabId: string): void {
+    setTabMenu(null)
+    if (!closeTerminalConfirmEnabled) {
+      if (mode === 'tab') performCloseTab(tabId)
+      else performCloseOtherTabs(tabId)
+      return
+    }
+
+    setCloseTabsConfirmRequest({ mode, tabId, dontAskAgain: false })
+  }
+
+  function closeTab(tabId: string): void {
+    requestCloseTabs('tab', tabId)
+  }
+
+  function closeOtherTabs(tabId: string): void {
+    requestCloseTabs('other-tabs', tabId)
+  }
+
+  function confirmCloseTabs(): void {
+    if (!closeTabsConfirmRequest) return
+
+    const request = closeTabsConfirmRequest
+    setCloseTabsConfirmRequest(null)
+    if (request.dontAskAgain) setCloseTerminalConfirmEnabled(false)
+
+    if (request.mode === 'tab') performCloseTab(request.tabId)
+    else performCloseOtherTabs(request.tabId)
   }
 
   async function copyLogEntry(entry: AgentLogEntry): Promise<void> {
@@ -2487,7 +2681,7 @@ function App(): React.JSX.Element {
                         setCommandWhitelistText(text)
                         updateConfig('commandWhitelist', parseCommandWhitelist(text))
                       }}
-                      placeholder={'pwd\ndf -h\nfree -h\nkubectl get *\n/^op do web .*$/'}
+                      placeholder={'exact command\ncommand prefix *\n/^custom regex rule$/'}
                     />
                     <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
                   </Field>
@@ -2857,37 +3051,52 @@ function App(): React.JSX.Element {
                     )}
                     {!historyLoading &&
                       historyItems.map((item) => (
-                        <button
+                        <div
                           key={item.tabId}
-                          type="button"
-                          className="block w-full rounded-md border bg-card p-3 text-left text-sm transition hover:border-primary/60 hover:bg-muted/30"
-                          onClick={() => void openHistorySession(item)}
+                          className="flex items-start gap-2 rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate font-medium">{item.title}</span>
-                            {item.isSsh && (
-                              <Badge variant="secondary" className="shrink-0">
-                                SSH
-                              </Badge>
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => void openHistorySession(item)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="min-w-0 truncate font-medium">{item.title}</span>
+                              {item.isSsh && (
+                                <Badge variant="secondary" className="shrink-0">
+                                  SSH
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                              <time dateTime={item.lastMessageAt ?? item.updatedAt}>
+                                {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
+                              </time>
+                              {item.connectionName && (
+                                <span className="truncate">· {item.connectionName}</span>
+                              )}
+                              <span className="shrink-0">
+                                · {item.runCount} {t.history.runs}
+                              </span>
+                            </div>
+                            {item.lastMessage && (
+                              <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                                {summarizeHistoryMessage(item.lastMessage)}
+                              </p>
                             )}
-                          </div>
-                          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                            <time dateTime={item.lastMessageAt ?? item.updatedAt}>
-                              {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
-                            </time>
-                            {item.connectionName && (
-                              <span className="truncate">· {item.connectionName}</span>
-                            )}
-                            <span className="shrink-0">
-                              · {item.runCount} {t.history.runs}
-                            </span>
-                          </div>
-                          {item.lastMessage && (
-                            <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                              {summarizeHistoryMessage(item.lastMessage)}
-                            </p>
-                          )}
-                        </button>
+                          </button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="shrink-0"
+                            aria-label={`${t.common.delete}: ${item.title}`}
+                            title={`${t.common.delete}: ${item.title}`}
+                            onClick={() => void deleteHistorySession(item)}
+                          >
+                            <Trash2Icon aria-hidden="true" />
+                          </Button>
+                        </div>
                       ))}
                   </div>
                   <SheetFooter>
@@ -3270,8 +3479,12 @@ function App(): React.JSX.Element {
                   <Badge variant={activeTab.terminalMode === 'pty' ? 'secondary' : 'destructive'}>
                     {activeTab.terminalMode.toUpperCase()}
                   </Badge>
-                  <Badge variant={activeTab.agentBusy ? 'secondary' : 'outline'}>
-                    {activeTab.agentBusy ? t.app.running : formatAgentMode(config.agentMode)}
+                  <Badge variant={activeAgentPending ? 'secondary' : 'outline'}>
+                    {activeTab.agentThinking
+                      ? t.input.thinking
+                      : activeTab.agentBusy
+                        ? t.app.running
+                        : formatAgentMode(config.agentMode)}
                   </Badge>
                 </div>
               </div>
@@ -3426,7 +3639,11 @@ function App(): React.JSX.Element {
                   />
                   <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
                     <span>
-                      {activeTab.agentBusy ? t.input.contextHint : t.input.currentTerminal}
+                      {activeTab.agentThinking
+                        ? t.input.thinking
+                        : activeTab.agentBusy
+                          ? t.input.contextHint
+                          : t.input.currentTerminal}
                     </span>
                     <div className="flex items-center gap-2">
                       <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
@@ -3441,20 +3658,29 @@ function App(): React.JSX.Element {
                           {t.common.stop}
                         </Button>
                       )}
-                      <Button
-                        type="submit"
-                        size={activeTab.agentBusy ? 'icon-xs' : 'icon'}
-                        aria-label={activeTab.agentBusy ? t.input.contextAdd : t.common.send}
-                        disabled={!activeTab.agentBusy && !activeTab.agentInput.trim()}
-                      >
-                        {activeTab.agentBusy && !activeTab.agentInput.trim() ? (
-                          <Loader2Icon className="animate-spin" aria-hidden="true" />
-                        ) : activeTab.agentBusy ? (
-                          <PlusIcon aria-hidden="true" />
-                        ) : (
-                          <ArrowUpIcon aria-hidden="true" />
-                        )}
-                      </Button>
+                      {(activeAgentPending || activeTab.agentInput.trim()) && (
+                        <Button
+                          type="submit"
+                          size={activeAgentPending ? 'icon-xs' : 'icon'}
+                          aria-label={
+                            activeTab.agentThinking
+                              ? t.input.thinking
+                              : activeTab.agentBusy
+                                ? t.input.contextAdd
+                                : t.common.send
+                          }
+                          disabled={activeTab.agentThinking}
+                        >
+                          {activeTab.agentThinking ||
+                          (activeTab.agentBusy && !activeTab.agentInput.trim()) ? (
+                            <Loader2Icon className="animate-spin" aria-hidden="true" />
+                          ) : activeTab.agentBusy ? (
+                            <PlusIcon aria-hidden="true" />
+                          ) : (
+                            <ArrowUpIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3664,6 +3890,16 @@ function App(): React.JSX.Element {
                     />
                   </Field>
                   <Field>
+                    <FieldLabel>{t.connections.password}</FieldLabel>
+                    <Input
+                      type="password"
+                      value={connectionForm.password ?? ''}
+                      onChange={(event) => updateConnectionForm('password', event.target.value)}
+                      placeholder={t.connections.passwordPlaceholder}
+                      disabled={!connectionEditing}
+                    />
+                  </Field>
+                  <Field>
                     <FieldLabel>{t.connections.identityFile}</FieldLabel>
                     <Input
                       value={connectionForm.identityFile ?? ''}
@@ -3751,6 +3987,64 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
+      {closeTabsConfirmRequest && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="close-tabs-confirm-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCloseTabsConfirmRequest(null)
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl">
+            <div className="flex items-start gap-3 border-b px-4 py-3">
+              <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+              <div className="min-w-0">
+                <h2 id="close-tabs-confirm-title" className="text-sm font-semibold">
+                  {t.confirm.closeTabsTitle}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {closeTabsConfirmRequest.mode === 'tab'
+                    ? t.confirm.closeTab
+                    : t.confirm.closeOtherTabs}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-4 px-4 py-4">
+              <label
+                htmlFor="close-tabs-dont-ask"
+                className="flex items-center gap-3 rounded-md border bg-muted/10 p-3 text-sm"
+              >
+                <Input
+                  id="close-tabs-dont-ask"
+                  type="checkbox"
+                  checked={closeTabsConfirmRequest.dontAskAgain}
+                  onChange={(event) =>
+                    setCloseTabsConfirmRequest((current) =>
+                      current ? { ...current, dontAskAgain: event.target.checked } : current
+                    )
+                  }
+                  className="size-4 shrink-0 accent-primary"
+                />
+                <span>{t.confirm.dontAskAgain}</span>
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCloseTabsConfirmRequest(null)}
+              >
+                {t.common.cancel}
+              </Button>
+              <Button type="button" variant="destructive" onClick={confirmCloseTabs}>
+                {t.common.close}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {commandApproval && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
@@ -3795,6 +4089,12 @@ function App(): React.JSX.Element {
               </section>
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.operationReason}
+                </h3>
+                <p className="text-sm">{commandApproval.audit.operationReason}</p>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
                   {t.commandReview.riskPoints}
                 </h3>
                 <ul className="space-y-1 text-sm">
@@ -3816,6 +4116,17 @@ function App(): React.JSX.Element {
                   {t.commandReview.recommendation}
                 </h3>
                 <p className="text-sm">{commandApproval.audit.recommendation}</p>
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t.commandReview.rejectionReason}
+                </h3>
+                <Textarea
+                  value={commandRejectionReason}
+                  onChange={(event) => setCommandRejectionReason(event.target.value)}
+                  placeholder={t.commandReview.rejectionReasonPlaceholder}
+                  className="min-h-20 resize-y text-sm"
+                />
               </section>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
@@ -3979,6 +4290,46 @@ function summarizeBehaviorLog(value: string, kind: AgentLogEntry['kind'], t: Dic
   return firstLine || t.input.actionDetails
 }
 
+function isContinueIntent(value: string): boolean {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[。.!！?？\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+
+  return (
+    /^(继续|继续处理|继续执行|继续未完成的工作|接着来|接着处理|接着执行|恢复|恢复继续|继续刚才的任务)$/.test(
+      normalized
+    ) || /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
+  )
+}
+
+function buildResumeAgentInput(tab: AgentTerminalTab, latestInput: string, t: Dictionary): string {
+  const previousUserEntry = [...tab.agentLog].reverse().find((entry) => entry.kind === 'user')
+  const recentContext = tab.agentLog
+    .slice(-10)
+    .map((entry) => formatResumeContextEntry(entry, t))
+    .filter(Boolean)
+    .join('\n\n')
+
+  return [
+    t.input.resumeInstruction,
+    previousUserEntry ? `${t.input.resumePreviousGoal}\n${previousUserEntry.text}` : '',
+    `${t.input.resumeLatestInput}\n${latestInput}`,
+    recentContext ? `${t.input.resumeRecentContext}\n${recentContext}` : t.input.resumeNoContext
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function formatResumeContextEntry(entry: AgentLogEntry, t: Dictionary): string {
+  const role = logRoleLabel(entry.kind, t)
+  const text = entry.text.trim()
+  if (!text) return ''
+
+  return `[${role}] ${text.slice(-1800)}`
+}
+
 function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): React.JSX.Element {
   const className =
     state === 'ready'
@@ -4115,6 +4466,9 @@ function formatCommandAuditDetail(
     `${t.commandReview.auditSummary}:`,
     audit.summary,
     '',
+    `${t.commandReview.operationReason}:`,
+    audit.operationReason,
+    '',
     `${t.commandReview.riskLevel}: ${riskLabel(audit.risk, t)}`,
     '',
     `${t.commandReview.riskPoints}:`,
@@ -4126,6 +4480,27 @@ function formatCommandAuditDetail(
     `${t.commandReview.recommendation}:`,
     audit.recommendation
   ].join('\n')
+}
+
+function formatCommandAuditActionDetail(
+  command: string,
+  audit: CommandApprovalRequest['audit'],
+  t: Dictionary
+): string {
+  if (audit.risk === 'low' && !audit.requiresApproval) {
+    return [
+      `${t.commandReview.command}:`,
+      command,
+      '',
+      `${t.commandReview.auditSummary}:`,
+      audit.summary,
+      '',
+      `${t.commandReview.operationReason}:`,
+      audit.operationReason
+    ].join('\n')
+  }
+
+  return formatCommandAuditDetail(command, audit, t)
 }
 
 function formatAgentEventActionTitle(
@@ -4147,11 +4522,11 @@ function formatAgentEventActionTitle(
 function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Dispatching tool call.') return t.input.toolDispatching
   if (message.startsWith('Submitting command for review:')) return t.commandReview.submitted
+  if (message === 'Command audit classified this as read-only inspection.') {
+    return t.commandReview.readOnlyAllowed
+  }
   if (message === 'Command review subprocess is analyzing risk.') return t.commandReview.analyzing
   if (message.startsWith('Command matched whitelist:')) return t.commandReview.whitelisted
-  if (message === 'Command audit passed without user approval.') {
-    return t.commandReview.autoApproved
-  }
   if (message === 'Command approved by user.') return t.commandReview.approved
   if (message === 'Command rejected by user.') return t.commandReview.rejected
   if (message === 'Running in chat-only terminal assistant mode.') return t.input.currentTerminal
@@ -4191,7 +4566,30 @@ function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
     lines.push('', `**${t.input.error}**`, '', run.error)
   }
 
+  if (typeof run.elapsedMs === 'number') {
+    lines.push('', formatElapsedFooter(run.elapsedMs, t))
+  }
+
   return lines.join('\n').trim()
+}
+
+function appendElapsedFooter(text: string, elapsedMs: number, t: Dictionary): string {
+  return [text.trim(), formatElapsedFooter(elapsedMs, t)].filter(Boolean).join('\n\n')
+}
+
+function formatElapsedFooter(elapsedMs: number, t: Dictionary): string {
+  return ['---', '', `${t.input.elapsed}: ${formatElapsedDuration(elapsedMs)}`].join('\n')
+}
+
+function formatElapsedDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
 }
 
 function formatConnectionTarget(connection: ConnectionConfig): string {
@@ -4721,7 +5119,12 @@ function extractRequestedActions(input: string): string[] {
 function buildConnectionCommands(connection: ConnectionConfig): string[] {
   if (!connection.host) return []
 
-  return [buildSshCommand(connection), ...(connection.actions ?? [])]
+  return [buildSshCommand(connection), ...buildConnectionLoginActions(connection)]
+}
+
+function buildConnectionLoginActions(connection: ConnectionConfig): string[] {
+  const passwordActions = connection.password ? [connection.password] : []
+  return [...passwordActions, ...(connection.actions ?? [])]
 }
 
 async function runConnectionCommandSequence(
@@ -4735,12 +5138,8 @@ async function runConnectionCommandSequence(
 
   const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
-  appendLog({ kind: 'command', text: `${t.terminal.commandExecuted}\n${sshCommand}` }, tabId)
 
-  if (loginActions.length === 0) {
-    await waitForTerminalReadyAfterSsh(tabId, sshCommand)
-    return
-  }
+  if (loginActions.length === 0) return
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
@@ -4769,22 +5168,44 @@ async function runConnectionCommandSequence(
     )
   }
 
-  await waitForTerminalIdle(tabId, {
-    ignoredEcho: loginActions.length ? loginActions[loginActions.length - 1] : sshCommand,
-    idleMs: 1500,
-    timeoutMs: 60_000
-  })
+  return
 }
 
-async function waitForTerminalReadyAfterSsh(tabId: string, sshCommand: string): Promise<boolean> {
-  const idle = await waitForTerminalIdle(tabId, {
-    ignoredEcho: sshCommand,
-    idleMs: 1500,
-    timeoutMs: 60_000
-  })
-  if (!idle) return false
+async function runConnectionLoginActionSequence(
+  loginActions: string[],
+  tabId: string,
+  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
+  t: Dictionary
+): Promise<void> {
+  if (loginActions.length === 0) return
 
-  return waitForTerminalReadyForAgent(tabId)
+  const firstActionReady = waitForTerminalActionPrompt(tabId)
+  for (let index = 0; index < loginActions.length; index += 1) {
+    const action = loginActions[index]
+    const ready =
+      index === 0
+        ? await firstActionReady
+        : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
+    if (!ready) {
+      appendLog(
+        {
+          kind: 'error',
+          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
+        },
+        tabId
+      )
+      return
+    }
+
+    sendTerminalInput(action, tabId)
+    appendLog(
+      {
+        kind: 'command',
+        text: formatConnectionActionLog(action, index + 1, t)
+      },
+      tabId
+    )
+  }
 }
 
 function waitForTerminalIdle(
