@@ -2,6 +2,7 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
 
 import type { AgentBrain } from './brain'
 import type { AgentMemory } from './memory'
+import { validateGeneratedShellCommand } from './shell-command-validator'
 
 export interface CommandGenerationInput {
   instruction: string
@@ -66,6 +67,7 @@ export function buildCommandSystemPrompt(memoryBlock: string, instructionContext
     'Generate exactly one command suitable to paste into an interactive terminal.',
     'Prefer safe, inspect-first commands. Avoid destructive actions unless the user explicitly requests them.',
     'For remote server work, prefer standard ssh syntax such as ssh -p 22 user@host.',
+    'Do not return incomplete wrapper, alias, or placeholder commands. If a wrapper tool is required, include the concrete target and subcommand so the operation is reviewable.',
     'If the task writes a report or file, preserve the user-requested destination, filename, and context exactly. Do not replace them with temporary paths, current working directories, inferred defaults, or a different host context.',
     'Do not invent credentials or target identifiers. Use values explicitly present in the request/context, read from an existing configured source, or generate a command that fails clearly when required inputs are missing.',
     'Do not wrap the command in markdown. Do not include multiple alternatives.',
@@ -77,11 +79,21 @@ export function buildCommandSystemPrompt(memoryBlock: string, instructionContext
 }
 
 export function parseCommandResponse(content: string): GeneratedCommand {
+  let parsed: unknown
+
   try {
-    const parsed = JSON.parse(content)
+    parsed = JSON.parse(content)
+  } catch {
+    parsed = undefined
+  }
+
+  if (isRecord(parsed)) {
     const command = normalizeCommand(parsed?.command)
 
     if (command) {
+      const validation = validateGeneratedShellCommand(command)
+      if (!validation.ok) throw new Error(validation.error)
+
       return {
         command,
         explanation:
@@ -91,8 +103,6 @@ export function parseCommandResponse(content: string): GeneratedCommand {
         risk: normalizeRisk(parsed.risk)
       }
     }
-  } catch {
-    // Fall through to plain text extraction.
   }
 
   const command = normalizeCommand(extractCommandFromText(content))
@@ -100,6 +110,9 @@ export function parseCommandResponse(content: string): GeneratedCommand {
   if (!command) {
     throw new Error('Model did not return a usable terminal command.')
   }
+
+  const validation = validateGeneratedShellCommand(command)
+  if (!validation.ok) throw new Error(validation.error)
 
   return {
     command,
@@ -134,4 +147,8 @@ function inferRisk(command: string): GeneratedCommand['risk'] {
   if (/\b(rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot|halt|poweroff)\b/.test(command)) return 'high'
   if (/\b(sudo|ssh|scp|rsync|kubectl|docker|systemctl)\b/.test(command)) return 'medium'
   return 'low'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }

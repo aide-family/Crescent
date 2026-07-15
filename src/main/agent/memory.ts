@@ -5,16 +5,24 @@ export interface AgentMemoryState {
   longTerm: AgentLongTermMemory
 }
 
+export interface AgentMemoryOptions {
+  includeShortTerm?: boolean
+  includeOperations?: boolean
+  persistShortTerm?: boolean
+}
+
 export class AgentMemory {
   constructor(
     private readonly state: AgentMemoryState,
-    private readonly persist: (state: AgentMemoryState) => void
+    private readonly persist: (state: AgentMemoryState) => void,
+    private readonly options: AgentMemoryOptions = {}
   ) {}
 
   getPromptBlock(): string {
     const preferences = this.state.longTerm.preferences
     const notes = this.state.longTerm.notes
-    const operations = this.state.longTerm.operations
+    const operations =
+      this.options.includeOperations === false ? [] : this.state.longTerm.operations
 
     if (preferences.length === 0 && notes.length === 0 && operations.length === 0) {
       return 'No long-term memory has been recorded yet.'
@@ -37,6 +45,8 @@ export class AgentMemory {
   }
 
   getShortTermMessages(limit = 12): ChatMessage[] {
+    if (this.options.includeShortTerm === false) return []
+
     return this.state.shortTerm.slice(-limit).map((record) => ({
       role: record.role,
       content: record.content
@@ -44,6 +54,8 @@ export class AgentMemory {
   }
 
   rememberTurn(userInput: string, assistantOutput: string): void {
+    if (this.options.persistShortTerm === false) return
+
     const createdAt = new Date().toISOString()
 
     const userRecord: AgentMemoryRecord = { role: 'user', content: userInput, createdAt }

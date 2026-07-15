@@ -62,10 +62,15 @@ const activeRuns = new Map<string, ActiveAgentRun>()
 const pendingCommandApprovals = new Map<
   string,
   {
-    resolve: (approved: boolean) => void
+    resolve: (decision: CommandApprovalDecisionResult) => void
     timeout: NodeJS.Timeout
   }
 >()
+
+interface CommandApprovalDecisionResult {
+  approved: boolean
+  rejectionReason?: string
+}
 
 export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-config', () => {
@@ -200,7 +205,10 @@ export function registerAgentIpc(): void {
 
     clearTimeout(pending.timeout)
     pendingCommandApprovals.delete(requestId)
-    pending.resolve(Boolean(payload.approved))
+    pending.resolve({
+      approved: Boolean(payload.approved),
+      rejectionReason: typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
+    })
     return { ok: true }
   })
 
@@ -211,13 +219,17 @@ export function registerAgentIpc(): void {
     if (!instruction) return { ok: false, error: 'Command instruction is empty.' }
 
     try {
-      const command = await generateTerminalCommand(new AgentBrain(config), createMemory(), {
-        instruction,
-        cwd: payload.cwd,
-        shell: payload.shell,
-        instructionContext: buildLocalInstructionContext(),
-        terminalContext: payload.terminalContext
-      })
+      const command = await generateTerminalCommand(
+        new AgentBrain(config),
+        createIsolatedMemory(),
+        {
+          instruction,
+          cwd: payload.cwd,
+          shell: payload.shell,
+          instructionContext: buildLocalInstructionContext(),
+          terminalContext: payload.terminalContext
+        }
+      )
 
       return { ok: true, ...command }
     } catch (error) {
@@ -342,14 +354,14 @@ export function registerAgentIpc(): void {
         if (!audit.requiresApproval) {
           event.sender.send('agent:event', {
             type: 'status',
-            message: 'Command audit passed without user approval.',
+            message: 'Command audit classified this as read-only inspection.',
             runId,
             tabId: payload?.tabId
           })
           return execute()
         }
 
-        const approved = await requestCommandApproval({
+        const approval = await requestCommandApproval({
           webContents: event.sender,
           runId,
           tabId: payload?.tabId,
@@ -359,7 +371,8 @@ export function registerAgentIpc(): void {
           signal: controller.signal
         })
 
-        if (!approved) {
+        if (!approval.approved) {
+          const rejectionReason = approval.rejectionReason?.trim()
           event.sender.send('agent:event', {
             type: 'status',
             message: 'Command rejected by user.',
@@ -372,8 +385,18 @@ export function registerAgentIpc(): void {
             output: '',
             error:
               runLanguage === 'zh-CN'
-                ? '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。'
-                : 'Command execution was rejected by the user. Continue from this result and do not assume the command ran.'
+                ? [
+                    '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。',
+                    rejectionReason ? `用户拒绝原因：${rejectionReason}` : ''
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
+                : [
+                    'Command execution was rejected by the user. Continue from this result and do not assume the command ran.',
+                    rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
           }
         }
 
@@ -388,7 +411,7 @@ export function registerAgentIpc(): void {
       const text = await runTerminalAgent(
         agentConfig,
         input,
-        createMemory(),
+        createIsolatedMemory(),
         payload?.terminalContext ?? '',
         (agentEvent) => {
           event.sender.send('agent:event', { ...agentEvent, runId, tabId: payload?.tabId })
@@ -607,8 +630,8 @@ function requestCommandApproval(input: {
   timeoutMs?: number
   audit: CommandAuditResult
   signal?: AbortSignal
-}): Promise<boolean> {
-  if (input.webContents.isDestroyed()) return Promise.resolve(false)
+}): Promise<CommandApprovalDecisionResult> {
+  if (input.webContents.isDestroyed()) return Promise.resolve({ approved: false })
 
   const requestId = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
   const request: CommandApprovalRequest = {
@@ -621,21 +644,21 @@ function requestCommandApproval(input: {
   }
 
   return new Promise((resolve) => {
-    const finish = (approved: boolean): void => {
+    const finish = (decision: CommandApprovalDecisionResult): void => {
       input.signal?.removeEventListener('abort', onAbort)
-      resolve(approved)
+      resolve(decision)
     }
     const timeout = setTimeout(
       () => {
         pendingCommandApprovals.delete(requestId)
-        finish(false)
+        finish({ approved: false })
       },
       10 * 60 * 1000
     )
     const onAbort = (): void => {
       clearTimeout(timeout)
       pendingCommandApprovals.delete(requestId)
-      finish(false)
+      finish({ approved: false })
     }
 
     pendingCommandApprovals.set(requestId, { resolve: finish, timeout })
@@ -718,6 +741,20 @@ function createMemory(): AgentMemory {
   return new AgentMemory(readCrescentMemory(), (nextMemory) => {
     writeCrescentMemory(nextMemory)
   })
+}
+
+function createIsolatedMemory(): AgentMemory {
+  return new AgentMemory(
+    readCrescentMemory(),
+    (nextMemory) => {
+      writeCrescentMemory(nextMemory)
+    },
+    {
+      includeShortTerm: false,
+      includeOperations: false,
+      persistShortTerm: false
+    }
+  )
 }
 
 async function validateModel(config: AgentConfig): Promise<void> {

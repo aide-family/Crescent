@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 
 import {
+  deleteSessionHistory,
   listSessionHistory,
   readSessionHistoryDetail,
   saveAgentLog,
@@ -40,5 +41,9 @@ export function registerStorageIpc(): void {
 
   ipcMain.handle('storage:get-session-history', (_, tabId: string) => {
     return readSessionHistoryDetail(tabId)
+  })
+
+  ipcMain.handle('storage:delete-session-history', (_, tabId: string) => {
+    return { ok: deleteSessionHistory(tabId ?? '') }
   })
 }
