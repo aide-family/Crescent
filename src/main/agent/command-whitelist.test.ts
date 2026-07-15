@@ -14,8 +14,8 @@ describe('matchCommandWhitelist', () => {
   })
 
   it('matches regex rules', () => {
-    expect(matchCommandWhitelist('op do web "df -h"', ['/^op do web .*df -h.*$/'])).toBe(
-      '/^op do web .*df -h.*$/'
+    expect(matchCommandWhitelist('custom-tool target "show status"', ['/^custom-tool .*$/'])).toBe(
+      '/^custom-tool .*$/'
     )
   })
 })

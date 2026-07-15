@@ -51,11 +51,45 @@ describe('AgentToolRuntime', () => {
 
     expect(runtime.hasTools()).toBe(true)
     expect(runtime.tools.map((tool) => tool.function.name)).toEqual(['execute_terminal_command'])
+    expect(runtime.tools[0]?.function.description).toContain('Execute one non-interactive')
+    expect(runtime.tools[0]?.function.parameters).toMatchObject({
+      properties: {
+        command: {
+          description: expect.stringContaining('single shell command')
+        }
+      }
+    })
     expect(terminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', undefined)
     expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool', name: 'execute_terminal_command' })
     )
+  })
+
+  it('rejects incomplete shell syntax before terminal execution', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const terminalExecutor: TerminalCommandExecutor = {
+      executeCommand: vi.fn()
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'collect inventory',
+      terminalExecutor,
+      emit
+    })
+    const result = await runtime.execute(
+      'execute_terminal_command',
+      JSON.stringify({ command: '&&' })
+    )
+
+    expect(terminalExecutor.executeCommand).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      ok: false,
+      command: '&&',
+      error: expect.stringContaining('incomplete shell syntax')
+    })
   })
 
   it('registers and dispatches the temporary sub-terminal tool', async () => {

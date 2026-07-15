@@ -21,7 +21,7 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('1. Inspect state')
   })
 
-  it('guides tool runs toward fast closed-loop completion', () => {
+  it('guides tool runs toward stepwise closed-loop completion', () => {
     const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
       mode: 'react',
       memoryBlock: '',
@@ -29,8 +29,14 @@ describe('AgentPromptBuilder', () => {
     })
 
     expect(prompt).toContain('closed-loop operator')
-    expect(prompt).toContain('Prefer one batched, read-only terminal command')
-    expect(prompt).toContain('After a terminal command returns enough evidence')
+    expect(prompt).toContain('Decompose user tasks into explicit steps')
+    expect(prompt).toContain('run one shell command per tool call')
+    expect(prompt).toContain('bounded script or loop')
+    expect(prompt).toContain('uniform collection across a known target set')
+    expect(prompt).toContain('Prefer several small, sequential commands')
+    expect(prompt).toContain(
+      'After a terminal command returns enough evidence for the current step'
+    )
     expect(prompt).toContain('Do not use terminal commands to read Crescent local skill files')
   })
 

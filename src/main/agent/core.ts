@@ -15,8 +15,8 @@ import type {
 } from './types'
 import type { AgentRunControls } from './runner'
 
-const MAX_TOOL_STEPS = 5
-const MAX_TOOL_ROUNDS_BEFORE_SYNTHESIS = 3
+const MAX_TOOL_STEPS = 12
+const MAX_REPEATED_TOOL_CALLS = 3
 
 export class TerminalAgentCore {
   private readonly promptBuilder = new AgentPromptBuilder()
@@ -155,38 +155,31 @@ export class TerminalAgentCore {
       }
     ]
 
-    let toolRounds = 0
+    const toolCallCounts = new Map<string, number>()
+    let hasToolObservations = false
 
     for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
       this.throwIfCanceled()
       appendSupplementalInputs(messages, this.controls?.consumeSupplementalInputs?.())
-      const hasToolObservations = toolRounds > 0
-      const shouldForceFinal = toolRounds >= MAX_TOOL_ROUNDS_BEFORE_SYNTHESIS
       this.emit({
         type: 'thought',
-        message: shouldForceFinal
-          ? 'Analyzing tool results and preparing the final answer...'
-          : hasToolObservations
-            ? 'Analyzing tool results and preparing the final answer...'
-            : this.config.agentMode === 'plan-execute'
-              ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
-              : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
+        message: hasToolObservations
+          ? 'Analyzing tool results and preparing the next action...'
+          : this.config.agentMode === 'plan-execute'
+            ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
+            : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
       })
 
       const stepMessages = buildStepMessages(messages, {
-        hasToolObservations,
-        shouldForceFinal
+        hasToolObservations
       })
       const completion = await input.brain.chat(
-        shouldForceFinal
-          ? {
-              messages: stepMessages
-            }
-          : {
-              messages: stepMessages,
-              tools: input.toolRuntime.tools,
-              tool_choice: 'auto'
-            },
+        {
+          messages: stepMessages,
+          tools: input.toolRuntime.tools,
+          tool_choice: 'auto',
+          parallel_tool_calls: false
+        },
         {
           signal: this.controls?.signal
         }
@@ -196,18 +189,52 @@ export class TerminalAgentCore {
 
       if (!message) throw new Error('Model returned an empty response.')
 
-      messages.push(message)
-
       if (!message.tool_calls || message.tool_calls.length === 0) {
+        messages.push(message)
         const text = message.content ?? ''
         this.emit({ type: 'token', text })
         this.emit({ type: 'done', message: 'Done.' })
         return text
       }
 
-      toolRounds += 1
+      const toolCalls = message.tool_calls.slice(0, 1)
+      const repeatedToolCall = toolCalls.find((toolCall) => {
+        if (toolCall.type !== 'function') return false
 
-      for (const toolCall of message.tool_calls) {
+        const signature = createToolCallSignature(
+          toolCall.function.name,
+          toolCall.function.arguments
+        )
+        const count = (toolCallCounts.get(signature) ?? 0) + 1
+        toolCallCounts.set(signature, count)
+
+        return count >= MAX_REPEATED_TOOL_CALLS
+      })
+
+      if (repeatedToolCall?.type === 'function') {
+        messages.push({
+          role: 'system',
+          content: [
+            'The agent is about to repeat the same tool call for the third time.',
+            `Repeated tool: ${repeatedToolCall.function.name}`,
+            'Treat this as a stalled loop. Do not call more tools. Summarize what has been tried, why it is stuck, and the next concrete action or missing input needed from the user.'
+          ].join('\n')
+        })
+        return this.synthesizeFinalAnswer(input.brain, messages, 'stalled')
+      }
+
+      hasToolObservations = true
+
+      messages.push({ ...message, tool_calls: toolCalls })
+      if (message.tool_calls.length > 1) {
+        messages.push({
+          role: 'system',
+          content:
+            'Only one tool call is allowed per step. Crescent will execute the first tool call now; after observing its result, decide the next step before calling another tool.'
+        })
+      }
+
+      for (const toolCall of toolCalls) {
         this.throwIfCanceled()
         if (toolCall.type !== 'function') continue
 
@@ -230,7 +257,7 @@ export class TerminalAgentCore {
       }
     }
 
-    return this.synthesizeFinalAnswer(input.brain, messages)
+    return this.synthesizeFinalAnswer(input.brain, messages, 'safety-limit')
   }
 
   private throwIfCanceled(): void {
@@ -239,11 +266,15 @@ export class TerminalAgentCore {
 
   private async synthesizeFinalAnswer(
     brain: AgentBrain,
-    messages: ChatCompletionMessageParam[]
+    messages: ChatCompletionMessageParam[],
+    reason: 'stalled' | 'safety-limit' = 'safety-limit'
   ): Promise<string> {
     this.emit({
       type: 'thought',
-      message: 'Analyzing tool results and preparing the final answer...'
+      message:
+        reason === 'stalled'
+          ? 'Loop appears stalled; preparing the final answer...'
+          : 'Tool loop safety limit reached; preparing the final answer...'
     })
     this.throwIfCanceled()
 
@@ -254,7 +285,9 @@ export class TerminalAgentCore {
           {
             role: 'system',
             content:
-              'The tool loop budget is exhausted. Do not call any more tools. Produce the best final answer from the available observations in the same natural language as the user’s latest request. If the task is incomplete, clearly state what was completed, what is still unknown, and the next concrete command or action.'
+              reason === 'stalled'
+                ? 'The loop is stalled because the same action is repeating without new progress. Do not call any more tools. Produce the best final answer in the same natural language as the user’s latest request. Clearly state what was completed, what repeated, why it is blocked, and the next concrete action or missing input.'
+                : 'The tool loop safety limit is reached. Do not call any more tools. Produce the best final answer from the available observations in the same natural language as the user’s latest request. If the task is incomplete, clearly state what was completed, what is still unknown, and the next concrete command or action.'
           }
         ]
       },
@@ -273,19 +306,8 @@ export class TerminalAgentCore {
 
 function buildStepMessages(
   messages: ChatCompletionMessageParam[],
-  input: { hasToolObservations: boolean; shouldForceFinal: boolean }
+  input: { hasToolObservations: boolean }
 ): ChatCompletionMessageParam[] {
-  if (input.shouldForceFinal) {
-    return [
-      ...messages,
-      {
-        role: 'system',
-        content:
-          'You already have enough tool interaction rounds for this request. Stop using tools now and write the final answer in the same natural language as the user’s latest request. Summarize the result, evidence, failures if any, and the next concrete action only if needed.'
-      }
-    ]
-  }
-
   if (!input.hasToolObservations) return messages
 
   return [
@@ -293,9 +315,32 @@ function buildStepMessages(
     {
       role: 'system',
       content:
-        'You have tool observations. Prefer producing the final answer now. Call one more tool only when a specific missing fact prevents a correct conclusion. If more terminal work is necessary, batch related read-only checks into one command and avoid repeated probing.'
+        'You have tool observations. Continue the loop when another concrete action can advance the user goal. Produce a final answer only when the task is solved, a required input/permission is missing, the environment blocks progress, or the next action would repeat the same failed approach. If more terminal work is necessary, choose exactly one narrow next command based on the latest observation and avoid repeated probing.'
     }
   ]
+}
+
+function createToolCallSignature(name: string, rawArguments: string): string {
+  return `${name}:${normalizeToolCallArguments(rawArguments)}`
+}
+
+function normalizeToolCallArguments(rawArguments: string): string {
+  try {
+    return JSON.stringify(sortJsonValue(JSON.parse(rawArguments)))
+  } catch {
+    return rawArguments.replace(/\s+/g, ' ').trim()
+  }
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue)
+  if (!value || typeof value !== 'object') return value
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortJsonValue(item)])
+  )
 }
 
 function appendSupplementalInputs(

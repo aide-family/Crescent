@@ -1,4 +1,5 @@
 import { AgentBrain } from './brain'
+import { validateGeneratedShellCommand } from './shell-command-validator'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { OpenApiToolExecutor } from './tool-executor'
 import type {
@@ -19,19 +20,19 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: TERMINAL_TOOL_NAME,
     description:
-      'Execute a non-interactive shell command in the current visible terminal session, wait for completion, and return exit code plus output. Prefer batched read-only checks so the agent can finish in fewer tool rounds.',
+      'Execute one non-interactive shell command in the current visible terminal session, wait for completion, and return exit code plus output. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The exact shell command to execute in the current terminal environment. Use safe, non-interactive commands. Batch related inspections into one command when practical.'
+            'The exact single shell command to execute in the current terminal environment. Use safe, non-interactive commands. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
         },
         timeoutMs: {
           type: 'number',
           description:
-            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000. Long-running commands are interrupted on timeout.'
+            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000. Long-running or stuck commands are interrupted with Ctrl+C on timeout.'
         }
       },
       required: ['command']
@@ -43,7 +44,7 @@ const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: SUBTERMINAL_TOOL_NAME,
     description:
-      'Execute a non-interactive shell command in a named temporary local-shell sub-terminal displayed under the current terminal. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
+      'Execute a non-interactive shell command in a named temporary local-shell sub-terminal displayed under the current terminal. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
     parameters: {
       type: 'object',
       properties: {
@@ -55,12 +56,12 @@ const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
         command: {
           type: 'string',
           description:
-            'The exact shell command to execute in the temporary sub-terminal. Use safe, non-interactive commands.'
+            'The exact single shell command to execute in the temporary sub-terminal. Use safe, non-interactive commands. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
         },
         timeoutMs: {
           type: 'number',
           description:
-            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000.'
+            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000. Long-running or stuck commands are interrupted with Ctrl+C on timeout.'
         }
       },
       required: ['terminalName', 'command']
@@ -170,6 +171,17 @@ export class AgentToolRuntime {
       },
       execute: async (rawArguments) => {
         const args = parseTerminalCommandArgs(rawArguments)
+        const validation = validateGeneratedShellCommand(args.command)
+
+        if (!validation.ok) {
+          return {
+            ok: false,
+            command: args.command,
+            output: '',
+            error: validation.error
+          }
+        }
+
         emit({
           type: 'tool',
           name: TERMINAL_TOOL_NAME,
@@ -200,6 +212,18 @@ export class AgentToolRuntime {
       },
       execute: async (rawArguments) => {
         const args = parseSubterminalCommandArgs(rawArguments)
+        const validation = validateGeneratedShellCommand(args.command)
+
+        if (!validation.ok) {
+          return {
+            ok: false,
+            command: args.command,
+            subterminalName: args.terminalName,
+            output: '',
+            error: validation.error
+          }
+        }
+
         emit({
           type: 'tool',
           name: SUBTERMINAL_TOOL_NAME,

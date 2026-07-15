@@ -38,11 +38,24 @@ describe('command generation helpers', () => {
     ).toBe('cd /var/log && ls -lah')
   })
 
+  it('rejects incomplete shell syntax', () => {
+    expect(() =>
+      parseCommandResponse(
+        JSON.stringify({
+          command: '&&',
+          explanation: 'Continue command.',
+          risk: 'low'
+        })
+      )
+    ).toThrow(/incomplete shell syntax/i)
+  })
+
   it('instructs command generation to preserve requested artifact intent', () => {
     const prompt = buildCommandSystemPrompt('')
 
     expect(prompt).toContain('preserve the user-requested destination, filename, and context')
     expect(prompt).toContain('Do not replace them with temporary paths')
     expect(prompt).toContain('Do not invent credentials or target identifiers')
+    expect(prompt).toContain('Do not return incomplete wrapper, alias, or placeholder commands')
   })
 })

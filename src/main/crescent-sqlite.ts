@@ -235,6 +235,11 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
           WHERE run.tab_id = tab.tab_id
         ) AS runCount
       FROM session_tabs tab
+      WHERE EXISTS (
+        SELECT 1 FROM agent_logs log WHERE log.tab_id = tab.tab_id
+      ) OR EXISTS (
+        SELECT 1 FROM agent_runs run WHERE run.tab_id = tab.tab_id
+      )
       ORDER BY COALESCE(lastMessageAt, tab.updated_at) DESC
       LIMIT ?
     `
@@ -309,6 +314,28 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     runCount: historyItem?.runCount ?? 0,
     logs
   }
+}
+
+export function deleteSessionHistory(tabId: string): boolean {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return false
+
+  const db = getDatabase()
+  let changed = 0
+
+  runInTransaction(db, () => {
+    changed += Number(
+      db.prepare('DELETE FROM agent_runs WHERE tab_id = ?').run(normalizedTabId).changes
+    )
+    changed += Number(
+      db.prepare('DELETE FROM agent_logs WHERE tab_id = ?').run(normalizedTabId).changes
+    )
+    changed += Number(
+      db.prepare('DELETE FROM session_tabs WHERE tab_id = ?').run(normalizedTabId).changes
+    )
+  })
+
+  return changed > 0
 }
 
 export function readCommandWhitelistFromDb(): string[] {
