@@ -37,6 +37,8 @@ export interface ConnectionConfig {
   host: string
   user?: string
   password?: string
+  passwordEnvVar?: string
+  resolvedPassword?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]
@@ -50,6 +52,7 @@ export interface ConnectionInput {
   host: string
   user?: string
   password?: string
+  passwordEnvVar?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]

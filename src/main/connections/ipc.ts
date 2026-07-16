@@ -30,14 +30,22 @@ function listConnections(): ConnectionConfig[] {
   const seen = new Set<string>()
   const merged: ConnectionConfig[] = []
 
-  for (const connection of [...sshConfigConnections, ...customConnections]) {
+  for (const connection of [...customConnections, ...sshConfigConnections]) {
     if (seen.has(connection.id)) continue
     seen.add(connection.id)
-    merged.push(connection)
+    merged.push(resolveConnectionRuntimeSecrets(connection))
   }
 
   return merged.sort((left, right) => {
     if (left.source !== right.source) return left.source === 'custom' ? -1 : 1
     return left.name.localeCompare(right.name)
   })
+}
+
+function resolveConnectionRuntimeSecrets(connection: ConnectionConfig): ConnectionConfig {
+  const envName = connection.passwordEnvVar?.trim()
+  if (!envName || connection.password) return connection
+
+  const resolvedPassword = process.env[envName]
+  return resolvedPassword ? { ...connection, resolvedPassword } : connection
 }
