@@ -101,9 +101,18 @@ const en = {
     noSearchResults: 'No matching connections.',
     openConnectionList: 'Open connection list',
     password: 'Password',
+    passwordEnvVar: 'Password environment variable',
+    passwordEnvVarDescription:
+      'When password is empty, login reads the password from this system environment variable; only the variable name is stored.',
+    passwordEnvVarMissing:
+      'Password environment variable was not found in the app startup environment',
+    passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD',
     passwordPlaceholder: 'Optional; leave empty to skip automatic password input',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
+    saveAndConnectSucceeded: 'Connection saved. Connecting now.',
+    saveFailed: 'Failed to save connection',
+    saveSucceeded: 'Connection saved.',
     searchPlaceholder: 'Search by name, host, user, or description',
     storedIn: 'Custom connections are stored in ~/.crescent/config.json.',
     sshConnections: 'SSH connections',

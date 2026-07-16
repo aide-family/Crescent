@@ -308,6 +308,7 @@ function normalizeConnection(value: unknown): ConnectionConfig {
     host: String(record.host || ''),
     user: record.user ? String(record.user) : undefined,
     password: record.password ? String(record.password) : undefined,
+    passwordEnvVar: record.passwordEnvVar ? String(record.passwordEnvVar).trim() : undefined,
     port: Number.isFinite(port) && port > 0 ? Math.round(port) : undefined,
     identityFile: record.identityFile ? String(record.identityFile) : undefined,
     sshOptions: Array.isArray(record.sshOptions)

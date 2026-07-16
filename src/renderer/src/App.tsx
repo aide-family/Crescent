@@ -313,6 +313,7 @@ function App(): React.JSX.Element {
     host: '',
     user: '',
     password: '',
+    passwordEnvVar: '',
     port: 22,
     identityFile: '',
     sshOptions: [],
@@ -322,6 +323,9 @@ function App(): React.JSX.Element {
   const [connectionSshOptionsText, setConnectionSshOptionsText] = useState('')
   const [connectionActionsText, setConnectionActionsText] = useState('')
   const [connectionImportText, setConnectionImportText] = useState('')
+  const [connectionSaveMessage, setConnectionSaveMessage] = useState<SkillManageMessage | null>(
+    null
+  )
   const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
   const [commandRejectionReason, setCommandRejectionReason] = useState('')
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
@@ -436,7 +440,6 @@ function App(): React.JSX.Element {
       name: connectionForm.name.trim() || 'preview',
       host,
       user: connectionForm.user?.trim() || undefined,
-      password: connectionForm.password?.trim() || undefined,
       port: connectionForm.port || undefined,
       identityFile: connectionForm.identityFile?.trim() || undefined,
       sshOptions: parseSshOptions(connectionSshOptionsText)
@@ -446,7 +449,6 @@ function App(): React.JSX.Element {
     connectionForm.id,
     connectionForm.identityFile,
     connectionForm.name,
-    connectionForm.password,
     connectionForm.port,
     connectionForm.user,
     connectionSshOptionsText
@@ -780,6 +782,18 @@ function App(): React.JSX.Element {
       const commands = includeSshCommand
         ? buildConnectionCommands(connection)
         : buildConnectionLoginActions(connection)
+
+      if (isPasswordEnvVarMissing(connection)) {
+        appendLog(
+          {
+            kind: 'error',
+            text: `${t.connections.passwordEnvVarMissing}: ${connection.passwordEnvVar}`
+          },
+          targetTabId
+        )
+        return
+      }
+
       if (commands.length === 0) return
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
@@ -884,18 +898,27 @@ function App(): React.JSX.Element {
   }, [terminalPage])
 
   useEffect(() => {
-    const handleConnectionSearchShortcut = (event: globalThis.KeyboardEvent): void => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    const handleConnectionShortcut = (event: globalThis.KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey)) return
+
+      const key = event.key.toLowerCase()
+      if (key === 'k') {
         event.preventDefault()
         showConnectionList()
         window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
+        return
+      }
+
+      if (key === 't') {
+        event.preventDefault()
+        openNewConnectionForm()
       }
     }
 
-    window.addEventListener('keydown', handleConnectionSearchShortcut)
+    window.addEventListener('keydown', handleConnectionShortcut)
 
     return () => {
-      window.removeEventListener('keydown', handleConnectionSearchShortcut)
+      window.removeEventListener('keydown', handleConnectionShortcut)
     }
   })
 
@@ -1846,6 +1869,11 @@ function App(): React.JSX.Element {
     setTerminalPage('terminal')
   }
 
+  function openNewConnectionForm(): void {
+    resetConnectionForm()
+    setConnectionModalOpen(true)
+  }
+
   async function resolveConnectionIntentForInput(input: string): Promise<{
     analysis?: AgentConnectionIntentResult
     connection?: ConnectionConfig
@@ -1889,23 +1917,41 @@ function App(): React.JSX.Element {
       ? normalizedInput
       : { ...normalizedInput, id: createCustomConnectionId() }
 
-    const nextConnections = await window.api.connections.save(input)
-    setConnections(nextConnections)
-    const fallbackConnection: ConnectionConfig = { ...input, id: input.id ?? '', source: 'custom' }
-    const savedConnection = mergeConnectionInput(
-      nextConnections.find((connection) => connection.id === input.id),
-      fallbackConnection
-    )
+    setConnectionSaveMessage(null)
 
-    if (connectAfterSave && savedConnection) {
-      connectFromConnectionManager(savedConnection)
-      setConnectionModalOpen(false)
-      resetConnectionForm()
-      return
-    }
+    try {
+      const nextConnections = await window.api.connections.save(input)
+      setConnections(nextConnections)
+      const fallbackConnection: ConnectionConfig = {
+        ...input,
+        id: input.id ?? '',
+        source: 'custom'
+      }
+      const savedConnection = mergeConnectionInput(
+        nextConnections.find((connection) => connection.id === input.id),
+        fallbackConnection
+      )
 
-    if (savedConnection) {
-      editConnection(savedConnection)
+      setConnectionSaveMessage({
+        type: 'success',
+        text: connectAfterSave ? t.connections.saveAndConnectSucceeded : t.connections.saveSucceeded
+      })
+
+      if (connectAfterSave && savedConnection) {
+        connectFromConnectionManager(savedConnection)
+        setConnectionModalOpen(false)
+        resetConnectionForm()
+        return
+      }
+
+      if (savedConnection) {
+        editConnection(savedConnection)
+      }
+    } catch (error) {
+      setConnectionSaveMessage({
+        type: 'error',
+        text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
     }
   }
 
@@ -2276,6 +2322,7 @@ function App(): React.JSX.Element {
       host,
       user: connectionForm.user?.trim() || undefined,
       password: connectionForm.password?.trim() || undefined,
+      passwordEnvVar: connectionForm.passwordEnvVar?.trim() || undefined,
       port: connectionForm.port || undefined,
       identityFile: connectionForm.identityFile?.trim() || undefined,
       sshOptions,
@@ -2290,6 +2337,7 @@ function App(): React.JSX.Element {
       host: '',
       user: '',
       password: '',
+      passwordEnvVar: '',
       port: 22,
       identityFile: '',
       sshOptions: [],
@@ -2299,6 +2347,7 @@ function App(): React.JSX.Element {
     setConnectionSshOptionsText('')
     setConnectionActionsText('')
     setConnectionImportText('')
+    setConnectionSaveMessage(null)
     setSelectedConnectionId('')
     setConnectionEditing(true)
   }
@@ -2310,6 +2359,7 @@ function App(): React.JSX.Element {
       host: connection.host,
       user: connection.user,
       password: connection.password,
+      passwordEnvVar: connection.passwordEnvVar,
       port: connection.port ?? 22,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2337,6 +2387,7 @@ function App(): React.JSX.Element {
       host: connection.host,
       user: connection.user,
       password: connection.password,
+      passwordEnvVar: connection.passwordEnvVar,
       port: connection.port ?? 22,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2355,6 +2406,7 @@ function App(): React.JSX.Element {
       host: connection.host,
       user: connection.user,
       password: connection.password,
+      passwordEnvVar: connection.passwordEnvVar,
       port: connection.port,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -2373,6 +2425,7 @@ function App(): React.JSX.Element {
         host: String(parsed.host ?? ''),
         user: parsed.user,
         password: parsed.password,
+        passwordEnvVar: parsed.passwordEnvVar,
         port: parsed.port ?? 22,
         identityFile: parsed.identityFile,
         sshOptions: parsed.sshOptions,
@@ -3900,6 +3953,18 @@ function App(): React.JSX.Element {
                     />
                   </Field>
                   <Field>
+                    <FieldLabel>{t.connections.passwordEnvVar}</FieldLabel>
+                    <Input
+                      value={connectionForm.passwordEnvVar ?? ''}
+                      onChange={(event) =>
+                        updateConnectionForm('passwordEnvVar', event.target.value)
+                      }
+                      placeholder={t.connections.passwordEnvVarPlaceholder}
+                      disabled={!connectionEditing}
+                    />
+                    <FieldDescription>{t.connections.passwordEnvVarDescription}</FieldDescription>
+                  </Field>
+                  <Field>
                     <FieldLabel>{t.connections.identityFile}</FieldLabel>
                     <Input
                       value={connectionForm.identityFile ?? ''}
@@ -3952,36 +4017,39 @@ function App(): React.JSX.Element {
                 </FieldGroup>
               </div>
             </div>
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-3">
-              <Button type="button" variant="outline" onClick={resetConnectionForm}>
-                {t.common.new}
-              </Button>
-              <div className="flex items-center gap-2">
-                {!connectionEditing && connectionForm.id && (
+            <div className="shrink-0 border-t px-4 py-3">
+              <SkillManageStatus message={connectionSaveMessage} />
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <Button type="button" variant="outline" onClick={resetConnectionForm}>
+                  {t.common.new}
+                </Button>
+                <div className="flex items-center gap-2">
+                  {!connectionEditing && connectionForm.id && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setConnectionEditing(true)}
+                    >
+                      {t.common.edit}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setConnectionEditing(true)}
+                    onClick={() => saveConnection(false)}
+                    disabled={!connectionEditing || !connectionFormReady}
                   >
-                    {t.common.edit}
+                    {t.common.save}
                   </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => saveConnection(false)}
-                  disabled={!connectionEditing || !connectionFormReady}
-                >
-                  {t.common.save}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => saveConnection(true)}
-                  disabled={!connectionEditing || !connectionFormReady}
-                >
-                  <ServerIcon data-icon="inline-start" />
-                  {t.common.saveAndConnect}
-                </Button>
+                  <Button
+                    type="button"
+                    onClick={() => saveConnection(true)}
+                    disabled={!connectionEditing || !connectionFormReady}
+                  >
+                    <ServerIcon data-icon="inline-start" />
+                    {t.common.saveAndConnect}
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -4790,6 +4858,9 @@ function mergeConnectionInput(
   return {
     ...fallback,
     ...saved,
+    password: saved?.password ?? fallback.password,
+    passwordEnvVar: saved?.passwordEnvVar ?? fallback.passwordEnvVar,
+    resolvedPassword: saved?.resolvedPassword ?? fallback.resolvedPassword,
     sshOptions: saved?.sshOptions?.length ? saved.sshOptions : fallback.sshOptions,
     actions: saved?.actions?.length ? saved.actions : fallback.actions
   }
@@ -5123,8 +5194,13 @@ function buildConnectionCommands(connection: ConnectionConfig): string[] {
 }
 
 function buildConnectionLoginActions(connection: ConnectionConfig): string[] {
-  const passwordActions = connection.password ? [connection.password] : []
+  const password = connection.password || connection.resolvedPassword
+  const passwordActions = password ? [password] : []
   return [...passwordActions, ...(connection.actions ?? [])]
+}
+
+function isPasswordEnvVarMissing(connection: ConnectionConfig): boolean {
+  return Boolean(connection.passwordEnvVar && !connection.password && !connection.resolvedPassword)
 }
 
 async function runConnectionCommandSequence(
