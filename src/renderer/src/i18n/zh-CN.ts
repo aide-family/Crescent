@@ -259,6 +259,10 @@ const zhCN = {
     slashWikiUseLabel: '使用知识库',
     pathReferenceRequirement:
       '要求：把这些本地路径作为用户选择的上下文；除非你用可用的本地工具主动检查，否则不要假设已经读取了其中内容。',
+    analyzingNextAction: '正在分析工具结果，并决定下一步操作',
+    executingPlanStep: '正在按计划执行当前步骤',
+    planUnavailable: '计划内容未返回，Agent 将根据当前需求继续执行并在后续步骤中说明处理过程。',
+    reasoningNextStep: '正在判断当前需求、状态和下一步操作',
     synthesizingResult: '正在分析命令输出并整理结论',
     terminalContext: '正在收集终端上下文。',
     thinking: 'AI 正在思考',
