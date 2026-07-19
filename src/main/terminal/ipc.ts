@@ -882,10 +882,12 @@ function normalizeCommandTimeout(timeoutMs: number): number {
   )
 }
 
-function isInteractiveCommand(data: string): boolean {
+export function isInteractiveCommand(data: string): boolean {
   const command = data.trim()
 
-  return /^(ssh|sftp|scp|sudo\b|su\b|passwd\b|mysql\b|psql\b)/.test(command)
+  if (/^sudo\s*(?:$|-i\b|-s\b|su\b)/.test(command)) return true
+
+  return /^(ssh|sftp|scp|su\b|passwd\b|mysql\b|psql\b)/.test(command)
 }
 
 function sanitizeCommand(value: unknown): string {
@@ -1096,6 +1098,12 @@ export function filterAutomationControlOutputWithState(
   }
 
   const holdLength = Math.max(state.endMarker.length - 1, 0)
+  if (hasUnterminatedSecretPrompt(state.pending)) {
+    const output = state.pending
+    state.pending = ''
+    return stripAutomationDisplayNoise(output)
+  }
+
   if (state.pending.length <= holdLength) return ''
 
   const safeLength = state.pending.length - holdLength
@@ -1108,6 +1116,23 @@ export function filterAutomationControlOutputWithState(
   state.pending = state.pending.slice(emitLength)
 
   return stripAutomationDisplayNoise(output)
+}
+
+function hasUnterminatedSecretPrompt(value: string): boolean {
+  const lastLine = removeAutomationNoise(value)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop()
+
+  if (!lastLine) return false
+
+  return (
+    /(?:\[sudo\]\s*)?(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(
+      lastLine
+    ) || /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(lastLine)
+  )
 }
 
 function keepMarkerTail(value: string, marker: string): string {

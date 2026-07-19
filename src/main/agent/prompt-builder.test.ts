@@ -34,9 +34,15 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('bounded script or loop')
     expect(prompt).toContain('uniform collection across a known target set')
     expect(prompt).toContain('Prefer several small, sequential commands')
+    expect(prompt).toContain('For install, deploy, configure, repair, or migration requests')
+    expect(prompt).toContain('Do not present prerequisites, discovery, or a proposed next command')
+    expect(prompt).toContain('keep prerequisite discovery bounded')
+    expect(prompt).toContain('interactive prompt as the current blocker')
+    expect(prompt).toContain('Do not use sudo -n')
     expect(prompt).toContain(
       'After a terminal command returns enough evidence for the current step'
     )
+    expect(prompt).toContain('Never include raw tool-call syntax')
     expect(prompt).toContain('Do not use terminal commands to read Crescent local skill files')
   })
 

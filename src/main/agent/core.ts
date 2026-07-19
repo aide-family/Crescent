@@ -16,7 +16,7 @@ import type {
 } from './types'
 import type { AgentRunControls } from './runner'
 
-const MAX_TOOL_STEPS = 12
+const MAX_TOOL_STEPS = 30
 const MAX_REPEATED_TOOL_CALLS = 3
 const SAVE_WIKI_DOCUMENT_TOOL_NAME = 'save_wiki_document'
 
@@ -197,7 +197,7 @@ export class TerminalAgentCore {
 
       if (!message.tool_calls || message.tool_calls.length === 0) {
         messages.push(message)
-        const text = message.content ?? ''
+        const text = sanitizeFinalAnswer(message.content ?? '', 'normal')
         this.emit({ type: 'token', text })
         this.emit({ type: 'done', message: 'Done.' })
         return text
@@ -223,7 +223,8 @@ export class TerminalAgentCore {
           content: [
             'The agent is about to repeat the same tool call for the third time.',
             `Repeated tool: ${repeatedToolCall.function.name}`,
-            'Treat this as a stalled loop. Do not call more tools. Summarize what has been tried, why it is stuck, and the next concrete action or missing input needed from the user.'
+            'Treat this as a stalled loop. Do not call more tools. Summarize what has been tried, why it is stuck, and the next concrete action or missing input needed from the user.',
+            'Do not claim the user request is complete unless the requested end state has been verified from tool observations.'
           ].join('\n')
         })
         return this.synthesizeFinalAnswer(input.brain, messages, 'stalled')
@@ -291,10 +292,7 @@ export class TerminalAgentCore {
           ...messages,
           {
             role: 'system',
-            content:
-              reason === 'stalled'
-                ? 'The loop is stalled because the same action is repeating without new progress. Do not call any more tools. Produce the best final answer in the same natural language as the user’s latest request. Clearly state what was completed, what repeated, why it is blocked, and the next concrete action or missing input.'
-                : 'The tool loop safety limit is reached. Do not call any more tools. Produce the best final answer from the available observations in the same natural language as the user’s latest request. If the task is incomplete, clearly state what was completed, what is still unknown, and the next concrete command or action.'
+            content: buildFinalAnswerInstruction(reason)
           }
         ]
       },
@@ -304,7 +302,7 @@ export class TerminalAgentCore {
     )
     this.throwIfCanceled()
 
-    const text = completion.choices[0]?.message.content ?? ''
+    const text = sanitizeFinalAnswer(completion.choices[0]?.message.content ?? '', reason)
     this.emit({ type: 'token', text })
     this.emit({ type: 'done', message: 'Done.' })
     return text
@@ -386,10 +384,80 @@ function buildStepMessages(
     ...messages,
     {
       role: 'system',
-      content:
-        'You have tool observations. Continue the loop when another concrete action can advance the user goal. Produce a final answer only when the task is solved, a required input/permission is missing, the environment blocks progress, or the next action would repeat the same failed approach. If more terminal work is necessary, choose exactly one narrow next command based on the latest observation and avoid repeated probing.'
+      content: [
+        'You have tool observations. Continue the loop when another concrete action can advance the user goal. Produce a final answer only when the task is solved, a required input/permission is missing, the environment blocks progress, or the next action would repeat the same failed approach.',
+        'For install, deploy, configure, repair, or migration requests, the task is not solved until the requested resources/configuration exist and a relevant health or functionality check passes. If only prerequisites or discovery are complete, keep acting or state that the task is incomplete.',
+        'Do not spend the majority of the run on prerequisite discovery. Once the target, deployment mechanism, and one blocking dependency are known, either execute the next installation/configuration step or clearly stop on that blocker.',
+        'If a command is blocked by password, sudo, OTP, or another interactive prompt, do not continue unrelated probing. Ask for that input or retry the same blocked step after the user provides it.',
+        'If more terminal work is necessary, choose exactly one narrow next command based on the latest observation and avoid repeated probing.'
+      ].join('\n')
     }
   ]
+}
+
+function buildFinalAnswerInstruction(reason: 'stalled' | 'safety-limit'): string {
+  const statusLine =
+    reason === 'stalled'
+      ? 'The loop is stalled because the same action is repeating without new progress.'
+      : 'The tool loop safety limit is reached.'
+
+  return [
+    statusLine,
+    'Do not call any more tools, and do not write tool-call markup or pseudo tool calls in the answer.',
+    'Produce the best final answer in the same natural language as the user’s latest request.',
+    'For install, deploy, configure, repair, or migration requests, do not claim completion unless the requested end state was verified in the observations.',
+    'Use this structure when the task is incomplete: 未完成 / 已完成 / 未完成或未知 / 下一步.',
+    'The next step may include one concrete command or action, but present it as a recommendation for the next run, not as if it was executed.'
+  ].join('\n')
+}
+
+export function sanitizeFinalAnswer(
+  text: string,
+  reason: 'normal' | 'stalled' | 'safety-limit'
+): string {
+  const withoutToolMarkup = text
+    .replace(/<\|{0,2}[^>\n]*(?:tool_calls|invoke|parameter)[\s\S]*?(?:<\/\|{0,2}[^>\n]+>|$)/gi, '')
+    .replace(/```(?:json|text)?\s*[\s\S]*?"tool_calls"\s*:\s*[\s\S]*?```/gi, '')
+    .replace(/<details>\s*<summary>tool_calls<\/summary>[\s\S]*?<\/details>/gi, '')
+    .trim()
+
+  const fallback = withoutToolMarkup || text.replace(/<[^>]+>/g, '').trim()
+  if (reason === 'safety-limit' && looksLikeBareShellCommand(fallback)) {
+    return [
+      '未完成：工具执行步数已达到安全上限，后续动作没有继续执行。',
+      '',
+      '已完成：已执行前置检查和部分依赖验证。',
+      '',
+      '未完成或未知：用户请求的安装、配置和验证还没有完成。',
+      '',
+      `下一步：继续执行并验证这一步，而不是把它当作已完成结果：\`${fallback}\``
+    ].join('\n')
+  }
+
+  if (reason === 'normal') return fallback
+
+  const needsIncompletePrefix =
+    reason === 'safety-limit' &&
+    !/未完成|incomplete|not complete|没有完成|尚未完成/i.test(fallback)
+
+  if (!needsIncompletePrefix) return fallback
+
+  return [
+    '未完成：工具执行步数已达到安全上限，后续动作没有继续执行。',
+    '',
+    fallback
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function looksLikeBareShellCommand(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.includes('\n')) return false
+
+  return /^(?:sudo\s+)?(?:kubectl|helm|docker|ctr|crictl|curl|wget|cat|ls|id|groups|journalctl|systemctl|df|free|ip|sysctl)\b/.test(
+    trimmed
+  )
 }
 
 function createToolCallSignature(name: string, rawArguments: string): string {

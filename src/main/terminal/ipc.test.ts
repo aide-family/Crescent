@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   filterAutomationControlOutputWithState,
   formatReadableCommandInput,
+  isInteractiveCommand,
   type TerminalAutomationFilterState
 } from './ipc'
 
@@ -53,5 +54,22 @@ describe('terminal ipc automation display helpers', () => {
     )
 
     expect(output).toBe('result line\r\nroot@arch-devops-k8smaster01[ K8S-RONLY ]:~# ')
+  })
+
+  it('streams an unterminated sudo password prompt during automation', () => {
+    const state = createFilterState()
+
+    expect(filterAutomationControlOutputWithState('__CRESCENT_CMD_START_test__\r\n', state)).toBe(
+      ''
+    )
+    expect(
+      filterAutomationControlOutputWithState('[sudo] password for self: ', state)
+    ).toBe('[sudo] password for self: ')
+  })
+
+  it('allows sudo for concrete commands but blocks interactive sudo shells', () => {
+    expect(isInteractiveCommand('sudo resolvectl status')).toBe(false)
+    expect(isInteractiveCommand('sudo -i')).toBe(true)
+    expect(isInteractiveCommand('sudo su')).toBe(true)
   })
 })

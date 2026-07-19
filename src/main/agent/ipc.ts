@@ -359,9 +359,10 @@ export function registerAgentIpc(): void {
       const executeReviewedCommand = async (
         command: string,
         timeoutMs: number | undefined,
-        execute: () => ReturnType<typeof executeCommandInTerminal>
+        execute: (command: string) => ReturnType<typeof executeCommandInTerminal>
       ): ReturnType<typeof executeCommandInTerminal> => {
-        const whitelistRule = matchCommandWhitelist(command, agentConfig.commandWhitelist)
+        const executableCommand = normalizeInteractivePrivilegeCommand(command)
+        const whitelistRule = matchCommandWhitelist(executableCommand, agentConfig.commandWhitelist)
         if (whitelistRule) {
           event.sender.send('agent:event', {
             type: 'status',
@@ -369,7 +370,7 @@ export function registerAgentIpc(): void {
             runId,
             tabId: payload?.tabId
           })
-          return execute()
+          return execute(executableCommand)
         }
 
         event.sender.send('agent:event', {
@@ -379,14 +380,14 @@ export function registerAgentIpc(): void {
           tabId: payload?.tabId
         })
         const audit = await commandAuditor.audit({
-          command,
+          command: executableCommand,
           userInput: input,
           terminalContext: payload?.terminalContext ?? '',
           locale: payload?.locale
         })
         event.sender.send('agent:event', {
           type: 'command-review',
-          command,
+          command: executableCommand,
           audit,
           runId,
           tabId: payload?.tabId
@@ -398,14 +399,14 @@ export function registerAgentIpc(): void {
             runId,
             tabId: payload?.tabId
           })
-          return execute()
+          return execute(executableCommand)
         }
 
         const approval = await requestCommandApproval({
           webContents: event.sender,
           runId,
           tabId: payload?.tabId,
-          command,
+          command: executableCommand,
           timeoutMs,
           audit,
           signal: controller.signal
@@ -421,7 +422,7 @@ export function registerAgentIpc(): void {
           })
           return {
             ok: false,
-            command,
+            command: executableCommand,
             output: '',
             error:
               runLanguage === 'zh-CN'
@@ -446,7 +447,7 @@ export function registerAgentIpc(): void {
           runId,
           tabId: payload?.tabId
         })
-        return execute()
+        return execute(executableCommand)
       }
       const text = await runTerminalAgent(
         agentConfig,
@@ -458,10 +459,10 @@ export function registerAgentIpc(): void {
         },
         {
           executeCommand: async (command, timeoutMs) => {
-            return executeReviewedCommand(command, timeoutMs, () =>
+            return executeReviewedCommand(command, timeoutMs, (executableCommand) =>
               executeCommandInTerminalWithPermissionRequest(
                 event.sender,
-                command,
+                executableCommand,
                 timeoutMs,
                 payload?.tabId
               )
@@ -470,12 +471,12 @@ export function registerAgentIpc(): void {
         },
         {
           executeCommand: async (command, options) => {
-            return executeReviewedCommand(command, options.timeoutMs, () =>
+            return executeReviewedCommand(command, options.timeoutMs, (executableCommand) =>
               executeCommandInTemporaryTerminal(
                 event.sender,
                 payload?.tabId,
                 options.terminalName,
-                command,
+                executableCommand,
                 options.timeoutMs
               )
             )
@@ -859,4 +860,8 @@ function findConnection(id: string | undefined): { id: string; name: string } | 
   return [...loadSshConfigConnections(), ...readCustomConnections()].find(
     (connection) => connection.id === id
   )
+}
+
+function normalizeInteractivePrivilegeCommand(command: string): string {
+  return command.replace(/(^|[;&|]\s*)sudo\s+(?:-n|--non-interactive)\s+/g, '$1sudo ')
 }
