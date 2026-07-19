@@ -50,7 +50,9 @@ describe('AgentToolRuntime', () => {
     )
 
     expect(runtime.hasTools()).toBe(true)
-    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(['execute_terminal_command'])
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(['execute_terminal_command', 'parse_pdf_file', 'parse_docx_file'])
+    )
     expect(runtime.tools[0]?.function.description).toContain('Execute one non-interactive')
     expect(runtime.tools[0]?.function.parameters).toMatchObject({
       properties: {
@@ -127,10 +129,9 @@ describe('AgentToolRuntime', () => {
       JSON.stringify({ terminalName: 'local', command: 'pwd' })
     )
 
-    expect(runtime.tools.map((tool) => tool.function.name)).toEqual([
-      'execute_terminal_command',
-      'execute_subterminal_command'
-    ])
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(['execute_terminal_command', 'execute_subterminal_command'])
+    )
     expect(subterminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', {
       terminalName: 'local',
       timeoutMs: undefined
@@ -165,7 +166,9 @@ describe('AgentToolRuntime', () => {
       })
     )
 
-    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(['write_local_file'])
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(['write_local_file', 'parse_markdown_file'])
+    )
     expect(localFileWriter.writeFile).toHaveBeenCalledWith(
       '~/Documents/work/report.md',
       '# Report\n\nok',
@@ -180,5 +183,29 @@ describe('AgentToolRuntime', () => {
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool', name: 'write_local_file' })
     )
+  })
+
+  it('registers the local wiki save tool for conversation-driven knowledge capture', async () => {
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: '把这个巡检过程保存到知识库',
+      emit: vi.fn<(event: AgentEvent) => void>()
+    })
+    const wikiTool = runtime.tools.find((tool) => tool.function.name === 'save_wiki_document')
+
+    expect(wikiTool?.function.description).toContain('Crescent local knowledge base')
+    expect(wikiTool?.function.parameters).toMatchObject({
+      required: ['title', 'content'],
+      properties: {
+        title: {
+          description: expect.stringContaining('Knowledge-base document title')
+        },
+        content: {
+          description: expect.stringContaining('Full Markdown content')
+        }
+      }
+    })
+    expect(runtime.catalog.map((tool) => tool.name)).toContain('save_wiki_document')
   })
 })

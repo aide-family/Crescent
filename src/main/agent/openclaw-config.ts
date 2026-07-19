@@ -67,6 +67,21 @@ export const defaultOpenClawLikeConfig: OpenClawLikeConfig = {
             input: ['text']
           }
         ]
+      },
+      deepseek: {
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com',
+        api: 'openai-completions',
+        auth: 'api-key',
+        request: {
+          allowPrivateNetwork: false
+        },
+        models: [
+          { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', reasoning: false, input: ['text'] },
+          { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', reasoning: true, input: ['text'] },
+          { id: 'deepseek-chat', name: 'deepseek-chat', reasoning: false, input: ['text'] },
+          { id: 'deepseek-reasoner', name: 'deepseek-reasoner', reasoning: true, input: ['text'] }
+        ]
       }
     }
   },
@@ -79,7 +94,11 @@ export const defaultOpenClawLikeConfig: OpenClawLikeConfig = {
         'azure/gpt-5.4': {},
         'azure/gpt-5.5': {},
         'bailian/glm-5-1': {},
-        'bailian/qwen3.6-plus': {}
+        'bailian/qwen3.6-plus': {},
+        'deepseek-v4-flash': {},
+        'deepseek-v4-pro': {},
+        'deepseek-chat': {},
+        'deepseek-reasoner': {}
       },
       workspace: '~/.terminal-agent/workspace'
     }
@@ -98,9 +117,14 @@ export function resolveModelProvider(
 ): ResolvedModelProvider {
   const requestedModel = agentConfig.model.trim() || openClawConfig.agents.defaults.model.primary
   const providers = getAgentProviders(agentConfig, openClawConfig)
-  const provider = providers.find((candidate) =>
-    candidate.models.some((model) => model.id === requestedModel)
-  )
+  const requestedProviderId = agentConfig.providerId?.trim()
+  const provider =
+    providers.find(
+      (candidate) =>
+        candidate.id === requestedProviderId &&
+        candidate.models.some((model) => model.id === requestedModel)
+    ) ??
+    providers.find((candidate) => candidate.models.some((model) => model.id === requestedModel))
 
   if (!provider) {
     return {

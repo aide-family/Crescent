@@ -8,6 +8,7 @@ import type {
   AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
+  AgentPathReference,
   AgentRunInput,
   AgentSkillInstallResult,
   AgentSkillOption,
@@ -22,7 +23,10 @@ import type {
   StoredAgentRun,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
-  StoredSessionTab
+  StoredSessionTab,
+  WikiDocument,
+  WikiDocumentSummary,
+  WikiSaveInput
 } from '../shared/agent-types'
 
 // Custom APIs for renderer
@@ -116,6 +120,18 @@ const api = {
       ipcRenderer.invoke('agent:delete-skill', path),
     listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
       ipcRenderer.invoke('agent:list-instruction-files'),
+    listWikiDocuments: (): Promise<WikiDocumentSummary[]> =>
+      ipcRenderer.invoke('agent:list-wiki-documents'),
+    getWikiDocument: (id: string): Promise<WikiDocument | undefined> =>
+      ipcRenderer.invoke('agent:get-wiki-document', id),
+    saveWikiDocument: (input: WikiSaveInput): Promise<WikiDocument> =>
+      ipcRenderer.invoke('agent:save-wiki-document', input),
+    searchWikiDocuments: (query: string): Promise<WikiDocument[]> =>
+      ipcRenderer.invoke('agent:search-wiki-documents', query),
+    pickPathReference: (
+      kind: AgentPathReference['kind']
+    ): Promise<AgentPathReference | undefined> =>
+      ipcRenderer.invoke('agent:pick-path-reference', { kind }),
     saveInstructionFile: (input: {
       name: string
       content: string

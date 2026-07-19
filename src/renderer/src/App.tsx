@@ -3,19 +3,21 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import {
   ArrowUpIcon,
+  BookOpenIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CopyIcon,
   DownloadIcon,
+  FileIcon,
+  FileTextIcon,
+  FolderOpenIcon,
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
-  PanelRightCloseIcon,
-  PanelRightOpenIcon,
   PlusIcon,
   ServerIcon,
   SettingsIcon,
@@ -52,7 +54,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
-import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
 import {
   dictionaries,
   localeOptions,
@@ -65,19 +66,25 @@ import type {
   AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
+  AgentPathReference,
   AgentProviderConfig,
   AgentProviderModelConfig,
   AgentSkillSearchResult,
   AgentValidationResult,
   AgentSkillOption,
+  AgentWikiReference,
   CommandApprovalRequest,
   CommandRiskLevel,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
   StoredAgentLogEntry,
-  StoredSessionHistoryItem
+  StoredSessionHistoryDetail,
+  StoredSessionHistoryItem,
+  WikiDocument,
+  WikiDocumentSummary
 } from '../../shared/agent-types'
+import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 
 const emptyConfig: AgentConfig = {
   providers: [
@@ -92,8 +99,21 @@ const emptyConfig: AgentConfig = {
         { id: 'bailian/glm-5-1', name: 'bailian/glm-5-1', reasoning: false },
         { id: 'bailian/qwen3.6-plus', name: 'bailian/qwen3.6-plus', reasoning: false }
       ]
+    },
+    {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: '',
+      models: [
+        { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', reasoning: false },
+        { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', reasoning: true },
+        { id: 'deepseek-chat', name: 'deepseek-chat', reasoning: false },
+        { id: 'deepseek-reasoner', name: 'deepseek-reasoner', reasoning: true }
+      ]
     }
   ],
+  providerId: 'nova-litellm',
   model: 'azure/gpt-5.5',
   agentMode: 'react',
   maxActiveTools: 5,
@@ -152,11 +172,26 @@ interface SlashCommandOption {
   value: string
   keywords: string[]
   skill?: AgentSkillOption
+  connection?: ConnectionConfig
+  agentMode?: AgentConfig['agentMode']
+  pathReferenceKind?: AgentPathReference['kind']
+  toolRef?: AgentToolReference
+  wikiRef?: AgentWikiReference
+  wikiDocument?: WikiDocumentSummary
+}
+
+interface AgentToolReference {
+  id: string
+  name: string
+  description: string
+  source: 'built-in' | 'openapi'
 }
 
 interface AgentTerminalTab {
   id: string
   title: string
+  providerId?: string
+  model?: string
   connectionId?: string
   connectionName?: string
   isSsh: boolean
@@ -167,6 +202,9 @@ interface AgentTerminalTab {
   terminalOutput: string
   agentInput: string
   skillRefs: AgentSkillOption[]
+  pathRefs: AgentPathReference[]
+  toolRefs: AgentToolReference[]
+  wikiRefs: AgentWikiReference[]
   agentBusy: boolean
   agentThinking: boolean
   copiedLogId: number | null
@@ -188,6 +226,8 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
   return {
     id: input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     title: input?.title ?? 'Local',
+    providerId: input?.providerId,
+    model: input?.model,
     connectionId: input?.connectionId,
     connectionName: input?.connectionName,
     isSsh: input?.isSsh ?? false,
@@ -198,6 +238,9 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
     terminalOutput: input?.terminalOutput ?? '',
     agentInput: input?.agentInput ?? '',
     skillRefs: input?.skillRefs ?? [],
+    pathRefs: input?.pathRefs ?? [],
+    toolRefs: input?.toolRefs ?? [],
+    wikiRefs: input?.wikiRefs ?? [],
     agentBusy: input?.agentBusy ?? false,
     agentThinking: input?.agentThinking ?? false,
     copiedLogId: input?.copiedLogId ?? null,
@@ -249,6 +292,7 @@ function App(): React.JSX.Element {
   const pipeHistoryIndexRef = useRef<number | null>(null)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
+  const slashCommandListRef = useRef<HTMLDivElement | null>(null)
   const activeTabIdRef = useRef('default')
   const tabsRef = useRef<AgentTerminalTab[]>([])
   const subterminalResizeRef = useRef<{
@@ -262,6 +306,10 @@ function App(): React.JSX.Element {
   const subterminalHeightResizeRef = useRef<{
     startY: number
     startHeight: number
+  } | null>(null)
+  const wikiSheetResizeRef = useRef<{
+    startX: number
+    startWidth: number
   } | null>(null)
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
@@ -282,6 +330,9 @@ function App(): React.JSX.Element {
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
+  const [providerModelsText, setProviderModelsText] = useState(
+    formatProviderModels(emptyConfig.providers[0]?.models ?? [])
+  )
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
   const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
@@ -300,6 +351,19 @@ function App(): React.JSX.Element {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
+  const [wikiOpen, setWikiOpen] = useState(false)
+  const [wikiLoading, setWikiLoading] = useState(false)
+  const [wikiDocumentLoadingId, setWikiDocumentLoadingId] = useState<string | null>(null)
+  const [wikiDocuments, setWikiDocuments] = useState<WikiDocumentSummary[]>([])
+  const [selectedWikiDocument, setSelectedWikiDocument] = useState<WikiDocument | null>(null)
+  const [wikiSearchQuery, setWikiSearchQuery] = useState('')
+  const [wikiEditing, setWikiEditing] = useState(false)
+  const [wikiEditTitle, setWikiEditTitle] = useState('')
+  const [wikiEditContent, setWikiEditContent] = useState('')
+  const [wikiSaving, setWikiSaving] = useState(false)
+  const [wikiMessage, setWikiMessage] = useState<SkillManageMessage | null>(null)
+  const [wikiPreviewWidth, setWikiPreviewWidth] = useState(620)
+  const [savingHistoryWikiTabId, setSavingHistoryWikiTabId] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
@@ -331,7 +395,7 @@ function App(): React.JSX.Element {
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
-  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>(null)
+  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('terminal')
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('connections')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
@@ -371,28 +435,39 @@ function App(): React.JSX.Element {
     [config.providers]
   )
   const modelOptions = useMemo(() => flattenProviderModels(config.providers), [config.providers])
-  const visibleModels = models.length ? models : modelOptions
-  const activeModel = visibleModels.find((model) => model.id === config.model)
-  const activeProviderId = activeModel?.providerId ?? config.providers[0]?.id ?? 'custom'
+  const visibleModels = modelOptions.length ? modelOptions : models
+  const activeTabProviderId = activeTab.providerId ?? config.providerId
+  const activeProviderId =
+    config.providers.some((provider) => provider.id === activeTabProviderId)
+      ? (activeTabProviderId ?? config.providers[0]?.id ?? 'custom')
+      : (visibleModels.find((model) => model.id === (activeTab.model ?? config.model))?.providerId ??
+        config.providers[0]?.id ??
+        'custom')
   const filteredModels = visibleModels.filter((model) => model.providerId === activeProviderId)
+  const activeTabModelId =
+    activeTab.model && filteredModels.some((model) => model.id === activeTab.model)
+      ? activeTab.model
+      : (filteredModels[0]?.id ?? config.model)
+  const activeModel = visibleModels.find(
+    (model) => model.id === activeTabModelId && model.providerId === activeProviderId
+  )
   const settingsProvider =
     config.providers.find((provider) => provider.id === settingsProviderId) ??
     config.providers[0] ??
     emptyConfig.providers[0]
-  const settingsProviderModelsText = useMemo(
-    () => settingsProvider.models.map((model) => model.id).join('\n'),
-    [settingsProvider.models]
+  const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
+  const filteredWikiDocuments = useMemo(
+    () => filterWikiDocuments(wikiDocuments, wikiSearchQuery),
+    [wikiDocuments, wikiSearchQuery]
   )
   const selectedInstructionFile = instructionFiles.find(
     (file) => file.name === selectedInstructionName
   )
   const aiState: 'ready' | 'pending' | 'not-ready' = validating
     ? 'pending'
-    : validation === undefined && config.model.trim()
-      ? 'pending'
-      : validation?.modelOk
-        ? 'ready'
-        : 'not-ready'
+    : validation?.modelOk === false
+      ? 'not-ready'
+      : 'ready'
   const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
     ? 'ready'
     : activeTab.sessionId
@@ -400,18 +475,37 @@ function App(): React.JSX.Element {
       : 'pending'
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const slashCommandQuery = getSlashCommandQuery(activeTab.agentInput)
-  const slashCommandOptions = useMemo(
-    () =>
-      buildSlashCommandOptions({
-        activeProviderId,
-        activeTab,
-        config,
-        modelName: activeModel?.name ?? config.model,
-        skills,
-        t
-      }).filter((command) => matchesSlashCommand(command, slashCommandQuery)),
-    [activeModel?.name, activeProviderId, activeTab, config, skills, slashCommandQuery, t]
-  )
+  const slashCommandOptions = useMemo(() => {
+    if (isModeSlashQuery(slashCommandQuery)) {
+      return buildModeSlashCommands(t).filter((command) =>
+        matchesModeSlashCommand(command, slashCommandQuery ?? '')
+      )
+    }
+    if (isToolSlashQuery(slashCommandQuery)) {
+      return availableToolRefs
+        .map((tool) => buildToolSlashCommand(tool))
+        .filter((command) => matchesToolSlashCommand(command, slashCommandQuery ?? ''))
+    }
+    if (isWikiSlashQuery(slashCommandQuery)) {
+      return wikiDocuments
+        .map((document) => buildWikiSlashCommand(document, t))
+        .filter((command) => matchesWikiSlashCommand(command, slashCommandQuery ?? ''))
+    }
+    if (slashCommandQuery?.startsWith('skill:')) {
+      return skills
+        .map((skill) => buildSkillSlashCommand(skill, t))
+        .filter((command) => matchesSkillSlashCommand(command, slashCommandQuery))
+    }
+    if (isConnectionSlashQuery(slashCommandQuery)) {
+      return connections
+        .map((connection) => buildConnectionSlashCommand(connection, t))
+        .filter((command) => matchesConnectionSlashCommand(command, slashCommandQuery ?? ''))
+    }
+
+    return buildSlashCommandOptions(t).filter((command) =>
+      matchesSlashCommand(command, slashCommandQuery)
+    )
+  }, [availableToolRefs, connections, skills, slashCommandQuery, t, wikiDocuments])
   const slashMenuVisible =
     slashCommandOpen && slashCommandQuery !== undefined && slashCommandOptions.length > 0
   const selectedSlashCommandIndex = slashCommandOptions.length
@@ -420,6 +514,15 @@ function App(): React.JSX.Element {
   const failedToLoadConfigText = t.terminal.failedToLoadConfig
   const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
   const failedToLoadModelsText = t.terminal.failedToLoadModels
+
+  useEffect(() => {
+    if (!slashMenuVisible) return
+
+    const selectedItem = slashCommandListRef.current?.querySelector<HTMLElement>(
+      `[data-slash-command-index="${selectedSlashCommandIndex}"]`
+    )
+    selectedItem?.scrollIntoView({ block: 'nearest' })
+  }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
 
   const configured = useMemo(
     () =>
@@ -493,6 +596,34 @@ function App(): React.JSX.Element {
   function setHistorySheetOpen(open: boolean): void {
     setHistoryOpen(open)
     if (open) void refreshSessionHistory()
+  }
+
+  const refreshWikiDocuments = useCallback(async (): Promise<void> => {
+    const initialLoad = wikiDocuments.length === 0
+    if (initialLoad) setWikiLoading(true)
+    try {
+      const documents = await window.api.agent.listWikiDocuments()
+      setWikiDocuments(documents)
+      setSelectedWikiDocument((current) =>
+        current && documents.some((document) => document.id === current.id) ? current : null
+      )
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      if (initialLoad) setWikiLoading(false)
+    }
+  }, [wikiDocuments.length])
+
+  function setWikiSheetOpen(open: boolean): void {
+    setWikiOpen(open)
+    if (open) {
+      setWikiEditing(false)
+      setWikiMessage(null)
+      void refreshWikiDocuments()
+    }
   }
 
   const updateTab = useCallback(
@@ -955,6 +1086,19 @@ function App(): React.JSX.Element {
         return
       }
 
+      const wikiSheetResize = wikiSheetResizeRef.current
+      if (wikiSheetResize) {
+        const listWidth = 280
+        const sheetChromeWidth = 62
+        const maxWidth = Math.max(360, window.innerWidth - 48 - listWidth - sheetChromeWidth)
+        const nextWidth = Math.max(
+          360,
+          Math.min(maxWidth, wikiSheetResize.startWidth + event.clientX - wikiSheetResize.startX)
+        )
+        setWikiPreviewWidth(nextWidth)
+        return
+      }
+
       const subterminalResize = subterminalResizeRef.current
       if (subterminalResize) {
         const deltaPercent = ((event.clientX - subterminalResize.startX) / window.innerWidth) * 100
@@ -979,6 +1123,7 @@ function App(): React.JSX.Element {
       splitDragRef.current = false
       subterminalResizeRef.current = null
       subterminalHeightResizeRef.current = null
+      wikiSheetResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
@@ -1117,6 +1262,31 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (!isConnectionSlashQuery(slashCommandQuery)) return
+
+    void window.api.connections
+      .list()
+      .then(setConnections)
+      .catch((error) => {
+        writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
+      })
+  }, [failedToLoadConnectionsText, slashCommandQuery, writeLine])
+
+  useEffect(() => {
+    if (!isWikiSlashQuery(slashCommandQuery)) return
+
+    void window.api.agent
+      .listWikiDocuments()
+      .then(setWikiDocuments)
+      .catch((error) => {
+        setWikiMessage({
+          type: 'error',
+          text: error instanceof Error ? error.message : String(error)
+        })
+      })
+  }, [slashCommandQuery])
+
+  useEffect(() => {
     document.documentElement.classList.add('dark')
 
     window.api.agent
@@ -1125,7 +1295,9 @@ function App(): React.JSX.Element {
         setConfig(nextConfig)
         setCommandWhitelistText(nextConfig.commandWhitelist.join('\n'))
         setModels(flattenProviderModels(nextConfig.providers))
-        setSettingsProviderId(nextConfig.providers[0]?.id ?? 'nova-litellm')
+        const firstProvider = nextConfig.providers[0]
+        setSettingsProviderId(firstProvider?.id ?? 'nova-litellm')
+        setProviderModelsText(formatProviderModels(firstProvider?.models ?? []))
         const requestId = validationRequestRef.current + 1
         validationRequestRef.current = requestId
         setValidating(true)
@@ -1485,12 +1657,11 @@ function App(): React.JSX.Element {
     setConfig(nextConfig)
     setCommandWhitelistText(nextConfig.commandWhitelist.join('\n'))
     setModels(flattenProviderModels(nextConfig.providers))
-    setSettingsProviderId(
-      (current) =>
-        nextConfig.providers.find((provider) => provider.id === current)?.id ??
-        nextConfig.providers[0]?.id ??
-        'nova-litellm'
-    )
+    const nextSettingsProvider =
+      nextConfig.providers.find((provider) => provider.id === settingsProviderId) ??
+      nextConfig.providers[0]
+    setSettingsProviderId(nextSettingsProvider?.id ?? 'nova-litellm')
+    setProviderModelsText(formatProviderModels(nextSettingsProvider?.models ?? []))
     return nextConfig
   }
 
@@ -1543,6 +1714,81 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function saveHistorySessionToWiki(item: StoredSessionHistoryItem): Promise<void> {
+    setSavingHistoryWikiTabId(item.tabId)
+    setWikiMessage(null)
+    try {
+      const detail = await window.api.storage.getSessionHistory(item.tabId)
+      if (!detail) return
+
+      const title = `${detail.title} SOP`
+      const document = await window.api.agent.saveWikiDocument({
+        title,
+        content: buildWikiContentFromHistory(detail, t)
+      })
+      setWikiDocuments((current) => upsertWikiSummary(current, document))
+      setSelectedWikiDocument(document)
+      setWikiEditTitle(document.title)
+      setWikiEditContent(document.content)
+      setWikiEditing(false)
+      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
+      setWikiOpen(true)
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
+    } finally {
+      setSavingHistoryWikiTabId(null)
+    }
+  }
+
+  async function openWikiDocument(document: WikiDocumentSummary): Promise<void> {
+    setWikiDocumentLoadingId(document.id)
+    setWikiEditing(false)
+    setWikiMessage(null)
+    try {
+      const detail = (await window.api.agent.getWikiDocument(document.id)) ?? null
+      setSelectedWikiDocument(detail)
+      setWikiEditTitle(detail?.title ?? '')
+      setWikiEditContent(detail?.content ?? '')
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setWikiDocumentLoadingId(null)
+    }
+  }
+
+  async function saveWikiEdits(): Promise<void> {
+    if (!selectedWikiDocument) return
+
+    setWikiSaving(true)
+    setWikiMessage(null)
+    try {
+      const document = await window.api.agent.saveWikiDocument({
+        id: selectedWikiDocument.id,
+        title: wikiEditTitle,
+        content: wikiEditContent
+      })
+      setSelectedWikiDocument(document)
+      setWikiEditTitle(document.title)
+      setWikiEditContent(document.content)
+      setWikiDocuments((current) => upsertWikiSummary(current, document))
+      setWikiEditing(false)
+      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
+    } finally {
+      setWikiSaving(false)
+    }
+  }
+
   async function deleteHistorySession(item: StoredSessionHistoryItem): Promise<void> {
     if (!window.confirm(`${t.confirm.deleteHistory}\n\n${item.title}`)) return
 
@@ -1577,8 +1823,10 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function applyModel(modelId: string): Promise<void> {
-    const optimisticConfig = { ...config, model: modelId }
+  async function applyDefaultModel(modelId: string): Promise<void> {
+    const modelProviderId =
+      modelOptions.find((model) => model.id === modelId)?.providerId ?? config.providerId
+    const optimisticConfig = { ...config, providerId: modelProviderId, model: modelId }
 
     setConfig(optimisticConfig)
     setValidation(undefined)
@@ -1586,9 +1834,29 @@ function App(): React.JSX.Element {
     void validateConfig(nextConfig)
   }
 
-  async function applyProvider(providerId: string): Promise<void> {
-    const nextModel = visibleModels.find((model) => model.providerId === providerId)
-    if (nextModel) await applyModel(nextModel.id)
+  function applyModel(modelId: string): void {
+    const modelProviderId =
+      filteredModels.find((model) => model.id === modelId)?.providerId ?? activeProviderId
+
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      providerId: modelProviderId,
+      model: modelId
+    }))
+  }
+
+  function applyProvider(providerId: string): void {
+    const providerModels = visibleModels.filter((model) => model.providerId === providerId)
+    if (!providerModels.length) return
+
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      providerId,
+      model:
+        tab.model && providerModels.some((model) => model.id === tab.model)
+          ? tab.model
+          : providerModels[0].id
+    }))
   }
 
   function stopAgentRun(tabId = activeTabIdRef.current): void {
@@ -1765,6 +2033,8 @@ function App(): React.JSX.Element {
     if (currentTab?.isSsh) {
       const nextTab = createTerminalTab({
         title: getNextTerminalTitle(connection.name, tabsRef.current),
+        providerId: currentTab.providerId ?? config.providerId,
+        model: currentTab.model,
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -1776,6 +2046,7 @@ function App(): React.JSX.Element {
     } else if (!currentTab) {
       const nextTab = createTerminalTab({
         title: getNextTerminalTitle(connection.name, tabsRef.current),
+        providerId: config.providerId,
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -1787,6 +2058,7 @@ function App(): React.JSX.Element {
     } else {
       setActiveTabId(currentTab.id)
     }
+    setHiddenPane(null)
     setTerminalPage('terminal')
 
     if (postLoginInput) {
@@ -1823,6 +2095,7 @@ function App(): React.JSX.Element {
   }
 
   function openLocalTerminal(): void {
+    setHiddenPane(null)
     setTerminalPage('terminal')
     const defaultTab = tabsRef.current.find((tab) => tab.id === 'default')
     const canUseDefaultTab =
@@ -1838,7 +2111,8 @@ function App(): React.JSX.Element {
     }
 
     const nextTab = createTerminalTab({
-      title: getNextTerminalTitle('Local', tabsRef.current)
+      title: getNextTerminalTitle('Local', tabsRef.current),
+      providerId: config.providerId
     })
 
     setTabs((current) => [...current, nextTab])
@@ -1846,9 +2120,11 @@ function App(): React.JSX.Element {
   }
 
   function openConnectionTerminal(connection: ConnectionConfig): void {
+    setHiddenPane(null)
     setTerminalPage('terminal')
     const nextTab = createTerminalTab({
       title: getNextTerminalTitle(connection.name, tabsRef.current),
+      providerId: config.providerId,
       connectionId: connection.id,
       connectionName: connection.name,
       isSsh: true
@@ -1866,6 +2142,7 @@ function App(): React.JSX.Element {
     }
 
     connectToConnection(connection)
+    setHiddenPane(null)
     setTerminalPage('terminal')
   }
 
@@ -1972,13 +2249,30 @@ function App(): React.JSX.Element {
     if (!displayInput) return
 
     const skillRefs = tab?.skillRefs ?? []
+    const pathRefs = tab?.pathRefs ?? []
+    const toolRefs = tab?.toolRefs ?? []
+    const wikiRefs = tab?.wikiRefs ?? []
     const resumeRequested = isContinueIntent(displayInput)
-    const baseInput = buildAgentInputWithSkillRefs(displayInput, skillRefs, t)
+    const baseInput = buildAgentInputWithReferences(
+      displayInput,
+      skillRefs,
+      pathRefs,
+      toolRefs,
+      wikiRefs,
+      t
+    )
     const input = resumeRequested && tab ? buildResumeAgentInput(tab, baseInput, t) : baseInput
     const startedAt = Date.now()
 
     if (tab?.agentBusy) {
-      updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
+      updateTab(tabId, (current) => ({
+        ...current,
+        agentInput: '',
+        skillRefs: [],
+        pathRefs: [],
+        toolRefs: [],
+        wikiRefs: []
+      }))
       const runId = activeRunIdRef.current.get(tabId)
       if (runId) void window.api.agent.supplement({ runId, input })
       updateAgentRun(tabId, (run) => ({
@@ -1987,9 +2281,12 @@ function App(): React.JSX.Element {
           ...run.actions,
           {
             title: t.input.contextSupplement,
-            detail: formatVisibleInputWithSkillRefs(
+            detail: formatVisibleInputWithReferences(
               `${t.input.contextSupplementDetail}\n${displayInput}`,
               skillRefs,
+              pathRefs,
+              toolRefs,
+              wikiRefs,
               t
             )
           }
@@ -1998,9 +2295,26 @@ function App(): React.JSX.Element {
       return
     }
 
-    updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
+    updateTab(tabId, (current) => ({
+      ...current,
+      agentInput: '',
+      skillRefs: [],
+      pathRefs: [],
+      toolRefs: [],
+      wikiRefs: []
+    }))
     appendLog(
-      { kind: 'user', text: formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) },
+      {
+        kind: 'user',
+        text: formatVisibleInputWithReferences(
+          displayInput,
+          skillRefs,
+          pathRefs,
+          toolRefs,
+          wikiRefs,
+          t
+        )
+      },
       tabId
     )
     updateTab(tabId, (current) => ({ ...current, agentThinking: true }))
@@ -2038,7 +2352,14 @@ function App(): React.JSX.Element {
           },
           tabId
         )
-        updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
+        updateTab(tabId, (current) => ({
+          ...current,
+          agentInput: '',
+          skillRefs: [],
+          pathRefs: [],
+          toolRefs: [],
+          wikiRefs: []
+        }))
         return
       }
 
@@ -2071,11 +2392,27 @@ function App(): React.JSX.Element {
       connectToConnection(
         matchedConnection,
         executeAfterLogin ? buildPostLoginAgentInput(input, matchedConnection, t) : undefined,
-        executeAfterLogin ? formatVisibleInputWithSkillRefs(displayInput, skillRefs, t) : undefined,
+        executeAfterLogin
+          ? formatVisibleInputWithReferences(
+              displayInput,
+              skillRefs,
+              pathRefs,
+              toolRefs,
+              wikiRefs,
+              t
+            )
+          : undefined,
         false,
         startedAt
       )
-      updateTab(tabId, (current) => ({ ...current, agentInput: '', skillRefs: [] }))
+      updateTab(tabId, (current) => ({
+        ...current,
+        agentInput: '',
+        skillRefs: [],
+        pathRefs: [],
+        toolRefs: [],
+        wikiRefs: []
+      }))
       return
     }
 
@@ -2137,9 +2474,13 @@ function App(): React.JSX.Element {
     try {
       await ensureTerminalReadyForAgent(tabId)
       const terminalContext = await getTerminalContextForAgent(tabId)
+      const runTab = tabsRef.current.find((candidate) => candidate.id === tabId)
+      const runModelSelection = resolveTabModelSelection(runTab, config, visibleModels)
       const result = await window.api.agent.run({
         runId,
         input,
+        providerId: runModelSelection.providerId,
+        model: runModelSelection.model,
         terminalContext,
         connectionId,
         tabId,
@@ -2245,18 +2586,140 @@ function App(): React.JSX.Element {
   }
 
   function insertSlashCommand(command: SlashCommandOption): void {
+    const shouldOpenModeList = command.id === 'mode'
+    const shouldOpenSkillList = command.id === 'skill'
+    const shouldOpenConnectionList = command.id === 'connection'
+    const shouldOpenToolList = command.id === 'tool'
+    const shouldOpenWikiList = command.id === 'wiki'
+
+    if (command.pathReferenceKind) {
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, '')
+      }))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      void pickPathReference(command.pathReferenceKind)
+      return
+    }
+
+    if (command.toolRef) {
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
+        toolRefs: addUniqueToolRef(tab.toolRefs, command.toolRef as AgentToolReference)
+      }))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      return
+    }
+
+    if (command.wikiDocument) {
+      void addWikiReference(command.wikiDocument)
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      return
+    }
+
+    if (command.wikiRef) {
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
+        wikiRefs: addUniqueWikiRef(tab.wikiRefs, command.wikiRef as AgentWikiReference)
+      }))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      return
+    }
+
+    if (command.agentMode) {
+      updateConfig('agentMode', command.agentMode)
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, '')
+      }))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      return
+    }
+
+    if (command.connection) {
+      updateTab(activeTab.id, (tab) => ({
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, '')
+      }))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      connectToConnection(command.connection)
+      return
+    }
+
     updateTab(activeTab.id, (tab) => ({
       ...tab,
       agentInput: replaceSlashCommandInput(tab.agentInput, command.skill ? '' : command.value),
       skillRefs: command.skill ? addUniqueSkillRef(tab.skillRefs, command.skill) : tab.skillRefs
     }))
-    setSlashCommandOpen(false)
+    setSlashCommandIndex(0)
+    setSlashCommandOpen(
+      shouldOpenModeList ||
+        shouldOpenSkillList ||
+        shouldOpenConnectionList ||
+        shouldOpenToolList ||
+        shouldOpenWikiList
+    )
   }
 
   function removeSkillRef(skillId: string): void {
     updateTab(activeTab.id, (tab) => ({
       ...tab,
       skillRefs: tab.skillRefs.filter((skill) => skill.id !== skillId)
+    }))
+  }
+
+  function removeToolRef(toolId: string): void {
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      toolRefs: tab.toolRefs.filter((tool) => tool.id !== toolId)
+    }))
+  }
+
+  function removeWikiRef(wikiId: string): void {
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      wikiRefs: tab.wikiRefs.filter((wiki) => wiki.id !== wikiId)
+    }))
+  }
+
+  async function addWikiReference(document: WikiDocumentSummary): Promise<void> {
+    const detail = await window.api.agent.getWikiDocument(document.id)
+    if (!detail) return
+
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      agentInput: replaceSlashCommandInput(tab.agentInput, ''),
+      wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+        id: detail.id,
+        title: detail.title,
+        path: detail.path,
+        content: detail.content
+      })
+    }))
+  }
+
+  async function pickPathReference(kind: AgentPathReference['kind']): Promise<void> {
+    const reference = await window.api.agent.pickPathReference(kind)
+    if (!reference) return
+
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      pathRefs: addUniquePathRef(tab.pathRefs, reference)
+    }))
+  }
+
+  function removePathRef(pathRefId: string): void {
+    updateTab(activeTab.id, (tab) => ({
+      ...tab,
+      pathRefs: tab.pathRefs.filter((reference) => reference.id !== pathRefId)
     }))
   }
 
@@ -2270,20 +2733,39 @@ function App(): React.JSX.Element {
     value: AgentProviderConfig[K]
   ): void {
     const nextProviderId = key === 'id' ? String(value) : settingsProviderId
+    if (
+      key === 'id' &&
+      config.providers.some(
+        (provider) => provider.id !== settingsProvider.id && provider.id === nextProviderId
+      )
+    ) {
+      return
+    }
 
     setConfig((current) => {
       const providers = current.providers.map((provider) =>
         provider.id === settingsProvider.id ? { ...provider, [key]: value } : provider
       )
 
-      return { ...current, providers }
+      return {
+        ...current,
+        providers,
+        providerId: current.providerId === settingsProvider.id ? nextProviderId : current.providerId
+      }
     })
     if (key === 'id') setSettingsProviderId(nextProviderId)
     setValidation(undefined)
   }
 
   function updateSettingsProviderModels(value: string): void {
+    setProviderModelsText(value)
     updateSettingsProvider('models', parseProviderModels(value))
+  }
+
+  function selectSettingsProvider(providerId: string): void {
+    const provider = config.providers.find((candidate) => candidate.id === providerId)
+    setSettingsProviderId(providerId)
+    setProviderModelsText(formatProviderModels(provider?.models ?? []))
   }
 
   function createProvider(): void {
@@ -2291,13 +2773,38 @@ function App(): React.JSX.Element {
     const provider: AgentProviderConfig = {
       id,
       name: id,
-      baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
+      baseUrl: 'https://api.deepseek.com',
       apiKey: '',
-      models: []
+      models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', reasoning: false }]
     }
 
     setConfig((current) => ({ ...current, providers: [...current.providers, provider] }))
     setSettingsProviderId(id)
+    setProviderModelsText(formatProviderModels(provider.models))
+    setValidation(undefined)
+  }
+
+  function deleteSettingsProvider(): void {
+    if (config.providers.length <= 1) return
+    if (!window.confirm(`${t.confirm.deleteProvider}\n\n${settingsProvider.name}`)) return
+
+    const remainingProviders = config.providers.filter(
+      (provider) => provider.id !== settingsProvider.id
+    )
+    const nextProvider = remainingProviders[0]
+    const modelProvider = remainingProviders.find((provider) =>
+      provider.models.some((model) => model.id === config.model)
+    )
+    const modelStillAvailable = Boolean(modelProvider)
+
+    setConfig({
+      ...config,
+      providers: remainingProviders,
+      providerId: modelStillAvailable ? modelProvider?.id : nextProvider?.id,
+      model: modelStillAvailable ? config.model : (nextProvider?.models[0]?.id ?? '')
+    })
+    setSettingsProviderId(nextProvider?.id ?? 'nova-litellm')
+    setProviderModelsText(formatProviderModels(nextProvider?.models ?? []))
     setValidation(undefined)
   }
 
@@ -2523,6 +3030,187 @@ function App(): React.JSX.Element {
     }, 1200)
   }
 
+  const wikiSheet = (
+    <Sheet open={wikiOpen} onOpenChange={setWikiSheetOpen}>
+      <SheetContent
+        side="left"
+        className="w-[var(--wiki-sheet-width)] max-w-[calc(100vw-3rem)] sm:max-w-[calc(100vw-3rem)]"
+        style={
+          {
+            '--wiki-sheet-width': selectedWikiDocument
+              ? `${280 + 12 + 32 + wikiPreviewWidth}px`
+              : '420px',
+            maxWidth: 'calc(100vw - 3rem)'
+          } as React.CSSProperties
+        }
+      >
+        <SheetHeader>
+          <SheetTitle>{t.wiki.title}</SheetTitle>
+          <SheetDescription>{t.wiki.description}</SheetDescription>
+        </SheetHeader>
+        <div
+          className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-4"
+          style={
+            selectedWikiDocument
+              ? { gridTemplateColumns: `280px minmax(360px, ${wikiPreviewWidth}px)` }
+              : undefined
+          }
+        >
+          <div className="flex min-h-0 flex-col gap-2">
+            <Input
+              value={wikiSearchQuery}
+              onChange={(event) => setWikiSearchQuery(event.target.value)}
+              placeholder={t.wiki.searchPlaceholder}
+            />
+            <div className="min-h-0 space-y-2 overflow-auto">
+              {wikiLoading && (
+                <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+                  <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+                  {t.wiki.loading}
+                </div>
+              )}
+              {!wikiLoading && wikiDocuments.length === 0 && (
+                <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                  {t.wiki.empty}
+                </div>
+              )}
+              {!wikiLoading && wikiDocuments.length > 0 && filteredWikiDocuments.length === 0 && (
+                <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                  {t.wiki.empty}
+                </div>
+              )}
+              {filteredWikiDocuments.map((document) => (
+                <button
+                  key={document.id}
+                  type="button"
+                  className={`block w-full min-w-0 overflow-hidden rounded-md border p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
+                    selectedWikiDocument?.id === document.id
+                      ? 'border-primary/70 ring-1 ring-primary/30'
+                      : ''
+                  }`}
+                  onClick={() => void openWikiDocument(document)}
+                >
+                  <span className="block truncate font-medium">{document.title}</span>
+                  <span className="mt-1 block truncate text-muted-foreground">
+                    {formatHistoryTime(document.updatedAt)}
+                  </span>
+                  {document.excerpt && (
+                    <span className="mt-2 line-clamp-2 block overflow-hidden break-words leading-snug text-muted-foreground">
+                      {document.excerpt}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+          {selectedWikiDocument && (
+            <div className="relative min-h-0 overflow-auto rounded-md border bg-background">
+              {wikiDocumentLoadingId === selectedWikiDocument.id ? (
+                <div className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
+                  <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+                  {t.wiki.loading}
+                </div>
+              ) : wikiEditing ? (
+                <div className="space-y-4 p-5 text-sm">
+                  <Field>
+                    <FieldLabel htmlFor="wiki-edit-title">{t.wiki.titleLabel}</FieldLabel>
+                    <Input
+                      id="wiki-edit-title"
+                      value={wikiEditTitle}
+                      onChange={(event) => setWikiEditTitle(event.target.value)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="wiki-edit-content">{t.wiki.markdownSource}</FieldLabel>
+                    <Textarea
+                      id="wiki-edit-content"
+                      className="min-h-[520px] resize-y font-mono text-xs"
+                      value={wikiEditContent}
+                      onChange={(event) => setWikiEditContent(event.target.value)}
+                    />
+                  </Field>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setWikiEditing(false)
+                        setWikiEditTitle(selectedWikiDocument.title)
+                        setWikiEditContent(selectedWikiDocument.content)
+                      }}
+                      disabled={wikiSaving}
+                    >
+                      {t.wiki.cancelEdit}
+                    </Button>
+                    <Button type="button" onClick={saveWikiEdits} disabled={wikiSaving}>
+                      {wikiSaving && (
+                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                      )}
+                      {t.wiki.saveEdit}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <article className="mx-auto w-full max-w-4xl space-y-4 p-5 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-base font-semibold">{selectedWikiDocument.title}</h2>
+                      <p className="mt-1 break-all text-xs text-muted-foreground">
+                        {selectedWikiDocument.path}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setWikiEditTitle(selectedWikiDocument.title)
+                        setWikiEditContent(selectedWikiDocument.content)
+                        setWikiEditing(true)
+                      }}
+                    >
+                      {t.wiki.edit}
+                    </Button>
+                  </div>
+                  <MarkdownContent value={selectedWikiDocument.content} />
+                </article>
+              )}
+              <div
+                className="absolute inset-y-0 right-0 hidden w-2 cursor-col-resize hover:bg-primary/40 lg:block"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t.wiki.resize}
+                title={t.wiki.resize}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  wikiSheetResizeRef.current = {
+                    startX: event.clientX,
+                    startWidth: wikiPreviewWidth
+                  }
+                  document.body.style.cursor = 'col-resize'
+                  document.body.style.userSelect = 'none'
+                }}
+              />
+            </div>
+          )}
+        </div>
+        <SheetFooter className="gap-2 sm:justify-between">
+          <SkillManageStatus message={wikiMessage} />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refreshWikiDocuments()}
+            disabled={wikiLoading}
+          >
+            {wikiLoading && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
+            {t.wiki.refresh}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+
   return (
     <main className="flex h-full flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center justify-between border-b px-4">
@@ -2531,14 +3219,25 @@ function App(): React.JSX.Element {
           <span className="text-sm font-semibold">Crescent</span>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t.wiki.title}
+            title={t.wiki.title}
+            onClick={() => setWikiSheetOpen(true)}
+          >
+            <BookOpenIcon aria-hidden="true" />
+          </Button>
           <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
             <SelectTrigger
               size="sm"
-              className="size-8 justify-center px-0 [&>svg:last-child]:hidden"
+              className="h-8 w-auto min-w-28 justify-start px-2"
               aria-label={t.app.language}
               title={t.app.language}
             >
               <LanguagesIcon aria-hidden="true" />
+              <SelectValue aria-label={t.app.language} />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
@@ -2572,14 +3271,28 @@ function App(): React.JSX.Element {
                   <Field>
                     <div className="flex items-center justify-between gap-2">
                       <FieldLabel htmlFor="provider">{t.settings.providerList}</FieldLabel>
-                      <Button type="button" variant="outline" size="sm" onClick={createProvider}>
-                        <PlusIcon data-icon="inline-start" />
-                        {t.settings.newProvider}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={createProvider}>
+                          <PlusIcon data-icon="inline-start" />
+                          {t.settings.newProvider}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={config.providers.length <= 1}
+                          aria-label={t.settings.deleteProvider}
+                          title={t.settings.deleteProvider}
+                          onClick={deleteSettingsProvider}
+                        >
+                          <Trash2Icon aria-hidden="true" />
+                        </Button>
+                      </div>
                     </div>
                     <Select
                       value={settingsProvider.id}
-                      onValueChange={(value) => setSettingsProviderId(value)}
+                      onValueChange={selectSettingsProvider}
                     >
                       <SelectTrigger id="provider" className="w-full">
                         <SelectValue placeholder={t.settings.providerList} />
@@ -2622,7 +3335,7 @@ function App(): React.JSX.Element {
                       id="provider-base-url"
                       value={settingsProvider.baseUrl}
                       onChange={(event) => updateSettingsProvider('baseUrl', event.target.value)}
-                      placeholder="http://nova.dmxwg.yiducloud.cn/litellm"
+                      placeholder="https://api.deepseek.com"
                     />
                     <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
                   </Field>
@@ -2641,17 +3354,18 @@ function App(): React.JSX.Element {
                     <Textarea
                       id="provider-models"
                       className="min-h-28 resize-y font-mono text-xs"
-                      value={settingsProviderModelsText}
+                      value={providerModelsText}
                       onChange={(event) => updateSettingsProviderModels(event.target.value)}
-                      placeholder={
-                        'azure/gpt-5.4\nazure/gpt-5.5\nbailian/glm-5-1\nbailian/qwen3.6-plus'
-                      }
+                      placeholder={'deepseek-v4-flash\ndeepseek-v4-pro'}
                     />
                     <FieldDescription>{t.settings.modelListHint}</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
-                    <Select value={config.model} onValueChange={(value) => void applyModel(value)}>
+                    <Select
+                      value={config.model}
+                      onValueChange={(value) => void applyDefaultModel(value)}
+                    >
                       <SelectTrigger id="model" className="w-full">
                         <SelectValue placeholder={t.settings.selectModel} />
                       </SelectTrigger>
@@ -2659,7 +3373,7 @@ function App(): React.JSX.Element {
                         <SelectGroup>
                           <SelectLabel>{t.settings.modelGroup}</SelectLabel>
                           {modelOptions.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
+                            <SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
                               {model.name} · {model.providerName}
                             </SelectItem>
                           ))}
@@ -2667,23 +3381,6 @@ function App(): React.JSX.Element {
                       </SelectContent>
                     </Select>
                     <FieldDescription>{t.settings.modelHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.settings.agentMode}</FieldLabel>
-                    <ToggleGroup
-                      type="single"
-                      value={config.agentMode}
-                      onValueChange={(value) => {
-                        if (value === 'react' || value === 'plan-execute') {
-                          updateConfig('agentMode', value)
-                        }
-                      }}
-                      className="justify-start"
-                    >
-                      <ToggleGroupItem value="react">ReAct</ToggleGroupItem>
-                      <ToggleGroupItem value="plan-execute">Plan-and-Execute</ToggleGroupItem>
-                    </ToggleGroup>
-                    <FieldDescription>{t.settings.planExecuteHint}</FieldDescription>
                   </Field>
                   <Field>
                     <label
@@ -3022,6 +3719,7 @@ function App(): React.JSX.Element {
           </Sheet>
         </div>
       </header>
+      {wikiSheet}
       <section className="flex min-h-0 flex-1">
         {hiddenPane !== 'terminal' && (
           <div
@@ -3143,6 +3841,22 @@ function App(): React.JSX.Element {
                             variant="ghost"
                             size="icon-xs"
                             className="shrink-0"
+                            aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
+                            title={`${t.wiki.saveFromHistory}: ${item.title}`}
+                            disabled={savingHistoryWikiTabId === item.tabId}
+                            onClick={() => void saveHistorySessionToWiki(item)}
+                          >
+                            {savingHistoryWikiTabId === item.tabId ? (
+                              <Loader2Icon className="animate-spin" aria-hidden="true" />
+                            ) : (
+                              <FileTextIcon aria-hidden="true" />
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="shrink-0"
                             aria-label={`${t.common.delete}: ${item.title}`}
                             title={`${t.common.delete}: ${item.title}`}
                             onClick={() => void deleteHistorySession(item)}
@@ -3167,25 +3881,6 @@ function App(): React.JSX.Element {
                   </SheetFooter>
                 </SheetContent>
               </Sheet>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={hiddenPane === 'chat' ? t.app.showChat : t.app.hideChat}
-                title={hiddenPane === 'chat' ? t.app.showChat : t.app.hideChat}
-                onClick={() => {
-                  setHiddenPane((current) => (current === 'chat' ? null : 'chat'))
-                  window.requestAnimationFrame(() => {
-                    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
-                  })
-                }}
-              >
-                {hiddenPane === 'chat' ? (
-                  <PanelRightOpenIcon aria-hidden="true" />
-                ) : (
-                  <PanelRightCloseIcon aria-hidden="true" />
-                )}
-              </Button>
               {tabMenu && (
                 <div
                   className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
@@ -3507,41 +4202,6 @@ function App(): React.JSX.Element {
         )}
         {hiddenPane !== 'chat' && (
           <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
-            <div className="border-b p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-semibold">{t.app.chatTitle}</h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
-                    title={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
-                    onClick={() => {
-                      setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
-                    }}
-                  >
-                    {hiddenPane === 'terminal' ? (
-                      <PanelLeftOpenIcon aria-hidden="true" />
-                    ) : (
-                      <PanelLeftCloseIcon aria-hidden="true" />
-                    )}
-                  </Button>
-                  <Badge variant={activeTab.terminalMode === 'pty' ? 'secondary' : 'destructive'}>
-                    {activeTab.terminalMode.toUpperCase()}
-                  </Badge>
-                  <Badge variant={activeAgentPending ? 'secondary' : 'outline'}>
-                    {activeTab.agentThinking
-                      ? t.input.thinking
-                      : activeTab.agentBusy
-                        ? t.app.running
-                        : formatAgentMode(config.agentMode)}
-                  </Badge>
-                </div>
-              </div>
-            </div>
             <div ref={agentLogRef} className="min-h-0 flex-1 space-y-2 overflow-auto p-4 text-sm">
               {activeTab.agentLog.map((entry) => (
                 <div
@@ -3583,6 +4243,23 @@ function App(): React.JSX.Element {
             <div className="space-y-3 border-t p-4">
               <form onSubmit={submitAgent} className="space-y-2">
                 <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    aria-label={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
+                    title={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
+                    onClick={() => {
+                      setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
+                    }}
+                  >
+                    {hiddenPane === 'terminal' ? (
+                      <PanelLeftOpenIcon aria-hidden="true" />
+                    ) : (
+                      <PanelLeftCloseIcon aria-hidden="true" />
+                    )}
+                  </Button>
                   <Select value={activeProviderId} onValueChange={applyProvider}>
                     <SelectTrigger className="h-8 min-w-0 flex-1">
                       <SelectValue aria-label={t.app.provider} />
@@ -3598,24 +4275,43 @@ function App(): React.JSX.Element {
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <Select value={config.model} onValueChange={(value) => void applyModel(value)}>
+                  <Select value={activeTabModelId} onValueChange={applyModel}>
                     <SelectTrigger className="h-8 min-w-0 flex-1">
                       <span className="sr-only">
                         <SelectValue aria-label={t.app.model} />
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
                         <StatusDot state={aiState} />
-                        <span className="truncate">{activeModel?.name ?? config.model}</span>
+                        <span className="truncate">{activeModel?.name ?? activeTabModelId}</span>
                       </span>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>{t.app.model}</SelectLabel>
                         {(filteredModels.length ? filteredModels : visibleModels).map((model) => (
-                          <SelectItem key={model.id} value={model.id}>
+                          <SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
                             {model.name}
                           </SelectItem>
                         ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={config.agentMode}
+                    onValueChange={(value) => {
+                      if (value === 'react' || value === 'plan-execute') {
+                        updateConfig('agentMode', value)
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-8 min-w-0 flex-1">
+                      <SelectValue aria-label={t.settings.agentMode} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>{t.settings.agentMode}</SelectLabel>
+                        <SelectItem value="react">ReAct</SelectItem>
+                        <SelectItem value="plan-execute">Plan-and-Execute</SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>
@@ -3626,11 +4322,12 @@ function App(): React.JSX.Element {
                       <div className="border-b px-3 py-2 text-muted-foreground">
                         {t.input.slashCommandHint}
                       </div>
-                      <div className="max-h-56 overflow-auto p-1">
+                      <div ref={slashCommandListRef} className="max-h-56 overflow-auto p-1">
                         {slashCommandOptions.map((command, index) => (
                           <button
                             key={command.id}
                             type="button"
+                            data-slash-command-index={index}
                             className={`block w-full rounded px-2 py-2 text-left transition-colors ${
                               index === selectedSlashCommandIndex
                                 ? 'bg-secondary text-secondary-foreground'
@@ -3641,7 +4338,16 @@ function App(): React.JSX.Element {
                               insertSlashCommand(command)
                             }}
                           >
-                            <span className="block font-medium">/{command.id}</span>
+                            <span className="block font-medium">
+                              {command.connection ||
+                              command.agentMode ||
+                              command.pathReferenceKind ||
+                              command.toolRef ||
+                              command.wikiDocument ||
+                              command.wikiRef
+                                ? command.title
+                                : `/${command.id}`}
+                            </span>
                             <span className="block text-muted-foreground">
                               {command.description}
                             </span>
@@ -3650,8 +4356,58 @@ function App(): React.JSX.Element {
                       </div>
                     </div>
                   )}
-                  {activeTab.skillRefs.length > 0 && (
+                  {(activeTab.skillRefs.length > 0 ||
+                    activeTab.pathRefs.length > 0 ||
+                    activeTab.toolRefs.length > 0 ||
+                    activeTab.wikiRefs.length > 0) && (
                     <div className="mb-2 flex flex-wrap gap-2 px-1">
+                      {activeTab.wikiRefs.map((wiki) => (
+                        <Badge
+                          key={wiki.id}
+                          variant="secondary"
+                          className="max-w-full gap-1 rounded-md pr-1"
+                          title={wiki.path}
+                        >
+                          <BookOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          <span className="truncate">
+                            {t.input.referencedWiki}: {wiki.title}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4 hover:bg-background/70"
+                            aria-label={`${t.input.removeWikiRef}: ${wiki.title}`}
+                            title={`${t.input.removeWikiRef}: ${wiki.title}`}
+                            onClick={() => removeWikiRef(wiki.id)}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </Badge>
+                      ))}
+                      {activeTab.toolRefs.map((tool) => (
+                        <Badge
+                          key={tool.id}
+                          variant="secondary"
+                          className="max-w-full gap-1 rounded-md pr-1"
+                          title={tool.description}
+                        >
+                          <span className="truncate">
+                            {t.input.referencedTool}: {tool.name}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4 hover:bg-background/70"
+                            aria-label={`${t.input.removeToolRef}: ${tool.name}`}
+                            title={`${t.input.removeToolRef}: ${tool.name}`}
+                            onClick={() => removeToolRef(tool.id)}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </Badge>
+                      ))}
                       {activeTab.skillRefs.map((skill) => (
                         <Badge
                           key={skill.id}
@@ -3672,6 +4428,37 @@ function App(): React.JSX.Element {
                             aria-label={`${t.input.removeSkillRef}: ${skill.name}`}
                             title={`${t.input.removeSkillRef}: ${skill.name}`}
                             onClick={() => removeSkillRef(skill.id)}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </Badge>
+                      ))}
+                      {activeTab.pathRefs.map((reference) => (
+                        <Badge
+                          key={reference.id}
+                          variant="secondary"
+                          className="max-w-full gap-1 rounded-md pr-1"
+                          title={reference.path}
+                        >
+                          {reference.kind === 'directory' ? (
+                            <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          ) : (
+                            <FileIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          )}
+                          <span className="truncate">
+                            {reference.kind === 'directory'
+                              ? t.input.referencedDirectory
+                              : t.input.referencedFile}
+                            : {reference.name}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4 hover:bg-background/70"
+                            aria-label={`${t.input.removePathRef}: ${reference.name}`}
+                            title={`${t.input.removePathRef}: ${reference.name}`}
+                            onClick={() => removePathRef(reference.id)}
                           >
                             <XIcon aria-hidden="true" />
                           </Button>
@@ -3699,6 +4486,26 @@ function App(): React.JSX.Element {
                           : t.input.currentTerminal}
                     </span>
                     <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.input.referenceFile}
+                        title={t.input.referenceFile}
+                        onClick={() => void pickPathReference('file')}
+                      >
+                        <FileIcon aria-hidden="true" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.input.referenceDirectory}
+                        title={t.input.referenceDirectory}
+                        onClick={() => void pickPathReference('directory')}
+                      >
+                        <FolderOpenIcon aria-hidden="true" />
+                      </Button>
                       <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
                       {activeTab.agentBusy && (
                         <Button
@@ -4501,10 +5308,6 @@ function normalizeStoredAgentLogKind(kind: string): AgentLogEntry['kind'] {
   return 'status'
 }
 
-function formatAgentMode(value: AgentConfig['agentMode']): string {
-  return value === 'plan-execute' ? 'Plan-and-Execute' : 'ReAct'
-}
-
 function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
   switch (risk) {
     case 'low':
@@ -4890,8 +5693,17 @@ function parseProviderModels(value: string): AgentProviderModelConfig[] {
     .map((id) => ({
       id,
       name: id,
-      reasoning: id.includes('gpt-5')
+      reasoning: isReasoningModelId(id)
     }))
+}
+
+function formatProviderModels(models: AgentProviderModelConfig[]): string {
+  return models.map((model) => model.id).join('\n')
+}
+
+function isReasoningModelId(id: string): boolean {
+  const normalized = id.toLowerCase()
+  return normalized.includes('gpt-5') || normalized.includes('reasoner') || normalized.endsWith('-pro')
 }
 
 function parseCommandWhitelist(value: string): string[] {
@@ -4943,6 +5755,50 @@ function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOpti
   )
 }
 
+function resolveTabModelSelection(
+  tab: AgentTerminalTab | undefined,
+  config: AgentConfig,
+  models: AgentModelOption[]
+): { providerId?: string; model: string } {
+  const providerId = tab?.providerId ?? config.providerId
+  const providerModels = models.filter((model) => model.providerId === providerId)
+  const model =
+    tab?.model && providerModels.some((candidate) => candidate.id === tab.model)
+      ? tab.model
+      : (providerModels[0]?.id ?? config.model)
+
+  return { providerId, model }
+}
+
+function buildAvailableToolRefs(
+  validation: AgentValidationResult | undefined
+): AgentToolReference[] {
+  const builtInToolNames = new Set(BUILT_IN_TOOL_CATALOG.map((tool) => tool.name))
+  const builtInTools: AgentToolReference[] = BUILT_IN_TOOL_CATALOG.map((tool) => ({
+    id: `built-in:${tool.name}`,
+    name: tool.name,
+    description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,
+    source: 'built-in'
+  }))
+
+  const dynamicTools =
+    validation?.tools
+      ?.filter((tool) => !builtInToolNames.has(tool.name))
+      .map((tool) => ({
+        id: `openapi:${tool.name}`,
+        name: tool.name,
+        description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,
+        source: 'openapi' as const
+      })) ?? []
+
+  const tools = new Map<string, AgentToolReference>()
+  for (const tool of [...builtInTools, ...dynamicTools]) {
+    tools.set(tool.id, tool)
+  }
+
+  return [...tools.values()]
+}
+
 function getSlashCommandQuery(value: string): string | undefined {
   if (!value.startsWith('/') || value.includes('\n')) return undefined
 
@@ -4960,85 +5816,151 @@ function matchesSlashCommand(command: SlashCommandOption, query: string | undefi
   return searchable.includes(query)
 }
 
+function matchesSkillSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const skillQuery = query.slice('skill:'.length).trim()
+  if (!skillQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(skillQuery)
+}
+
+function isToolSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('tool:')
+}
+
+function matchesToolSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const toolQuery = query
+    .replace(/^tool:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!toolQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(toolQuery)
+}
+
+function isWikiSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('wiki:')
+}
+
+function matchesWikiSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const wikiQuery = query
+    .replace(/^wiki:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!wikiQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(wikiQuery)
+}
+
+function isModeSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('mode:')
+}
+
+function matchesModeSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const modeQuery = query
+    .replace(/^mode:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!modeQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(modeQuery)
+}
+
+function isConnectionSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('connection:')
+}
+
+function matchesConnectionSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const connectionQuery = query
+    .replace(/^connection:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!connectionQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(connectionQuery)
+}
+
 function replaceSlashCommandInput(value: string, replacement: string): string {
   if (!value.startsWith('/')) return `${replacement}\n${value}`.trim()
 
   return `${replacement}\n${value.replace(/^\/[^\n]*/, '').replace(/^\n/, '')}`.trim()
 }
 
-function buildSlashCommandOptions(input: {
-  activeProviderId: string
-  activeTab: AgentTerminalTab
-  config: AgentConfig
-  modelName: string
-  skills: AgentSkillOption[]
-  t: Dictionary
-}): SlashCommandOption[] {
-  const connectionText = input.activeTab.connectionId
-    ? [
-        `${input.t.terminal.connectionTarget}: ${input.activeTab.connectionName ?? input.activeTab.connectionId}`,
-        `connectionId: ${input.activeTab.connectionId}`,
-        `tab: ${input.activeTab.title}`
-      ].join('\n')
-    : [
-        `${input.t.terminal.connectionTarget}: ${input.t.connections.noConnections}`,
-        `tab: ${input.activeTab.title}`
-      ].join('\n')
-  const terminalText = [
-    `${input.t.terminal.terminalMode}: ${input.activeTab.terminalMode.toUpperCase()}`,
-    `${input.t.app.workingDirectory}: ${input.activeTab.terminalCwd || '...'}`,
-    `tab: ${input.activeTab.title}`,
-    `ssh: ${input.activeTab.isSsh ? 'true' : 'false'}`
-  ].join('\n')
-
-  const skillOptions = input.skills.map((skill) => buildSkillSlashCommand(skill, input.t))
-
+function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
   return [
     {
       id: 'mode',
-      title: input.t.input.slashMode,
-      description: input.t.input.slashModeDescription,
-      value: `${input.t.settings.agentMode}: ${formatAgentMode(input.config.agentMode)}`,
+      title: t.input.slashMode,
+      description: t.input.slashModeDescription,
+      value: '/mode:',
       keywords: ['mode', 'agent', 'react', 'plan', '模式', '对话模式']
     },
     {
-      id: 'model',
-      title: input.t.input.slashModel,
-      description: input.t.input.slashModelDescription,
-      value: [
-        `${input.t.app.provider}: ${input.activeProviderId}`,
-        `${input.t.app.model}: ${input.modelName}`
-      ].join('\n'),
-      keywords: ['model', 'provider', '模型', '供应商']
-    },
-    {
-      id: 'terminal',
-      title: input.t.input.slashTerminal,
-      description: input.t.input.slashTerminalDescription,
-      value: terminalText,
-      keywords: ['terminal', 'shell', 'cwd', '终端', '目录']
-    },
-    {
       id: 'connection',
-      title: input.t.input.slashConnection,
-      description: input.t.input.slashConnectionDescription,
-      value: connectionText,
+      title: t.input.slashConnection,
+      description: t.input.slashConnectionDescription,
+      value: '/connection:',
       keywords: ['connection', 'ssh', 'host', '连接', '主机']
     },
-    ...skillOptions,
     {
-      id: 'skill',
-      title: input.t.input.slashSkill,
-      description: input.t.input.slashSkillDescription,
+      id: 'file',
+      title: t.input.referenceFile,
+      description: t.input.slashFileDescription,
       value: '',
-      keywords: ['skill', 'skills', '技能']
+      keywords: ['file', 'reference', 'context', '文件', '引用'],
+      pathReferenceKind: 'file'
     },
     {
-      id: 'skills',
-      title: input.t.input.slashSkills,
-      description: input.t.input.slashSkillsDescription,
+      id: 'folder',
+      title: t.input.referenceDirectory,
+      description: t.input.slashFolderDescription,
       value: '',
-      keywords: ['skill', 'skills', 'rules', '技能', '规则']
+      keywords: ['folder', 'directory', 'reference', 'context', '文件夹', '目录', '引用'],
+      pathReferenceKind: 'directory'
+    },
+    {
+      id: 'tool',
+      title: t.input.slashTool,
+      description: t.input.slashToolDescription,
+      value: '/tool:',
+      keywords: ['tool', 'tools', '工具']
+    },
+    {
+      id: 'wiki',
+      title: t.input.slashWiki,
+      description: t.input.slashWikiDescription,
+      value: '/wiki:',
+      keywords: ['wiki', 'knowledge', 'sop', '知识库', '最佳实践']
+    },
+    {
+      id: 'skill',
+      title: t.input.slashSkill,
+      description: t.input.slashSkillDescription,
+      value: '/skill:',
+      keywords: ['skill', 'skills', '技能']
     }
   ]
 }
@@ -5054,6 +5976,71 @@ function buildSkillSlashCommand(skill: AgentSkillOption, t: Dictionary): SlashCo
   }
 }
 
+function buildToolSlashCommand(tool: AgentToolReference): SlashCommandOption {
+  return {
+    id: `tool:${tool.name}`,
+    title: tool.name,
+    description: tool.description,
+    value: '',
+    keywords: ['tool', 'tools', tool.name, tool.description, tool.source],
+    toolRef: tool
+  }
+}
+
+function buildWikiSlashCommand(document: WikiDocumentSummary, t: Dictionary): SlashCommandOption {
+  return {
+    id: `wiki:${document.id}`,
+    title: document.title,
+    description: document.excerpt || t.input.slashWikiDescription,
+    value: '',
+    keywords: ['wiki', 'knowledge', 'sop', document.title, document.excerpt, document.path],
+    wikiDocument: document
+  }
+}
+
+function buildModeSlashCommands(t: Dictionary): SlashCommandOption[] {
+  return [
+    {
+      id: 'mode:react',
+      title: 'ReAct',
+      description: t.settings.planExecuteHint,
+      value: '',
+      keywords: ['mode', 'agent', 'react', '模式'],
+      agentMode: 'react'
+    },
+    {
+      id: 'mode:plan-execute',
+      title: 'Plan-and-Execute',
+      description: t.settings.planExecuteHint,
+      value: '',
+      keywords: ['mode', 'agent', 'plan', 'execute', 'plan-execute', '规划', '执行'],
+      agentMode: 'plan-execute'
+    }
+  ]
+}
+
+function buildConnectionSlashCommand(
+  connection: ConnectionConfig,
+  t: Dictionary
+): SlashCommandOption {
+  return {
+    id: `connection:${connection.id}`,
+    title: connection.name,
+    description: formatConnectionTarget(connection),
+    value: '',
+    keywords: [
+      'connection',
+      'ssh',
+      connection.name,
+      connection.host,
+      connection.user,
+      connection.description,
+      connection.source === 'ssh-config' ? '~/.ssh/config' : t.connections.customConnectionName
+    ].filter((value): value is string => Boolean(value)),
+    connection
+  }
+}
+
 function addUniqueSkillRef(
   skillRefs: AgentSkillOption[],
   skill: AgentSkillOption
@@ -5063,12 +6050,46 @@ function addUniqueSkillRef(
   return [...skillRefs, skill]
 }
 
-function buildAgentInputWithSkillRefs(
+function addUniqueToolRef(
+  toolRefs: AgentToolReference[],
+  tool: AgentToolReference
+): AgentToolReference[] {
+  if (toolRefs.some((current) => current.id === tool.id)) return toolRefs
+
+  return [...toolRefs, tool]
+}
+
+function addUniqueWikiRef(
+  wikiRefs: AgentWikiReference[],
+  wiki: AgentWikiReference
+): AgentWikiReference[] {
+  if (wikiRefs.some((current) => current.id === wiki.id)) return wikiRefs
+
+  return [...wikiRefs, wiki]
+}
+
+function addUniquePathRef(
+  pathRefs: AgentPathReference[],
+  reference: AgentPathReference
+): AgentPathReference[] {
+  if (pathRefs.some((current) => current.id === reference.id)) return pathRefs
+
+  return [...pathRefs, reference]
+}
+
+function buildAgentInputWithReferences(
   input: string,
   skillRefs: AgentSkillOption[],
+  pathRefs: AgentPathReference[],
+  toolRefs: AgentToolReference[],
+  wikiRefs: AgentWikiReference[],
   t: Dictionary
 ): string {
-  if (skillRefs.length === 0) return input
+  const toolLines = toolRefs.flatMap((tool) => [
+    `- ${t.input.slashToolUseLabel}: ${tool.name}`,
+    tool.description ? `  ${t.input.slashToolDescriptionLabel}: ${tool.description}` : '',
+    `  ${t.input.slashToolRequirement}`
+  ])
 
   const skillLines = skillRefs.flatMap((skill) => [
     `- ${t.input.slashSkillUseLabel}: ${skill.name}`,
@@ -5077,25 +6098,81 @@ function buildAgentInputWithSkillRefs(
     `  ${t.input.slashSkillRequirement}`
   ])
 
-  return [
-    `${t.input.referencedSkills}:`,
-    ...skillLines.filter(Boolean),
-    '',
-    `${t.input.slashSkillTaskLabel}:`,
-    input
-  ].join('\n')
+  const pathLines = pathRefs.map((reference) => {
+    const label =
+      reference.kind === 'directory' ? t.input.referencedDirectory : t.input.referencedFile
+    return `- ${label}: ${reference.path}`
+  })
+  const wikiLines = wikiRefs.flatMap((wiki) => [
+    `- ${t.input.slashWikiUseLabel}: ${wiki.title}`,
+    `  ${t.input.slashSkillPathLabel}: ${wiki.path}`,
+    '  ```markdown',
+    wiki.content,
+    '  ```'
+  ])
+
+  const referenceSections = [
+    ...(toolRefs.length > 0 ? [`${t.input.referencedTools}:`, ...toolLines.filter(Boolean)] : []),
+    ...(skillRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 ? [''] : []),
+          `${t.input.referencedSkills}:`,
+          ...skillLines.filter(Boolean)
+        ]
+      : []),
+    ...(pathRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 || skillRefs.length > 0 ? [''] : []),
+          `${t.input.referencedPaths}:`,
+          ...pathLines,
+          t.input.pathReferenceRequirement
+        ]
+      : []),
+    ...(wikiRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 || skillRefs.length > 0 || pathRefs.length > 0 ? [''] : []),
+          `${t.input.referencedWikiDocuments}:`,
+          ...wikiLines,
+          t.input.slashWikiRequirement
+        ]
+      : [])
+  ]
+
+  if (referenceSections.length === 0) return input
+
+  return [...referenceSections, '', `${t.input.slashSkillTaskLabel}:`, input].join('\n')
 }
 
-function formatVisibleInputWithSkillRefs(
+function formatVisibleInputWithReferences(
   input: string,
   skillRefs: AgentSkillOption[],
+  pathRefs: AgentPathReference[],
+  toolRefs: AgentToolReference[],
+  wikiRefs: AgentWikiReference[],
   t: Dictionary
 ): string {
-  if (skillRefs.length === 0) return input
+  const visibleReferences = [
+    toolRefs.length > 0
+      ? `${t.input.referencedTools}: ${toolRefs.map((tool) => `\`${tool.name}\``).join(', ')}`
+      : '',
+    skillRefs.length > 0
+      ? `${t.input.referencedSkills}: ${skillRefs.map((skill) => `\`${skill.name}\``).join(', ')}`
+      : '',
+    pathRefs.length > 0
+      ? `${t.input.referencedPaths}: ${pathRefs
+          .map((reference) => `\`${reference.name}\``)
+          .join(', ')}`
+      : '',
+    wikiRefs.length > 0
+      ? `${t.input.referencedWikiDocuments}: ${wikiRefs
+          .map((wiki) => `\`${wiki.title}\``)
+          .join(', ')}`
+      : ''
+  ].filter(Boolean)
 
-  const skills = skillRefs.map((skill) => `\`${skill.name}\``).join(', ')
+  if (visibleReferences.length === 0) return input
 
-  return `${t.input.referencedSkills}: ${skills}\n\n${input}`
+  return `${visibleReferences.join('\n')}\n\n${input}`
 }
 
 function buildPostLoginAgentInput(
@@ -5746,6 +6823,91 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
 
 function safeHref(value: string): string {
   return /^(https?:|mailto:)/i.test(value) ? value : ''
+}
+
+function buildWikiContentFromHistory(detail: StoredSessionHistoryDetail, t: Dictionary): string {
+  const title = `${detail.title} SOP`
+  const logs = detail.logs
+    .filter((log) => log.kind === 'user' || log.kind === 'assistant' || log.kind === 'error')
+    .slice(-20)
+  const sourceLines = [
+    `- ${t.wiki.sourceSession}: ${detail.title}`,
+    detail.connectionName ? `- ${t.terminal.connectionTarget}: ${detail.connectionName}` : '',
+    detail.terminalCwd ? `- ${t.app.workingDirectory}: ${detail.terminalCwd}` : '',
+    `- ${t.history.runs}: ${detail.runCount}`,
+    `- ${t.wiki.savedAt}: ${new Date().toISOString()}`
+  ].filter(Boolean)
+
+  const conversationLines = logs.flatMap((log) => [
+    `### ${formatWikiLogKind(log.kind, t)} · ${log.createdAt}`,
+    '',
+    truncateWikiContent(log.text.trim(), 6000),
+    ''
+  ])
+
+  return [
+    `# ${title}`,
+    '',
+    `## ${t.wiki.overview}`,
+    '',
+    t.wiki.generatedFromHistory,
+    '',
+    `## ${t.wiki.sourceInfo}`,
+    '',
+    ...sourceLines,
+    '',
+    `## ${t.wiki.bestPracticeDraft}`,
+    '',
+    `- ${t.wiki.fillInPurpose}`,
+    `- ${t.wiki.fillInPrerequisites}`,
+    `- ${t.wiki.fillInSteps}`,
+    `- ${t.wiki.fillInRollback}`,
+    '',
+    `## ${t.wiki.historyTranscript}`,
+    '',
+    ...conversationLines
+  ].join('\n')
+}
+
+function formatWikiLogKind(kind: string, t: Dictionary): string {
+  if (kind === 'user') return t.common.user
+  if (kind === 'assistant') return t.common.assistant
+  if (kind === 'error') return t.common.error
+  return kind
+}
+
+function truncateWikiContent(content: string, maxChars: number): string {
+  return content.length > maxChars ? `${content.slice(0, maxChars)}\n...[truncated]` : content
+}
+
+function upsertWikiSummary(
+  documents: WikiDocumentSummary[],
+  document: WikiDocument
+): WikiDocumentSummary[] {
+  const summary: WikiDocumentSummary = {
+    id: document.id,
+    title: document.title,
+    path: document.path,
+    updatedAt: document.updatedAt,
+    excerpt: document.excerpt
+  }
+
+  return [summary, ...documents.filter((candidate) => candidate.id !== document.id)]
+}
+
+function filterWikiDocuments(
+  documents: WikiDocumentSummary[],
+  query: string
+): WikiDocumentSummary[] {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return documents
+
+  return documents.filter((document) =>
+    [document.title, document.excerpt, document.path]
+      .join('\n')
+      .toLowerCase()
+      .includes(normalized)
+  )
 }
 
 export default App

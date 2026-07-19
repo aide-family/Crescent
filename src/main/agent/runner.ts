@@ -12,6 +12,7 @@ export interface AgentRunControls {
   signal?: AbortSignal
   instructionContext?: string
   skillContext?: string
+  wikiContext?: string
   consumeSupplementalInputs?: () => string[]
 }
 
