@@ -24,7 +24,12 @@ import type {
   OperationRecord
 } from './agent/types'
 
-export { getCrescentDir, getCrescentConfigPath, getCrescentMemoryPath } from './crescent-paths'
+export {
+  getCrescentDir,
+  getCrescentConfigPath,
+  getCrescentMemoryPath,
+  getCrescentWikiDir
+} from './crescent-paths'
 
 export interface CrescentConfigFile {
   agent: AgentConfig
@@ -40,6 +45,7 @@ export const defaultCommandWhitelist: string[] = []
 
 export const defaultAgentConfig: AgentConfig = {
   providers: getDefaultAgentProviders(),
+  providerId: 'nova-litellm',
   model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
   agentMode: 'react',
   maxActiveTools: 5,
@@ -154,14 +160,21 @@ export function appendOperationRecord(
 
 export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig {
   const providers = normalizeAgentProviders(config)
-  const defaultModel = providers[0]?.models[0]?.id ?? defaultAgentConfig.model
+  const requestedProviderId = String(config.providerId ?? '').trim()
+  const provider =
+    providers.find((candidate) => candidate.id === requestedProviderId) ??
+    providers.find((candidate) =>
+      candidate.models.some((model) => model.id === String(config.model ?? '').trim())
+    ) ??
+    providers[0]
+  const defaultModel = provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? defaultAgentConfig.model
   const model = String(config.model ?? defaultAgentConfig.model)
+  const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === model))
 
   return {
     providers,
-    model: providers.some((provider) => provider.models.some((candidate) => candidate.id === model))
-      ? model
-      : defaultModel,
+    providerId: provider?.id ?? defaultAgentConfig.providerId,
+    model: modelOk ? model : defaultModel,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
     maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools),
     commandWhitelist: normalizeStringList(
@@ -180,7 +193,9 @@ function normalizeStringList(value: unknown): string[] {
 
 function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderConfig[] {
   if (Array.isArray(config.providers)) {
-    const providers = config.providers.map(normalizeAgentProvider).filter((provider) => provider.id)
+    const providers = dedupeAgentProviders(
+      config.providers.map(normalizeAgentProvider).filter((provider) => provider.id)
+    )
     if (providers.length) return providers
   }
 
@@ -192,6 +207,15 @@ function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderCon
     baseUrl: legacyBaseUrl || provider.baseUrl,
     apiKey: legacyApiKey || provider.apiKey
   }))
+}
+
+function dedupeAgentProviders(providers: AgentProviderConfig[]): AgentProviderConfig[] {
+  const seen = new Set<string>()
+  return providers.filter((provider) => {
+    if (seen.has(provider.id)) return false
+    seen.add(provider.id)
+    return true
+  })
 }
 
 function normalizeAgentProvider(value: unknown): AgentProviderConfig {

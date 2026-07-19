@@ -6,6 +6,7 @@ import { resolveModelProvider } from './openclaw-config'
 import { AgentPlanner } from './planner'
 import { AgentPromptBuilder } from './prompt-builder'
 import { AgentToolRuntime } from './tool-runtime'
+import { saveWikiDocument } from './wiki'
 import type {
   AgentConfig,
   AgentEvent,
@@ -17,9 +18,11 @@ import type { AgentRunControls } from './runner'
 
 const MAX_TOOL_STEPS = 12
 const MAX_REPEATED_TOOL_CALLS = 3
+const SAVE_WIKI_DOCUMENT_TOOL_NAME = 'save_wiki_document'
 
 export class TerminalAgentCore {
   private readonly promptBuilder = new AgentPromptBuilder()
+  private readonly executedToolNames = new Set<string>()
 
   constructor(
     private readonly config: AgentConfig,
@@ -85,9 +88,10 @@ export class TerminalAgentCore {
       terminalContext,
       planSteps
     })
+    const completedText = await this.ensureRequestedWikiSave(userInput, finalText)
 
-    this.memory.rememberTurn(userInput, finalText)
-    return finalText
+    this.memory.rememberTurn(userInput, completedText)
+    return completedText
   }
 
   private async runChatOnly(input: {
@@ -109,6 +113,7 @@ export class TerminalAgentCore {
               memoryBlock: input.memoryBlock,
               instructionContext: this.controls?.instructionContext,
               skillContext: this.controls?.skillContext,
+              wikiContext: this.controls?.wikiContext,
               terminalContext: input.terminalContext
             })
           },
@@ -144,6 +149,7 @@ export class TerminalAgentCore {
           memoryBlock: input.memoryBlock,
           instructionContext: this.controls?.instructionContext,
           skillContext: this.controls?.skillContext,
+          wikiContext: this.controls?.wikiContext,
           planSteps: input.planSteps,
           terminalContext: input.terminalContext
         })
@@ -243,6 +249,7 @@ export class TerminalAgentCore {
           name: toolCall.function.name,
           message: 'Dispatching tool call.'
         })
+        this.executedToolNames.add(toolCall.function.name)
 
         const result = await input.toolRuntime.execute(
           toolCall.function.name,
@@ -302,6 +309,71 @@ export class TerminalAgentCore {
     this.emit({ type: 'done', message: 'Done.' })
     return text
   }
+
+  private async ensureRequestedWikiSave(userInput: string, finalText: string): Promise<string> {
+    if (!isWikiSaveIntent(userInput)) return finalText
+    if (this.executedToolNames.has(SAVE_WIKI_DOCUMENT_TOOL_NAME)) return finalText
+
+    this.emit({
+      type: 'tool',
+      name: SAVE_WIKI_DOCUMENT_TOOL_NAME,
+      message: 'Saving final answer to the local knowledge base.'
+    })
+
+    try {
+      const document = await saveWikiDocument({
+        title: inferWikiTitle(userInput),
+        content: buildFallbackWikiContent(userInput, finalText)
+      })
+      return [finalText.trim(), '', '---', `已保存到本地知识库：\`${document.path}\``]
+        .filter(Boolean)
+        .join('\n')
+    } catch (error) {
+      return [
+        finalText.trim(),
+        '',
+        '---',
+        `知识库保存失败：${error instanceof Error ? error.message : String(error)}`
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+  }
+}
+
+function isWikiSaveIntent(input: string): boolean {
+  if (/(飞书|feishu|lark|notion|confluence)/i.test(input)) return false
+
+  return /(保存|写入|沉淀|整理|总结).{0,12}(知识库|wiki|SOP|sop|最佳实践)|((知识库|wiki|SOP|sop|最佳实践).{0,12}(保存|写入|沉淀|整理|总结))/.test(
+    input
+  )
+}
+
+function inferWikiTitle(input: string): string {
+  const clusterMatch = input.match(/巡检\s*([a-zA-Z0-9_.-]+)\s*(?:集群)?/)
+  if (clusterMatch?.[1]) return `${clusterMatch[1]} 集群巡检 SOP`
+
+  const compact = input
+    .replace(/[，。,.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48)
+
+  return compact ? `${compact} SOP` : '运维巡检 SOP'
+}
+
+function buildFallbackWikiContent(userInput: string, finalText: string): string {
+  return [
+    `# ${inferWikiTitle(userInput)}`,
+    '',
+    '## 来源请求',
+    '',
+    userInput.trim(),
+    '',
+    '## 巡检总结与 SOP 草稿',
+    '',
+    finalText.trim()
+  ].join('\n')
 }
 
 function buildStepMessages(

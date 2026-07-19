@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { createReadStream } from 'fs'
 import type {
   ChatCompletion,
   ChatCompletionCreateParamsNonStreaming,
@@ -35,6 +36,54 @@ export class AgentBrain {
       },
       options
     )
+  }
+
+  async analyzeImage(
+    input: { dataUrl: string; prompt?: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<string> {
+    const completion = await this.chat(
+      {
+        temperature: 0,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text:
+                  input.prompt?.trim() ||
+                  'Analyze this image and extract all visible text, objects, layout, and operationally relevant details. Be concise but complete.'
+              },
+              {
+                type: 'image_url',
+                image_url: { url: input.dataUrl }
+              }
+            ]
+          }
+        ]
+      },
+      options
+    )
+
+    return completion.choices[0]?.message.content ?? ''
+  }
+
+  async transcribeAudio(
+    input: { path: string; model?: string; language?: string; prompt?: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<string> {
+    const response = await this.client.audio.transcriptions.create(
+      {
+        file: createReadStream(input.path),
+        model: input.model?.trim() || 'whisper-1',
+        ...(input.language?.trim() ? { language: input.language.trim() } : {}),
+        ...(input.prompt?.trim() ? { prompt: input.prompt.trim() } : {})
+      },
+      options
+    )
+
+    return response.text
   }
 
   async selectRelevantTools(input: {

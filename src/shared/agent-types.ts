@@ -6,6 +6,7 @@ export interface AgentConfig {
   openAiApiKey?: string
   openAiBaseUrl?: string
   providers: AgentProviderConfig[]
+  providerId?: string
   model: string
   agentMode: AgentMode
   maxActiveTools: number
@@ -60,6 +61,38 @@ export interface ConnectionInput {
   actions?: string[]
 }
 
+export interface AgentPathReference {
+  id: string
+  kind: 'file' | 'directory'
+  path: string
+  name: string
+}
+
+export interface AgentWikiReference {
+  id: string
+  title: string
+  path: string
+  content: string
+}
+
+export interface WikiDocumentSummary {
+  id: string
+  title: string
+  path: string
+  updatedAt: string
+  excerpt: string
+}
+
+export interface WikiDocument extends WikiDocumentSummary {
+  content: string
+}
+
+export interface WikiSaveInput {
+  title: string
+  content: string
+  id?: string
+}
+
 export interface OperationRecord {
   id: string
   createdAt: string
@@ -74,6 +107,8 @@ export interface OperationRecord {
 export interface AgentRunInput {
   runId?: string
   input: string
+  providerId?: string
+  model?: string
   terminalContext?: string
   connectionId?: string
   tabId?: string

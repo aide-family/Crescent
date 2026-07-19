@@ -2,6 +2,9 @@ import { AgentBrain } from './brain'
 import { validateGeneratedShellCommand } from './shell-command-validator'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { OpenApiToolExecutor } from './tool-executor'
+import { DOCUMENT_PARSE_TOOLS, executeDocumentParseTool } from './document-tools'
+import { saveWikiDocument } from './wiki'
+import { findBuiltInToolCatalogEntry } from '../../shared/agent-tool-catalog'
 import type {
   AgentConfig,
   AgentEvent,
@@ -15,6 +18,7 @@ import type {
 const TERMINAL_TOOL_NAME = 'execute_terminal_command'
 const SUBTERMINAL_TOOL_NAME = 'execute_subterminal_command'
 const LOCAL_FILE_WRITE_TOOL_NAME = 'write_local_file'
+const SAVE_WIKI_DOCUMENT_TOOL_NAME = 'save_wiki_document'
 const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   type: 'function',
   function: {
@@ -96,6 +100,35 @@ const LOCAL_FILE_WRITE_TOOL: OpenAiTool = {
     }
   }
 }
+const SAVE_WIKI_DOCUMENT_TOOL: OpenAiTool = {
+  type: 'function',
+  function: {
+    name: SAVE_WIKI_DOCUMENT_TOOL_NAME,
+    description:
+      'Save a Markdown SOP or best-practice document into the Crescent local knowledge base. Use this when the user asks to save operations, inspections, troubleshooting steps, SOPs, or best practices to the knowledge base/wiki. The document is stored as a .md file next to the Crescent config files and becomes retrievable in later conversations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description:
+            'Knowledge-base document title. Use a concise operational title, for example "zhangke K8s 集群巡检 SOP".'
+        },
+        content: {
+          type: 'string',
+          description:
+            'Full Markdown content to save. Include purpose, scope, prerequisites, repeatable steps, verification, risks, rollback/escalation notes, and source evidence when available.'
+        },
+        id: {
+          type: 'string',
+          description:
+            'Optional stable markdown filename or id. Omit unless updating a known existing wiki document.'
+        }
+      },
+      required: ['title', 'content']
+    }
+  }
+}
 
 interface ToolHandler {
   schema: OpenAiTool
@@ -128,6 +161,8 @@ export class AgentToolRuntime {
     if (input.localFileWriter) {
       runtime.registerLocalFileWriteTool(input.localFileWriter, input.emit)
     }
+    runtime.registerWikiTool(input.emit)
+    runtime.registerDocumentParseTools(input.brain, input.emit)
 
     if (hasOpenApiConfig(input.config)) {
       await runtime.registerOpenApiTools(input)
@@ -163,12 +198,7 @@ export class AgentToolRuntime {
   ): void {
     this.handlers.set(TERMINAL_TOOL_NAME, {
       schema: TERMINAL_COMMAND_TOOL,
-      catalog: {
-        name: TERMINAL_TOOL_NAME,
-        method: 'post',
-        path: 'terminal://current-session',
-        description: TERMINAL_COMMAND_TOOL.function.description ?? ''
-      },
+      catalog: findBuiltInToolCatalogEntry(TERMINAL_TOOL_NAME),
       execute: async (rawArguments) => {
         const args = parseTerminalCommandArgs(rawArguments)
         const validation = validateGeneratedShellCommand(args.command)
@@ -204,12 +234,7 @@ export class AgentToolRuntime {
   ): void {
     this.handlers.set(SUBTERMINAL_TOOL_NAME, {
       schema: SUBTERMINAL_COMMAND_TOOL,
-      catalog: {
-        name: SUBTERMINAL_TOOL_NAME,
-        method: 'post',
-        path: 'terminal://temporary-subterminal',
-        description: SUBTERMINAL_COMMAND_TOOL.function.description ?? ''
-      },
+      catalog: findBuiltInToolCatalogEntry(SUBTERMINAL_TOOL_NAME),
       execute: async (rawArguments) => {
         const args = parseSubterminalCommandArgs(rawArguments)
         const validation = validateGeneratedShellCommand(args.command)
@@ -249,12 +274,7 @@ export class AgentToolRuntime {
   ): void {
     this.handlers.set(LOCAL_FILE_WRITE_TOOL_NAME, {
       schema: LOCAL_FILE_WRITE_TOOL,
-      catalog: {
-        name: LOCAL_FILE_WRITE_TOOL_NAME,
-        method: 'post',
-        path: 'file://local-artifact',
-        description: LOCAL_FILE_WRITE_TOOL.function.description ?? ''
-      },
+      catalog: findBuiltInToolCatalogEntry(LOCAL_FILE_WRITE_TOOL_NAME),
       execute: async (rawArguments) => {
         const args = parseLocalFileWriteArgs(rawArguments)
         emit({
@@ -269,6 +289,50 @@ export class AgentToolRuntime {
         })
       }
     })
+  }
+
+  private registerWikiTool(emit: (event: AgentEvent) => void): void {
+    this.handlers.set(SAVE_WIKI_DOCUMENT_TOOL_NAME, {
+      schema: SAVE_WIKI_DOCUMENT_TOOL,
+      catalog: findBuiltInToolCatalogEntry(SAVE_WIKI_DOCUMENT_TOOL_NAME),
+      execute: async (rawArguments) => {
+        const args = parseWikiSaveArgs(rawArguments)
+        emit({
+          type: 'tool',
+          name: SAVE_WIKI_DOCUMENT_TOOL_NAME,
+          message: `Saving wiki document: ${args.title || '(untitled)'}`
+        })
+
+        try {
+          const document = await saveWikiDocument(args)
+          return { ok: true, document }
+        } catch (error) {
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }
+      }
+    })
+  }
+
+  private registerDocumentParseTools(brain: AgentBrain, emit: (event: AgentEvent) => void): void {
+    for (const schema of DOCUMENT_PARSE_TOOLS) {
+      this.handlers.set(schema.function.name, {
+        schema,
+        catalog: findBuiltInToolCatalogEntry(schema.function.name),
+        execute: async (rawArguments) => {
+          const args = parseDocumentToolPath(rawArguments)
+          emit({
+            type: 'tool',
+            name: schema.function.name,
+            message: `Parsing local file: ${args.path || '(missing path)'}`
+          })
+
+          return executeDocumentParseTool(schema.function.name, rawArguments, brain)
+        }
+      })
+    }
   }
 
   private async registerOpenApiTools(input: AgentToolRuntimeInput): Promise<void> {
@@ -362,6 +426,39 @@ function parseLocalFileWriteArgs(rawArguments: string): {
     }
   } catch {
     return { path: '', content: '', overwrite: false }
+  }
+}
+
+function parseWikiSaveArgs(rawArguments: string): {
+  title: string
+  content: string
+  id?: string
+} {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+
+    if (!isRecord(parsed)) return { title: '', content: '' }
+
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
+      content: typeof parsed.content === 'string' ? parsed.content : '',
+      id: typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id.trim() : undefined
+    }
+  } catch {
+    return { title: '', content: '' }
+  }
+}
+
+function parseDocumentToolPath(rawArguments: string): { path: string } {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+    if (!isRecord(parsed)) return { path: '' }
+
+    return {
+      path: typeof parsed.path === 'string' ? parsed.path.trim() : ''
+    }
+  } catch {
+    return { path: '' }
   }
 }
 

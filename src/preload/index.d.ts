@@ -7,6 +7,7 @@ import type {
   AgentConnectionIntentResult,
   AgentEvent,
   AgentModelOption,
+  AgentPathReference,
   AgentRunInput,
   AgentSkillInstallResult,
   AgentSkillOption,
@@ -21,7 +22,10 @@ import type {
   StoredAgentRun,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
-  StoredSessionTab
+  StoredSessionTab,
+  WikiDocument,
+  WikiDocumentSummary,
+  WikiSaveInput
 } from '../shared/agent-types'
 
 interface TerminalAgentApi {
@@ -75,6 +79,11 @@ interface TerminalAgentApi {
     }) => Promise<AgentSkillInstallResult>
     deleteSkill: (path: string) => Promise<AgentSkillOption[]>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
+    listWikiDocuments: () => Promise<WikiDocumentSummary[]>
+    getWikiDocument: (id: string) => Promise<WikiDocument | undefined>
+    saveWikiDocument: (input: WikiSaveInput) => Promise<WikiDocument>
+    searchWikiDocuments: (query: string) => Promise<WikiDocument[]>
+    pickPathReference: (kind: AgentPathReference['kind']) => Promise<AgentPathReference | undefined>
     saveInstructionFile: (input: {
       name: string
       content: string

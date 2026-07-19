@@ -3,6 +3,7 @@ export interface AgentPromptInput {
   memoryBlock: string
   instructionContext?: string
   skillContext?: string
+  wikiContext?: string
   terminalContext: string
   planSteps?: string[]
 }
@@ -48,6 +49,8 @@ export class AgentPromptBuilder {
       'For inventory/table/report requests, first identify the target set, then prefer one direct read-only collection command that outputs normalized rows. Avoid exploratory detours to indirect systems when a direct source can answer the requested table.',
       'Before every command, make the current decision point clear in your reasoning: what you need to learn or change now, what output would confirm it, and what you will do if it fails.',
       'Interpret execution context and artifact destination separately. Run inspection commands where the target system context exists, but write generated artifacts in the destination context the user requested. If the destination is local to Crescent, use write_local_file; do not send large file content through shell heredocs, python heredocs, or temporary sub-terminals. If the destination is remote/current-context, write there only when that matches the user request.',
+      'When the user says "保存到知识库", "保存到 wiki", "沉淀为 SOP", or asks to save operations as best practice without naming an external product, treat it as the Crescent local knowledge base and call save_wiki_document. Do not ask for Feishu/Lark/wiki-space location unless the user explicitly says 飞书 or provides an external knowledge-base target.',
+      'For local user-referenced documents and media, use the dedicated parser tools before answering about content: parse_pdf_file for PDF, parse_docx_file for DOCX, parse_markdown_file for Markdown/text, analyze_image_file for images, and transcribe_audio_file for audio.',
       'For local generated reports or documents, call write_local_file after collecting evidence. Preserve the requested local directory and filename intent, create a unique filename when needed, and verify the tool result instead of asking the user to run ls.',
       'Preserve user-specified destinations, filenames, namespaces, clusters, hosts, and credential sources. Do not replace them with convenient temporary paths, inferred defaults, or invented credentials. If a required credential or target is missing, ask for it or use an existing configured source instead of fabricating one.',
       'Never call incomplete wrapper, alias, or placeholder commands. If using a wrapper is truly necessary, include the concrete target and subcommand; otherwise use standard shell, ssh, kubectl, or local tools directly.',
@@ -67,6 +70,9 @@ export class AgentPromptBuilder {
       `Long-term memory:\n${input.memoryBlock}`,
       input.instructionContext ? `Local instruction files:\n${input.instructionContext}` : '',
       input.skillContext ? `Agent skills:\n${input.skillContext}` : '',
+      input.wikiContext
+        ? `Knowledge base SOPs and best practices:\n${input.wikiContext}\n\nUse these as reference material when relevant. Treat them as stored operational knowledge, but verify current terminal state before making risky changes.`
+        : '',
       input.terminalContext
         ? `Recent terminal context, use it to answer accurately but do not claim you executed new commands:\n${input.terminalContext}`
         : ''

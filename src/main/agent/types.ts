@@ -22,6 +22,7 @@ export type {
   AgentMemoryRecord,
   AgentMode,
   AgentModelOption,
+  AgentPathReference,
   AgentProviderConfig,
   AgentProviderModelConfig,
   AgentRunInput,
@@ -50,5 +51,8 @@ export type {
   SubterminalCommandExecutor,
   TerminalCommandExecutor,
   TerminalCommandResult,
-  ToolCatalogEntry
+  ToolCatalogEntry,
+  WikiDocument,
+  WikiDocumentSummary,
+  WikiSaveInput
 } from '../../shared/agent-types'

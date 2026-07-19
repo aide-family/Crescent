@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { homedir } from 'os'
-import { dirname, isAbsolute, resolve } from 'path'
+import { basename, dirname, isAbsolute, resolve } from 'path'
 
 import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
 
@@ -15,6 +15,7 @@ import {
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './openclaw-config'
 import { AgentBrain } from './brain'
+import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import {
   buildAgentSkillContext,
   deleteAgentSkill,
@@ -24,6 +25,13 @@ import {
 } from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
+import {
+  formatWikiContext,
+  getWikiDocument,
+  listWikiDocuments,
+  saveWikiDocument,
+  searchWikiDocuments
+} from './wiki'
 import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminal,
@@ -44,13 +52,15 @@ import type {
   AgentConfig,
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
+  AgentPathReference,
   AgentRunInput,
   CommandApprovalDecision,
   CommandApprovalRequest,
   CommandAuditResult,
   ConnectionConfig,
   LocalFileWriter,
-  LocalFileWriteResult
+  LocalFileWriteResult,
+  WikiSaveInput
 } from './types'
 
 interface ActiveAgentRun {
@@ -115,6 +125,31 @@ export function registerAgentIpc(): void {
     return listEditableInstructionFiles()
   })
 
+  ipcMain.handle('agent:list-wiki-documents', () => {
+    return listWikiDocuments()
+  })
+
+  ipcMain.handle('agent:get-wiki-document', (_, id: string) => {
+    return getWikiDocument(id ?? '')
+  })
+
+  ipcMain.handle('agent:save-wiki-document', (_, input: WikiSaveInput) => {
+    return saveWikiDocument(input)
+  })
+
+  ipcMain.handle('agent:search-wiki-documents', (_, query: string) => {
+    return searchWikiDocuments(query ?? '', 12, 6000)
+  })
+
+  ipcMain.handle(
+    'agent:pick-path-reference',
+    async (event, payload: { kind?: AgentPathReference['kind'] }) => {
+      const kind = payload?.kind === 'directory' ? 'directory' : 'file'
+      const selection = await pickAgentPathReference(event.sender, kind)
+      return selection
+    }
+  )
+
   ipcMain.handle(
     'agent:save-instruction-file',
     (_, payload: { name?: string; content?: string }) => {
@@ -157,8 +192,8 @@ export function registerAgentIpc(): void {
       return {
         ok: true,
         modelOk: true,
-        toolCount: 0,
-        tools: []
+        toolCount: BUILT_IN_TOOL_CATALOG.length,
+        tools: BUILT_IN_TOOL_CATALOG
       }
     }
 
@@ -167,8 +202,8 @@ export function registerAgentIpc(): void {
       return {
         ok: true,
         modelOk: true,
-        toolCount: registry.tools.length,
-        tools: registry.catalog.slice(0, 8)
+        toolCount: BUILT_IN_TOOL_CATALOG.length + registry.tools.length,
+        tools: [...BUILT_IN_TOOL_CATALOG, ...registry.catalog]
       }
     } catch (error) {
       return {
@@ -314,7 +349,12 @@ export function registerAgentIpc(): void {
       const connection = findConnection(payload?.connectionId)
       const skillContext = buildAgentSkillContext(input)
       const instructionContext = buildLocalInstructionContext()
-      const agentConfig = readAgentConfig()
+      const wikiContext = formatWikiContext(await searchWikiDocuments(input, 5))
+      const agentConfig = normalizeAgentConfig({
+        ...readAgentConfig(),
+        providerId: payload?.providerId,
+        model: payload?.model
+      })
       const commandAuditor = new CommandAuditor(agentConfig)
       const executeReviewedCommand = async (
         command: string,
@@ -446,6 +486,7 @@ export function registerAgentIpc(): void {
           signal: controller.signal,
           instructionContext,
           skillContext: skillContext.promptBlock,
+          wikiContext,
           consumeSupplementalInputs: () => {
             const run = activeRuns.get(runId)
             if (!run?.supplements.length) return []
@@ -595,6 +636,30 @@ async function requestLocalWriteAuthorization(
     : await dialog.showOpenDialog(options)
 
   return selection.canceled ? undefined : selection.filePaths[0]
+}
+
+async function pickAgentPathReference(
+  webContents: WebContents,
+  kind: AgentPathReference['kind']
+): Promise<AgentPathReference | undefined> {
+  const options: OpenDialogOptions = {
+    properties: [kind === 'directory' ? 'openDirectory' : 'openFile']
+  }
+  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
+  const selection = browserWindow
+    ? await dialog.showOpenDialog(browserWindow, options)
+    : await dialog.showOpenDialog(options)
+
+  if (selection.canceled || !selection.filePaths[0]) return undefined
+
+  const path = resolve(selection.filePaths[0])
+
+  return {
+    id: `${kind}:${path}`,
+    kind,
+    path,
+    name: basename(path) || path
+  }
 }
 
 function resolveLocalArtifactPath(path: string): string {
@@ -758,15 +823,31 @@ function createIsolatedMemory(): AgentMemory {
 }
 
 async function validateModel(config: AgentConfig): Promise<void> {
-  const completion = await new AgentBrain(config).chat({
-    temperature: 0,
-    messages: [
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 8000)
+
+  let completion
+  try {
+    completion = await new AgentBrain(config).chat(
       {
-        role: 'user',
-        content: 'Reply with OK.'
-      }
-    ]
-  })
+        temperature: 0,
+        messages: [
+          {
+            role: 'user',
+            content: 'Reply with OK.'
+          }
+        ]
+      },
+      { signal: controller.signal }
+    )
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Model validation timed out after 8 seconds.')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
 
   const text = completion.choices[0]?.message.content?.trim()
   if (!text) throw new Error('Model returned an empty validation response.')
