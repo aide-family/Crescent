@@ -248,7 +248,7 @@ export class TerminalAgentCore {
         this.emit({
           type: 'tool',
           name: toolCall.function.name,
-          message: 'Dispatching tool call.'
+          message: formatToolCallDetail(toolCall.function.name, toolCall.function.arguments)
         })
         this.executedToolNames.add(toolCall.function.name)
 
@@ -372,6 +372,56 @@ function buildFallbackWikiContent(userInput: string, finalText: string): string 
     '',
     finalText.trim()
   ].join('\n')
+}
+
+function formatToolCallDetail(toolName: string, rawArguments: string): string {
+  const args = parseToolCallArguments(rawArguments)
+  const lines = [`Tool: ${toolName}`]
+
+  if (toolName === 'execute_terminal_command') {
+    lines.push(`Command: ${formatToolArgument(args.command)}`)
+  } else if (toolName === 'execute_subterminal_command') {
+    lines.push(`Terminal: ${formatToolArgument(args.terminalName)}`)
+    lines.push(`Command: ${formatToolArgument(args.command)}`)
+  } else if (toolName === 'write_local_file') {
+    lines.push(`Path: ${formatToolArgument(args.path)}`)
+  } else if (toolName === SAVE_WIKI_DOCUMENT_TOOL_NAME) {
+    lines.push(`Title: ${formatToolArgument(args.title)}`)
+  } else if (
+    toolName.startsWith('parse_') ||
+    toolName.startsWith('analyze_') ||
+    toolName.startsWith('transcribe_')
+  ) {
+    lines.push(`Path: ${formatToolArgument(args.path)}`)
+  } else {
+    lines.push(`Arguments: ${formatToolArgumentsForDisplay(args, rawArguments)}`)
+  }
+
+  return lines.join('\n')
+}
+
+function parseToolCallArguments(rawArguments: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+    return isRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function formatToolArgument(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '(not provided)'
+}
+
+function formatToolArgumentsForDisplay(args: Record<string, unknown>, rawArguments: string): string {
+  const text = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : rawArguments.trim()
+  if (!text) return '(none)'
+
+  return text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
 function buildStepMessages(

@@ -278,6 +278,11 @@ const en = {
     slashWikiUseLabel: 'Use wiki',
     pathReferenceRequirement:
       'Requirement: use these referenced local paths as user-selected context. Do not assume contents have been read unless you intentionally inspect them with an available local tool.',
+    analyzingNextAction: 'Analyzing tool results and deciding the next action',
+    executingPlanStep: 'Executing the current plan step',
+    planUnavailable:
+      'No plan content was returned. The agent will continue from the current request and explain progress in subsequent steps.',
+    reasoningNextStep: 'Assessing the request, current state, and next action',
     synthesizingResult: 'Analyzing command output and preparing the final answer',
     toolDispatching: 'Dispatching tool call',
     toolsConfigured: 'Tools configured',

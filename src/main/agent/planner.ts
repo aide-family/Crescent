@@ -32,23 +32,39 @@ export class AgentPlanner {
     const completion = await this.brain.chat({ temperature: 0, messages })
     const content = completion.choices[0]?.message.content ?? ''
 
-    return { steps: parsePlanSteps(content) }
+    return { steps: parsePlanSteps(content, input.userInput) }
   }
 }
 
-function parsePlanSteps(content: string): string[] {
+function parsePlanSteps(content: string, userInput: string): string[] {
   try {
     const parsed = JSON.parse(content)
     if (Array.isArray(parsed?.steps)) {
-      return parsed.steps.filter((step) => typeof step === 'string' && step.trim()).slice(0, 8)
+      const steps = parsed.steps
+        .filter((step) => typeof step === 'string' && step.trim())
+        .slice(0, 8)
+      if (steps.length > 0) return steps
     }
   } catch {
     // Fall through to line parsing.
   }
 
-  return content
+  const steps = content
     .split('\n')
     .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
     .filter(Boolean)
     .slice(0, 8)
+
+  return steps.length > 0 ? steps : buildFallbackPlan(userInput)
+}
+
+function buildFallbackPlan(userInput: string): string[] {
+  const task = userInput.trim()
+
+  return [
+    task ? `确认当前环境与任务目标：${task}` : '确认当前环境与任务目标',
+    '收集必要上下文并定位影响范围',
+    '按最新观察执行一个可验证的下一步操作',
+    '验证结果并说明已完成、未完成和后续步骤'
+  ]
 }

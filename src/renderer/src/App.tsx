@@ -817,13 +817,16 @@ function App(): React.JSX.Element {
       if (event.type === 'token' || event.type === 'done') return
 
       if (event.type === 'plan') {
+        const detail = event.steps.length
+          ? event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+          : t.input.planUnavailable
         updateAgentRun(tabId, (run) => ({
           ...run,
           actions: [
             ...run.actions,
             {
               title: t.input.createdPlan,
-              detail: event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+              detail
             }
           ]
         }))
@@ -845,8 +848,6 @@ function App(): React.JSX.Element {
       }
 
       if (event.type === 'tool') {
-        if (event.message.startsWith('Submitting command for review:')) return
-
         updateAgentRun(tabId, (run) => ({
           ...run,
           actions: [
@@ -3393,7 +3394,7 @@ function App(): React.JSX.Element {
                       {t.wiki.edit}
                     </Button>
                   </div>
-                  <MarkdownContent value={selectedWikiDocument.content} />
+                  <MarkdownContent value={selectedWikiDocument.content} t={t} />
                 </article>
               )}
               <div
@@ -4324,11 +4325,14 @@ function App(): React.JSX.Element {
         )}
         {hiddenPane !== 'chat' && (
           <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
-            <div ref={agentLogRef} className="min-h-0 flex-1 space-y-2 overflow-auto p-4 text-sm">
+            <div
+              ref={agentLogRef}
+              className="min-h-0 min-w-0 flex-1 space-y-2 overflow-auto p-4 text-sm"
+            >
               {activeTab.agentLog.map((entry) => (
                 <div
                   key={entry.id}
-                  className={isConversationLog(entry.kind) ? logClassName(entry.kind) : ''}
+                  className={isConversationLog(entry.kind) ? `${logClassName(entry.kind)} min-w-0` : 'min-w-0'}
                 >
                   {isConversationLog(entry.kind) ? (
                     <>
@@ -5259,7 +5263,7 @@ function ActionLogRow({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): Re
         </time>
         <span className="truncate text-foreground/90">{summary}</span>
       </summary>
-      <pre className="select-text max-h-72 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+      <pre className="select-text max-h-72 min-w-0 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
         {entry.text}
       </pre>
     </details>
@@ -5290,7 +5294,7 @@ function SkillManageStatus({
 }
 
 function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
-  if (isConversationLog(entry.kind)) return <MarkdownContent value={entry.text} />
+  if (isConversationLog(entry.kind)) return <MarkdownContent value={entry.text} t={t} />
 
   const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
 
@@ -5299,7 +5303,7 @@ function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }):
       <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium marker:text-muted-foreground">
         {summary}
       </summary>
-      <pre className="select-text max-h-80 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+      <pre className="select-text max-h-80 min-w-0 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
         {entry.text}
       </pre>
     </details>
@@ -5593,7 +5597,15 @@ function formatAgentEventActionTitle(
 
 function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Dispatching tool call.') return t.input.toolDispatching
-  if (message.startsWith('Submitting command for review:')) return t.commandReview.submitted
+  if (message.startsWith('Submitting command for review:')) {
+    return `${t.commandReview.submitted}:\n${message.slice('Submitting command for review:'.length).trim()}`
+  }
+  const subterminalCommand = message.match(
+    /^Submitting command in temporary sub-terminal "([^"]+)":\s*([\s\S]+)$/
+  )
+  if (subterminalCommand) {
+    return `${t.commandReview.submitted} (${subterminalCommand[1]}):\n${subterminalCommand[2].trim()}`
+  }
   if (message === 'Command audit classified this as read-only inspection.') {
     return t.commandReview.readOnlyAllowed
   }
@@ -5606,8 +5618,11 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Agent run canceled.') return t.input.agentCanceled
   if (message === 'Planning before execution...') return t.input.createdPlan
   if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
-  if (/^Executing plan with ReAct step /.test(message)) return t.input.createdPlan
-  if (/^Reasoning and acting step /.test(message)) return t.roles.thought
+  if (/^Executing plan with ReAct step /.test(message)) return t.input.executingPlanStep
+  if (/^Reasoning and acting step /.test(message)) return t.input.reasoningNextStep
+  if (message === 'Analyzing tool results and preparing the next action...') {
+    return t.input.analyzingNextAction
+  }
   if (message === 'Analyzing tool results and preparing the final answer...') {
     return t.input.synthesizingResult
   }
@@ -6788,11 +6803,15 @@ async function copyText(value: string): Promise<void> {
   }
 }
 
-function MarkdownContent({ value }: { value: string }): React.JSX.Element {
-  return <div className="select-text space-y-2 leading-relaxed">{renderMarkdownBlocks(value)}</div>
+function MarkdownContent({ value, t }: { value: string; t: Dictionary }): React.JSX.Element {
+  return (
+    <div className="select-text min-w-0 space-y-2 overflow-hidden leading-relaxed break-words">
+      {renderMarkdownBlocks(value, t)}
+    </div>
+  )
 }
 
-function renderMarkdownBlocks(value: string): React.ReactNode[] {
+function renderMarkdownBlocks(value: string, t: Dictionary): React.ReactNode[] {
   const lines = value.replace(/\r\n/g, '\n').split('\n')
   const nodes: React.ReactNode[] = []
   let index = 0
@@ -6830,11 +6849,13 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
       }
       index += 1
       nodes.push(
-        <details key={nodes.length} className="rounded-md border bg-muted/20 p-2">
+        <details key={nodes.length} className="min-w-0 overflow-hidden rounded-md border bg-muted/20 p-2">
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
             {summary}
           </summary>
-          <div className="mt-2 space-y-2">{renderMarkdownBlocks(contentLines.join('\n'))}</div>
+          <div className="mt-2 min-w-0 space-y-2 overflow-hidden">
+            {renderMarkdownBlocks(contentLines.join('\n'), t)}
+          </div>
         </details>
       )
       continue
@@ -6850,7 +6871,7 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
       continue
     }
 
-    const fence = line.match(/^```(\w+)?\s*$/)
+    const fence = line.match(/^```([\w-]+)?\s*$/)
     if (fence) {
       const codeLines: string[] = []
       index += 1
@@ -6860,12 +6881,12 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
       }
       index += 1
       nodes.push(
-        <pre
+        <MarkdownCodeBlock
           key={nodes.length}
-          className="overflow-auto rounded-md border bg-[#111111] p-3 font-mono text-xs leading-relaxed text-zinc-100"
-        >
-          <code>{codeLines.join('\n')}</code>
-        </pre>
+          code={codeLines.join('\n')}
+          language={fence[1] ?? ''}
+          t={t}
+        />
       )
       continue
     }
@@ -6881,7 +6902,7 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
             : 'text-sm font-medium'
 
       nodes.push(
-        <div key={nodes.length} className={className}>
+        <div key={nodes.length} className={`${className} min-w-0 break-words`}>
           {renderInlineMarkdown(heading[2])}
         </div>
       )
@@ -6898,7 +6919,7 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
       nodes.push(
         <blockquote
           key={nodes.length}
-          className="border-l-2 border-border pl-3 text-muted-foreground"
+          className="min-w-0 break-words border-l-2 border-border pl-3 text-muted-foreground"
         >
           {renderInlineMarkdown(quoteLines.join(' '))}
         </blockquote>
@@ -6913,7 +6934,7 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
         index += 1
       }
       nodes.push(
-        <ul key={nodes.length} className="list-disc space-y-1 pl-5">
+        <ul key={nodes.length} className="min-w-0 list-disc space-y-1 pl-5 break-words">
           {items.map((item, itemIndex) => (
             <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
           ))}
@@ -6929,7 +6950,7 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
         index += 1
       }
       nodes.push(
-        <ol key={nodes.length} className="list-decimal space-y-1 pl-5">
+        <ol key={nodes.length} className="min-w-0 list-decimal space-y-1 pl-5 break-words">
           {items.map((item, itemIndex) => (
             <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
           ))}
@@ -6945,13 +6966,54 @@ function renderMarkdownBlocks(value: string): React.ReactNode[] {
       index += 1
     }
     nodes.push(
-      <p key={nodes.length} className="break-words">
+      <p key={nodes.length} className="min-w-0 break-words">
         {renderInlineMarkdown(paragraphLines.join(' '))}
       </p>
     )
   }
 
   return nodes
+}
+
+function MarkdownCodeBlock({
+  code,
+  language,
+  t
+}: {
+  code: string
+  language: string
+  t: Dictionary
+}): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const label = language || 'text'
+
+  async function copyCode(): Promise<void> {
+    await copyText(code)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <div className="min-w-0 overflow-hidden rounded-md border bg-[#111111] text-zinc-100">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-white/5 px-3 py-1.5">
+        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">{label}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="h-6 w-6 shrink-0 text-zinc-300 hover:bg-white/10 hover:text-white"
+          aria-label={copied ? t.common.copied : t.common.copy}
+          title={copied ? t.common.copied : t.common.copy}
+          onClick={() => void copyCode()}
+        >
+          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+        </Button>
+      </div>
+      <pre className="min-w-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
+        <code className="break-words">{code}</code>
+      </pre>
+    </div>
+  )
 }
 
 function isMarkdownBlockStart(line: string): boolean {
@@ -6986,12 +7048,12 @@ function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
   const rows = bodyLines.map(splitMarkdownTableRow)
 
   return (
-    <div className="overflow-auto rounded-md border">
-      <table className="w-full border-collapse text-left text-xs">
+    <div className="min-w-0 overflow-hidden rounded-md border">
+      <table className="w-full table-fixed border-collapse text-left text-xs">
         <thead className="bg-muted/40">
           <tr>
             {headers.map((header, index) => (
-              <th key={index} className="border-b px-2 py-1.5 font-medium">
+              <th key={index} className="break-words border-b px-2 py-1.5 font-medium">
                 {renderInlineMarkdown(header)}
               </th>
             ))}
@@ -7001,7 +7063,7 @@ function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
           {rows.map((row, rowIndex) => (
             <tr key={rowIndex} className="border-b last:border-b-0">
               {headers.map((_, cellIndex) => (
-                <td key={cellIndex} className="px-2 py-1.5 align-top">
+                <td key={cellIndex} className="break-words px-2 py-1.5 align-top">
                   {renderInlineMarkdown(row[cellIndex] ?? '')}
                 </td>
               ))}
@@ -7034,7 +7096,10 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
     const token = match[0]
     if (token.startsWith('`')) {
       nodes.push(
-        <code key={nodes.length} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+        <code
+          key={nodes.length}
+          className="break-all rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
+        >
           {token.slice(1, -1)}
         </code>
       )
@@ -7048,7 +7113,7 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
           <a
             key={nodes.length}
             href={href}
-            className="text-cyan-300 underline underline-offset-2"
+            className="break-words text-cyan-300 underline underline-offset-2"
             rel="noreferrer"
             target="_blank"
           >
