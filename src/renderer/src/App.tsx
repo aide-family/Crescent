@@ -146,6 +146,12 @@ interface AgentRunAction {
   detail: string
 }
 
+interface PasswordPromptRequest {
+  tabId: string
+  title: string
+  prompt: string
+}
+
 type SkillManageMessage = {
   type: 'info' | 'success' | 'error'
   text: string
@@ -292,9 +298,11 @@ function App(): React.JSX.Element {
   const pipeHistoryIndexRef = useRef<number | null>(null)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
+  const passwordPromptInputRef = useRef<HTMLInputElement | null>(null)
   const slashCommandListRef = useRef<HTMLDivElement | null>(null)
   const activeTabIdRef = useRef('default')
   const tabsRef = useRef<AgentTerminalTab[]>([])
+  const connectionsRef = useRef<ConnectionConfig[]>([])
   const subterminalResizeRef = useRef<{
     tabId: string
     leftId: string
@@ -314,7 +322,11 @@ function App(): React.JSX.Element {
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
-  const restoreTerminalConnectionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
+  const suppressTerminalReconnectRef = useRef(new Set<string>())
+  const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
+  const passwordPromptBuffersRef = useRef(new Map<string, string>())
+  const passwordPromptOpenTabsRef = useRef(new Set<string>())
+  const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
   const runAgentConversationRef = useRef<
     | ((
         input: string,
@@ -368,6 +380,11 @@ function App(): React.JSX.Element {
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
   const [connections, setConnections] = useState<ConnectionConfig[]>([])
+  const [passwordPromptRequest, setPasswordPromptRequest] = useState<PasswordPromptRequest | null>(
+    null
+  )
+  const [passwordPromptValue, setPasswordPromptValue] = useState('')
+  const [passwordPromptError, setPasswordPromptError] = useState('')
   const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
@@ -994,8 +1011,19 @@ function App(): React.JSX.Element {
   }, [tabs])
 
   useEffect(() => {
-    restoreTerminalConnectionRef.current = restoreTerminalConnection
+    connectionsRef.current = connections
+  }, [connections])
+
+  useEffect(() => {
+    restoreTerminalSessionRef.current = restoreTerminalSession
   })
+
+  useEffect(() => {
+    if (!passwordPromptRequest) return
+
+    passwordPromptRequestRef.current = passwordPromptRequest
+    window.requestAnimationFrame(() => passwordPromptInputRef.current?.focus())
+  }, [passwordPromptRequest])
 
   useEffect(() => {
     void window.api.storage.saveTabs(
@@ -1065,6 +1093,32 @@ function App(): React.JSX.Element {
       window.removeEventListener('blur', closeMenu)
     }
   }, [tabMenu])
+
+  const maybeRequestTerminalPassword = useCallback(
+    (tabId: string, data: string): void => {
+      const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
+      passwordPromptBuffersRef.current.set(tabId, nextBuffer)
+
+      const promptLine = extractPasswordPromptLine(nextBuffer)
+      if (!promptLine) return
+      if (passwordPromptRequestRef.current || passwordPromptOpenTabsRef.current.has(tabId)) return
+
+      const tab = tabsRef.current.find((current) => current.id === tabId)
+      if (!tab) return
+
+      passwordPromptOpenTabsRef.current.add(tabId)
+      const request = {
+        tabId,
+        title: tab.title,
+        prompt: promptLine
+      }
+      passwordPromptRequestRef.current = request
+      setPasswordPromptValue('')
+      setPasswordPromptError('')
+      setPasswordPromptRequest(request)
+    },
+    []
+  )
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
@@ -1416,6 +1470,7 @@ function App(): React.JSX.Element {
         ...current,
         terminalOutput: `${current.terminalOutput}${event.data}`.slice(-200_000)
       }))
+      maybeRequestTerminalPassword(event.tabId, event.data)
       if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
@@ -1447,13 +1502,11 @@ function App(): React.JSX.Element {
       if (event.tabId === activeTabIdRef.current) {
         terminal.writeln(`\r\n\x1b[31m${t.terminal.shellExited} ${event.exitCode}.\x1b[0m`)
       }
-      const exitedTab = tabsRef.current.find((current) => current.id === event.tabId)
-      if (exitedTab?.connectionId) {
-        void restoreTerminalConnectionRef.current?.(event.tabId)
+      if (suppressTerminalReconnectRef.current.delete(event.tabId)) {
         return
       }
 
-      appendLog({ kind: 'error', text: t.terminal.terminalReconnectUnavailable }, event.tabId)
+      void restoreTerminalSessionRef.current?.(event.tabId)
     })
 
     const startShell = async (): Promise<void> => {
@@ -1524,6 +1577,7 @@ function App(): React.JSX.Element {
     executeConnectionCommands,
     executeConnectionLoginActions,
     handlePipeTerminalInput,
+    maybeRequestTerminalPassword,
     t,
     terminalVisible,
     updateSubterminalCwd,
@@ -1884,6 +1938,38 @@ function App(): React.JSX.Element {
     updateTab(tabId, (tab) => ({ ...tab, agentBusy: false, agentThinking: false }))
   }
 
+  async function submitPasswordPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!passwordPromptRequest) return
+
+    const context = await window.api.terminal.getContext(passwordPromptRequest.tabId)
+    if (!isTerminalCurrentlyAtPasswordPrompt(context.output)) {
+      passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
+      setPasswordPromptValue('')
+      setPasswordPromptError(t.terminal.passwordPromptExpired)
+      return
+    }
+
+    sendTerminalInput(passwordPromptValue, passwordPromptRequest.tabId)
+    passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
+    passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
+    passwordPromptRequestRef.current = null
+    setPasswordPromptRequest(null)
+    setPasswordPromptValue('')
+    setPasswordPromptError('')
+  }
+
+  function cancelPasswordPrompt(): void {
+    if (passwordPromptRequest) {
+      passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
+      passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
+    }
+    passwordPromptRequestRef.current = null
+    setPasswordPromptRequest(null)
+    setPasswordPromptValue('')
+    setPasswordPromptError('')
+  }
+
   function resolveCommandApproval(approved: boolean): void {
     if (!commandApproval) return
 
@@ -1913,16 +1999,17 @@ function App(): React.JSX.Element {
     const context = await window.api.terminal.getContext(tabId)
     if (context.mode !== 'none') return
 
-    const tab = tabsRef.current.find((current) => current.id === tabId)
-    if (tab?.connectionId) {
-      const restored = await restoreTerminalConnection(tabId)
-      if (restored) return
-    } else if (tab) {
-      const restored = await restoreLocalTerminal(tabId)
-      if (restored) return
-    }
+    const restored = await restoreTerminalSession(tabId)
+    if (restored) return
 
     throw new Error(t.terminal.terminalReconnectUnavailable)
+  }
+
+  async function restoreTerminalSession(tabId: string): Promise<boolean> {
+    const tab = tabsRef.current.find((current) => current.id === tabId)
+    if (!tab) return false
+
+    return tab.connectionId ? restoreTerminalConnection(tabId) : restoreLocalTerminal(tabId)
   }
 
   async function restoreLocalTerminal(tabId: string): Promise<boolean> {
@@ -1946,6 +2033,12 @@ function App(): React.JSX.Element {
         terminalCwd: session.cwd,
         terminalReady: true
       }))
+      if (tabId === activeTabIdRef.current) {
+        terminalSessionIdRef.current = session.sessionId
+        terminalModeRef.current = session.mode
+        terminalCwdRef.current = session.cwd
+        pipePromptRef.current = formatPipePrompt(session.cwd)
+      }
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1990,6 +2083,12 @@ function App(): React.JSX.Element {
         terminalCwd: session.cwd,
         terminalReady: true
       }))
+      if (tabId === activeTabIdRef.current) {
+        terminalSessionIdRef.current = session.sessionId
+        terminalModeRef.current = session.mode
+        terminalCwdRef.current = session.cwd
+        pipePromptRef.current = formatPipePrompt(session.cwd)
+      }
       await executeConnectionCommands(connection, tabId)
       return true
     } catch (error) {
@@ -2056,6 +2155,13 @@ function App(): React.JSX.Element {
       setTabs((current) => [...current, nextTab])
       setActiveTabId(nextTab.id)
     } else {
+      updateTab(currentTab.id, (tab) => ({
+        ...tab,
+        title: tab.connectionId || tab.isSsh ? tab.title : getNextTerminalTitle(connection.name, tabsRef.current),
+        connectionId: connection.id,
+        connectionName: connection.name,
+        isSsh: true
+      }))
       setActiveTabId(currentTab.id)
     }
     setHiddenPane(null)
@@ -2318,7 +2424,13 @@ function App(): React.JSX.Element {
       tabId
     )
     updateTab(tabId, (current) => ({ ...current, agentThinking: true }))
-    const shouldResolveConnectionIntent = !resumeRequested && !tab?.isSsh && !tab?.connectionId
+    const terminalContext = await window.api.terminal.getContext(tabId)
+    const shouldUseCurrentTerminal =
+      terminalContext.mode !== 'none' &&
+      hasUsableCurrentTerminal(tab, terminalContext.output) &&
+      !isExplicitConnectionRequest(displayInput)
+    const shouldResolveConnectionIntent =
+      !resumeRequested && !tab?.isSsh && !tab?.connectionId && !shouldUseCurrentTerminal
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
       connectionIntent = shouldResolveConnectionIntent
@@ -2416,8 +2528,11 @@ function App(): React.JSX.Element {
       return
     }
 
+    const runInput = shouldUseCurrentTerminal
+      ? buildCurrentTerminalAgentInput(input, terminalContext, t)
+      : input
     await runAgentConversation(
-      input,
+      runInput,
       tabId,
       tab?.connectionId || undefined,
       displayInput,
@@ -2951,8 +3066,12 @@ function App(): React.JSX.Element {
 
   function performCloseTab(tabId: string): void {
     const closingTab = tabsRef.current.find((tab) => tab.id === tabId)
+    suppressTerminalReconnectRef.current.add(tabId)
     window.api.terminal.stop(tabId)
-    closingTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
+    closingTab?.subTerminals.forEach((subterminal) => {
+      suppressTerminalReconnectRef.current.add(subterminal.id)
+      window.api.terminal.stop(subterminal.id)
+    })
     pendingSshRef.current.delete(tabId)
     setTabs((current) => {
       const next = current.filter((tab) => tab.id !== tabId)
@@ -2974,8 +3093,12 @@ function App(): React.JSX.Element {
   function performCloseOtherTabs(tabId: string): void {
     for (const tab of tabsRef.current) {
       if (tab.id !== tabId) {
+        suppressTerminalReconnectRef.current.add(tab.id)
         window.api.terminal.stop(tab.id)
-        tab.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
+        tab.subTerminals.forEach((subterminal) => {
+          suppressTerminalReconnectRef.current.add(subterminal.id)
+          window.api.terminal.stop(subterminal.id)
+        })
         pendingSshRef.current.delete(tab.id)
       }
     }
@@ -3029,6 +3152,104 @@ function App(): React.JSX.Element {
       }))
     }, 1200)
   }
+
+  const historySheet = (
+    <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
+      <SheetContent side="left" className="w-[420px] sm:max-w-[420px]">
+        <SheetHeader>
+          <SheetTitle>{t.history.title}</SheetTitle>
+          <SheetDescription>{t.history.description}</SheetDescription>
+        </SheetHeader>
+        <div className="min-h-0 flex-1 space-y-2 overflow-auto px-4">
+          {historyLoading && (
+            <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+              <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+              {t.history.loading}
+            </div>
+          )}
+          {!historyLoading && historyItems.length === 0 && (
+            <div className="rounded-md border p-3 text-sm text-muted-foreground">
+              {t.history.empty}
+            </div>
+          )}
+          {!historyLoading &&
+            historyItems.map((item) => (
+              <div
+                key={item.tabId}
+                className="flex items-start gap-2 rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => void openHistorySession(item)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium">{item.title}</span>
+                    {item.isSsh && (
+                      <Badge variant="secondary" className="shrink-0">
+                        SSH
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                    <time dateTime={item.lastMessageAt ?? item.updatedAt}>
+                      {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
+                    </time>
+                    {item.connectionName && <span className="truncate">· {item.connectionName}</span>}
+                    <span className="shrink-0">
+                      · {item.runCount} {t.history.runs}
+                    </span>
+                  </div>
+                  {item.lastMessage && (
+                    <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                      {summarizeHistoryMessage(item.lastMessage)}
+                    </p>
+                  )}
+                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
+                  title={`${t.wiki.saveFromHistory}: ${item.title}`}
+                  disabled={savingHistoryWikiTabId === item.tabId}
+                  onClick={() => void saveHistorySessionToWiki(item)}
+                >
+                  {savingHistoryWikiTabId === item.tabId ? (
+                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <FileTextIcon aria-hidden="true" />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0"
+                  aria-label={`${t.common.delete}: ${item.title}`}
+                  title={`${t.common.delete}: ${item.title}`}
+                  onClick={() => void deleteHistorySession(item)}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </div>
+            ))}
+        </div>
+        <SheetFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refreshSessionHistory()}
+            disabled={historyLoading}
+          >
+            {historyLoading && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
+            {t.history.refresh}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
 
   const wikiSheet = (
     <Sheet open={wikiOpen} onOpenChange={setWikiSheetOpen}>
@@ -3219,6 +3440,16 @@ function App(): React.JSX.Element {
           <span className="text-sm font-semibold">Crescent</span>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t.history.title}
+            title={t.history.title}
+            onClick={() => setHistorySheetOpen(true)}
+          >
+            <HistoryIcon aria-hidden="true" />
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -3719,6 +3950,7 @@ function App(): React.JSX.Element {
           </Sheet>
         </div>
       </header>
+      {historySheet}
       {wikiSheet}
       <section className="flex min-h-0 flex-1">
         {hiddenPane !== 'terminal' && (
@@ -3771,116 +4003,6 @@ function App(): React.JSX.Element {
               >
                 <PlusIcon aria-hidden="true" />
               </Button>
-              <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
-                <SheetTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={t.history.title}
-                    title={t.history.title}
-                  >
-                    <HistoryIcon aria-hidden="true" />
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="left" className="w-[420px] sm:max-w-[420px]">
-                  <SheetHeader>
-                    <SheetTitle>{t.history.title}</SheetTitle>
-                    <SheetDescription>{t.history.description}</SheetDescription>
-                  </SheetHeader>
-                  <div className="min-h-0 flex-1 space-y-2 overflow-auto px-4">
-                    {historyLoading && (
-                      <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
-                        <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
-                        {t.history.loading}
-                      </div>
-                    )}
-                    {!historyLoading && historyItems.length === 0 && (
-                      <div className="rounded-md border p-3 text-sm text-muted-foreground">
-                        {t.history.empty}
-                      </div>
-                    )}
-                    {!historyLoading &&
-                      historyItems.map((item) => (
-                        <div
-                          key={item.tabId}
-                          className="flex items-start gap-2 rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
-                        >
-                          <button
-                            type="button"
-                            className="min-w-0 flex-1 text-left"
-                            onClick={() => void openHistorySession(item)}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="min-w-0 truncate font-medium">{item.title}</span>
-                              {item.isSsh && (
-                                <Badge variant="secondary" className="shrink-0">
-                                  SSH
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                              <time dateTime={item.lastMessageAt ?? item.updatedAt}>
-                                {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
-                              </time>
-                              {item.connectionName && (
-                                <span className="truncate">· {item.connectionName}</span>
-                              )}
-                              <span className="shrink-0">
-                                · {item.runCount} {t.history.runs}
-                              </span>
-                            </div>
-                            {item.lastMessage && (
-                              <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                                {summarizeHistoryMessage(item.lastMessage)}
-                              </p>
-                            )}
-                          </button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="shrink-0"
-                            aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
-                            title={`${t.wiki.saveFromHistory}: ${item.title}`}
-                            disabled={savingHistoryWikiTabId === item.tabId}
-                            onClick={() => void saveHistorySessionToWiki(item)}
-                          >
-                            {savingHistoryWikiTabId === item.tabId ? (
-                              <Loader2Icon className="animate-spin" aria-hidden="true" />
-                            ) : (
-                              <FileTextIcon aria-hidden="true" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="shrink-0"
-                            aria-label={`${t.common.delete}: ${item.title}`}
-                            title={`${t.common.delete}: ${item.title}`}
-                            onClick={() => void deleteHistorySession(item)}
-                          >
-                            <Trash2Icon aria-hidden="true" />
-                          </Button>
-                        </div>
-                      ))}
-                  </div>
-                  <SheetFooter>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void refreshSessionHistory()}
-                      disabled={historyLoading}
-                    >
-                      {historyLoading && (
-                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                      )}
-                      {t.history.refresh}
-                    </Button>
-                  </SheetFooter>
-                </SheetContent>
-              </Sheet>
               {tabMenu && (
                 <div
                   className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
@@ -4920,6 +5042,58 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
+      {passwordPromptRequest && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="password-prompt-title"
+        >
+          <form
+            onSubmit={submitPasswordPrompt}
+            className="w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl"
+          >
+            <div className="border-b px-4 py-3">
+              <h2 id="password-prompt-title" className="text-sm font-semibold">
+                {t.terminal.passwordPromptTitle}
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {passwordPromptRequest.title}
+              </p>
+            </div>
+            <div className="space-y-4 px-4 py-4">
+              <div className="rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs text-muted-foreground">
+                {passwordPromptRequest.prompt}
+              </div>
+              <Field>
+                <FieldLabel htmlFor="terminal-password-input">
+                  {t.terminal.passwordPromptLabel}
+                </FieldLabel>
+                <Input
+                  id="terminal-password-input"
+                  ref={passwordPromptInputRef}
+                  type="password"
+                  value={passwordPromptValue}
+                  onChange={(event) => setPasswordPromptValue(event.target.value)}
+                  autoComplete="current-password"
+                />
+                <FieldDescription>{t.terminal.passwordPromptDescription}</FieldDescription>
+              </Field>
+              {passwordPromptError && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {passwordPromptError}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+              <Button type="button" variant="outline" onClick={cancelPasswordPrompt}>
+                {t.common.cancel}
+              </Button>
+              <Button type="submit">{t.terminal.passwordPromptSubmit}</Button>
+            </div>
+          </form>
+        </div>
+      )}
       {commandApproval && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
@@ -5176,6 +5350,33 @@ function isContinueIntent(value: string): boolean {
     /^(继续|继续处理|继续执行|继续未完成的工作|接着来|接着处理|接着执行|恢复|恢复继续|继续刚才的任务)$/.test(
       normalized
     ) || /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
+  )
+}
+
+function isExplicitConnectionRequest(value: string): boolean {
+  return /(^|\s)(ssh|login|connect)\b|登录|登陆|连接|进入.*机器|切换.*连接|打开.*终端/i.test(
+    value
+  )
+}
+
+function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
+  if (tab?.isSsh || tab?.connectionId) return true
+  if (tab && tab.id !== 'default' && tab.title !== 'Local') return true
+
+  const normalized = normalizeTerminalControlText(output).trim()
+  if (!normalized) return false
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-20)
+  if (lines.length === 0) return false
+
+  return lines.some(
+    (line) =>
+      !/^\[Crescent\]/.test(line) &&
+      !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
   )
 }
 
@@ -6191,6 +6392,21 @@ function buildPostLoginAgentInput(
   ].join('\n')
 }
 
+function buildCurrentTerminalAgentInput(
+  input: string,
+  terminalContext: { cwd: string; mode: string; output: string; shell: string },
+  t: Dictionary
+): string {
+  return [
+    t.terminal.currentTerminalInstruction,
+    `${t.terminal.terminalMode}: ${terminalContext.mode}`,
+    `${t.app.workingDirectory}: ${terminalContext.cwd || '-'}`,
+    '',
+    t.terminal.postLoginOriginalTask,
+    input
+  ].join('\n')
+}
+
 function buildUserRequirementBreakdown(
   input: string,
   connection: ConnectionConfig,
@@ -6444,6 +6660,40 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
   })
 }
 
+function extractPasswordPromptLine(output: string): string | null {
+  const lines = stripTerminalControlSequences(output)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-8)
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (isPasswordPromptLine(lines[index])) return lines[index]
+  }
+
+  return null
+}
+
+function isTerminalCurrentlyAtPasswordPrompt(output: string): boolean {
+  const lines = stripTerminalControlSequences(output)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const lastLine = lines[lines.length - 1]
+  return Boolean(lastLine && isPasswordPromptLine(lastLine))
+}
+
+function isPasswordPromptLine(line: string): boolean {
+  return (
+    /(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(
+      line
+    ) || /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(line)
+  )
+}
+
 function hasOutputBeyondEcho(output: string, echo: string): boolean {
   const compactOutput = compactTerminalText(output)
   const compactEcho = compactTerminalText(echo)
@@ -6455,9 +6705,7 @@ function hasOutputBeyondEcho(output: string, echo: string): boolean {
 }
 
 function hasInteractivePrompt(output: string): boolean {
-  const normalizedOutput = output
-    .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
-    .replace(/\r/g, '\n')
+  const normalizedOutput = stripTerminalControlSequences(output).replace(/\r/g, '\n')
   const lines = normalizedOutput
     .split('\n')
     .map((line) => line.trim())
@@ -6474,9 +6722,7 @@ function hasInteractivePrompt(output: string): boolean {
 }
 
 function compactTerminalText(value: string): string {
-  return value
-    .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
-    .replace(/\s+/g, '')
+  return stripTerminalControlSequences(value).replace(/\s+/g, '')
 }
 
 function sendTerminalInput(value: string, tabId: string): void {

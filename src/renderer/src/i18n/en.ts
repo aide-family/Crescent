@@ -133,6 +133,8 @@ const en = {
       'No matching SSH connection was found. Check existing connections or custom connection names.',
     connectionStarting: 'Starting connection with login actions',
     connectionTarget: 'Connection target',
+    currentTerminalInstruction:
+      'The current terminal is already in a usable target environment. Do not match another connection or SSH login again; analyze the user request, create working steps, then continue execution and verification in the current terminal.',
     commandExecuted: 'Executed',
     fallbackLimited: 'limited fallback; SSH/password prompts are disabled',
     failedToLoadConfig: 'Failed to load config',
@@ -141,13 +143,19 @@ const en = {
     failedToStartShell: 'Failed to start shell',
     outputSettleTimeout:
       'Timed out waiting for terminal output to settle. Automatic login actions stopped.',
+    passwordPromptDescription:
+      'The secret is typed directly into the terminal and is not written to chat logs.',
+    passwordPromptExpired:
+      'The terminal is no longer waiting for secret input. Nothing was typed. Rerun the command that triggered the prompt.',
+    passwordPromptLabel: 'Password or verification code',
+    passwordPromptSubmit: 'Type into terminal',
+    passwordPromptTitle: 'Terminal is waiting for secret input',
     terminalDisconnected:
       'Terminal session disconnected. Command injection to this terminal stopped.',
     terminalReconnectFailed: 'Terminal auto-restore failed',
-    terminalReconnecting:
-      'Terminal connection disconnected. Restoring it with the current connection config.',
+    terminalReconnecting: 'Terminal connection disconnected. Restoring it automatically.',
     terminalReconnectUnavailable:
-      'Terminal is abnormal and this session has no usable connection config. Automatic command execution stopped.',
+      'Terminal is abnormal and this session cannot be restored automatically. Automatic command execution stopped.',
     postLoginAgentInstruction:
       'The current terminal has already completed the target login. Do not log in again or switch connections; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
     requirementBreakdown: 'User requirement breakdown (must complete accordingly)',
