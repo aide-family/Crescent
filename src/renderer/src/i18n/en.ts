@@ -201,6 +201,7 @@ const en = {
     empty: 'No history sessions yet.',
     loading: 'Loading history sessions',
     refresh: 'Refresh history',
+    renameTitle: 'Rename title',
     runs: 'runs',
     title: 'Session history'
   },
@@ -251,6 +252,10 @@ const en = {
     slashCommandHint: 'Type / to reference context, mode, or skills',
     slashConnection: 'Connect to SSH',
     slashConnectionDescription: 'Choose a saved SSH connection and connect',
+    slashCreateSkill: 'Create skill',
+    slashCreateSkillDescription: 'Guide custom skill creation and draft SKILL.md',
+    createSkillPrompt:
+      'I want to create a custom Skill. Guide me through the name, use cases, triggers, workflow steps, inputs and outputs, risks, and validation approach, then generate a SKILL.md draft.',
     slashFileDescription: 'Choose a local file as referenced context',
     slashFolderDescription: 'Choose a local folder as referenced context',
     slashMode: 'Change chat mode',
@@ -279,13 +284,18 @@ const en = {
     pathReferenceRequirement:
       'Requirement: use these referenced local paths as user-selected context. Do not assume contents have been read unless you intentionally inspect them with an available local tool.',
     analyzingNextAction: 'Analyzing tool results and deciding the next action',
+    breakingDownTask: 'Breaking the request into verifiable steps',
     executingPlanStep: 'Executing the current plan step',
     planUnavailable:
       'No plan content was returned. The agent will continue from the current request and explain progress in subsequent steps.',
+    preparingToolAction: 'Preparing tool for the current step',
     reasoningNextStep: 'Assessing the request, current state, and next action',
+    reviewingObservation:
+      'Reviewing the latest observation and deciding whether to continue, verify, or summarize',
     synthesizingResult: 'Analyzing command output and preparing the final answer',
     toolDispatching: 'Dispatching tool call',
     toolsConfigured: 'Tools configured',
+    understandingRequest: 'Understanding the user request and current terminal context',
     usedTool: 'Used tool'
   },
   roles: {
@@ -342,6 +352,7 @@ const en = {
     commandWhitelistHint:
       'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
     copySkillInstallCommand: 'Copy install command',
+    copySkillInstallLog: 'Copy install log',
     document: 'OpenAPI URL or JSON',
     dynamicToolLimit: 'Dynamic tool limit',
     instructionFileExists: 'Created',
@@ -362,6 +373,7 @@ const en = {
     providerModels: 'Model list',
     providerName: 'Provider name',
     deleteProvider: 'Delete provider',
+    deleteSkillInstallLog: 'Delete install log',
     saveInstructionFile: 'Save instruction file',
     saveSettings: 'Save settings',
     saved: 'Saved',
@@ -377,25 +389,43 @@ const en = {
     protectedSkill: 'Protected',
     refreshSkills: 'Refresh',
     searchSkills: 'Search',
+    cancelSkillInstall: 'Cancel install',
+    saveSkillDirectory: 'Save directory',
+    skillDirectory: 'Skill load directory',
+    skillDirectoryHint:
+      'Only skills under this directory are loaded. The default is ~/.agents/skills.',
+    skillDirectorySaved: 'Skill load directory saved',
     skillDeleted: 'Skill deleted',
     skillDeleting: 'Deleting skill',
     skillFallbackInstalledAll:
       'The requested skill was not found in this source; installed available skills from the source instead',
     skillInstalled: 'Skill installed',
+    skillInstalledStatus: 'Installed',
+    skillInstallCanceled: 'Skill install canceled',
     skillInstallFailed: 'Skill install failed',
+    skillInstallFinishedHint:
+      'The install process has finished. You can close this window or inspect the log.',
+    skillInstallLog: 'Skill install log',
+    skillInstallLogs: 'Install logs',
+    skillInstallRunningHint:
+      'Install is still running. Logs update live, and you can cancel it here.',
+    skillInstallWaitingLog: 'Waiting for install log output...',
+    skillInstallDoneShort: 'Done',
     skillInstalling: 'Installing skill',
+    skillInstallingShort: 'Installing',
+    skillInstalls: 'Installs',
+    updateSkill: 'Update',
     skillsManagement: 'Skills management',
     skillsManagementHint:
       'Manage Agent Skills available on this machine. Built-in system skills are protected; installs use skills.sh search results.',
     skillsNoResults: 'No matching skills found.',
     skillsRefreshed: 'Skills refreshed',
     skillsSearchComplete: 'Skills search complete',
-    skillsSearchHint:
-      'Search skills.sh and install a new skill. The default example is Browser for browser-related skills.',
+    skillsSearchHint: 'Enter a keyword to search skills.sh, such as browser, git, or kubernetes.',
+    skillsSearchPlaceholder: 'Enter a keyword to search skills',
     skillsSearching: 'Searching skills',
     title: 'Agent settings',
-    titleDescription:
-      'Configure the model provider and the OpenAPI document used to generate tools.',
+    titleDescription: 'Configure model providers, command review, and local instruction files.',
     validateTools: 'Validate tools',
     validating: 'Validating'
   }

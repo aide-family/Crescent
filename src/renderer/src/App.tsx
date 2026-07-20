@@ -18,6 +18,7 @@ import {
   Loader2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
+  PencilIcon,
   PlusIcon,
   ServerIcon,
   SettingsIcon,
@@ -69,6 +70,7 @@ import type {
   AgentPathReference,
   AgentProviderConfig,
   AgentProviderModelConfig,
+  AgentSkillInstallEvent,
   AgentSkillSearchResult,
   AgentValidationResult,
   AgentSkillOption,
@@ -114,12 +116,13 @@ const emptyConfig: AgentConfig = {
     }
   ],
   providerId: 'nova-litellm',
-  model: 'azure/gpt-5.5',
+  model: 'azure/gpt-5.4',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: '',
-  openApiDocument: ''
+  openApiDocument: '',
+  skillRoot: '~/.agents/skills'
 }
 const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
 
@@ -157,6 +160,8 @@ type SkillManageMessage = {
   text: string
 }
 
+type SkillInstallLogStatus = 'running' | 'success' | 'error'
+
 interface CloseTabsConfirmRequest {
   mode: 'tab' | 'other-tabs'
   tabId: string
@@ -184,6 +189,7 @@ interface SlashCommandOption {
   toolRef?: AgentToolReference
   wikiRef?: AgentWikiReference
   wikiDocument?: WikiDocumentSummary
+  templateInput?: string
 }
 
 interface AgentToolReference {
@@ -323,6 +329,7 @@ function App(): React.JSX.Element {
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
+  const automatedLoginTabsRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
@@ -339,6 +346,8 @@ function App(): React.JSX.Element {
     | null
   >(null)
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
+  const skillInstallResultIdsRef = useRef(new Map<string, string>())
+  const skillInstallNamesRef = useRef(new Map<string, string>())
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
@@ -348,21 +357,38 @@ function App(): React.JSX.Element {
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
   const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
-  const [skillSearchQuery, setSkillSearchQuery] = useState('Browser')
+  const [skillSearchQuery, setSkillSearchQuery] = useState('')
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillSearchResult[]>([])
   const [skillSearchLoading, setSkillSearchLoading] = useState(false)
-  const [skillInstallingId, setSkillInstallingId] = useState<string | null>(null)
   const [skillDeletingPath, setSkillDeletingPath] = useState<string | null>(null)
   const [copiedSkillCommandId, setCopiedSkillCommandId] = useState<string | null>(null)
   const [skillManageMessage, setSkillManageMessage] = useState<SkillManageMessage | null>(null)
+  const [skillInstallIds, setSkillInstallIds] = useState<Record<string, string>>({})
+  const [skillInstallLogs, setSkillInstallLogs] = useState<Record<string, string>>({})
+  const [skillInstallLogNames, setSkillInstallLogNames] = useState<Record<string, string>>({})
+  const [skillInstallLogStatuses, setSkillInstallLogStatuses] = useState<
+    Record<string, SkillInstallLogStatus>
+  >({})
+  const [skillInstallLogCreatedAt, setSkillInstallLogCreatedAt] = useState<Record<string, number>>(
+    {}
+  )
+  const [skillInstallLogResultId, setSkillInstallLogResultId] = useState<string | null>(null)
+  const [copiedSkillInstallLogId, setCopiedSkillInstallLogId] = useState<string | null>(null)
+  const [skillInstallCancelingIds, setSkillInstallCancelingIds] = useState<Record<string, boolean>>(
+    {}
+  )
   const [instructionFiles, setInstructionFiles] = useState<LocalInstructionDocument[]>([])
   const [selectedInstructionName, setSelectedInstructionName] = useState('IDENTITY.md')
   const [instructionContent, setInstructionContent] = useState('')
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [skillOpen, setSkillOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
+  const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
+  const [historyTitleDraft, setHistoryTitleDraft] = useState('')
+  const [historyTitleSavingId, setHistoryTitleSavingId] = useState<string | null>(null)
   const [wikiOpen, setWikiOpen] = useState(false)
   const [wikiLoading, setWikiLoading] = useState(false)
   const [wikiDocumentLoadingId, setWikiDocumentLoadingId] = useState<string | null>(null)
@@ -454,12 +480,11 @@ function App(): React.JSX.Element {
   const modelOptions = useMemo(() => flattenProviderModels(config.providers), [config.providers])
   const visibleModels = modelOptions.length ? modelOptions : models
   const activeTabProviderId = activeTab.providerId ?? config.providerId
-  const activeProviderId =
-    config.providers.some((provider) => provider.id === activeTabProviderId)
-      ? (activeTabProviderId ?? config.providers[0]?.id ?? 'custom')
-      : (visibleModels.find((model) => model.id === (activeTab.model ?? config.model))?.providerId ??
-        config.providers[0]?.id ??
-        'custom')
+  const activeProviderId = config.providers.some((provider) => provider.id === activeTabProviderId)
+    ? (activeTabProviderId ?? config.providers[0]?.id ?? 'custom')
+    : (visibleModels.find((model) => model.id === (activeTab.model ?? config.model))?.providerId ??
+      config.providers[0]?.id ??
+      'custom')
   const filteredModels = visibleModels.filter((model) => model.providerId === activeProviderId)
   const activeTabModelId =
     activeTab.model && filteredModels.some((model) => model.id === activeTab.model)
@@ -485,6 +510,11 @@ function App(): React.JSX.Element {
     : validation?.modelOk === false
       ? 'not-ready'
       : 'ready'
+  const aiStatusText = validating
+    ? t.app.aiPending
+    : validation?.modelOk === false
+      ? `${t.app.aiNotReady}: ${validation.error ?? t.common.error}`
+      : t.app.aiReady
   const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
     ? 'ready'
     : activeTab.sessionId
@@ -541,11 +571,7 @@ function App(): React.JSX.Element {
     selectedItem?.scrollIntoView({ block: 'nearest' })
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
 
-  const configured = useMemo(
-    () =>
-      Boolean(config.model.trim() && config.openApiBaseUrl.trim() && config.openApiDocument.trim()),
-    [config.model, config.openApiBaseUrl, config.openApiDocument]
-  )
+  const configured = useMemo(() => Boolean(config.model.trim()), [config.model])
   const connectionFormReady = useMemo(
     () => Boolean(connectionForm.name.trim() && connectionForm.host.trim()),
     [connectionForm.host, connectionForm.name]
@@ -577,6 +603,7 @@ function App(): React.JSX.Element {
     () => filterLocalSkills(skills, localSkillSearchQuery),
     [localSkillSearchQuery, skills]
   )
+  const installedSkillNames = useMemo(() => buildInstalledSkillNameSet(skills), [skills])
   const connectionSearchText = connectionSearchQuery.trim().toLowerCase()
   const localTerminalMatchesSearch =
     !connectionSearchText ||
@@ -977,12 +1004,19 @@ function App(): React.JSX.Element {
         targetTabId
       )
 
-      if (includeSshCommand) {
-        await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
-        return
-      }
+      automatedLoginTabsRef.current.add(targetTabId)
+      passwordPromptBuffersRef.current.set(targetTabId, '')
+      try {
+        if (includeSshCommand) {
+          await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
+          return
+        }
 
-      await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t)
+        await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t)
+      } finally {
+        automatedLoginTabsRef.current.delete(targetTabId)
+        passwordPromptBuffersRef.current.set(targetTabId, '')
+      }
     },
     [appendLog, locale, t, updateTab]
   )
@@ -1095,31 +1129,32 @@ function App(): React.JSX.Element {
     }
   }, [tabMenu])
 
-  const maybeRequestTerminalPassword = useCallback(
-    (tabId: string, data: string): void => {
-      const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
-      passwordPromptBuffersRef.current.set(tabId, nextBuffer)
+  const maybeRequestTerminalPassword = useCallback((tabId: string, data: string): void => {
+    const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
+    passwordPromptBuffersRef.current.set(tabId, nextBuffer)
 
-      const promptLine = extractPasswordPromptLine(nextBuffer)
-      if (!promptLine) return
-      if (passwordPromptRequestRef.current || passwordPromptOpenTabsRef.current.has(tabId)) return
+    const promptLine = extractPasswordPromptLine(nextBuffer)
+    if (!promptLine) return
+    if (automatedLoginTabsRef.current.has(tabId)) {
+      passwordPromptBuffersRef.current.set(tabId, '')
+      return
+    }
+    if (passwordPromptRequestRef.current || passwordPromptOpenTabsRef.current.has(tabId)) return
 
-      const tab = tabsRef.current.find((current) => current.id === tabId)
-      if (!tab) return
+    const tab = tabsRef.current.find((current) => current.id === tabId)
+    if (!tab) return
 
-      passwordPromptOpenTabsRef.current.add(tabId)
-      const request = {
-        tabId,
-        title: tab.title,
-        prompt: promptLine
-      }
-      passwordPromptRequestRef.current = request
-      setPasswordPromptValue('')
-      setPasswordPromptError('')
-      setPasswordPromptRequest(request)
-    },
-    []
-  )
+    passwordPromptOpenTabsRef.current.add(tabId)
+    const request = {
+      tabId,
+      title: tab.title,
+      prompt: promptLine
+    }
+    passwordPromptRequestRef.current = request
+    setPasswordPromptValue('')
+    setPasswordPromptError('')
+    setPasswordPromptRequest(request)
+  }, [])
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
@@ -1412,6 +1447,47 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    return window.api.agent.onSkillInstallEvent((event) => {
+      handleSkillInstallEvent(event)
+    })
+  })
+
+  useEffect(() => {
+    return window.api.storage.onSessionSummaryUpdated((event) => {
+      setHistoryItems((current) =>
+        current.map((item) =>
+          item.tabId === event.tabId
+            ? { ...item, title: event.title, summary: event.summary, updatedAt: event.updatedAt }
+            : item
+        )
+      )
+      setTabs((current) =>
+        current.map((tab) => (tab.id === event.tabId ? { ...tab, title: event.title } : tab))
+      )
+    })
+  }, [])
+
+  useEffect(() => {
+    pruneExpiredSkillInstallLogs()
+
+    const now = Date.now()
+    const nextExpirationDelay = Object.entries(skillInstallLogCreatedAt)
+      .filter(([resultId]) => !skillInstallIds[resultId])
+      .map(([, createdAt]) => createdAt + 24 * 60 * 60 * 1000 - now)
+      .filter((delay) => delay > 0)
+      .sort((left, right) => left - right)[0]
+
+    if (!nextExpirationDelay) return undefined
+
+    const timeout = window.setTimeout(
+      () => pruneExpiredSkillInstallLogs(),
+      Math.max(1000, nextExpirationDelay)
+    )
+
+    return () => window.clearTimeout(timeout)
+  }, [skillInstallIds, skillInstallLogCreatedAt])
+
+  useEffect(() => {
     agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
   }, [activeTab?.agentLog])
 
@@ -1596,6 +1672,24 @@ function App(): React.JSX.Element {
     setTimeout(() => setSaved(false), 1400)
   }
 
+  async function saveSkillRoot(): Promise<void> {
+    try {
+      const nextConfig = await saveAgentConfig({
+        ...config,
+        skillRoot: config.skillRoot.trim() || '~/.agents/skills',
+        commandWhitelist: parseCommandWhitelist(commandWhitelistText)
+      })
+      setSkillManageMessage({ type: 'success', text: t.settings.skillDirectorySaved })
+      setSkills(await window.api.agent.listSkills())
+      setConfig(nextConfig)
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   async function saveInstructionFile(): Promise<void> {
     const savedFile = await window.api.agent.saveInstructionFile({
       name: selectedInstructionName,
@@ -1609,6 +1703,12 @@ function App(): React.JSX.Element {
     )
     setInstructionSaved(true)
     setTimeout(() => setInstructionSaved(false), 1400)
+  }
+
+  function selectInstructionFile(name: string): void {
+    setSelectedInstructionName(name)
+    setInstructionContent(instructionFiles.find((file) => file.name === name)?.content ?? '')
+    setInstructionSaved(false)
   }
 
   async function refreshSkills(): Promise<void> {
@@ -1645,29 +1745,32 @@ function App(): React.JSX.Element {
   }
 
   async function installSkill(result: AgentSkillSearchResult): Promise<void> {
-    setSkillInstallingId(result.id)
+    if (skillInstallIds[result.id]) {
+      setSkillInstallLogResultId((current) => (current === result.id ? null : result.id))
+      return
+    }
+
+    setSkillInstallLogNames((current) => ({ ...current, [result.id]: result.name }))
+    setSkillInstallLogCreatedAt((current) => ({ ...current, [result.id]: Date.now() }))
+    setSkillInstallLogStatuses((current) => ({ ...current, [result.id]: 'running' }))
+    setSkillInstallLogs((current) => ({
+      ...current,
+      [result.id]: `${buildSkillInstallCommand(result)}\n\n`
+    }))
     setSkillManageMessage({
       type: 'info',
       text: `${t.settings.skillInstalling}: ${result.name}`
     })
     try {
-      const response = await window.api.agent.installSkill({
+      const response = await window.api.agent.startSkillInstall({
         installSource: result.installSource,
         installSkill: result.installSkill
       })
-      setSkills(response.skills)
-      setSkillManageMessage({
-        type: 'success',
-        text: [
-          `${t.settings.skillInstalled}: ${result.name}`,
-          response.fallbackInstalledAll && response.requestedSkill
-            ? `${t.settings.skillFallbackInstalledAll}: ${response.requestedSkill}`
-            : '',
-          response.output
-        ]
-          .filter(Boolean)
-          .join('\n\n')
-      })
+
+      skillInstallResultIdsRef.current.set(response.installId, result.id)
+      skillInstallNamesRef.current.set(response.installId, result.name)
+      setSkillInstallIds((current) => ({ ...current, [result.id]: response.installId }))
+      setSkillInstallLogResultId(result.id)
     } catch (error) {
       setSkillManageMessage({
         type: 'error',
@@ -1675,9 +1778,125 @@ function App(): React.JSX.Element {
           error instanceof Error ? error.message : String(error)
         }`
       })
-    } finally {
-      setSkillInstallingId(null)
+      setSkillInstallIds((current) => {
+        const next = { ...current }
+        delete next[result.id]
+        return next
+      })
+      setSkillInstallLogStatuses((current) => ({ ...current, [result.id]: 'error' }))
     }
+  }
+
+  async function cancelSkillInstall(resultId: string): Promise<void> {
+    const installId = skillInstallIds[resultId]
+    if (!installId) return
+
+    setSkillInstallCancelingIds((current) => ({ ...current, [resultId]: true }))
+    try {
+      await window.api.agent.cancelSkillInstall(installId)
+    } finally {
+      setSkillInstallCancelingIds((current) => {
+        const next = { ...current }
+        delete next[resultId]
+        return next
+      })
+    }
+  }
+
+  function handleSkillInstallEvent(event: AgentSkillInstallEvent): void {
+    const resultId = skillInstallResultIdsRef.current.get(event.installId)
+    if (!resultId) return
+
+    if (event.type === 'log') {
+      setSkillInstallLogs((current) => ({
+        ...current,
+        [resultId]: `${current[resultId] ?? ''}${event.data}`
+      }))
+      return
+    }
+
+    const skillName = skillInstallNamesRef.current.get(event.installId) ?? resultId
+    skillInstallResultIdsRef.current.delete(event.installId)
+    skillInstallNamesRef.current.delete(event.installId)
+    setSkillInstallIds((current) => {
+      const next = { ...current }
+      delete next[resultId]
+      return next
+    })
+    setSkillInstallCancelingIds((current) => {
+      const next = { ...current }
+      delete next[resultId]
+      return next
+    })
+
+    if (event.type === 'done') {
+      setSkills(event.result.skills)
+      setSkillInstallLogStatuses((current) => ({ ...current, [resultId]: 'success' }))
+      setSkillInstallLogs((current) => ({
+        ...current,
+        [resultId]: `${current[resultId] ?? ''}\n${t.settings.skillInstalled}: ${skillName}\n`
+      }))
+      setSkillManageMessage({
+        type: 'success',
+        text: [
+          `${t.settings.skillInstalled}: ${skillName}`,
+          event.result.fallbackInstalledAll && event.result.requestedSkill
+            ? `${t.settings.skillFallbackInstalledAll}: ${event.result.requestedSkill}`
+            : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      })
+      return
+    }
+
+    setSkillInstallLogStatuses((current) => ({ ...current, [resultId]: 'error' }))
+    setSkillInstallLogs((current) => ({
+      ...current,
+      [resultId]: `${current[resultId] ?? ''}\n${event.error}\n`
+    }))
+    setSkillManageMessage({
+      type: event.canceled ? 'info' : 'error',
+      text: event.canceled
+        ? `${t.settings.skillInstallCanceled}: ${skillName}`
+        : `${t.settings.skillInstallFailed}: ${event.error}`
+    })
+  }
+
+  function deleteSkillInstallLog(resultId: string): void {
+    const installId = skillInstallIds[resultId]
+    if (installId) void window.api.agent.cancelSkillInstall(installId)
+
+    skillInstallResultIdsRef.current.forEach((mappedResultId, activeInstallId) => {
+      if (mappedResultId === resultId) {
+        skillInstallResultIdsRef.current.delete(activeInstallId)
+        skillInstallNamesRef.current.delete(activeInstallId)
+      }
+    })
+    setSkillInstallIds((current) => omitRecordKey(current, resultId))
+    setSkillInstallLogs((current) => omitRecordKey(current, resultId))
+    setSkillInstallLogNames((current) => omitRecordKey(current, resultId))
+    setSkillInstallLogStatuses((current) => omitRecordKey(current, resultId))
+    setSkillInstallLogCreatedAt((current) => omitRecordKey(current, resultId))
+    setSkillInstallCancelingIds((current) => omitRecordKey(current, resultId))
+    setSkillInstallLogResultId((current) => {
+      if (current !== resultId) return current
+
+      const nextIds = Object.keys(skillInstallLogs).filter((id) => id !== resultId)
+      return nextIds[0] ?? null
+    })
+  }
+
+  function pruneExpiredSkillInstallLogs(): void {
+    const now = Date.now()
+    const expiredIds = Object.entries(skillInstallLogCreatedAt)
+      .filter(
+        ([resultId, createdAt]) =>
+          !skillInstallIds[resultId] && now - createdAt > 24 * 60 * 60 * 1000
+      )
+      .map(([resultId]) => resultId)
+
+    for (const resultId of expiredIds) deleteSkillInstallLog(resultId)
   }
 
   async function copySkillInstallCommand(result: AgentSkillSearchResult): Promise<void> {
@@ -1685,6 +1904,22 @@ function App(): React.JSX.Element {
     setCopiedSkillCommandId(result.id)
     window.setTimeout(() => {
       setCopiedSkillCommandId((current) => (current === result.id ? null : current))
+    }, 1400)
+  }
+
+  async function copySelectedSkillInstallLog(): Promise<void> {
+    if (!skillInstallLogResultId) return
+
+    const selectedText = window.getSelection()?.toString().trim()
+    const text = selectedText || selectedSkillInstallLog
+    if (!text) return
+
+    await copyText(text)
+    setCopiedSkillInstallLogId(skillInstallLogResultId)
+    window.setTimeout(() => {
+      setCopiedSkillInstallLogId((current) =>
+        current === skillInstallLogResultId ? null : current
+      )
     }, 1400)
   }
 
@@ -1798,6 +2033,42 @@ function App(): React.JSX.Element {
     }
   }
 
+  function startRenameHistorySession(item: StoredSessionHistoryItem): void {
+    setHistoryTitleEditingId(item.tabId)
+    setHistoryTitleDraft(item.title)
+  }
+
+  function cancelRenameHistorySession(): void {
+    setHistoryTitleEditingId(null)
+    setHistoryTitleDraft('')
+  }
+
+  async function saveHistorySessionTitle(item: StoredSessionHistoryItem): Promise<void> {
+    const nextTitle = historyTitleDraft.trim()
+    if (!nextTitle) return
+
+    setHistoryTitleSavingId(item.tabId)
+    try {
+      const result = await window.api.storage.renameSessionHistory({
+        tabId: item.tabId,
+        title: nextTitle
+      })
+      if (!result.ok) return
+
+      setHistoryItems((current) =>
+        current.map((candidate) =>
+          candidate.tabId === item.tabId ? { ...candidate, title: nextTitle } : candidate
+        )
+      )
+      setTabs((current) =>
+        current.map((tab) => (tab.id === item.tabId ? { ...tab, title: nextTitle } : tab))
+      )
+      cancelRenameHistorySession()
+    } finally {
+      setHistoryTitleSavingId(null)
+    }
+  }
+
   async function openWikiDocument(document: WikiDocumentSummary): Promise<void> {
     setWikiDocumentLoadingId(document.id)
     setWikiEditing(false)
@@ -1889,6 +2160,22 @@ function App(): React.JSX.Element {
     void validateConfig(nextConfig)
   }
 
+  async function persistModelSelection(
+    providerId: string | undefined,
+    model: string
+  ): Promise<void> {
+    const optimisticConfig = { ...config, providerId, model }
+    setConfig(optimisticConfig)
+    setValidation(undefined)
+
+    try {
+      const nextConfig = await saveAgentConfig(optimisticConfig)
+      void validateConfig(nextConfig)
+    } catch (error) {
+      writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
+    }
+  }
+
   function applyModel(modelId: string): void {
     const modelProviderId =
       filteredModels.find((model) => model.id === modelId)?.providerId ?? activeProviderId
@@ -1898,20 +2185,23 @@ function App(): React.JSX.Element {
       providerId: modelProviderId,
       model: modelId
     }))
+    void persistModelSelection(modelProviderId, modelId)
   }
 
   function applyProvider(providerId: string): void {
     const providerModels = visibleModels.filter((model) => model.providerId === providerId)
     if (!providerModels.length) return
+    const nextModel =
+      activeTab.model && providerModels.some((model) => model.id === activeTab.model)
+        ? activeTab.model
+        : providerModels[0].id
 
     updateTab(activeTab.id, (tab) => ({
       ...tab,
       providerId,
-      model:
-        tab.model && providerModels.some((model) => model.id === tab.model)
-          ? tab.model
-          : providerModels[0].id
+      model: nextModel
     }))
+    void persistModelSelection(providerId, nextModel)
   }
 
   function stopAgentRun(tabId = activeTabIdRef.current): void {
@@ -2158,7 +2448,10 @@ function App(): React.JSX.Element {
     } else {
       updateTab(currentTab.id, (tab) => ({
         ...tab,
-        title: tab.connectionId || tab.isSsh ? tab.title : getNextTerminalTitle(connection.name, tabsRef.current),
+        title:
+          tab.connectionId || tab.isSsh
+            ? tab.title
+            : getNextTerminalTitle(connection.name, tabsRef.current),
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -2772,7 +3065,10 @@ function App(): React.JSX.Element {
 
     updateTab(activeTab.id, (tab) => ({
       ...tab,
-      agentInput: replaceSlashCommandInput(tab.agentInput, command.skill ? '' : command.value),
+      agentInput: replaceSlashCommandInput(
+        tab.agentInput,
+        command.templateInput ?? (command.skill ? '' : command.value)
+      ),
       skillRefs: command.skill ? addUniqueSkillRef(tab.skillRefs, command.skill) : tab.skillRefs
     }))
     setSlashCommandIndex(0)
@@ -3154,6 +3450,363 @@ function App(): React.JSX.Element {
     }, 1200)
   }
 
+  const skillInstallLogResultIds = Object.keys(skillInstallLogs)
+  const skillInstallLogCount = skillInstallLogResultIds.length
+  const selectedSkillInstallName = skillInstallLogResultId
+    ? (skillInstallLogNames[skillInstallLogResultId] ?? skillInstallLogResultId)
+    : ''
+  const selectedSkillInstallRunning = Boolean(
+    skillInstallLogResultId && skillInstallIds[skillInstallLogResultId]
+  )
+  const selectedSkillInstallStatus: SkillInstallLogStatus = selectedSkillInstallRunning
+    ? 'running'
+    : skillInstallLogResultId
+      ? (skillInstallLogStatuses[skillInstallLogResultId] ?? 'success')
+      : 'success'
+  const selectedSkillInstallLog = skillInstallLogResultId
+    ? (skillInstallLogs[skillInstallLogResultId] ?? '')
+    : ''
+
+  const skillSheet = (
+    <Sheet open={skillOpen} onOpenChange={setSkillOpen}>
+      <SheetContent
+        side="right"
+        className={`w-full ${skillInstallLogResultId ? 'sm:max-w-6xl' : 'sm:max-w-2xl'}`}
+      >
+        <SheetHeader>
+          <SheetTitle>{t.settings.skillsManagement}</SheetTitle>
+          <SheetDescription>{t.settings.skillsManagementHint}</SheetDescription>
+        </SheetHeader>
+        <div className="flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+          <div className="min-w-0 flex-1 space-y-4 overflow-auto">
+            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+              <Field>
+                <FieldLabel htmlFor="skill-root">{t.settings.skillDirectory}</FieldLabel>
+                <div className="flex gap-2">
+                  <Input
+                    id="skill-root"
+                    value={config.skillRoot}
+                    onChange={(event) => updateConfig('skillRoot', event.target.value)}
+                    placeholder="~/.agents/skills"
+                  />
+                  <Button type="button" variant="outline" onClick={() => void saveSkillRoot()}>
+                    {t.settings.saveSkillDirectory}
+                  </Button>
+                </div>
+                <FieldDescription>{t.settings.skillDirectoryHint}</FieldDescription>
+              </Field>
+            </div>
+            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {t.settings.localSkills} · {filteredLocalSkills.length}/{skills.length}
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={refreshSkills}>
+                  <SearchIcon data-icon="inline-start" />
+                  {t.settings.refreshSkills}
+                </Button>
+              </div>
+              <Input
+                value={localSkillSearchQuery}
+                onChange={(event) => setLocalSkillSearchQuery(event.target.value)}
+                placeholder={t.settings.localSkillsSearchPlaceholder}
+              />
+              <div className="max-h-72 space-y-2 overflow-auto">
+                {skills.length === 0 ? (
+                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                    {t.settings.noLocalSkills}
+                  </div>
+                ) : filteredLocalSkills.length === 0 ? (
+                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                    {t.settings.noMatchedLocalSkills}
+                  </div>
+                ) : (
+                  filteredLocalSkills.map((skill) => (
+                    <div
+                      key={skill.path}
+                      className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium">{skill.name}</span>
+                          {!skill.removable && (
+                            <Badge variant="outline">{t.settings.protectedSkill}</Badge>
+                          )}
+                        </div>
+                        {skill.description && (
+                          <div className="line-clamp-2 text-muted-foreground">
+                            {skill.description}
+                          </div>
+                        )}
+                        <div className="truncate font-mono text-[11px] text-muted-foreground">
+                          {skill.path}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        disabled={!skill.removable || skillDeletingPath === skill.path}
+                        aria-label={t.settings.deleteSkill}
+                        title={t.settings.deleteSkill}
+                        onClick={() => void deleteSkill(skill)}
+                      >
+                        {skillDeletingPath === skill.path ? (
+                          <Loader2Icon className="animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Trash2Icon aria-hidden="true" />
+                        )}
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+              <div className="flex gap-2">
+                <Input
+                  value={skillSearchQuery}
+                  onChange={(event) => setSkillSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void searchSkills()
+                    }
+                  }}
+                  placeholder={t.settings.skillsSearchPlaceholder}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={searchSkills}
+                  disabled={skillSearchLoading}
+                >
+                  {skillSearchLoading ? (
+                    <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <SearchIcon data-icon="inline-start" />
+                  )}
+                  {t.settings.searchSkills}
+                </Button>
+              </div>
+              <FieldDescription>{t.settings.skillsSearchHint}</FieldDescription>
+              {skillSearchResults.length > 0 && (
+                <div className="max-h-80 space-y-2 overflow-auto">
+                  {skillSearchResults.map((result) => {
+                    const installed = isSkillSearchResultInstalled(result, installedSkillNames)
+                    const installing = Boolean(skillInstallIds[result.id])
+
+                    return (
+                      <div
+                        key={result.id}
+                        className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
+                      >
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex min-w-0 items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="truncate font-medium">{result.name}</span>
+                              {installed && (
+                                <Badge variant="secondary" className="shrink-0">
+                                  {t.settings.skillInstalledStatus}
+                                </Badge>
+                              )}
+                            </div>
+                            <Badge variant="outline" className="shrink-0">
+                              {t.settings.skillInstalls}: {formatInstallCount(result.installs)}
+                            </Badge>
+                          </div>
+                          {result.description && (
+                            <div className="line-clamp-2 text-muted-foreground">
+                              {result.description}
+                            </div>
+                          )}
+                          <div className="truncate font-mono text-[11px] text-muted-foreground">
+                            {buildSkillInstallCommand(result)}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={t.settings.copySkillInstallCommand}
+                            title={t.settings.copySkillInstallCommand}
+                            onClick={() => void copySkillInstallCommand(result)}
+                          >
+                            {copiedSkillCommandId === result.id ? (
+                              <CheckIcon aria-hidden="true" />
+                            ) : (
+                              <CopyIcon aria-hidden="true" />
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={installing ? 'outline' : 'default'}
+                            onClick={() => void installSkill(result)}
+                          >
+                            {installing ? (
+                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                            ) : (
+                              <DownloadIcon data-icon="inline-start" />
+                            )}
+                            {installing
+                              ? t.settings.skillInstalling
+                              : installed
+                                ? t.settings.updateSkill
+                                : t.settings.installSkill}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <SkillManageStatus message={skillManageMessage} />
+            </div>
+          </div>
+          {skillInstallLogResultId && (
+            <div className="flex w-[680px] shrink-0 overflow-hidden rounded-md border bg-background">
+              <div className="w-44 shrink-0 overflow-auto border-r bg-muted/20 p-1">
+                {skillInstallLogResultIds.map((resultId) => {
+                  const running = Boolean(skillInstallIds[resultId])
+                  const status: SkillInstallLogStatus = running
+                    ? 'running'
+                    : (skillInstallLogStatuses[resultId] ?? 'success')
+                  const selected = resultId === skillInstallLogResultId
+
+                  return (
+                    <div
+                      key={resultId}
+                      className={`mb-1 block w-full rounded px-2 py-2 text-left text-[11px] transition ${
+                        selected
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
+                      }`}
+                      title={skillInstallLogNames[resultId] ?? resultId}
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full min-w-0 items-start gap-2 text-left"
+                        onClick={() => setSkillInstallLogResultId(resultId)}
+                      >
+                        <SkillInstallStatusDot status={status} />
+                        <span className="min-w-0 flex-1 break-words leading-snug">
+                          {skillInstallLogNames[resultId] ?? resultId}
+                        </span>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex items-start justify-between gap-3 border-b px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-start gap-2 text-sm font-semibold">
+                      <SkillInstallStatusDot status={selectedSkillInstallStatus} />
+                      <span className="min-w-0 break-words">
+                        {t.settings.skillInstallLog}: {selectedSkillInstallName}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {selectedSkillInstallRunning
+                        ? t.settings.skillInstallRunningHint
+                        : t.settings.skillInstallFinishedHint}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.settings.copySkillInstallLog}
+                      title={t.settings.copySkillInstallLog}
+                      disabled={!selectedSkillInstallLog}
+                      onClick={() => void copySelectedSkillInstallLog()}
+                    >
+                      {copiedSkillInstallLogId === skillInstallLogResultId ? (
+                        <CheckIcon aria-hidden="true" />
+                      ) : (
+                        <CopyIcon aria-hidden="true" />
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={t.settings.deleteSkillInstallLog}
+                      title={t.settings.deleteSkillInstallLog}
+                      onClick={() =>
+                        skillInstallLogResultId && deleteSkillInstallLog(skillInstallLogResultId)
+                      }
+                    >
+                      <Trash2Icon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.common.close}
+                      title={t.common.close}
+                      onClick={() => setSkillInstallLogResultId(null)}
+                    >
+                      <XIcon aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[#111111] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+                  {selectedSkillInstallLog || t.settings.skillInstallWaitingLog}
+                </pre>
+                <div className="flex items-center justify-end gap-2 border-t px-3 py-2">
+                  {selectedSkillInstallRunning && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={Boolean(
+                        skillInstallLogResultId && skillInstallCancelingIds[skillInstallLogResultId]
+                      )}
+                      onClick={() =>
+                        skillInstallLogResultId && void cancelSkillInstall(skillInstallLogResultId)
+                      }
+                    >
+                      {skillInstallLogResultId &&
+                        skillInstallCancelingIds[skillInstallLogResultId] && (
+                          <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                        )}
+                      {t.settings.cancelSkillInstall}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <SheetFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={skillInstallLogCount === 0}
+            onClick={() =>
+              setSkillInstallLogResultId(
+                (current) => current ?? skillInstallLogResultIds[0] ?? null
+              )
+            }
+          >
+            <FileTextIcon data-icon="inline-start" />
+            {t.settings.skillInstallLogs}
+            {skillInstallLogCount > 0 ? ` (${skillInstallLogCount})` : ''}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void refreshSkills()}>
+            <SearchIcon data-icon="inline-start" />
+            {t.settings.refreshSkills}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+
   const historySheet = (
     <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
       <SheetContent side="left" className="w-[420px] sm:max-w-[420px]">
@@ -3174,68 +3827,134 @@ function App(): React.JSX.Element {
             </div>
           )}
           {!historyLoading &&
-            historyItems.map((item) => (
-              <div
-                key={item.tabId}
-                className="flex items-start gap-2 rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
-              >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => void openHistorySession(item)}
+            historyItems.map((item) => {
+              const editing = historyTitleEditingId === item.tabId
+
+              return (
+                <div
+                  key={item.tabId}
+                  className="flex items-start gap-2 rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate font-medium">{item.title}</span>
-                    {item.isSsh && (
-                      <Badge variant="secondary" className="shrink-0">
-                        SSH
-                      </Badge>
+                  <div className="min-w-0 flex-1">
+                    {editing ? (
+                      <div className="space-y-2">
+                        <Input
+                          value={historyTitleDraft}
+                          onChange={(event) => setHistoryTitleDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void saveHistorySessionTitle(item)
+                            }
+                            if (event.key === 'Escape') {
+                              event.preventDefault()
+                              cancelRenameHistorySession()
+                            }
+                          }}
+                          aria-label={t.history.renameTitle}
+                          autoFocus
+                        />
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={cancelRenameHistorySession}
+                          >
+                            {t.common.cancel}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={
+                              !historyTitleDraft.trim() || historyTitleSavingId === item.tabId
+                            }
+                            onClick={() => void saveHistorySessionTitle(item)}
+                          >
+                            {historyTitleSavingId === item.tabId && (
+                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                            )}
+                            {t.common.save}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="min-w-0 text-left"
+                        onClick={() => void openHistorySession(item)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate font-medium">{item.title}</span>
+                          {item.isSsh && (
+                            <Badge variant="secondary" className="shrink-0">
+                              SSH
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                          <time dateTime={item.lastMessageAt ?? item.updatedAt}>
+                            {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
+                          </time>
+                          {item.connectionName && (
+                            <span className="truncate">· {item.connectionName}</span>
+                          )}
+                          <span className="shrink-0">
+                            · {item.runCount} {t.history.runs}
+                          </span>
+                        </div>
+                        {(item.summary || item.lastMessage) && (
+                          <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                            {item.summary ?? summarizeHistoryMessage(item.lastMessage ?? '')}
+                          </p>
+                        )}
+                      </button>
                     )}
                   </div>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                    <time dateTime={item.lastMessageAt ?? item.updatedAt}>
-                      {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
-                    </time>
-                    {item.connectionName && <span className="truncate">· {item.connectionName}</span>}
-                    <span className="shrink-0">
-                      · {item.runCount} {t.history.runs}
-                    </span>
-                  </div>
-                  {item.lastMessage && (
-                    <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                      {summarizeHistoryMessage(item.lastMessage)}
-                    </p>
+                  {!editing && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="shrink-0"
+                      aria-label={`${t.history.renameTitle}: ${item.title}`}
+                      title={`${t.history.renameTitle}: ${item.title}`}
+                      onClick={() => startRenameHistorySession(item)}
+                    >
+                      <PencilIcon aria-hidden="true" />
+                    </Button>
                   )}
-                </button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="shrink-0"
-                  aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
-                  title={`${t.wiki.saveFromHistory}: ${item.title}`}
-                  disabled={savingHistoryWikiTabId === item.tabId}
-                  onClick={() => void saveHistorySessionToWiki(item)}
-                >
-                  {savingHistoryWikiTabId === item.tabId ? (
-                    <Loader2Icon className="animate-spin" aria-hidden="true" />
-                  ) : (
-                    <FileTextIcon aria-hidden="true" />
-                  )}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="shrink-0"
-                  aria-label={`${t.common.delete}: ${item.title}`}
-                  title={`${t.common.delete}: ${item.title}`}
-                  onClick={() => void deleteHistorySession(item)}
-                >
-                  <Trash2Icon aria-hidden="true" />
-                </Button>
-              </div>
-            ))}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="shrink-0"
+                    aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
+                    title={`${t.wiki.saveFromHistory}: ${item.title}`}
+                    disabled={editing || savingHistoryWikiTabId === item.tabId}
+                    onClick={() => void saveHistorySessionToWiki(item)}
+                  >
+                    {savingHistoryWikiTabId === item.tabId ? (
+                      <Loader2Icon className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <FileTextIcon aria-hidden="true" />
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="shrink-0"
+                    aria-label={`${t.common.delete}: ${item.title}`}
+                    title={`${t.common.delete}: ${item.title}`}
+                    disabled={editing}
+                    onClick={() => void deleteHistorySession(item)}
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                </div>
+              )
+            })}
         </div>
         <SheetFooter>
           <Button
@@ -3445,6 +4164,16 @@ function App(): React.JSX.Element {
             type="button"
             variant="outline"
             size="icon-sm"
+            aria-label={t.settings.skillsManagement}
+            title={t.settings.skillsManagement}
+            onClick={() => setSkillOpen(true)}
+          >
+            <BotIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
             aria-label={t.history.title}
             title={t.history.title}
             onClick={() => setHistorySheetOpen(true)}
@@ -3522,10 +4251,7 @@ function App(): React.JSX.Element {
                         </Button>
                       </div>
                     </div>
-                    <Select
-                      value={settingsProvider.id}
-                      onValueChange={selectSettingsProvider}
-                    >
+                    <Select value={settingsProvider.id} onValueChange={selectSettingsProvider}>
                       <SelectTrigger id="provider" className="w-full">
                         <SelectValue placeholder={t.settings.providerList} />
                       </SelectTrigger>
@@ -3669,190 +4395,33 @@ function App(): React.JSX.Element {
                   </Field>
                   <Separator />
                   <Field>
-                    <FieldLabel>{t.settings.skillsManagement}</FieldLabel>
-                    <FieldDescription>{t.settings.skillsManagementHint}</FieldDescription>
-                    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-medium text-muted-foreground">
-                          {t.settings.localSkills} · {filteredLocalSkills.length}/{skills.length}
-                        </div>
-                        <Button type="button" variant="outline" size="sm" onClick={refreshSkills}>
-                          <SearchIcon data-icon="inline-start" />
-                          {t.settings.refreshSkills}
-                        </Button>
-                      </div>
-                      <Input
-                        value={localSkillSearchQuery}
-                        onChange={(event) => setLocalSkillSearchQuery(event.target.value)}
-                        placeholder={t.settings.localSkillsSearchPlaceholder}
-                      />
-                      <div className="max-h-48 space-y-2 overflow-auto">
-                        {skills.length === 0 ? (
-                          <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-                            {t.settings.noLocalSkills}
-                          </div>
-                        ) : filteredLocalSkills.length === 0 ? (
-                          <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-                            {t.settings.noMatchedLocalSkills}
-                          </div>
-                        ) : (
-                          filteredLocalSkills.map((skill) => (
-                            <div
-                              key={skill.path}
-                              className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
-                            >
-                              <div className="min-w-0 space-y-1">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <span className="truncate font-medium">{skill.name}</span>
-                                  {!skill.removable && (
-                                    <Badge variant="outline">{t.settings.protectedSkill}</Badge>
-                                  )}
-                                </div>
-                                {skill.description && (
-                                  <div className="line-clamp-2 text-muted-foreground">
-                                    {skill.description}
-                                  </div>
-                                )}
-                                <div className="truncate font-mono text-[11px] text-muted-foreground">
-                                  {skill.path}
-                                </div>
-                              </div>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                disabled={!skill.removable || skillDeletingPath === skill.path}
-                                aria-label={t.settings.deleteSkill}
-                                title={t.settings.deleteSkill}
-                                onClick={() => void deleteSkill(skill)}
-                              >
-                                {skillDeletingPath === skill.path ? (
-                                  <Loader2Icon className="animate-spin" aria-hidden="true" />
-                                ) : (
-                                  <Trash2Icon aria-hidden="true" />
-                                )}
-                              </Button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                      <Separator />
-                      <div className="space-y-2">
-                        <div className="flex gap-2">
-                          <Input
-                            value={skillSearchQuery}
-                            onChange={(event) => setSkillSearchQuery(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                void searchSkills()
-                              }
-                            }}
-                            placeholder="Browser"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={searchSkills}
-                            disabled={skillSearchLoading}
-                          >
-                            {skillSearchLoading ? (
-                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                            ) : (
-                              <SearchIcon data-icon="inline-start" />
-                            )}
-                            {t.settings.searchSkills}
-                          </Button>
-                        </div>
-                        <FieldDescription>{t.settings.skillsSearchHint}</FieldDescription>
-                        {skillSearchResults.length > 0 && (
-                          <div className="max-h-64 space-y-2 overflow-auto">
-                            {skillSearchResults.map((result) => (
-                              <div
-                                key={result.id}
-                                className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
-                              >
-                                <div className="min-w-0 space-y-1">
-                                  <div className="truncate font-medium">{result.name}</div>
-                                  {result.description && (
-                                    <div className="line-clamp-2 text-muted-foreground">
-                                      {result.description}
-                                    </div>
-                                  )}
-                                  <div className="truncate font-mono text-[11px] text-muted-foreground">
-                                    {buildSkillInstallCommand(result)}
-                                  </div>
-                                </div>
-                                <div className="flex shrink-0 items-center gap-1">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon-xs"
-                                    aria-label={t.settings.copySkillInstallCommand}
-                                    title={t.settings.copySkillInstallCommand}
-                                    onClick={() => void copySkillInstallCommand(result)}
-                                  >
-                                    {copiedSkillCommandId === result.id ? (
-                                      <CheckIcon aria-hidden="true" />
-                                    ) : (
-                                      <CopyIcon aria-hidden="true" />
-                                    )}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    disabled={skillInstallingId === result.id}
-                                    onClick={() => void installSkill(result)}
-                                  >
-                                    {skillInstallingId === result.id ? (
-                                      <Loader2Icon
-                                        className="animate-spin"
-                                        data-icon="inline-start"
-                                      />
-                                    ) : (
-                                      <DownloadIcon data-icon="inline-start" />
-                                    )}
-                                    {t.settings.installSkill}
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <SkillManageStatus message={skillManageMessage} />
-                      </div>
-                    </div>
-                  </Field>
-                  <Separator />
-                  <Field>
-                    <FieldLabel htmlFor="instruction-file">
-                      {t.settings.instructionFiles}
-                    </FieldLabel>
-                    <Select
-                      value={selectedInstructionName}
-                      onValueChange={(name) => {
-                        setSelectedInstructionName(name)
-                        setInstructionContent(
-                          instructionFiles.find((file) => file.name === name)?.content ?? ''
-                        )
-                        setInstructionSaved(false)
-                      }}
+                    <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
+                    <div
+                      className="flex min-w-0 flex-wrap gap-1 rounded-md border bg-muted/20 p-1"
+                      role="tablist"
+                      aria-label={t.settings.instructionFiles}
                     >
-                      <SelectTrigger id="instruction-file" className="w-full">
-                        <SelectValue placeholder={t.settings.instructionFiles} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>{t.settings.instructionFiles}</SelectLabel>
-                          {instructionFiles.map((file) => (
-                            <SelectItem key={file.name} value={file.name}>
-                              {file.name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                      {instructionFiles.map((file) => {
+                        const selected = file.name === selectedInstructionName
+
+                        return (
+                          <button
+                            key={file.name}
+                            type="button"
+                            role="tab"
+                            aria-selected={selected}
+                            className={`rounded px-3 py-1.5 text-xs font-medium transition ${
+                              selected
+                                ? 'bg-background text-foreground shadow-sm'
+                                : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
+                            }`}
+                            onClick={() => selectInstructionFile(file.name)}
+                          >
+                            {file.name}
+                          </button>
+                        )
+                      })}
+                    </div>
                     <FieldDescription>
                       {selectedInstructionFile?.path ?? '~/.crescent'}
                       {' · '}
@@ -3883,25 +4452,6 @@ function App(): React.JSX.Element {
                     </div>
                   </Field>
                   <Separator />
-                  <Field>
-                    <FieldLabel htmlFor="open-api-base-url">{t.settings.openApiBaseUrl}</FieldLabel>
-                    <Input
-                      id="open-api-base-url"
-                      value={config.openApiBaseUrl}
-                      onChange={(event) => updateConfig('openApiBaseUrl', event.target.value)}
-                      placeholder="https://api.example.com"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="open-api-document">{t.settings.document}</FieldLabel>
-                    <Textarea
-                      id="open-api-document"
-                      className="min-h-48 resize-none font-mono text-xs"
-                      value={config.openApiDocument}
-                      onChange={(event) => updateConfig('openApiDocument', event.target.value)}
-                      placeholder="https://api.example.com/openapi.json"
-                    />
-                  </Field>
                   {validation && (
                     <div className="rounded-md border bg-muted/40 p-3 text-xs">
                       {validation.ok ? (
@@ -3951,6 +4501,7 @@ function App(): React.JSX.Element {
           </Sheet>
         </div>
       </header>
+      {skillSheet}
       {historySheet}
       {wikiSheet}
       <section className="flex min-h-0 flex-1">
@@ -4332,7 +4883,11 @@ function App(): React.JSX.Element {
               {activeTab.agentLog.map((entry) => (
                 <div
                   key={entry.id}
-                  className={isConversationLog(entry.kind) ? `${logClassName(entry.kind)} min-w-0` : 'min-w-0'}
+                  className={
+                    isConversationLog(entry.kind)
+                      ? `${logClassName(entry.kind)} min-w-0`
+                      : 'min-w-0'
+                  }
                 >
                   {isConversationLog(entry.kind) ? (
                     <>
@@ -4402,13 +4957,19 @@ function App(): React.JSX.Element {
                     </SelectContent>
                   </Select>
                   <Select value={activeTabModelId} onValueChange={applyModel}>
-                    <SelectTrigger className="h-8 min-w-0 flex-1">
+                    <SelectTrigger className="h-8 min-w-0 flex-1" title={aiStatusText}>
                       <span className="sr-only">
                         <SelectValue aria-label={t.app.model} />
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
                         <StatusDot state={aiState} />
                         <span className="truncate">{activeModel?.name ?? activeTabModelId}</span>
+                        {validation?.modelOk === false && (
+                          <TriangleAlertIcon
+                            className="size-3.5 shrink-0 text-destructive"
+                            aria-hidden="true"
+                          />
+                        )}
                       </span>
                     </SelectTrigger>
                     <SelectContent>
@@ -5061,9 +5622,7 @@ function App(): React.JSX.Element {
               <h2 id="password-prompt-title" className="text-sm font-semibold">
                 {t.terminal.passwordPromptTitle}
               </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {passwordPromptRequest.title}
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{passwordPromptRequest.title}</p>
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs text-muted-foreground">
@@ -5270,6 +5829,37 @@ function ActionLogRow({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): Re
   )
 }
 
+function SkillInstallStatusDot({ status }: { status: SkillInstallLogStatus }): React.JSX.Element {
+  if (status === 'running') {
+    return (
+      <span
+        className="mt-0.5 inline-flex size-4 shrink-0 animate-spin rounded-full border-2 border-yellow-500 border-t-transparent"
+        aria-hidden="true"
+      />
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <span
+        className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-white"
+        aria-hidden="true"
+      >
+        <XIcon className="size-3" />
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-white"
+      aria-hidden="true"
+    >
+      <CheckIcon className="size-3" />
+    </span>
+  )
+}
+
 function SkillManageStatus({
   message
 }: {
@@ -5358,9 +5948,7 @@ function isContinueIntent(value: string): boolean {
 }
 
 function isExplicitConnectionRequest(value: string): boolean {
-  return /(^|\s)(ssh|login|connect)\b|登录|登陆|连接|进入.*机器|切换.*连接|打开.*终端/i.test(
-    value
-  )
+  return /(^|\s)(ssh|login|connect)\b|登录|登陆|连接|进入.*机器|切换.*连接|打开.*终端/i.test(value)
 }
 
 function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
@@ -5379,8 +5967,7 @@ function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: str
 
   return lines.some(
     (line) =>
-      !/^\[Crescent\]/.test(line) &&
-      !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
+      !/^\[Crescent\]/.test(line) && !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
   )
 }
 
@@ -5617,12 +6204,29 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Done.') return t.input.done
   if (message === 'Agent run canceled.') return t.input.agentCanceled
   if (message === 'Planning before execution...') return t.input.createdPlan
+  if (message === 'Understanding the user request and current terminal context.') {
+    return t.input.understandingRequest
+  }
+  if (message === 'Breaking the request into verifiable steps before execution.') {
+    return t.input.breakingDownTask
+  }
   if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
   if (/^Executing plan with ReAct step /.test(message)) return t.input.executingPlanStep
+  if (/^Assessing the request and choosing one concrete next action/.test(message)) {
+    return t.input.reasoningNextStep
+  }
   if (/^Reasoning and acting step /.test(message)) return t.input.reasoningNextStep
   if (message === 'Analyzing tool results and preparing the next action...') {
     return t.input.analyzingNextAction
   }
+  if (
+    message ===
+    'Reviewing the latest observation and deciding whether to continue, verify, or summarize.'
+  ) {
+    return t.input.reviewingObservation
+  }
+  const preparingTool = message.match(/^Preparing to run tool ([\w.-]+) for the current step\.$/)
+  if (preparingTool) return `${t.input.preparingToolAction}: ${preparingTool[1]}`
   if (message === 'Analyzing tool results and preparing the final answer...') {
     return t.input.synthesizingResult
   }
@@ -5919,7 +6523,9 @@ function formatProviderModels(models: AgentProviderModelConfig[]): string {
 
 function isReasoningModelId(id: string): boolean {
   const normalized = id.toLowerCase()
-  return normalized.includes('gpt-5') || normalized.includes('reasoner') || normalized.endsWith('-pro')
+  return (
+    normalized.includes('gpt-5') || normalized.includes('reasoner') || normalized.endsWith('-pro')
+  )
 }
 
 function parseCommandWhitelist(value: string): string[] {
@@ -5927,6 +6533,12 @@ function parseCommandWhitelist(value: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+}
+
+function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record }
+  delete next[key]
+  return next
 }
 
 function filterLocalSkills(skills: AgentSkillOption[], query: string): AgentSkillOption[] {
@@ -5944,6 +6556,23 @@ function normalizeSkillSearchQuery(value: string): string {
   return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
 }
 
+function buildInstalledSkillNameSet(skills: AgentSkillOption[]): Set<string> {
+  return new Set(skills.map((skill) => normalizeSkillIdentity(skill.name)))
+}
+
+function isSkillSearchResultInstalled(
+  result: AgentSkillSearchResult,
+  installedSkillNames: Set<string>
+): boolean {
+  return [result.installSkill, result.name]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .some((value) => installedSkillNames.has(normalizeSkillIdentity(value)))
+}
+
+function normalizeSkillIdentity(value: string): string {
+  return value.toLowerCase().replace(/[\s_.-]+/g, '')
+}
+
 function buildSkillInstallCommand(result: AgentSkillSearchResult): string {
   return [
     'npx',
@@ -5957,6 +6586,14 @@ function buildSkillInstallCommand(result: AgentSkillSearchResult): string {
   ]
     .filter(Boolean)
     .join(' ')
+}
+
+function formatInstallCount(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}K`
+
+  return String(value)
 }
 
 function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {
@@ -6177,6 +6814,14 @@ function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       description: t.input.slashSkillDescription,
       value: '/skill:',
       keywords: ['skill', 'skills', '技能']
+    },
+    {
+      id: 'create-skill',
+      title: t.input.slashCreateSkill,
+      description: t.input.slashCreateSkillDescription,
+      value: '/create-skill',
+      keywords: ['create-skill', 'skill', 'skills', '创建', '自定义', '技能'],
+      templateInput: t.input.createSkillPrompt
     }
   ]
 }
@@ -6703,9 +7348,8 @@ function isTerminalCurrentlyAtPasswordPrompt(output: string): boolean {
 
 function isPasswordPromptLine(line: string): boolean {
   return (
-    /(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(
-      line
-    ) || /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(line)
+    /(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(line) ||
+    /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(line)
   )
 }
 
@@ -6849,7 +7493,10 @@ function renderMarkdownBlocks(value: string, t: Dictionary): React.ReactNode[] {
       }
       index += 1
       nodes.push(
-        <details key={nodes.length} className="min-w-0 overflow-hidden rounded-md border bg-muted/20 p-2">
+        <details
+          key={nodes.length}
+          className="min-w-0 overflow-hidden rounded-md border bg-muted/20 p-2"
+        >
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
             {summary}
           </summary>
@@ -7214,10 +7861,7 @@ function filterWikiDocuments(
   if (!normalized) return documents
 
   return documents.filter((document) =>
-    [document.title, document.excerpt, document.path]
-      .join('\n')
-      .toLowerCase()
-      .includes(normalized)
+    [document.title, document.excerpt, document.path].join('\n').toLowerCase().includes(normalized)
   )
 }
 

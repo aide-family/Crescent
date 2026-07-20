@@ -19,7 +19,8 @@ const config: AgentConfig = {
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: '',
-  openApiDocument: ''
+  openApiDocument: '',
+  skillRoot: '~/.agents/skills'
 }
 
 describe('AgentToolRuntime', () => {

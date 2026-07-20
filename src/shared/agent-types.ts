@@ -13,6 +13,7 @@ export interface AgentConfig {
   commandWhitelist: string[]
   openApiBaseUrl: string
   openApiDocument: string
+  skillRoot: string
 }
 
 export interface AgentProviderConfig {
@@ -126,6 +127,7 @@ export interface AgentConnectionIntentResult {
   confidence?: number
   executeAfterLogin?: boolean
   userGoal?: string
+  matchBasis?: 'name' | 'host' | 'user' | 'description' | 'none'
   reason?: string
   error?: string
 }
@@ -259,6 +261,24 @@ export interface AgentSkillInstallResult {
   requestedSkill?: string
 }
 
+export type AgentSkillInstallEvent =
+  | {
+      installId: string
+      type: 'log'
+      data: string
+    }
+  | {
+      installId: string
+      type: 'done'
+      result: AgentSkillInstallResult
+    }
+  | {
+      installId: string
+      type: 'error'
+      error: string
+      canceled?: boolean
+    }
+
 export interface AgentSkillContext {
   catalog: AgentSkillOption[]
   matched: Array<AgentSkillOption & { content: string; reason: 'referenced' | 'matched' }>
@@ -346,9 +366,17 @@ export interface StoredAgentRun {
 
 export interface StoredSessionHistoryItem extends StoredSessionTab {
   updatedAt: string
+  summary?: string
   lastMessage?: string
   lastMessageAt?: string
   runCount: number
+}
+
+export interface StoredSessionSummaryUpdate {
+  tabId: string
+  title: string
+  summary: string
+  updatedAt: string
 }
 
 export interface StoredSessionHistoryDetail extends StoredSessionHistoryItem {

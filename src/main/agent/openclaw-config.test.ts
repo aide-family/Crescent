@@ -16,7 +16,8 @@ const baseConfig: AgentConfig = {
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: 'https://api.example.test',
-  openApiDocument: '{}'
+  openApiDocument: '{}',
+  skillRoot: '~/.agents/skills'
 }
 
 describe('openclaw-config', () => {

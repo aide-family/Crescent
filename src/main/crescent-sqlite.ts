@@ -24,6 +24,8 @@ interface SessionHistoryRow {
   terminalCwd?: string | null
   terminalMode?: 'pty' | 'pipe' | null
   updatedAt: string
+  summary?: string | null
+  titleLocked?: 0 | 1
   lastMessage?: string | null
   lastMessageAt?: string | null
   runCount?: number
@@ -41,6 +43,8 @@ export function initializeCrescentDatabase(): void {
       is_ssh INTEGER NOT NULL DEFAULT 0,
       terminal_cwd TEXT,
       terminal_mode TEXT,
+      summary TEXT,
+      title_locked INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -112,6 +116,9 @@ export function initializeCrescentDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_operation_records_created_at
       ON operation_records (created_at);
   `)
+
+  ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 export function saveSessionTabs(tabs: StoredSessionTab[]): void {
@@ -122,7 +129,10 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id) DO UPDATE SET
-      title = excluded.title,
+      title = CASE
+        WHEN session_tabs.title_locked = 1 THEN session_tabs.title
+        ELSE excluded.title
+      END,
       connection_id = excluded.connection_id,
       connection_name = excluded.connection_name,
       is_ssh = excluded.is_ssh,
@@ -215,6 +225,8 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
         tab.terminal_cwd AS terminalCwd,
         tab.terminal_mode AS terminalMode,
         tab.updated_at AS updatedAt,
+        tab.summary AS summary,
+        tab.title_locked AS titleLocked,
         (
           SELECT log.text
           FROM agent_logs log
@@ -255,6 +267,7 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
     terminalCwd: row.terminalCwd ?? undefined,
     terminalMode: row.terminalMode ?? undefined,
     updatedAt: row.updatedAt,
+    summary: row.summary ?? undefined,
     lastMessage: row.lastMessage ?? undefined,
     lastMessageAt: row.lastMessageAt ?? undefined,
     runCount: Number(row.runCount ?? 0)
@@ -273,6 +286,8 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         is_ssh AS isSsh,
         terminal_cwd AS terminalCwd,
         terminal_mode AS terminalMode,
+        summary,
+        title_locked AS titleLocked,
         updated_at AS updatedAt
       FROM session_tabs
       WHERE tab_id = ?
@@ -309,6 +324,7 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     terminalCwd: tab.terminalCwd ?? undefined,
     terminalMode: tab.terminalMode ?? undefined,
     updatedAt: tab.updatedAt,
+    summary: tab.summary ?? undefined,
     lastMessage: historyItem?.lastMessage,
     lastMessageAt: historyItem?.lastMessageAt,
     runCount: historyItem?.runCount ?? 0,
@@ -336,6 +352,84 @@ export function deleteSessionHistory(tabId: string): boolean {
   })
 
   return changed > 0
+}
+
+export function renameSessionHistory(tabId: string, title: string): boolean {
+  const normalizedTabId = tabId.trim()
+  const normalizedTitle = title.trim()
+  if (!normalizedTabId || !normalizedTitle) return false
+
+  const result = getDatabase()
+    .prepare(
+      `
+      UPDATE session_tabs
+      SET title = ?, title_locked = 1, updated_at = ?
+      WHERE tab_id = ?
+    `
+    )
+    .run(normalizedTitle, new Date().toISOString(), normalizedTabId)
+
+  return Number(result.changes) > 0
+}
+
+export function updateSessionHistorySummary(input: {
+  tabId: string
+  title: string
+  summary: string
+}): { ok: boolean; title: string; summary: string; updatedAt: string } {
+  const normalizedTabId = input.tabId.trim()
+  const title = input.title.trim()
+  const summary = input.summary.trim()
+  const updatedAt = new Date().toISOString()
+  if (!normalizedTabId || !title || !summary) {
+    return { ok: false, title, summary, updatedAt }
+  }
+
+  const result = getDatabase()
+    .prepare(
+      `
+      UPDATE session_tabs
+      SET
+        title = CASE WHEN title_locked = 1 THEN title ELSE ? END,
+        summary = ?,
+        updated_at = ?
+      WHERE tab_id = ?
+    `
+    )
+    .run(title, summary, updatedAt, normalizedTabId)
+
+  const row = getDatabase()
+    .prepare('SELECT title, summary FROM session_tabs WHERE tab_id = ?')
+    .get(normalizedTabId) as { title?: string; summary?: string } | undefined
+
+  return {
+    ok: Number(result.changes) > 0,
+    title: row?.title ?? title,
+    summary: row?.summary ?? summary,
+    updatedAt
+  }
+}
+
+export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+
+  return getDatabase()
+    .prepare(
+      `
+      SELECT
+        tab_id AS tabId,
+        log_id AS logId,
+        kind,
+        text,
+        created_at AS createdAt
+      FROM agent_logs
+      WHERE tab_id = ?
+      ORDER BY log_id ASC
+      LIMIT 80
+    `
+    )
+    .all(normalizedTabId) as unknown as StoredAgentLogEntry[]
 }
 
 export function readCommandWhitelistFromDb(): string[] {
@@ -534,6 +628,13 @@ function getDatabase(): DatabaseSync {
   database = new DatabaseSync(getCrescentDatabasePath())
   initializeCrescentDatabase()
   return database
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>
+  if (columns.some((entry) => entry.name === column)) return
+
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
 }
 
 function readOperationRecordsFromDb(): OperationRecord[] {

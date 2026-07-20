@@ -21,7 +21,8 @@ import {
   deleteAgentSkill,
   installAgentSkill,
   listAgentSkills,
-  searchAgentSkills
+  searchAgentSkills,
+  startAgentSkillInstall
 } from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
@@ -69,6 +70,7 @@ interface ActiveAgentRun {
 }
 
 const activeRuns = new Map<string, ActiveAgentRun>()
+const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 const pendingCommandApprovals = new Map<
   string,
   {
@@ -100,7 +102,7 @@ export function registerAgentIpc(): void {
   })
 
   ipcMain.handle('agent:list-skills', () => {
-    return listAgentSkills()
+    return listAgentSkills(readAgentConfig().skillRoot)
   })
 
   ipcMain.handle('agent:search-skills', (_, query: string) => {
@@ -112,13 +114,74 @@ export function registerAgentIpc(): void {
     (_, payload: { installSource?: string; installSkill?: string }) => {
       return installAgentSkill({
         installSource: payload?.installSource ?? '',
-        installSkill: payload?.installSkill ?? ''
+        installSkill: payload?.installSkill ?? '',
+        skillRoot: readAgentConfig().skillRoot
       })
     }
   )
 
+  ipcMain.handle(
+    'agent:start-skill-install',
+    (event, payload: { installSource?: string; installSkill?: string }) => {
+      const installId = `${Date.now()}_${Math.random().toString(36).slice(2)}`
+      const webContents = event.sender
+      const session = startAgentSkillInstall(
+        {
+          installSource: payload?.installSource ?? '',
+          installSkill: payload?.installSkill ?? '',
+          skillRoot: readAgentConfig().skillRoot
+        },
+        (data) => {
+          if (!webContents.isDestroyed()) {
+            webContents.send('agent:skill-install-event', {
+              installId,
+              type: 'log',
+              data
+            })
+          }
+        }
+      )
+
+      activeSkillInstalls.set(installId, { cancel: session.cancel })
+      session.promise
+        .then((result) => {
+          if (!webContents.isDestroyed()) {
+            webContents.send('agent:skill-install-event', {
+              installId,
+              type: 'done',
+              result
+            })
+          }
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error)
+          if (!webContents.isDestroyed()) {
+            webContents.send('agent:skill-install-event', {
+              installId,
+              type: 'error',
+              error: message,
+              canceled: /canceled/i.test(message)
+            })
+          }
+        })
+        .finally(() => {
+          activeSkillInstalls.delete(installId)
+        })
+
+      return { ok: true, installId }
+    }
+  )
+
+  ipcMain.handle('agent:cancel-skill-install', (_, installId: string) => {
+    const session = activeSkillInstalls.get(installId)
+    if (!session) return { ok: false }
+
+    session.cancel()
+    return { ok: true }
+  })
+
   ipcMain.handle('agent:delete-skill', (_, path: string) => {
-    return deleteAgentSkill(path ?? '')
+    return deleteAgentSkill(path ?? '', readAgentConfig().skillRoot)
   })
 
   ipcMain.handle('agent:list-instruction-files', () => {
@@ -291,7 +354,7 @@ export function registerAgentIpc(): void {
             {
               role: 'system',
               content:
-                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login. Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","reason":"..."}. Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection. Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting. Infer semantically from the full request and current configured connections; do not rely on keywords alone. Prefer exact cluster, environment, host alias, hostname, or description matches. Do not invent ids.'
+                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login. Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","reason":"..."}. Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection. Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting. Matching priority is strict: exact connection name or name-contained request wins first; then host/alias/user-visible identifier; description is only weak context and must never override a plausible name match. If the request names a cluster/environment and a connection name contains that name, choose that connection even if another connection description mentions it. If only descriptions match and names conflict or are ambiguous, lower confidence below 60. Do not invent ids.'
             },
             {
               role: 'user',
@@ -347,7 +410,6 @@ export function registerAgentIpc(): void {
       activeRuns.set(runId, { controller, supplements: [] })
       const runLanguage = resolveRunLanguage(payload?.locale, input)
       const connection = findConnection(payload?.connectionId)
-      const skillContext = buildAgentSkillContext(input)
       const instructionContext = buildLocalInstructionContext()
       const wikiContext = formatWikiContext(await searchWikiDocuments(input, 5))
       const agentConfig = normalizeAgentConfig({
@@ -355,6 +417,7 @@ export function registerAgentIpc(): void {
         providerId: payload?.providerId,
         model: payload?.model
       })
+      const skillContext = buildAgentSkillContext(input, agentConfig.skillRoot)
       const commandAuditor = new CommandAuditor(agentConfig)
       const executeReviewedCommand = async (
         command: string,
@@ -736,15 +799,23 @@ function requestCommandApproval(input: {
 function summarizeConnectionForAi(connection: ConnectionConfig): Record<string, unknown> {
   return {
     id: connection.id,
+    matchingPriority:
+      'name is primary; host/user-visible identifiers are secondary; description is weak context only',
     source: connection.source,
     name: connection.name,
+    normalizedName: normalizeConnectionIntentText(connection.name),
     host: connection.host,
     user: connection.user,
     port: connection.port,
     identityFile: connection.identityFile,
     description: connection.description,
+    normalizedDescription: normalizeConnectionIntentText(connection.description ?? ''),
     sshOptions: connection.sshOptions
   }
+}
+
+function normalizeConnectionIntentText(value: string): string {
+  return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
 }
 
 function parseConnectionIntentResponse(
@@ -758,6 +829,7 @@ function parseConnectionIntentResponse(
       confidence?: unknown
       executeAfterLogin?: unknown
       userGoal?: unknown
+      matchBasis?: unknown
       reason?: unknown
     }
     const shouldConnect = parsed.shouldConnect === true
@@ -766,6 +838,7 @@ function parseConnectionIntentResponse(
     const executeAfterLogin = parsed.executeAfterLogin === true
     const knownIds = new Set(connections.map((connection) => connection.id))
     const userGoal = typeof parsed.userGoal === 'string' ? parsed.userGoal : undefined
+    const matchBasis = parseConnectionMatchBasis(parsed.matchBasis)
 
     if (!shouldConnect) {
       return {
@@ -774,6 +847,7 @@ function parseConnectionIntentResponse(
         confidence: Number.isFinite(confidence) ? confidence : 0,
         executeAfterLogin: false,
         userGoal,
+        matchBasis,
         reason: typeof parsed.reason === 'string' ? parsed.reason : 'no connection needed'
       }
     }
@@ -785,6 +859,7 @@ function parseConnectionIntentResponse(
         confidence: Number.isFinite(confidence) ? confidence : 0,
         executeAfterLogin,
         userGoal,
+        matchBasis,
         reason: typeof parsed.reason === 'string' ? parsed.reason : 'no match'
       }
     }
@@ -796,11 +871,22 @@ function parseConnectionIntentResponse(
       confidence,
       executeAfterLogin,
       userGoal,
+      matchBasis,
       reason: typeof parsed.reason === 'string' ? parsed.reason : undefined
     }
   } catch {
     return { ok: false, shouldConnect: false, confidence: 0, reason: 'invalid model response' }
   }
+}
+
+function parseConnectionMatchBasis(value: unknown): AgentConnectionIntentResult['matchBasis'] {
+  return value === 'name' ||
+    value === 'host' ||
+    value === 'user' ||
+    value === 'description' ||
+    value === 'none'
+    ? value
+    : undefined
 }
 
 function createMemory(): AgentMemory {
@@ -825,7 +911,7 @@ function createIsolatedMemory(): AgentMemory {
 
 async function validateModel(config: AgentConfig): Promise<void> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
+  const timeout = setTimeout(() => controller.abort(), 20_000)
 
   let completion
   try {
@@ -843,7 +929,7 @@ async function validateModel(config: AgentConfig): Promise<void> {
     )
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error('Model validation timed out after 8 seconds.')
+      throw new Error('Model validation timed out after 20 seconds.')
     }
     throw error
   } finally {

@@ -20,7 +20,8 @@ const config: AgentConfig = {
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: 'https://api.example.test/v1/',
-  openApiDocument: '{}'
+  openApiDocument: '{}',
+  skillRoot: '~/.agents/skills'
 }
 
 const operations = new Map<string, OpenApiOperationMeta>([

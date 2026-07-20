@@ -37,6 +37,10 @@ export class TerminalAgentCore {
   async run(userInput: string, terminalContext = ''): Promise<string> {
     assertConfig(this.config)
     this.throwIfCanceled()
+    this.emit({
+      type: 'status',
+      message: 'Understanding the user request and current terminal context.'
+    })
 
     const brain = new AgentBrain(this.config)
     const memoryBlock = this.memory.getPromptBlock()
@@ -70,7 +74,10 @@ export class TerminalAgentCore {
 
     let planSteps: string[] | undefined
     if (this.config.agentMode === 'plan-execute') {
-      this.emit({ type: 'thought', message: 'Planning before execution...' })
+      this.emit({
+        type: 'thought',
+        message: 'Breaking the request into verifiable steps before execution.'
+      })
       const plan = await planner.createPlan({
         userInput,
         memoryBlock,
@@ -170,10 +177,10 @@ export class TerminalAgentCore {
       this.emit({
         type: 'thought',
         message: hasToolObservations
-          ? 'Analyzing tool results and preparing the next action...'
+          ? 'Reviewing the latest observation and deciding whether to continue, verify, or summarize.'
           : this.config.agentMode === 'plan-execute'
             ? `Executing plan with ReAct step ${step + 1}/${MAX_TOOL_STEPS}.`
-            : `Reasoning and acting step ${step + 1}/${MAX_TOOL_STEPS}.`
+            : `Assessing the request and choosing one concrete next action, step ${step + 1}/${MAX_TOOL_STEPS}.`
       })
 
       const stepMessages = buildStepMessages(messages, {
@@ -245,6 +252,10 @@ export class TerminalAgentCore {
         this.throwIfCanceled()
         if (toolCall.type !== 'function') continue
 
+        this.emit({
+          type: 'status',
+          message: `Preparing to run tool ${toolCall.function.name} for the current step.`
+        })
         this.emit({
           type: 'tool',
           name: toolCall.function.name,
@@ -413,7 +424,10 @@ function formatToolArgument(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '(not provided)'
 }
 
-function formatToolArgumentsForDisplay(args: Record<string, unknown>, rawArguments: string): string {
+function formatToolArgumentsForDisplay(
+  args: Record<string, unknown>,
+  rawArguments: string
+): string {
   const text = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : rawArguments.trim()
   if (!text) return '(none)'
 
@@ -487,16 +501,11 @@ export function sanitizeFinalAnswer(
   if (reason === 'normal') return fallback
 
   const needsIncompletePrefix =
-    reason === 'safety-limit' &&
-    !/未完成|incomplete|not complete|没有完成|尚未完成/i.test(fallback)
+    reason === 'safety-limit' && !/未完成|incomplete|not complete|没有完成|尚未完成/i.test(fallback)
 
   if (!needsIncompletePrefix) return fallback
 
-  return [
-    '未完成：工具执行步数已达到安全上限，后续动作没有继续执行。',
-    '',
-    fallback
-  ]
+  return ['未完成：工具执行步数已达到安全上限，后续动作没有继续执行。', '', fallback]
     .filter(Boolean)
     .join('\n')
 }

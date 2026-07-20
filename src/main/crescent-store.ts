@@ -42,16 +42,20 @@ export interface CrescentMemoryFile {
 }
 
 export const defaultCommandWhitelist: string[] = []
+const defaultAgentProviders = getDefaultAgentProviders()
+const defaultAgentProvider = defaultAgentProviders[0]
 
 export const defaultAgentConfig: AgentConfig = {
-  providers: getDefaultAgentProviders(),
-  providerId: 'nova-litellm',
-  model: defaultOpenClawLikeConfig.agents.defaults.model.primary,
+  providers: defaultAgentProviders,
+  providerId: defaultAgentProvider?.id ?? 'nova-litellm',
+  model:
+    defaultAgentProvider?.models[0]?.id ?? defaultOpenClawLikeConfig.agents.defaults.model.primary,
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: defaultCommandWhitelist,
   openApiBaseUrl: '',
-  openApiDocument: ''
+  openApiDocument: '',
+  skillRoot: '~/.agents/skills'
 }
 
 export const defaultMemoryFile: CrescentMemoryFile = {
@@ -167,7 +171,8 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
       candidate.models.some((model) => model.id === String(config.model ?? '').trim())
     ) ??
     providers[0]
-  const defaultModel = provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? defaultAgentConfig.model
+  const defaultModel =
+    provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? defaultAgentConfig.model
   const model = String(config.model ?? defaultAgentConfig.model)
   const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === model))
 
@@ -181,8 +186,15 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
       config.commandWhitelist ?? defaultAgentConfig.commandWhitelist
     ),
     openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
-    openApiDocument: String(config.openApiDocument ?? '')
+    openApiDocument: String(config.openApiDocument ?? ''),
+    skillRoot: normalizeSkillRoot(config.skillRoot)
   }
+}
+
+function normalizeSkillRoot(value: unknown): string {
+  const skillRoot = String(value ?? '').trim()
+
+  return skillRoot || defaultAgentConfig.skillRoot
 }
 
 function normalizeStringList(value: unknown): string[] {

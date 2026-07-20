@@ -47,6 +47,7 @@ export type {
   StoredAgentRun,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
+  StoredSessionSummaryUpdate,
   StoredSessionTab,
   SubterminalCommandExecutor,
   TerminalCommandExecutor,
