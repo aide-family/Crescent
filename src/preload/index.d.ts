@@ -9,6 +9,7 @@ import type {
   AgentModelOption,
   AgentPathReference,
   AgentRunInput,
+  AgentSkillInstallEvent,
   AgentSkillInstallResult,
   AgentSkillOption,
   AgentSkillSearchResult,
@@ -22,6 +23,7 @@ import type {
   StoredAgentRun,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
+  StoredSessionSummaryUpdate,
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
@@ -77,6 +79,11 @@ interface TerminalAgentApi {
       installSource: string
       installSkill?: string
     }) => Promise<AgentSkillInstallResult>
+    startSkillInstall: (input: {
+      installSource: string
+      installSkill?: string
+    }) => Promise<{ ok: boolean; installId: string }>
+    cancelSkillInstall: (installId: string) => Promise<{ ok: boolean }>
     deleteSkill: (path: string) => Promise<AgentSkillOption[]>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
     listWikiDocuments: () => Promise<WikiDocumentSummary[]>
@@ -100,6 +107,7 @@ interface TerminalAgentApi {
     resolveCommandApproval: (input: CommandApprovalDecision) => Promise<{ ok: boolean }>
     onEvent: (callback: (event: AgentEvent) => void) => () => void
     onCommandApprovalRequest: (callback: (request: CommandApprovalRequest) => void) => () => void
+    onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
   }
   connections: {
     list: () => Promise<ConnectionConfig[]>
@@ -115,7 +123,9 @@ interface TerminalAgentApi {
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
     listSessionHistory: (limit?: number) => Promise<StoredSessionHistoryItem[]>
     getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
+    renameSessionHistory: (input: { tabId: string; title: string }) => Promise<{ ok: boolean }>
     deleteSessionHistory: (tabId: string) => Promise<{ ok: boolean }>
+    onSessionSummaryUpdated: (callback: (event: StoredSessionSummaryUpdate) => void) => () => void
   }
 }
 

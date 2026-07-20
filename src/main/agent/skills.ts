@@ -1,8 +1,7 @@
-import { existsSync, readdirSync, readFileSync, rmSync } from 'fs'
-import { execFile } from 'child_process'
-import { homedir } from 'os'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs'
+import { spawn } from 'child_process'
+import { homedir, tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
-import { promisify } from 'util'
 
 import type {
   AgentSkillContext,
@@ -13,14 +12,7 @@ import type {
 
 const MAX_MATCHED_SKILLS = 3
 const MAX_SKILL_CONTENT_CHARS = 16_000
-const execFileAsync = promisify(execFile)
-const SKILL_ROOTS = [
-  join(homedir(), '.codex', 'skills'),
-  join(homedir(), '.codex', 'skills', '.system'),
-  join(homedir(), '.agents', 'skills'),
-  join(homedir(), '.codex', '.agents', 'skills')
-]
-const PROTECTED_SKILL_ROOTS = new Set([join(homedir(), '.codex', 'skills', '.system')])
+const DEFAULT_SKILL_ROOT = '~/.agents/skills'
 const ESCAPE_CHAR = String.fromCharCode(27)
 const BELL_CHAR = String.fromCharCode(7)
 const ANSI_CSI_PATTERN = new RegExp(`${ESCAPE_CHAR}\\[[0-?]*[ -/]*[@-~]`, 'g')
@@ -29,16 +21,31 @@ const ANSI_OSC_PATTERN = new RegExp(
   'g'
 )
 
-export function listAgentSkills(): AgentSkillOption[] {
+interface SkillInstallRunOptions {
+  onOutput?: (chunk: string) => void
+  signal?: AbortSignal
+}
+
+interface SkillInstallCommandResult {
+  ok: boolean
+  output: string
+  canceled?: boolean
+}
+
+export interface AgentSkillInstallSession {
+  promise: Promise<AgentSkillInstallResult>
+  cancel: () => void
+}
+
+export function listAgentSkills(skillRoot?: string): AgentSkillOption[] {
   const seen = new Set<string>()
   const skills: AgentSkillOption[] = []
+  const root = resolveSkillRoot(skillRoot)
 
-  for (const root of SKILL_ROOTS) {
-    for (const path of findSkillFiles(root)) {
-      if (seen.has(path)) continue
-      seen.add(path)
-      skills.push(readSkill(path, root))
-    }
+  for (const path of findSkillFiles(root)) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    skills.push(readSkill(path, root))
   }
 
   return skills.sort((left, right) => left.name.localeCompare(right.name))
@@ -60,23 +67,57 @@ export async function searchAgentSkills(query: string): Promise<AgentSkillSearch
 export async function installAgentSkill(input: {
   installSource?: string
   installSkill?: string
+  skillRoot?: string
 }): Promise<AgentSkillInstallResult> {
+  return installAgentSkillWithOutput(input)
+}
+
+export function startAgentSkillInstall(
+  input: { installSource?: string; installSkill?: string; skillRoot?: string },
+  onOutput: (chunk: string) => void
+): AgentSkillInstallSession {
+  const controller = new AbortController()
+
+  return {
+    promise: installAgentSkillWithOutput(input, {
+      onOutput,
+      signal: controller.signal
+    }),
+    cancel: () => controller.abort()
+  }
+}
+
+async function installAgentSkillWithOutput(
+  input: {
+    installSource?: string
+    installSkill?: string
+    skillRoot?: string
+  },
+  options: SkillInstallRunOptions = {}
+): Promise<AgentSkillInstallResult> {
   const installSource = input.installSource?.trim()
   if (!installSource) throw new Error('Skill install source is empty.')
 
   const installSkill = input.installSkill?.trim()
-  const beforeInstallPaths = new Set(listAgentSkills().map((skill) => skill.path))
+  const beforeInstallPaths = new Set(listAgentSkills(input.skillRoot).map((skill) => skill.path))
 
-  const firstAttempt = await runSkillInstallCommand(installSource, installSkill)
+  const firstAttempt = await runSkillInstallCommand(
+    installSource,
+    installSkill,
+    input.skillRoot,
+    options
+  )
+  if (firstAttempt.canceled) throw new Error('Skill install canceled.')
+
   if (firstAttempt.ok) {
     return {
       ok: true,
       output: firstAttempt.output,
-      skills: listAgentSkills()
+      skills: listAgentSkills(input.skillRoot)
     }
   }
 
-  const skillsAfterFirstAttempt = listAgentSkills()
+  const skillsAfterFirstAttempt = listAgentSkills(input.skillRoot)
   if (wasSkillInstalled(skillsAfterFirstAttempt, installSkill, installSource)) {
     return {
       ok: true,
@@ -86,8 +127,15 @@ export async function installAgentSkill(input: {
   }
 
   if (installSkill && isMissingRequestedSkill(firstAttempt.output)) {
-    const fallbackAttempt = await runSkillInstallCommand(installSource)
-    const skillsAfterFallback = listAgentSkills()
+    const fallbackAttempt = await runSkillInstallCommand(
+      installSource,
+      undefined,
+      input.skillRoot,
+      options
+    )
+    if (fallbackAttempt.canceled) throw new Error('Skill install canceled.')
+
+    const skillsAfterFallback = listAgentSkills(input.skillRoot)
     if (fallbackAttempt.ok || hasNewInstalledSkill(skillsAfterFallback, beforeInstallPaths)) {
       return {
         ok: true,
@@ -104,44 +152,322 @@ export async function installAgentSkill(input: {
   throw new Error(firstAttempt.output)
 }
 
-async function runSkillInstallCommand(
+function runSkillInstallCommand(
   installSource: string,
-  installSkill?: string
-): Promise<{ ok: boolean; output: string }> {
-  const args = ['-y', 'skills', 'add', installSource, '--yes', '--global']
-  if (installSkill) args.push('--skill', installSkill)
-  let stdout = ''
-  let stderr = ''
+  installSkill?: string,
+  skillRoot?: string,
+  options: SkillInstallRunOptions = {}
+): Promise<SkillInstallCommandResult> {
+  const gitUrl = normalizeGitInstallSource(installSource)
+  if (gitUrl) {
+    return runGitSkillInstallCommand(gitUrl, installSource, installSkill, skillRoot, options)
+  }
+
+  return runSkillsCliInstallCommand(installSource, installSkill, skillRoot, options)
+}
+
+async function runGitSkillInstallCommand(
+  gitUrl: string,
+  installSource: string,
+  installSkill?: string,
+  skillRoot?: string,
+  options: SkillInstallRunOptions = {}
+): Promise<SkillInstallCommandResult> {
+  const resolvedSkillRoot = resolveSkillRoot(skillRoot)
+  const tempDir = mkdtempSync(join(tmpdir(), 'crescent-skill-'))
+  let output = `git clone --depth 1 ${gitUrl}\n`
+  options.onOutput?.(output)
 
   try {
-    const result = await execFileAsync('npx', args, {
-      timeout: 180_000,
-      maxBuffer: 1024 * 1024
-    })
-    stdout = result.stdout
-    stderr = result.stderr
+    const cloneResult = await runSpawnCommand(
+      'git',
+      ['clone', '--depth', '1', gitUrl, tempDir],
+      options
+    )
+    output += cloneResult.output
+    if (cloneResult.canceled || !cloneResult.ok) return cloneResult
+
+    mkdirSync(resolvedSkillRoot, { recursive: true })
+    const skillDirectories = findSkillDirectories(tempDir)
+    const selectedSkillDirectories = selectInstallSkillDirectories(skillDirectories, installSkill)
+    if (selectedSkillDirectories.length === 0) {
+      return {
+        ok: false,
+        output: sanitizeInstallOutput(
+          [
+            output,
+            installSkill
+              ? `No matching skills found for: ${installSkill}`
+              : `No SKILL.md files found in ${installSource}`
+          ].join('\n')
+        )
+      }
+    }
+
+    for (const directory of selectedSkillDirectories) {
+      const skillPath = join(directory, 'SKILL.md')
+      const content = readFileSync(skillPath, 'utf8')
+      const skillName = extractSkillName(content) || basename(directory)
+      const destination = join(resolvedSkillRoot, sanitizeSkillDirectoryName(skillName))
+      options.onOutput?.(`\nInstalling ${skillName} -> ${destination}\n`)
+      rmSync(destination, { recursive: true, force: true })
+      cpSync(directory, destination, { recursive: true })
+      output += `\nInstalled ${skillName} -> ${destination}\n`
+    }
+
+    return { ok: true, output: sanitizeInstallOutput(output) }
   } catch (error) {
     return {
       ok: false,
-      output:
-        normalizeExecErrorOutput(error) || (error instanceof Error ? error.message : String(error))
+      output: sanitizeInstallOutput(
+        [output, error instanceof Error ? error.message : String(error)].join('\n')
+      )
     }
-  }
-
-  return {
-    ok: true,
-    output: sanitizeInstallOutput([stdout, stderr].filter(Boolean).join('\n'))
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
   }
 }
 
-function normalizeExecErrorOutput(error: unknown): string {
-  if (!isRecord(error)) return ''
+function runSkillsCliInstallCommand(
+  installSource: string,
+  installSkill?: string,
+  skillRoot?: string,
+  options: SkillInstallRunOptions = {}
+): Promise<SkillInstallCommandResult> {
+  const args = ['-y', 'skills', 'add', installSource, '--yes', '--global']
+  if (installSkill) args.push('--skill', installSkill)
+  const resolvedSkillRoot = resolveSkillRoot(skillRoot)
+  const skillHome =
+    basename(resolvedSkillRoot) === 'skills' ? dirname(resolvedSkillRoot) : undefined
+  let stdout = ''
+  let stderr = ''
 
-  return sanitizeInstallOutput(
-    [error['message'], error['stdout'], error['stderr']]
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .join('\n')
-  )
+  return new Promise((resolveResult) => {
+    if (options.signal?.aborted) {
+      resolveResult({ ok: false, output: 'Skill install canceled.', canceled: true })
+      return
+    }
+
+    const child = spawn('npx', args, {
+      env: {
+        ...process.env,
+        ...(skillHome ? { CODEX_HOME: skillHome, AGENTS_HOME: skillHome } : {}),
+        CRESCENT_SKILL_ROOT: resolvedSkillRoot
+      },
+      stdio: 'pipe'
+    })
+    let settled = false
+    let canceled = false
+    let forceKillTimeout: NodeJS.Timeout | undefined
+
+    const settle = (result: SkillInstallCommandResult): void => {
+      if (settled) return
+
+      settled = true
+      clearTimeout(timeout)
+      if (forceKillTimeout) clearTimeout(forceKillTimeout)
+      options.signal?.removeEventListener('abort', cancel)
+      resolveResult(result)
+    }
+
+    const appendOutput = (kind: 'stdout' | 'stderr', data: Buffer): void => {
+      const chunk = data.toString()
+      if (kind === 'stdout') stdout += chunk
+      else stderr += chunk
+
+      options.onOutput?.(sanitizeInstallChunk(chunk))
+    }
+
+    const cancel = (): void => {
+      canceled = true
+      options.onOutput?.('\nSkill install canceled by user.\n')
+      child.kill('SIGTERM')
+      forceKillTimeout = setTimeout(() => {
+        if (settled || !child.pid) return
+
+        try {
+          process.kill(child.pid, 'SIGKILL')
+        } catch {
+          // Process already exited.
+        }
+      }, 2500)
+    }
+
+    const timeout = setTimeout(() => {
+      canceled = true
+      options.onOutput?.('\nSkill install timed out and was canceled.\n')
+      child.kill('SIGTERM')
+      forceKillTimeout = setTimeout(() => {
+        if (settled || !child.pid) return
+
+        try {
+          process.kill(child.pid, 'SIGKILL')
+        } catch {
+          // Process already exited.
+        }
+      }, 2500)
+    }, 180_000)
+
+    options.signal?.addEventListener('abort', cancel, { once: true })
+
+    child.stdout.on('data', (data: Buffer) => appendOutput('stdout', data))
+    child.stderr.on('data', (data: Buffer) => appendOutput('stderr', data))
+    child.on('error', (error) => {
+      settle({
+        ok: false,
+        output: sanitizeInstallOutput([stdout, stderr, error.message].filter(Boolean).join('\n')),
+        canceled
+      })
+    })
+    child.on('close', (code) => {
+      settle({
+        ok: !canceled && code === 0,
+        output: sanitizeInstallOutput([stdout, stderr].filter(Boolean).join('\n')),
+        canceled
+      })
+    })
+  })
+}
+
+function runSpawnCommand(
+  command: string,
+  args: string[],
+  options: SkillInstallRunOptions = {}
+): Promise<SkillInstallCommandResult> {
+  let stdout = ''
+  let stderr = ''
+
+  return new Promise((resolveResult) => {
+    if (options.signal?.aborted) {
+      resolveResult({ ok: false, output: 'Skill install canceled.', canceled: true })
+      return
+    }
+
+    const child = spawn(command, args, { stdio: 'pipe' })
+    let settled = false
+    let canceled = false
+    let forceKillTimeout: NodeJS.Timeout | undefined
+
+    const settle = (result: SkillInstallCommandResult): void => {
+      if (settled) return
+
+      settled = true
+      clearTimeout(timeout)
+      if (forceKillTimeout) clearTimeout(forceKillTimeout)
+      options.signal?.removeEventListener('abort', cancel)
+      resolveResult(result)
+    }
+
+    const cancel = (): void => {
+      canceled = true
+      options.onOutput?.('\nSkill install canceled by user.\n')
+      child.kill('SIGTERM')
+      forceKillTimeout = setTimeout(() => {
+        if (settled || !child.pid) return
+
+        try {
+          process.kill(child.pid, 'SIGKILL')
+        } catch {
+          // Process already exited.
+        }
+      }, 2500)
+    }
+
+    const timeout = setTimeout(() => {
+      canceled = true
+      options.onOutput?.('\nSkill install timed out and was canceled.\n')
+      child.kill('SIGTERM')
+      forceKillTimeout = setTimeout(() => {
+        if (settled || !child.pid) return
+
+        try {
+          process.kill(child.pid, 'SIGKILL')
+        } catch {
+          // Process already exited.
+        }
+      }, 2500)
+    }, 180_000)
+
+    const appendOutput = (kind: 'stdout' | 'stderr', data: Buffer): void => {
+      const chunk = data.toString()
+      if (kind === 'stdout') stdout += chunk
+      else stderr += chunk
+
+      options.onOutput?.(sanitizeInstallChunk(chunk))
+    }
+
+    options.signal?.addEventListener('abort', cancel, { once: true })
+    child.stdout.on('data', (data: Buffer) => appendOutput('stdout', data))
+    child.stderr.on('data', (data: Buffer) => appendOutput('stderr', data))
+    child.on('error', (error) => {
+      settle({
+        ok: false,
+        output: sanitizeInstallOutput([stdout, stderr, error.message].filter(Boolean).join('\n')),
+        canceled
+      })
+    })
+    child.on('close', (code) => {
+      settle({
+        ok: !canceled && code === 0,
+        output: sanitizeInstallOutput([stdout, stderr].filter(Boolean).join('\n')),
+        canceled
+      })
+    })
+  })
+}
+
+function normalizeGitInstallSource(source: string): string | undefined {
+  const trimmed = source.trim()
+  if (/^[\w.-]+\/[\w.-]+$/.test(trimmed)) return `https://github.com/${trimmed}.git`
+  if (/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+(?:\.git)?$/i.test(trimmed)) {
+    return trimmed.endsWith('.git') ? trimmed : `${trimmed}.git`
+  }
+  if (/^git@github\.com:[^/\s]+\/[^/\s]+(?:\.git)?$/i.test(trimmed)) {
+    return trimmed.endsWith('.git') ? trimmed : `${trimmed}.git`
+  }
+
+  return undefined
+}
+
+function findSkillDirectories(root: string, depth = 0): string[] {
+  if (depth > 5 || !existsSync(root)) return []
+  if (existsSync(join(root, 'SKILL.md'))) return [root]
+
+  const directories: string[] = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === '.git' || entry.name === 'node_modules') continue
+
+    directories.push(...findSkillDirectories(join(root, entry.name), depth + 1))
+  }
+
+  return directories
+}
+
+function selectInstallSkillDirectories(
+  directories: string[],
+  installSkill: string | undefined
+): string[] {
+  if (!installSkill) return directories
+
+  const normalizedInstallSkill = normalizeSkillName(installSkill)
+  return directories.filter((directory) => {
+    const content = readFileSync(join(directory, 'SKILL.md'), 'utf8')
+    const skillName = extractSkillName(content) || basename(directory)
+
+    return (
+      normalizeSkillName(skillName) === normalizedInstallSkill ||
+      normalizeSkillName(basename(directory)) === normalizedInstallSkill
+    )
+  })
+}
+
+function sanitizeSkillDirectoryName(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return normalized || 'skill'
 }
 
 function wasSkillInstalled(
@@ -186,18 +512,28 @@ function sanitizeInstallOutput(value: string): string {
     .trim()
 }
 
-export function deleteAgentSkill(path: string): AgentSkillOption[] {
+function sanitizeInstallChunk(value: string): string {
+  return value
+    .replace(ANSI_CSI_PATTERN, '')
+    .replace(ANSI_OSC_PATTERN, '')
+    .replace(/\r/g, '\n')
+    .replace(/\[[0-9]+[A-Z]/g, '')
+}
+
+export function deleteAgentSkill(path: string, skillRoot?: string): AgentSkillOption[] {
   const skillPath = resolve(path)
-  const skill = listAgentSkills().find((candidate) => resolve(candidate.path) === skillPath)
+  const skill = listAgentSkills(skillRoot).find(
+    (candidate) => resolve(candidate.path) === skillPath
+  )
   if (!skill) throw new Error('Skill not found.')
   if (!skill.removable) throw new Error('This skill is protected and cannot be deleted.')
 
   rmSync(dirname(skillPath), { recursive: true, force: false })
-  return listAgentSkills()
+  return listAgentSkills(skillRoot)
 }
 
-export function buildAgentSkillContext(input: string): AgentSkillContext {
-  const catalog = listAgentSkills()
+export function buildAgentSkillContext(input: string, skillRoot?: string): AgentSkillContext {
+  const catalog = listAgentSkills(skillRoot)
   const referenced = findReferencedSkills(input, catalog)
   const matched = referenced.length
     ? referenced.map((skill) => ({ skill, score: 1000, reason: 'referenced' as const }))
@@ -250,9 +586,16 @@ function readSkill(path: string, root: string): AgentSkillOption {
 function isRemovableSkillPath(path: string, root: string): boolean {
   const resolvedRoot = resolve(root)
   const resolvedPath = resolve(path)
-  if (PROTECTED_SKILL_ROOTS.has(root)) return false
 
   return resolvedPath.startsWith(`${resolvedRoot}/`)
+}
+
+function resolveSkillRoot(value: string | undefined): string {
+  const trimmed = value?.trim() || DEFAULT_SKILL_ROOT
+  if (trimmed === '~') return homedir()
+  if (trimmed.startsWith('~/')) return join(homedir(), trimmed.slice(2))
+
+  return resolve(trimmed)
 }
 
 function normalizeSkillSearchResults(payload: unknown): AgentSkillSearchResult[] {

@@ -10,6 +10,7 @@ import type {
   AgentModelOption,
   AgentPathReference,
   AgentRunInput,
+  AgentSkillInstallEvent,
   AgentSkillInstallResult,
   AgentSkillOption,
   AgentSkillSearchResult,
@@ -23,6 +24,7 @@ import type {
   StoredAgentRun,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
+  StoredSessionSummaryUpdate,
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
@@ -116,6 +118,13 @@ const api = {
       installSource: string
       installSkill?: string
     }): Promise<AgentSkillInstallResult> => ipcRenderer.invoke('agent:install-skill', input),
+    startSkillInstall: (input: {
+      installSource: string
+      installSkill?: string
+    }): Promise<{ ok: boolean; installId: string }> =>
+      ipcRenderer.invoke('agent:start-skill-install', input),
+    cancelSkillInstall: (installId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:cancel-skill-install', installId),
     deleteSkill: (path: string): Promise<AgentSkillOption[]> =>
       ipcRenderer.invoke('agent:delete-skill', path),
     listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
@@ -168,6 +177,13 @@ const api = {
 
       ipcRenderer.on('agent:command-approval-request', listener)
       return () => ipcRenderer.removeListener('agent:command-approval-request', listener)
+    },
+    onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: AgentSkillInstallEvent): void =>
+        callback(event)
+
+      ipcRenderer.on('agent:skill-install-event', listener)
+      return () => ipcRenderer.removeListener('agent:skill-install-event', listener)
     }
   },
   connections: {
@@ -191,8 +207,19 @@ const api = {
       ipcRenderer.invoke('storage:list-session-history', limit),
     getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>
       ipcRenderer.invoke('storage:get-session-history', tabId),
+    renameSessionHistory: (input: { tabId: string; title: string }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:rename-session-history', input),
     deleteSessionHistory: (tabId: string): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('storage:delete-session-history', tabId)
+      ipcRenderer.invoke('storage:delete-session-history', tabId),
+    onSessionSummaryUpdated: (
+      callback: (event: StoredSessionSummaryUpdate) => void
+    ): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: StoredSessionSummaryUpdate): void =>
+        callback(event)
+
+      ipcRenderer.on('storage:session-summary-updated', listener)
+      return () => ipcRenderer.removeListener('storage:session-summary-updated', listener)
+    }
   }
 }
 
