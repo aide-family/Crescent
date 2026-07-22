@@ -375,12 +375,7 @@ async function requestLocalFileAccessAndAnnotateResult(
 function isLocalFilePermissionFailure(result: TerminalCommandExecutionResult): boolean {
   const text = `${result.error ?? ''}\n${result.output}`
 
-  return (
-    !result.ok &&
-    /(EACCES|EPERM|Permission denied|Operation not permitted|权限不够|没有权限|操作不允许)/i.test(
-      text
-    )
-  )
+  return !result.ok && /(EACCES|EPERM|Permission denied|Operation not permitted)/i.test(text)
 }
 
 function extractLikelyLocalDirectory(command: string): string | undefined {
@@ -1128,10 +1123,8 @@ function hasUnterminatedSecretPrompt(value: string): boolean {
 
   if (!lastLine) return false
 
-  return (
-    /(?:\[sudo\]\s*)?(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(
-      lastLine
-    ) || /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(lastLine)
+  return /(?:\[sudo\]\s*)?(?:password|passphrase|verification code|one-time password|otp)\b.*:\s*$/i.test(
+    lastLine
   )
 }
 

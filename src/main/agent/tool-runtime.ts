@@ -3,6 +3,7 @@ import { validateGeneratedShellCommand } from './shell-command-validator'
 import { loadOpenApiToolRegistry } from './tool-registry'
 import { OpenApiToolExecutor } from './tool-executor'
 import { DOCUMENT_PARSE_TOOLS, executeDocumentParseTool } from './document-tools'
+import { executeMcpTool, loadMcpToolRegistry } from './mcp-runtime'
 import { saveWikiDocument } from './wiki'
 import { findBuiltInToolCatalogEntry } from '../../shared/agent-tool-catalog'
 import type {
@@ -77,7 +78,7 @@ const LOCAL_FILE_WRITE_TOOL: OpenAiTool = {
   function: {
     name: LOCAL_FILE_WRITE_TOOL_NAME,
     description:
-      'Write generated local artifacts such as Markdown reports directly to the Crescent user machine. Use this for user-requested local files instead of shell heredocs, python heredocs, or temporary sub-terminal file writes. Preserve the exact user-requested destination path. Creates parent directories as needed and does not overwrite existing files unless overwrite is true.',
+      'Write generated local artifacts such as Markdown reports directly to the Crescent user machine. Use this only after the user supplied or confirmed the local destination path. Use this for user-requested local files instead of shell heredocs, python heredocs, or temporary sub-terminal file writes. Preserve the exact user-requested destination path. Creates parent directories as needed and does not overwrite existing files unless overwrite is true.',
     parameters: {
       type: 'object',
       properties: {
@@ -112,7 +113,7 @@ const SAVE_WIKI_DOCUMENT_TOOL: OpenAiTool = {
         title: {
           type: 'string',
           description:
-            'Knowledge-base document title. Use a concise operational title, for example "zhangke K8s 集群巡检 SOP".'
+            'Knowledge-base document title. Use a concise operational title, for example "zhangke K8s inspection SOP".'
         },
         content: {
           type: 'string',
@@ -159,13 +160,16 @@ export class AgentToolRuntime {
       runtime.registerSubterminalTool(input.subterminalExecutor, input.emit)
     }
     if (input.localFileWriter) {
-      runtime.registerLocalFileWriteTool(input.localFileWriter, input.emit)
+      runtime.registerLocalFileWriteTool(input.localFileWriter, input.userInput, input.emit)
     }
     runtime.registerWikiTool(input.emit)
     runtime.registerDocumentParseTools(input.brain, input.emit)
 
     if (hasOpenApiConfig(input.config)) {
       await runtime.registerOpenApiTools(input)
+    }
+    if (hasMcpConfig(input.config)) {
+      await runtime.registerMcpTools(input)
     }
 
     return runtime
@@ -270,6 +274,7 @@ export class AgentToolRuntime {
 
   private registerLocalFileWriteTool(
     localFileWriter: LocalFileWriter,
+    userInput: string,
     emit: (event: AgentEvent) => void
   ): void {
     this.handlers.set(LOCAL_FILE_WRITE_TOOL_NAME, {
@@ -277,6 +282,15 @@ export class AgentToolRuntime {
       catalog: findBuiltInToolCatalogEntry(LOCAL_FILE_WRITE_TOOL_NAME),
       execute: async (rawArguments) => {
         const args = parseLocalFileWriteArgs(rawArguments)
+        if (requiresConfirmedLocalReportDestination(userInput, args.path)) {
+          return {
+            ok: false,
+            path: args.path,
+            error:
+              'Local report destination was not confirmed by the user. Finish the inspection summary first, ask the user to confirm a local Crescent-machine directory or filename, then call write_local_file with that confirmed path.'
+          }
+        }
+
         emit({
           type: 'tool',
           name: LOCAL_FILE_WRITE_TOOL_NAME,
@@ -365,6 +379,51 @@ export class AgentToolRuntime {
       })
     }
   }
+
+  private async registerMcpTools(input: AgentToolRuntimeInput): Promise<void> {
+    const registry = await loadMcpToolRegistry(input.config)
+
+    if (registry.errors.length > 0) {
+      input.emit({
+        type: 'status',
+        message: `Some MCP servers failed to load: ${registry.errors.join('; ')}`
+      })
+    }
+    if (registry.tools.length === 0) return
+
+    input.emit({ type: 'status', message: `Loaded ${registry.tools.length} MCP tools.` })
+
+    const selectedToolNames = await input.brain.selectRelevantTools({
+      userInput: input.userInput,
+      catalog: registry.catalog,
+      maxTools: Math.max(1, input.config.maxActiveTools)
+    })
+    const selected = new Set(selectedToolNames)
+    const activeTools = registry.tools.filter((tool) => selected.has(tool.function.name))
+    const selectedTools = activeTools.length > 0 ? activeTools : registry.tools.slice(0, 5)
+
+    for (const schema of selectedTools) {
+      const entry = registry.entries.get(schema.function.name)
+      if (!entry) continue
+
+      this.handlers.set(schema.function.name, {
+        schema,
+        catalog: entry.catalog,
+        execute: (rawArguments) => executeMcpTool(entry, rawArguments)
+      })
+    }
+  }
+}
+
+function requiresConfirmedLocalReportDestination(userInput: string, path: string): boolean {
+  const context = `${userInput}\n${path}`.toLowerCase()
+  if (!/\b(report|inspection|summary|audit|health)\b|巡检|报告|总结/i.test(context)) return false
+
+  return !hasExplicitLocalPath(userInput)
+}
+
+function hasExplicitLocalPath(value: string): boolean {
+  return /(?:~|\/|\$HOME)[^\s,;]*/.test(value)
 }
 
 function parseTerminalCommandArgs(rawArguments: string): { command: string; timeoutMs?: number } {
@@ -475,4 +534,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOpenApiConfig(config: AgentConfig): boolean {
   return Boolean(config.openApiBaseUrl.trim() && config.openApiDocument.trim())
+}
+
+function hasMcpConfig(config: AgentConfig): boolean {
+  return config.mcpServers.some((server) => server.enabled && server.command.trim())
 }

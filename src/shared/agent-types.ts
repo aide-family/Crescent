@@ -14,6 +14,19 @@ export interface AgentConfig {
   openApiBaseUrl: string
   openApiDocument: string
   skillRoot: string
+  mcpServers: AgentMcpServerConfig[]
+}
+
+export type AgentMcpTransport = 'stdio'
+
+export interface AgentMcpServerConfig {
+  id: string
+  name: string
+  transport: AgentMcpTransport
+  command: string
+  args: string[]
+  env: Record<string, string>
+  enabled: boolean
 }
 
 export interface AgentProviderConfig {

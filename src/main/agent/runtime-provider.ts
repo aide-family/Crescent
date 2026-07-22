@@ -1,5 +1,5 @@
 import type { AgentConfig } from './types'
-import { resolveModelProvider } from './openclaw-config'
+import { resolveModelProvider } from './model-provider-config'
 
 export type AgentApiMode = 'openai-chat-completions'
 

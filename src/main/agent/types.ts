@@ -20,6 +20,8 @@ export type {
   AgentEventMeta,
   AgentLongTermMemory,
   AgentMemoryRecord,
+  AgentMcpServerConfig,
+  AgentMcpTransport,
   AgentMode,
   AgentModelOption,
   AgentPathReference,

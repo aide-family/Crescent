@@ -14,6 +14,38 @@ export const TRANSCRIBE_AUDIO_TOOL_NAME = 'transcribe_audio_file'
 
 const DEFAULT_MAX_CHARS = 24_000
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+const TEXT_FILE_EXTENSIONS = [
+  '.md',
+  '.markdown',
+  '.mdown',
+  '.mkd',
+  '.txt',
+  '.yaml',
+  '.yml',
+  '.json',
+  '.jsonl',
+  '.toml',
+  '.ini',
+  '.env',
+  '.conf',
+  '.config',
+  '.properties',
+  '.csv',
+  '.tsv',
+  '.xml',
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.sql',
+  '.log'
+]
 
 export const DOCUMENT_PARSE_TOOLS: OpenAiTool[] = [
   {
@@ -39,8 +71,10 @@ export const DOCUMENT_PARSE_TOOLS: OpenAiTool[] = [
     function: {
       name: PARSE_MARKDOWN_TOOL_NAME,
       description:
-        'Read and parse a local Markdown/text file on the Crescent machine. Use this for user-referenced .md or markdown-like text files.',
-      parameters: createPathParameters('Absolute path or ~/ path to a local Markdown/text file.')
+        'Read a local Markdown, plain-text, source-code, or configuration file on the Crescent machine. Use this for user-referenced .md, .txt, .yaml/.yml, .json, .toml, .env, .conf, scripts, logs, and other text files.',
+      parameters: createPathParameters(
+        'Absolute path or ~/ path to a local Markdown/text/configuration file.'
+      )
     }
   },
   {
@@ -128,7 +162,7 @@ export async function executeDocumentParseTool(
 }
 
 async function parseMarkdownFile(path: string, maxChars: number): Promise<unknown> {
-  assertExtension(path, ['.md', '.markdown', '.mdown', '.mkd', '.txt'])
+  assertExtension(path, TEXT_FILE_EXTENSIONS)
   const stat = await fs.stat(path)
   const content = await fs.readFile(path, 'utf8')
 

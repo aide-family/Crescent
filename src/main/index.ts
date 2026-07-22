@@ -2,11 +2,48 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { registerAgentIpc } from './agent/ipc'
 import { registerTerminalIpc, stopAllTerminalSessions } from './terminal/ipc'
-import { registerConnectionIpc } from './connections/ipc'
-import { initializeCrescentDatabase } from './crescent-sqlite'
-import { registerStorageIpc } from './storage/ipc'
+
+installWarningFilter()
+configureGpuPolicy()
+
+function configureGpuPolicy(): void {
+  const shouldDisableGpu =
+    process.env.CRESCENT_DISABLE_GPU === '1' || process.argv.includes('--disable-gpu')
+  const shouldEnableExperimentalGpuFlags =
+    process.env.CRESCENT_EXPERIMENTAL_GPU_FLAGS === '1' ||
+    process.argv.includes('--enable-crescent-gpu-flags')
+
+  if (shouldDisableGpu) {
+    app.disableHardwareAcceleration()
+    return
+  }
+
+  if (shouldEnableExperimentalGpuFlags) {
+    app.commandLine.appendSwitch('enable-gpu-rasterization')
+    app.commandLine.appendSwitch('enable-zero-copy')
+  }
+}
+
+function installWarningFilter(): void {
+  const originalEmitWarning = process.emitWarning.bind(process)
+
+  process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
+    const warningMessage = typeof warning === 'string' ? warning : warning.message
+    const warningType =
+      typeof args[0] === 'string'
+        ? args[0]
+        : typeof warning === 'object' && 'name' in warning
+          ? warning.name
+          : ''
+    const isKnownSqliteWarning =
+      warningType === 'ExperimentalWarning' &&
+      warningMessage.includes('SQLite is an experimental feature')
+
+    if (isKnownSqliteWarning) return
+    ;(originalEmitWarning as (...parameters: unknown[]) => void)(warning, ...args)
+  }) as typeof process.emitWarning
+}
 
 function createWindow(): void {
   // Create the browser window.
@@ -43,12 +80,32 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const [
+    { registerAgentIpc },
+    { registerConnectionIpc },
+    { initializeCrescentDatabase },
+    { registerStorageIpc }
+  ] = await Promise.all([
+    import('./agent/ipc'),
+    import('./connections/ipc'),
+    import('./crescent-sqlite'),
+    import('./storage/ipc')
+  ])
+
   app.setName('Crescent')
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
+  if (process.platform === 'darwin') {
+    console.info('GPU feature status:', app.getGPUFeatureStatus())
+  }
+  app.on('child-process-gone', (_event, details) => {
+    if (details.type === 'GPU') {
+      console.warn('GPU process gone', details)
+    }
+  })
 
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.aide-family.crescent')
+  electronApp.setAppUserModelId('com.crescent.app')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

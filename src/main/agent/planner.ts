@@ -16,7 +16,10 @@ export class AgentPlanner {
     catalog: ToolCatalogEntry[]
   }): Promise<AgentPlan> {
     const catalogText = input.catalog
-      .map((entry) => `${entry.name}: ${entry.method.toUpperCase()} ${entry.path} - ${entry.description}`)
+      .map(
+        (entry) =>
+          `${entry.name}: ${entry.method.toUpperCase()} ${entry.path} - ${entry.description}`
+      )
       .join('\n')
     const messages: ChatCompletionMessageParam[] = [
       {
@@ -62,9 +65,11 @@ function buildFallbackPlan(userInput: string): string[] {
   const task = userInput.trim()
 
   return [
-    task ? `确认当前环境与任务目标：${task}` : '确认当前环境与任务目标',
-    '收集必要上下文并定位影响范围',
-    '按最新观察执行一个可验证的下一步操作',
-    '验证结果并说明已完成、未完成和后续步骤'
+    task
+      ? `Confirm the current environment and task goal: ${task}`
+      : 'Confirm the current environment and task goal',
+    'Collect the necessary context and identify the affected scope',
+    'Run one verifiable next action based on the latest observation',
+    'Verify the result and report what is complete, incomplete, and next'
   ]
 }

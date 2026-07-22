@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'path'
 import { randomUUID } from 'crypto'
 
-import { defaultOpenClawLikeConfig, getDefaultAgentProviders } from './agent/openclaw-config'
 import {
   appendOperationRecordToDb,
   readCommandWhitelistFromDb,
@@ -17,6 +16,7 @@ import type {
   AgentConfig,
   AgentLongTermMemory,
   AgentMemoryRecord,
+  AgentMcpServerConfig,
   AgentProviderConfig,
   AgentProviderModelConfig,
   ConnectionConfig,
@@ -28,6 +28,7 @@ export {
   getCrescentDir,
   getCrescentConfigPath,
   getCrescentMemoryPath,
+  getCrescentSystemSkillsDir,
   getCrescentWikiDir
 } from './crescent-paths'
 
@@ -42,20 +43,18 @@ export interface CrescentMemoryFile {
 }
 
 export const defaultCommandWhitelist: string[] = []
-const defaultAgentProviders = getDefaultAgentProviders()
-const defaultAgentProvider = defaultAgentProviders[0]
 
 export const defaultAgentConfig: AgentConfig = {
-  providers: defaultAgentProviders,
-  providerId: defaultAgentProvider?.id ?? 'nova-litellm',
-  model:
-    defaultAgentProvider?.models[0]?.id ?? defaultOpenClawLikeConfig.agents.defaults.model.primary,
+  providers: [],
+  providerId: undefined,
+  model: '',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: defaultCommandWhitelist,
   openApiBaseUrl: '',
   openApiDocument: '',
-  skillRoot: '~/.agents/skills'
+  skillRoot: '~/.agents/skills',
+  mcpServers: []
 }
 
 export const defaultMemoryFile: CrescentMemoryFile = {
@@ -165,21 +164,18 @@ export function appendOperationRecord(
 export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig {
   const providers = normalizeAgentProviders(config)
   const requestedProviderId = String(config.providerId ?? '').trim()
+  const requestedModel = String(config.model ?? '').trim()
   const provider =
     providers.find((candidate) => candidate.id === requestedProviderId) ??
-    providers.find((candidate) =>
-      candidate.models.some((model) => model.id === String(config.model ?? '').trim())
-    ) ??
+    providers.find((candidate) => candidate.models.some((model) => model.id === requestedModel)) ??
     providers[0]
-  const defaultModel =
-    provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? defaultAgentConfig.model
-  const model = String(config.model ?? defaultAgentConfig.model)
-  const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === model))
+  const defaultModel = provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? ''
+  const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === requestedModel))
 
   return {
     providers,
-    providerId: provider?.id ?? defaultAgentConfig.providerId,
-    model: modelOk ? model : defaultModel,
+    providerId: provider?.id,
+    model: modelOk ? requestedModel : defaultModel,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
     maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools),
     commandWhitelist: normalizeStringList(
@@ -187,7 +183,8 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     ),
     openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
     openApiDocument: String(config.openApiDocument ?? ''),
-    skillRoot: normalizeSkillRoot(config.skillRoot)
+    skillRoot: normalizeSkillRoot(config.skillRoot),
+    mcpServers: normalizeMcpServers(config.mcpServers)
   }
 }
 
@@ -203,22 +200,73 @@ function normalizeStringList(value: unknown): string[] {
   return value.map((item) => String(item).trim()).filter(Boolean)
 }
 
+function normalizeMcpServers(value: unknown): AgentMcpServerConfig[] {
+  if (!Array.isArray(value)) return []
+
+  const seen = new Set<string>()
+  return value.map(normalizeMcpServer).filter((server) => {
+    if (!server.id || seen.has(server.id)) return false
+    seen.add(server.id)
+    return true
+  })
+}
+
+function normalizeMcpServer(value: unknown): AgentMcpServerConfig {
+  const record = isRecord(value) ? value : {}
+  const name = String(record.name || record.id || '').trim()
+  const id = sanitizeConfigId(String(record.id || name || '').trim())
+
+  return {
+    id,
+    name: name || id,
+    transport: 'stdio',
+    command: String(record.command || '').trim(),
+    args: normalizeStringList(record.args),
+    env: normalizeStringMap(record.env),
+    enabled: record.enabled !== false
+  }
+}
+
+function normalizeStringMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {}
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, mapValue]) => [key.trim(), String(mapValue ?? '')] as const)
+      .filter(([key]) => Boolean(key))
+  )
+}
+
+function sanitizeConfigId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderConfig[] {
   if (Array.isArray(config.providers)) {
     const providers = dedupeAgentProviders(
       config.providers.map(normalizeAgentProvider).filter((provider) => provider.id)
     )
-    if (providers.length) return providers
+    return providers
   }
 
   const legacyBaseUrl = config.openAiBaseUrl?.trim()
   const legacyApiKey = config.openAiApiKey?.trim()
+  if (legacyBaseUrl || legacyApiKey || config.model?.trim()) {
+    return [
+      normalizeAgentProvider({
+        id: 'custom',
+        name: 'Custom',
+        baseUrl: legacyBaseUrl ?? '',
+        apiKey: legacyApiKey ?? '',
+        models: config.model?.trim() ? [{ id: config.model.trim(), name: config.model.trim() }] : []
+      })
+    ].filter((provider) => provider.id)
+  }
 
-  return defaultAgentConfig.providers.map((provider) => ({
-    ...provider,
-    baseUrl: legacyBaseUrl || provider.baseUrl,
-    apiKey: legacyApiKey || provider.apiKey
-  }))
+  return []
 }
 
 function dedupeAgentProviders(providers: AgentProviderConfig[]): AgentProviderConfig[] {
