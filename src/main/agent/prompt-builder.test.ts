@@ -7,7 +7,7 @@ describe('AgentPromptBuilder', () => {
     const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
       mode: 'plan-execute',
       memoryBlock: 'User preferences:\n- concise',
-      instructionContext: '## USER.md\nUse Chinese for Chinese requests.',
+      instructionContext: '## USER.md\nUse concise responses.',
       terminalContext: 'cwd: /repo',
       planSteps: ['Inspect state', 'Run verification']
     })
@@ -55,6 +55,8 @@ describe('AgentPromptBuilder', () => {
 
     expect(prompt).toContain('Interpret execution context and artifact destination separately')
     expect(prompt).toContain('destination context the user requested')
+    expect(prompt).toContain('never choose a default output path yourself')
+    expect(prompt).toContain('ask the user to confirm the local Crescent-machine directory')
     expect(prompt).toContain('use write_local_file')
     expect(prompt).toContain('do not send large file content through shell heredocs')
     expect(prompt).toContain('Preserve user-specified destinations')

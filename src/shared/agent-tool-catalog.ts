@@ -20,7 +20,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     method: 'post',
     path: 'file://local-artifact',
     description:
-      'Write generated local artifacts such as Markdown reports directly to the Crescent user machine.'
+      'Write generated local artifacts such as Markdown reports directly to the Crescent user machine after the user supplies or confirms the destination.'
   },
   {
     name: 'save_wiki_document',
@@ -47,7 +47,8 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'parse_markdown_file',
     method: 'post',
     path: 'file://local-parser/parse_markdown_file',
-    description: 'Read and parse a local Markdown/text file on the Crescent machine.'
+    description:
+      'Read a local Markdown, plain-text, source-code, or configuration file on the Crescent machine, including YAML manifests.'
   },
   {
     name: 'analyze_image_file',

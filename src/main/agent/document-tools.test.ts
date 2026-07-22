@@ -38,6 +38,30 @@ describe('document parser tools', () => {
     }
   })
 
+  it('parses yaml configuration files as text', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'crescent-yaml-'))
+    try {
+      const path = join(root, 'deployment.yaml')
+      const content = 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: showfront\n'
+      writeFileSync(path, content, 'utf8')
+
+      const result = await executeDocumentParseTool(
+        PARSE_MARKDOWN_TOOL_NAME,
+        JSON.stringify({ path }),
+        {} as AgentBrain
+      )
+
+      expect(result).toMatchObject({
+        ok: true,
+        type: 'markdown',
+        path,
+        content
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('extracts text from docx files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'crescent-docx-'))
     try {

@@ -54,6 +54,8 @@ describe('command generation helpers', () => {
     const prompt = buildCommandSystemPrompt('')
 
     expect(prompt).toContain('preserve the user-requested destination, filename, and context')
+    expect(prompt).toContain('no destination is specified')
+    expect(prompt).toContain('must confirm a local Crescent-machine destination')
     expect(prompt).toContain('Do not replace them with temporary paths')
     expect(prompt).toContain('Do not invent credentials or target identifiers')
     expect(prompt).toContain('Do not return incomplete wrapper, alias, or placeholder commands')

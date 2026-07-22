@@ -14,7 +14,7 @@ export class CommandAuditor {
     terminalContext: string
     locale?: string
   }): Promise<CommandAuditResult> {
-    const language = resolveAuditLanguage(input.locale, input.userInput)
+    const language = resolveAuditLanguage(input.locale)
     try {
       const completion = await this.brain.chat({
         temperature: 0,
@@ -34,6 +34,7 @@ export class CommandAuditor {
               'Do not require approval merely because a command uses remote execution, status/list/describe subcommands, text processing, a pipeline, or a shell loop. Require approval only when the local or remote command changes state, is ambiguous, or can create abnormal load.',
               'Set requiresApproval=true for any ambiguous command, any command with shell redirection that writes files, destructive flags, privilege escalation, service control, package installation, network mutation, SSH tunneling/port forwarding, credential handling, or data deletion.',
               'If the user requested a specific report/file destination but the command writes somewhere else, include that as a risk point and recommend correcting the command before execution.',
+              'For generated inspection reports or local artifacts, do not approve shell redirection, tee, heredocs, or remote/current-terminal file writes unless the user explicitly requested that exact destination. If no destination is specified, recommend asking the user to confirm a local Crescent-machine directory before writing.',
               'Classify destructive file operations, privilege escalation, credential exposure, network changes, service restarts, data deletion, package installation, and remote state-changing execution as medium or high risk as appropriate.',
               `Write all human-readable JSON field values in ${language === 'zh-CN' ? 'Simplified Chinese' : 'English'}. Keep the JSON keys and risk enum values unchanged.`,
               'Do not approve or reject. Only analyze risk and whether user approval is required.'
@@ -54,7 +55,12 @@ export class CommandAuditor {
         ]
       })
 
-      return parseAuditResult(completion.choices[0]?.message.content ?? '', language)
+      return applyLocalCommandPolicy(
+        input.command,
+        input.userInput,
+        parseAuditResult(completion.choices[0]?.message.content ?? '', language),
+        language
+      )
     } catch (error) {
       return {
         summary:
@@ -63,7 +69,7 @@ export class CommandAuditor {
             : 'Command audit model failed before execution.',
         operationReason:
           language === 'zh-CN'
-            ? '无法确认该命令的操作原因，因为命令审核模型未能完成分析。'
+            ? '由于命令审核模型未能完成分析，无法确认该命令的操作原因。'
             : 'The operation reason could not be confirmed because the command audit model failed.',
         risk: 'high',
         requiresApproval: true,
@@ -81,7 +87,10 @@ export class CommandAuditor {
   }
 }
 
-export function parseAuditResult(content: string, language: 'zh-CN' | 'en'): CommandAuditResult {
+export function parseAuditResult(
+  content: string,
+  language: 'zh-CN' | 'en' = 'en'
+): CommandAuditResult {
   try {
     const parsed = JSON.parse(content) as {
       summary?: unknown
@@ -145,7 +154,7 @@ export function parseAuditResult(content: string, language: 'zh-CN' | 'en'): Com
           : 'Command audit response was not valid JSON.',
       operationReason:
         language === 'zh-CN'
-          ? '无法确认该命令的操作原因，因为审核响应无法解析。'
+          ? '由于审核响应无法解析，无法确认该命令的操作原因。'
           : 'The operation reason could not be confirmed because the audit response could not be parsed.',
       risk: 'high',
       requiresApproval: true,
@@ -168,8 +177,65 @@ function normalizeRisk(value: unknown): CommandRiskLevel {
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'high'
 }
 
-function resolveAuditLanguage(locale: string | undefined, userInput: string): 'zh-CN' | 'en' {
-  if (locale?.toLowerCase().startsWith('zh')) return 'zh-CN'
-  if (locale?.toLowerCase().startsWith('en')) return 'en'
-  return /[\u3400-\u9fff]/.test(userInput) ? 'zh-CN' : 'en'
+function resolveAuditLanguage(locale: string | undefined): 'zh-CN' | 'en' {
+  return locale?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+}
+
+export function applyLocalCommandPolicy(
+  command: string,
+  userInput: string,
+  audit: CommandAuditResult,
+  language: 'zh-CN' | 'en'
+): CommandAuditResult {
+  if (!looksLikeGeneratedReportWrite(command, userInput)) return audit
+
+  const riskPoint =
+    language === 'zh-CN'
+      ? '命令正在通过当前终端写入巡检报告或本地产物，但用户没有明确要求写入该终端路径。'
+      : 'The command writes an inspection report or local artifact through the current terminal without an explicit request for that terminal destination.'
+  const recommendation =
+    language === 'zh-CN'
+      ? '先完成巡检并汇总结论，然后让用户确认客户端机器上的目标目录；确认后使用 write_local_file 写入该目录。不要默认写到 /、/root、/tmp 或当前终端目录。'
+      : 'Finish the inspection and summarize findings, then ask the user to confirm a target directory on the Crescent client machine; after confirmation, use write_local_file for that directory. Do not default to /, /root, /tmp, or the current terminal directory.'
+
+  return {
+    ...audit,
+    risk: audit.risk === 'high' ? 'high' : 'medium',
+    requiresApproval: true,
+    riskPoints: appendUnique(audit.riskPoints, riskPoint),
+    recommendation: appendSentence(audit.recommendation, recommendation)
+  }
+}
+
+function looksLikeGeneratedReportWrite(command: string, userInput: string): boolean {
+  const normalizedCommand = command.toLowerCase()
+  const normalizedInput = userInput.toLowerCase()
+  const writesFile =
+    /(^|[\s;&|])(?:tee|cat)\s+[^|;&]*(?:\/|~|\$home)[^\s|;&]*/i.test(command) ||
+    /(^|[^<>])>>?\s*(?:\/|~|\$HOME)[^\s|;&]*/.test(command) ||
+    /\b(?:touch|cp|mv)\s+[^|;&]*(?:\/|~|\$HOME)[^\s|;&]*/i.test(command)
+  if (!writesFile) return false
+
+  const reportLike = /\b(report|inspection|summary|audit|check|health)\b|巡检|报告|总结/i.test(
+    `${normalizedInput} ${normalizedCommand}`
+  )
+  const riskyDefaultDestination =
+    /(?:^|[\s>"'])\/(?:root|tmp)?(?:\/|[\s"']|$)/.test(command) ||
+    />>?\s*(?:report|inspection|summary|audit|check|health)[\w.-]*\.(?:md|txt|json|csv)\b/i.test(
+      command
+    )
+
+  return reportLike && riskyDefaultDestination && !hasExplicitDestinationPath(userInput)
+}
+
+function hasExplicitDestinationPath(value: string): boolean {
+  return /(?:~|\/|\$HOME)[^\s,;]*/.test(value)
+}
+
+function appendUnique(items: string[], item: string): string[] {
+  return items.some((current) => current === item) ? items : [...items, item]
+}
+
+function appendSentence(value: string, sentence: string): string {
+  return value.includes(sentence) ? value : [value, sentence].filter(Boolean).join(' ')
 }

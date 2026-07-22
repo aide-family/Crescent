@@ -85,6 +85,7 @@ interface TerminalAgentApi {
     }) => Promise<{ ok: boolean; installId: string }>
     cancelSkillInstall: (installId: string) => Promise<{ ok: boolean }>
     deleteSkill: (path: string) => Promise<AgentSkillOption[]>
+    getSkillContent: (path: string) => Promise<string>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
     listWikiDocuments: () => Promise<WikiDocumentSummary[]>
     getWikiDocument: (id: string) => Promise<WikiDocument | undefined>

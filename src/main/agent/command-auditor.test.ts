@@ -1,20 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseAuditResult } from './command-auditor'
+import { applyLocalCommandPolicy, parseAuditResult } from './command-auditor'
 
 describe('parseAuditResult', () => {
   it('respects explicit no-approval decisions for bounded read-only inspections', () => {
     const audit = parseAuditResult(
       JSON.stringify({
-        summary: '只读采集 CPU 信息。',
-        operationReason: '用户要求统计集群 CPU 硬件信息。',
+        summary: 'Collect CPU information with read-only commands.',
+        operationReason: 'The user asked for a cluster CPU hardware inventory.',
         risk: 'medium',
         requiresApproval: false,
-        riskPoints: ['会批量建立 SSH 连接。'],
-        impactAnalysis: '不会修改系统状态。',
-        recommendation: '可直接执行只读采集。'
-      }),
-      'zh-CN'
+        riskPoints: ['The command opens multiple SSH sessions.'],
+        impactAnalysis: 'No system state is changed.',
+        recommendation: 'The read-only collection can run.'
+      })
     )
 
     expect(audit.risk).toBe('medium')
@@ -24,16 +23,44 @@ describe('parseAuditResult', () => {
   it('falls back to approval for non-low risk when the auditor omits the decision', () => {
     const audit = parseAuditResult(
       JSON.stringify({
-        summary: '命令已审核。',
-        operationReason: '需要处理用户请求。',
+        summary: 'Command reviewed.',
+        operationReason: 'The command is intended to address the user request.',
         risk: 'medium',
-        riskPoints: ['审核结果缺少是否需要批准。'],
-        impactAnalysis: '影响未知。',
-        recommendation: '需要人工确认。'
-      }),
-      'zh-CN'
+        riskPoints: ['The audit result omitted whether approval is required.'],
+        impactAnalysis: 'Impact is unknown.',
+        recommendation: 'Manual confirmation is required.'
+      })
     )
 
     expect(audit.requiresApproval).toBe(true)
+  })
+
+  it('localizes fallback audit fields for Chinese UI mode', () => {
+    const audit = parseAuditResult(JSON.stringify({ risk: 'low' }), 'zh-CN')
+
+    expect(audit.summary).toContain('命令')
+    expect(audit.operationReason).toContain('操作原因')
+    expect(audit.impactAnalysis).toContain('系统变更')
+  })
+
+  it('requires approval when a generated report is written to a terminal default path', () => {
+    const audit = applyLocalCommandPolicy(
+      'cat <<EOF > /root/inspection-report.md\n# Report\nEOF',
+      'inspect the cluster and write a report',
+      {
+        summary: 'Review completed.',
+        operationReason: 'The user requested cluster inspection.',
+        risk: 'low',
+        requiresApproval: false,
+        riskPoints: [],
+        impactAnalysis: 'No system-changing impact is expected.',
+        recommendation: 'Run the read-only command.'
+      },
+      'en'
+    )
+
+    expect(audit.risk).toBe('medium')
+    expect(audit.requiresApproval).toBe(true)
+    expect(audit.recommendation).toContain('confirm a target directory')
   })
 })

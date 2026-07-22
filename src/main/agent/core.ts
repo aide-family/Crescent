@@ -2,7 +2,7 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
 
 import { AgentBrain } from './brain'
 import type { AgentMemory } from './memory'
-import { resolveModelProvider } from './openclaw-config'
+import { resolveModelProvider } from './model-provider-config'
 import { AgentPlanner } from './planner'
 import { AgentPromptBuilder } from './prompt-builder'
 import { AgentToolRuntime } from './tool-runtime'
@@ -334,7 +334,12 @@ export class TerminalAgentCore {
         title: inferWikiTitle(userInput),
         content: buildFallbackWikiContent(userInput, finalText)
       })
-      return [finalText.trim(), '', '---', `已保存到本地知识库：\`${document.path}\``]
+      return [
+        finalText.trim(),
+        '',
+        '---',
+        `Saved to the local knowledge base: \`${document.path}\``
+      ]
         .filter(Boolean)
         .join('\n')
     } catch (error) {
@@ -342,7 +347,7 @@ export class TerminalAgentCore {
         finalText.trim(),
         '',
         '---',
-        `知识库保存失败：${error instanceof Error ? error.message : String(error)}`
+        `Knowledge-base save failed: ${error instanceof Error ? error.message : String(error)}`
       ]
         .filter(Boolean)
         .join('\n')
@@ -351,35 +356,26 @@ export class TerminalAgentCore {
 }
 
 function isWikiSaveIntent(input: string): boolean {
-  if (/(飞书|feishu|lark|notion|confluence)/i.test(input)) return false
-
-  return /(保存|写入|沉淀|整理|总结).{0,12}(知识库|wiki|SOP|sop|最佳实践)|((知识库|wiki|SOP|sop|最佳实践).{0,12}(保存|写入|沉淀|整理|总结))/.test(
+  return /\b(save|store|write|capture|record)\b.{0,24}\b(knowledge base|wiki|sop|best practice)\b|\b(knowledge base|wiki|sop|best practice)\b.{0,24}\b(save|store|write|capture|record)\b/i.test(
     input
   )
 }
 
 function inferWikiTitle(input: string): string {
-  const clusterMatch = input.match(/巡检\s*([a-zA-Z0-9_.-]+)\s*(?:集群)?/)
-  if (clusterMatch?.[1]) return `${clusterMatch[1]} 集群巡检 SOP`
+  const compact = input.replace(/[,.]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48)
 
-  const compact = input
-    .replace(/[，。,.]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 48)
-
-  return compact ? `${compact} SOP` : '运维巡检 SOP'
+  return compact ? `${compact} SOP` : 'Operational SOP'
 }
 
 function buildFallbackWikiContent(userInput: string, finalText: string): string {
   return [
     `# ${inferWikiTitle(userInput)}`,
     '',
-    '## 来源请求',
+    '## Source Request',
     '',
     userInput.trim(),
     '',
-    '## 巡检总结与 SOP 草稿',
+    '## Summary and SOP Draft',
     '',
     finalText.trim()
   ].join('\n')
@@ -470,7 +466,7 @@ function buildFinalAnswerInstruction(reason: 'stalled' | 'safety-limit'): string
     'Do not call any more tools, and do not write tool-call markup or pseudo tool calls in the answer.',
     'Produce the best final answer in the same natural language as the user’s latest request.',
     'For install, deploy, configure, repair, or migration requests, do not claim completion unless the requested end state was verified in the observations.',
-    'Use this structure when the task is incomplete: 未完成 / 已完成 / 未完成或未知 / 下一步.',
+    'Use this structure when the task is incomplete: Incomplete / Completed / Incomplete or Unknown / Next Step.',
     'The next step may include one concrete command or action, but present it as a recommendation for the next run, not as if it was executed.'
   ].join('\n')
 }
@@ -488,24 +484,28 @@ export function sanitizeFinalAnswer(
   const fallback = withoutToolMarkup || text.replace(/<[^>]+>/g, '').trim()
   if (reason === 'safety-limit' && looksLikeBareShellCommand(fallback)) {
     return [
-      '未完成：工具执行步数已达到安全上限，后续动作没有继续执行。',
+      'Incomplete: the tool loop reached the safety limit, so later actions were not executed.',
       '',
-      '已完成：已执行前置检查和部分依赖验证。',
+      'Completed: prerequisite checks and some dependency verification were performed.',
       '',
-      '未完成或未知：用户请求的安装、配置和验证还没有完成。',
+      'Incomplete or Unknown: the requested installation, configuration, and verification are not complete.',
       '',
-      `下一步：继续执行并验证这一步，而不是把它当作已完成结果：\`${fallback}\``
+      `Next Step: continue by executing and verifying this step instead of treating it as a completed result: \`${fallback}\``
     ].join('\n')
   }
 
   if (reason === 'normal') return fallback
 
   const needsIncompletePrefix =
-    reason === 'safety-limit' && !/未完成|incomplete|not complete|没有完成|尚未完成/i.test(fallback)
+    reason === 'safety-limit' && !/incomplete|not complete|unfinished|not finished/i.test(fallback)
 
   if (!needsIncompletePrefix) return fallback
 
-  return ['未完成：工具执行步数已达到安全上限，后续动作没有继续执行。', '', fallback]
+  return [
+    'Incomplete: the tool loop reached the safety limit, so later actions were not executed.',
+    '',
+    fallback
+  ]
     .filter(Boolean)
     .join('\n')
 }

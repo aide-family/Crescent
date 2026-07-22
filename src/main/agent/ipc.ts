@@ -13,7 +13,7 @@ import {
   saveEditableInstructionFile
 } from './instruction-files'
 import { AgentMemory } from './memory'
-import { getAgentProviders } from './openclaw-config'
+import { getAgentProviders } from './model-provider-config'
 import { AgentBrain } from './brain'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import {
@@ -21,11 +21,13 @@ import {
   deleteAgentSkill,
   installAgentSkill,
   listAgentSkills,
+  readAgentSkillContent,
   searchAgentSkills,
   startAgentSkillInstall
 } from './skills'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
+import { loadMcpToolRegistry } from './mcp-runtime'
 import {
   formatWikiContext,
   getWikiDocument,
@@ -184,6 +186,10 @@ export function registerAgentIpc(): void {
     return deleteAgentSkill(path ?? '', readAgentConfig().skillRoot)
   })
 
+  ipcMain.handle('agent:get-skill-content', (_, path: string) => {
+    return readAgentSkillContent(path ?? '', readAgentConfig().skillRoot)
+  })
+
   ipcMain.handle('agent:list-instruction-files', () => {
     return listEditableInstructionFiles()
   })
@@ -251,7 +257,10 @@ export function registerAgentIpc(): void {
     const hasOpenApiConfig = Boolean(
       nextConfig.openApiBaseUrl.trim() && nextConfig.openApiDocument.trim()
     )
-    if (!hasOpenApiConfig) {
+    const hasMcpConfig = nextConfig.mcpServers.some(
+      (server) => server.enabled && server.command.trim()
+    )
+    if (!hasOpenApiConfig && !hasMcpConfig) {
       return {
         ok: true,
         modelOk: true,
@@ -261,12 +270,22 @@ export function registerAgentIpc(): void {
     }
 
     try {
-      const registry = await loadOpenApiToolRegistry(nextConfig)
+      const openApiRegistry = hasOpenApiConfig
+        ? await loadOpenApiToolRegistry(nextConfig)
+        : { tools: [], catalog: [] }
+      const mcpRegistry = hasMcpConfig
+        ? await loadMcpToolRegistry(nextConfig)
+        : { tools: [], catalog: [], errors: [] }
+      if (mcpRegistry.errors.length > 0) {
+        throw new Error(`MCP server load failed: ${mcpRegistry.errors.join('; ')}`)
+      }
+
       return {
         ok: true,
         modelOk: true,
-        toolCount: BUILT_IN_TOOL_CATALOG.length + registry.tools.length,
-        tools: [...BUILT_IN_TOOL_CATALOG, ...registry.catalog]
+        toolCount:
+          BUILT_IN_TOOL_CATALOG.length + openApiRegistry.tools.length + mcpRegistry.tools.length,
+        tools: [...BUILT_IN_TOOL_CATALOG, ...openApiRegistry.catalog, ...mcpRegistry.catalog]
       }
     } catch (error) {
       return {
@@ -408,7 +427,6 @@ export function registerAgentIpc(): void {
     try {
       const controller = new AbortController()
       activeRuns.set(runId, { controller, supplements: [] })
-      const runLanguage = resolveRunLanguage(payload?.locale, input)
       const connection = findConnection(payload?.connectionId)
       const instructionContext = buildLocalInstructionContext()
       const wikiContext = formatWikiContext(await searchWikiDocuments(input, 5))
@@ -487,20 +505,12 @@ export function registerAgentIpc(): void {
             ok: false,
             command: executableCommand,
             output: '',
-            error:
-              runLanguage === 'zh-CN'
-                ? [
-                    '用户已拒绝执行该命令。请基于这个结果继续处理，不要假设命令已经执行。',
-                    rejectionReason ? `用户拒绝原因：${rejectionReason}` : ''
-                  ]
-                    .filter(Boolean)
-                    .join('\n')
-                : [
-                    'Command execution was rejected by the user. Continue from this result and do not assume the command ran.',
-                    rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
-                  ]
-                    .filter(Boolean)
-                    .join('\n')
+            error: [
+              'Command execution was rejected by the user. Continue from this result and do not assume the command ran.',
+              rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
+            ]
+              .filter(Boolean)
+              .join('\n')
           }
         }
 
@@ -736,19 +746,11 @@ function resolveLocalArtifactPath(path: string): string {
 }
 
 function isLocalFilePermissionError(error: string | undefined): boolean {
-  return /(EACCES|EPERM|Permission denied|Operation not permitted|权限不够|没有权限|操作不允许)/i.test(
-    error ?? ''
-  )
+  return /(EACCES|EPERM|Permission denied|Operation not permitted)/i.test(error ?? '')
 }
 
 function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === 'object' && error !== null && 'code' in error
-}
-
-function resolveRunLanguage(locale: string | undefined, input: string): 'zh-CN' | 'en' {
-  if (locale?.toLowerCase().startsWith('zh')) return 'zh-CN'
-  if (locale?.toLowerCase().startsWith('en')) return 'en'
-  return /[\u3400-\u9fff]/.test(input) ? 'zh-CN' : 'en'
 }
 
 function requestCommandApproval(input: {
@@ -815,7 +817,7 @@ function summarizeConnectionForAi(connection: ConnectionConfig): Record<string, 
 }
 
 function normalizeConnectionIntentText(value: string): string {
-  return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
+  return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
 }
 
 function parseConnectionIntentResponse(
@@ -910,6 +912,9 @@ function createIsolatedMemory(): AgentMemory {
 }
 
 async function validateModel(config: AgentConfig): Promise<void> {
+  if (!config.providers.length) throw new Error('Model provider is required.')
+  if (!config.model.trim()) throw new Error('Model is required.')
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 20_000)
 

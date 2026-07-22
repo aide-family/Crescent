@@ -2,7 +2,6 @@ import axios from 'axios'
 import { describe, expect, it, vi } from 'vitest'
 
 import { OpenApiToolExecutor } from './tool-executor'
-import { getDefaultAgentProviders } from './openclaw-config'
 import type { AgentConfig, OpenApiOperationMeta } from './types'
 
 vi.mock('axios', () => ({
@@ -14,14 +13,24 @@ vi.mock('axios', () => ({
 const request = vi.mocked(axios.request)
 
 const config: AgentConfig = {
-  providers: getDefaultAgentProviders(),
-  model: 'azure/gpt-5.5',
+  providers: [
+    {
+      id: 'test-provider',
+      name: 'Test Provider',
+      baseUrl: 'https://model.example.test/v1',
+      apiKey: '',
+      models: [{ id: 'test-model', name: 'test-model' }]
+    }
+  ],
+  providerId: 'test-provider',
+  model: 'test-model',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: 'https://api.example.test/v1/',
   openApiDocument: '{}',
-  skillRoot: '~/.agents/skills'
+  skillRoot: '~/.agents/skills',
+  mcpServers: []
 }
 
 const operations = new Map<string, OpenApiOperationMeta>([

@@ -69,6 +69,7 @@ export function buildCommandSystemPrompt(memoryBlock: string, instructionContext
     'For remote server work, prefer standard ssh syntax such as ssh -p 22 user@host.',
     'Do not return incomplete wrapper, alias, or placeholder commands. If a wrapper tool is required, include the concrete target and subcommand so the operation is reviewable.',
     'If the task writes a report or file, preserve the user-requested destination, filename, and context exactly. Do not replace them with temporary paths, current working directories, inferred defaults, or a different host context.',
+    'If the task asks for an inspection report but no destination is specified, do not generate a shell command that writes a report file. Generate only the next read-only inspection command, or explain that the user must confirm a local Crescent-machine destination before report writing.',
     'Do not invent credentials or target identifiers. Use values explicitly present in the request/context, read from an existing configured source, or generate a command that fails clearly when required inputs are missing.',
     'Do not wrap the command in markdown. Do not include multiple alternatives.',
     `Long-term memory:\n${memoryBlock}`,

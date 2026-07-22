@@ -34,19 +34,19 @@ describe('local instruction files', () => {
     const saved = saveEditableInstructionFile({
       root,
       name: 'USER.md',
-      content: 'Prefer Chinese responses.'
+      content: 'Prefer concise responses.'
     })
 
     expect(saved).toMatchObject({
       name: 'USER.md',
       exists: true,
-      content: 'Prefer Chinese responses.'
+      content: 'Prefer concise responses.'
     })
     expect(
       listEditableInstructionFiles(root).find((file) => file.name === 'USER.md')
     ).toMatchObject({
       exists: true,
-      content: 'Prefer Chinese responses.'
+      content: 'Prefer concise responses.'
     })
   })
 })

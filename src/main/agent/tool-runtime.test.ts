@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentToolRuntime } from './tool-runtime'
-import { getDefaultAgentProviders } from './openclaw-config'
 import type {
   AgentConfig,
   AgentEvent,
@@ -13,14 +12,24 @@ import type {
 import type { AgentBrain } from './brain'
 
 const config: AgentConfig = {
-  providers: getDefaultAgentProviders(),
-  model: 'azure/gpt-5.5',
+  providers: [
+    {
+      id: 'test-provider',
+      name: 'Test Provider',
+      baseUrl: 'https://model.example.test/v1',
+      apiKey: '',
+      models: [{ id: 'test-model', name: 'test-model' }]
+    }
+  ],
+  providerId: 'test-provider',
+  model: 'test-model',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: '',
   openApiDocument: '',
-  skillRoot: '~/.agents/skills'
+  skillRoot: '~/.agents/skills',
+  mcpServers: []
 }
 
 describe('AgentToolRuntime', () => {
@@ -186,11 +195,39 @@ describe('AgentToolRuntime', () => {
     )
   })
 
+  it('rejects report writes when the user has not confirmed a local destination', async () => {
+    const localFileWriter: LocalFileWriter = {
+      writeFile: vi.fn()
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'inspect the cluster and write an inspection report',
+      localFileWriter,
+      emit: vi.fn<(event: AgentEvent) => void>()
+    })
+    const result = await runtime.execute(
+      'write_local_file',
+      JSON.stringify({
+        path: '~/inspection-report.md',
+        content: '# Report\n\nok',
+        overwrite: false
+      })
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      path: '~/inspection-report.md'
+    })
+    expect(localFileWriter.writeFile).not.toHaveBeenCalled()
+  })
+
   it('registers the local wiki save tool for conversation-driven knowledge capture', async () => {
     const runtime = await AgentToolRuntime.create({
       config,
       brain: {} as AgentBrain,
-      userInput: '把这个巡检过程保存到知识库',
+      userInput: 'Save this inspection process to the knowledge base',
       emit: vi.fn<(event: AgentEvent) => void>()
     })
     const wikiTool = runtime.tools.find((tool) => tool.function.name === 'save_wiki_document')

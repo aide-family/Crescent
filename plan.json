@@ -9,8 +9,8 @@
       "tests": ["manual: plan.json exists and is updated as tasks complete"]
     },
     {
-      "id": "openclaw-config",
-      "title": "Add OpenClaw-inspired model/provider/default-agent configuration",
+      "id": "model-provider-config",
+      "title": "Add model provider and default-agent configuration",
       "status": "completed",
       "tests": ["unit: provider config resolves model/baseUrl/apiKey without leaking secrets"]
     },

@@ -101,7 +101,7 @@ async function summarizeSessionHistory(tabId: string, webContents: WebContents):
         {
           role: 'system',
           content:
-            'Summarize a terminal-agent conversation for history review. Return strict JSON only: {"title":"short title","summary":"two-line concise summary"}. The title must be 6-24 Chinese characters or 3-8 English words. The summary must mention the goal and current outcome/status. Do not include markdown.'
+            'Summarize a Crescent agent conversation for history review. Return strict JSON only: {"title":"short title","summary":"two-line concise summary"}. The title must be 3-8 English words. The summary must mention the goal and current outcome/status. Do not include markdown.'
         },
         {
           role: 'user',
@@ -143,7 +143,7 @@ function parseSessionSummary(content: string): { title: string; summary: string 
 
   const lines = content
     .split(/\r?\n/)
-    .map((line) => line.replace(/^(title|summary|标题|摘要)\s*[:：]\s*/i, '').trim())
+    .map((line) => line.replace(/^(title|summary)\s*:\s*/i, '').trim())
     .filter(Boolean)
   if (lines.length < 2) return undefined
 

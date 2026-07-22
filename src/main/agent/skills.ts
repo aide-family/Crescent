@@ -9,6 +9,7 @@ import type {
   AgentSkillOption,
   AgentSkillSearchResult
 } from './types'
+import { getCrescentSystemSkillsDir } from '../crescent-paths'
 
 const MAX_MATCHED_SKILLS = 3
 const MAX_SKILL_CONTENT_CHARS = 16_000
@@ -40,15 +41,26 @@ export interface AgentSkillInstallSession {
 export function listAgentSkills(skillRoot?: string): AgentSkillOption[] {
   const seen = new Set<string>()
   const skills: AgentSkillOption[] = []
+  const systemRoot = ensureBuiltInOperationSkills()
   const root = resolveSkillRoot(skillRoot)
 
-  for (const path of findSkillFiles(root)) {
-    if (seen.has(path)) continue
-    seen.add(path)
-    skills.push(readSkill(path, root))
+  for (const { root: currentRoot, removable } of [
+    { root: systemRoot, removable: false },
+    { root, removable: true }
+  ]) {
+    for (const path of findSkillFiles(currentRoot)) {
+      const resolvedPath = resolve(path)
+      if (seen.has(resolvedPath)) continue
+      seen.add(resolvedPath)
+      skills.push(readSkill(path, currentRoot, removable))
+    }
   }
 
-  return skills.sort((left, right) => left.name.localeCompare(right.name))
+  return skills.sort(
+    (left, right) =>
+      Number(Boolean(left.removable)) - Number(Boolean(right.removable)) ||
+      left.name.localeCompare(right.name)
+  )
 }
 
 export async function searchAgentSkills(query: string): Promise<AgentSkillSearchResult[]> {
@@ -532,6 +544,16 @@ export function deleteAgentSkill(path: string, skillRoot?: string): AgentSkillOp
   return listAgentSkills(skillRoot)
 }
 
+export function readAgentSkillContent(path: string, skillRoot?: string): string {
+  const skillPath = resolve(path)
+  const skill = listAgentSkills(skillRoot).find(
+    (candidate) => resolve(candidate.path) === skillPath
+  )
+  if (!skill) throw new Error('Skill not found.')
+
+  return readSkillContent(skill.path)
+}
+
 export function buildAgentSkillContext(input: string, skillRoot?: string): AgentSkillContext {
   const catalog = listAgentSkills(skillRoot)
   const referenced = findReferencedSkills(input, catalog)
@@ -569,7 +591,7 @@ function findSkillFiles(root: string): string[] {
   return files
 }
 
-function readSkill(path: string, root: string): AgentSkillOption {
+function readSkill(path: string, root: string, removable: boolean): AgentSkillOption {
   const content = readFileSync(path, 'utf8')
   const name = extractSkillName(content) || basename(path.replace(/\/SKILL\.md$/, ''))
 
@@ -579,15 +601,8 @@ function readSkill(path: string, root: string): AgentSkillOption {
     description: extractSkillDescription(content),
     path,
     source: root,
-    removable: isRemovableSkillPath(path, root)
+    removable
   }
-}
-
-function isRemovableSkillPath(path: string, root: string): boolean {
-  const resolvedRoot = resolve(root)
-  const resolvedPath = resolve(path)
-
-  return resolvedPath.startsWith(`${resolvedRoot}/`)
 }
 
 function resolveSkillRoot(value: string | undefined): string {
@@ -596,6 +611,10 @@ function resolveSkillRoot(value: string | undefined): string {
   if (trimmed.startsWith('~/')) return join(homedir(), trimmed.slice(2))
 
   return resolve(trimmed)
+}
+
+function ensureBuiltInOperationSkills(): string {
+  return getCrescentSystemSkillsDir()
 }
 
 function normalizeSkillSearchResults(payload: unknown): AgentSkillSearchResult[] {
@@ -733,7 +752,7 @@ function findReferencedSkills(input: string, catalog: AgentSkillOption[]): Agent
   const referencedNames = new Set<string>()
   const referencedPaths = new Set<string>()
 
-  for (const match of input.matchAll(/(?:使用 skill|Use skill):\s*([^\n]+)/gi)) {
+  for (const match of input.matchAll(/Use skill:\s*([^\n]+)/gi)) {
     referencedNames.add(match[1].trim())
   }
 
@@ -780,7 +799,7 @@ function scoreSkills(
 }
 
 function normalizeSearchText(value: string): string {
-  return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
+  return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
 }
 
 function tokenizeSearchText(value: string): string[] {

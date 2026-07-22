@@ -19,12 +19,12 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PencilIcon,
+  PlugIcon,
   PlusIcon,
   ServerIcon,
   SettingsIcon,
   SearchIcon,
   TestTube2Icon,
-  TerminalIcon,
   TriangleAlertIcon,
   Trash2Icon,
   XIcon
@@ -66,6 +66,7 @@ import type {
   AgentConfig,
   AgentConnectionIntentResult,
   AgentEvent,
+  AgentMcpServerConfig,
   AgentModelOption,
   AgentPathReference,
   AgentProviderConfig,
@@ -83,47 +84,45 @@ import type {
   StoredAgentLogEntry,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
+  StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary
 } from '../../shared/agent-types'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 
 const emptyConfig: AgentConfig = {
-  providers: [
-    {
-      id: 'nova-litellm',
-      name: 'Nova LiteLLM',
-      baseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm',
-      apiKey: '',
-      models: [
-        { id: 'azure/gpt-5.4', name: 'azure/gpt-5.4', reasoning: true },
-        { id: 'azure/gpt-5.5', name: 'azure/gpt-5.5', reasoning: true },
-        { id: 'bailian/glm-5-1', name: 'bailian/glm-5-1', reasoning: false },
-        { id: 'bailian/qwen3.6-plus', name: 'bailian/qwen3.6-plus', reasoning: false }
-      ]
-    },
-    {
-      id: 'deepseek',
-      name: 'DeepSeek',
-      baseUrl: 'https://api.deepseek.com',
-      apiKey: '',
-      models: [
-        { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', reasoning: false },
-        { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', reasoning: true },
-        { id: 'deepseek-chat', name: 'deepseek-chat', reasoning: false },
-        { id: 'deepseek-reasoner', name: 'deepseek-reasoner', reasoning: true }
-      ]
-    }
-  ],
-  providerId: 'nova-litellm',
-  model: 'azure/gpt-5.4',
+  providers: [],
+  providerId: undefined,
+  model: '',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
   openApiBaseUrl: '',
   openApiDocument: '',
-  skillRoot: '~/.agents/skills'
+  skillRoot: '~/.agents/skills',
+  mcpServers: []
 }
+const emptyProvider: AgentProviderConfig = {
+  id: '',
+  name: '',
+  baseUrl: '',
+  apiKey: '',
+  models: []
+}
+const emptyMcpServer: AgentMcpServerConfig = {
+  id: '',
+  name: '',
+  transport: 'stdio',
+  command: '',
+  args: [],
+  env: {},
+  enabled: true
+}
+
+function hasConfiguredModelSelection(config: AgentConfig): boolean {
+  return Boolean(config.providerId?.trim() && config.model.trim() && config.providers.length > 0)
+}
+
 const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
 
 type AgentLogEntry =
@@ -261,6 +260,18 @@ function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab 
   }
 }
 
+function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[] {
+  return tabs.map((tab) => ({
+    tabId: tab.id,
+    title: tab.title,
+    connectionId: tab.connectionId,
+    connectionName: tab.connectionName,
+    isSsh: tab.isSsh,
+    terminalCwd: tab.terminalCwd,
+    terminalMode: tab.terminalMode
+  }))
+}
+
 const emptyLocalTab = createTerminalTab({ id: 'default', title: 'Local' })
 
 function getNextTerminalTitle(baseTitle: string, tabs: AgentTerminalTab[]): string {
@@ -287,7 +298,6 @@ function getPipePrompt(prompt: string, cwd: string): string {
 
 function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
-  const connectionSearchInputRef = useRef<HTMLInputElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const terminalSessionIdRef = useRef<number | null>(null)
@@ -348,6 +358,12 @@ function App(): React.JSX.Element {
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
   const skillInstallResultIdsRef = useRef(new Map<string, string>())
   const skillInstallNamesRef = useRef(new Map<string, string>())
+  const pendingTabsSaveRef = useRef<{
+    key: string
+    timer: number
+    tabs: StoredSessionTab[]
+  } | null>(null)
+  const lastSavedTabsKeyRef = useRef('')
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
@@ -373,6 +389,11 @@ function App(): React.JSX.Element {
     {}
   )
   const [skillInstallLogResultId, setSkillInstallLogResultId] = useState<string | null>(null)
+  const [selectedSkillPreview, setSelectedSkillPreview] = useState<{
+    skill: AgentSkillOption
+    content: string
+  } | null>(null)
+  const [skillPreviewLoadingPath, setSkillPreviewLoadingPath] = useState<string | null>(null)
   const [copiedSkillInstallLogId, setCopiedSkillInstallLogId] = useState<string | null>(null)
   const [skillInstallCancelingIds, setSkillInstallCancelingIds] = useState<Record<string, boolean>>(
     {}
@@ -411,7 +432,6 @@ function App(): React.JSX.Element {
   )
   const [passwordPromptValue, setPasswordPromptValue] = useState('')
   const [passwordPromptError, setPasswordPromptError] = useState('')
-  const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
   const [connectionEditing, setConnectionEditing] = useState(true)
@@ -439,7 +459,7 @@ function App(): React.JSX.Element {
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('terminal')
-  const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('connections')
+  const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
@@ -448,7 +468,10 @@ function App(): React.JSX.Element {
   )
   const [closeTabsConfirmRequest, setCloseTabsConfirmRequest] =
     useState<CloseTabsConfirmRequest | null>(null)
-  const [settingsProviderId, setSettingsProviderId] = useState('nova-litellm')
+  const [settingsProviderId, setSettingsProviderId] = useState('')
+  const [settingsMcpServerId, setSettingsMcpServerId] = useState('')
+  const [mcpArgsText, setMcpArgsText] = useState('')
+  const [mcpEnvText, setMcpEnvText] = useState('')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([
     createTerminalTab({ id: 'default', title: 'Local' })
   ])
@@ -481,10 +504,10 @@ function App(): React.JSX.Element {
   const visibleModels = modelOptions.length ? modelOptions : models
   const activeTabProviderId = activeTab.providerId ?? config.providerId
   const activeProviderId = config.providers.some((provider) => provider.id === activeTabProviderId)
-    ? (activeTabProviderId ?? config.providers[0]?.id ?? 'custom')
+    ? (activeTabProviderId ?? config.providers[0]?.id ?? '')
     : (visibleModels.find((model) => model.id === (activeTab.model ?? config.model))?.providerId ??
       config.providers[0]?.id ??
-      'custom')
+      '')
   const filteredModels = visibleModels.filter((model) => model.providerId === activeProviderId)
   const activeTabModelId =
     activeTab.model && filteredModels.some((model) => model.id === activeTab.model)
@@ -496,7 +519,11 @@ function App(): React.JSX.Element {
   const settingsProvider =
     config.providers.find((provider) => provider.id === settingsProviderId) ??
     config.providers[0] ??
-    emptyConfig.providers[0]
+    emptyProvider
+  const settingsMcpServer =
+    config.mcpServers.find((server) => server.id === settingsMcpServerId) ??
+    config.mcpServers[0] ??
+    emptyMcpServer
   const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
   const filteredWikiDocuments = useMemo(
     () => filterWikiDocuments(wikiDocuments, wikiSearchQuery),
@@ -523,6 +550,8 @@ function App(): React.JSX.Element {
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const slashCommandQuery = getSlashCommandQuery(activeTab.agentInput)
   const slashCommandOptions = useMemo(() => {
+    if (slashCommandQuery === undefined) return []
+
     if (isModeSlashQuery(slashCommandQuery)) {
       return buildModeSlashCommands(t).filter((command) =>
         matchesModeSlashCommand(command, slashCommandQuery ?? '')
@@ -604,28 +633,6 @@ function App(): React.JSX.Element {
     [localSkillSearchQuery, skills]
   )
   const installedSkillNames = useMemo(() => buildInstalledSkillNameSet(skills), [skills])
-  const connectionSearchText = connectionSearchQuery.trim().toLowerCase()
-  const localTerminalMatchesSearch =
-    !connectionSearchText ||
-    [
-      t.connections.localTerminal,
-      t.connections.defaultTerminal,
-      'local',
-      'terminal',
-      'default',
-      '本地',
-      '默认',
-      '终端'
-    ].some((value) => value.toLowerCase().includes(connectionSearchText))
-  const filteredConnections = useMemo(
-    () =>
-      connectionSearchText
-        ? connections.filter((connection) =>
-            matchesConnectionSearch(connection, connectionSearchText)
-          )
-        : connections,
-    [connectionSearchText, connections]
-  )
 
   const refreshSessionHistory = useCallback(async (): Promise<void> => {
     setHistoryLoading(true)
@@ -977,10 +984,7 @@ function App(): React.JSX.Element {
         appendLog(
           {
             kind: 'error',
-            text:
-              locale === 'zh-CN'
-                ? 'SSH 需要 PTY 模式。当前终端是 PIPE 备用模式，请在 node-pty 可用后重启应用。'
-                : 'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
+            text: 'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
           },
           targetTabId
         )
@@ -1061,18 +1065,35 @@ function App(): React.JSX.Element {
   }, [passwordPromptRequest])
 
   useEffect(() => {
-    void window.api.storage.saveTabs(
-      tabs.map((tab) => ({
-        tabId: tab.id,
-        title: tab.title,
-        connectionId: tab.connectionId,
-        connectionName: tab.connectionName,
-        isSsh: tab.isSsh,
-        terminalCwd: tab.terminalCwd,
-        terminalMode: tab.terminalMode
-      }))
-    )
+    const storedTabs = toStoredSessionTabs(tabs)
+    const key = JSON.stringify(storedTabs)
+    const pending = pendingTabsSaveRef.current
+
+    if (key === lastSavedTabsKeyRef.current || key === pending?.key) return
+    if (pending) window.clearTimeout(pending.timer)
+
+    const timer = window.setTimeout(() => {
+      const current = pendingTabsSaveRef.current
+      if (!current || current.key !== key) return
+
+      pendingTabsSaveRef.current = null
+      lastSavedTabsKeyRef.current = key
+      void window.api.storage.saveTabs(current.tabs)
+    }, 350)
+
+    pendingTabsSaveRef.current = { key, timer, tabs: storedTabs }
   }, [tabs])
+
+  useEffect(() => {
+    return () => {
+      const pending = pendingTabsSaveRef.current
+      if (!pending) return
+
+      window.clearTimeout(pending.timer)
+      void window.api.storage.saveTabs(pending.tabs)
+      pendingTabsSaveRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
@@ -1086,12 +1107,6 @@ function App(): React.JSX.Element {
   }, [closeTerminalConfirmEnabled])
 
   useEffect(() => {
-    if (terminalPage !== 'connections') return
-
-    window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
-  }, [terminalPage])
-
-  useEffect(() => {
     const handleConnectionShortcut = (event: globalThis.KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey)) return
 
@@ -1099,7 +1114,6 @@ function App(): React.JSX.Element {
       if (key === 'k') {
         event.preventDefault()
         showConnectionList()
-        window.requestAnimationFrame(() => connectionSearchInputRef.current?.focus())
         return
       }
 
@@ -1386,8 +1400,18 @@ function App(): React.JSX.Element {
         setCommandWhitelistText(nextConfig.commandWhitelist.join('\n'))
         setModels(flattenProviderModels(nextConfig.providers))
         const firstProvider = nextConfig.providers[0]
-        setSettingsProviderId(firstProvider?.id ?? 'nova-litellm')
+        setSettingsProviderId(firstProvider?.id ?? '')
         setProviderModelsText(formatProviderModels(firstProvider?.models ?? []))
+        const firstMcpServer = nextConfig.mcpServers[0]
+        setSettingsMcpServerId(firstMcpServer?.id ?? '')
+        setMcpArgsText(formatMcpArgs(firstMcpServer?.args ?? []))
+        setMcpEnvText(formatMcpEnv(firstMcpServer?.env ?? {}))
+        if (!hasConfiguredModelSelection(nextConfig)) {
+          setValidation(undefined)
+          setValidating(false)
+          return
+        }
+
         const requestId = validationRequestRef.current + 1
         validationRequestRef.current = requestId
         setValidating(true)
@@ -1942,6 +1966,25 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function previewSkill(skill: AgentSkillOption): Promise<void> {
+    setSkillPreviewLoadingPath(skill.path)
+    setSkillManageMessage(null)
+    setSkillInstallLogResultId(null)
+    setSelectedSkillPreview({ skill, content: '' })
+    try {
+      const content = await window.api.agent.getSkillContent(skill.path)
+      setSelectedSkillPreview({ skill, content })
+    } catch (error) {
+      setSelectedSkillPreview(null)
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setSkillPreviewLoadingPath(null)
+    }
+  }
+
   async function saveAgentConfig(nextConfigInput: AgentConfig): Promise<AgentConfig> {
     const nextConfig = await window.api.agent.saveConfig(nextConfigInput)
     setConfig(nextConfig)
@@ -1950,8 +1993,14 @@ function App(): React.JSX.Element {
     const nextSettingsProvider =
       nextConfig.providers.find((provider) => provider.id === settingsProviderId) ??
       nextConfig.providers[0]
-    setSettingsProviderId(nextSettingsProvider?.id ?? 'nova-litellm')
+    setSettingsProviderId(nextSettingsProvider?.id ?? '')
     setProviderModelsText(formatProviderModels(nextSettingsProvider?.models ?? []))
+    const nextMcpServer =
+      nextConfig.mcpServers.find((server) => server.id === settingsMcpServerId) ??
+      nextConfig.mcpServers[0]
+    setSettingsMcpServerId(nextMcpServer?.id ?? '')
+    setMcpArgsText(formatMcpArgs(nextMcpServer?.args ?? []))
+    setMcpEnvText(formatMcpEnv(nextMcpServer?.env ?? {}))
     return nextConfig
   }
 
@@ -2485,38 +2534,13 @@ function App(): React.JSX.Element {
   }
 
   function showConnectionList(): void {
-    setTerminalPage('connections')
+    setConnectionModalOpen(true)
     void window.api.connections
       .list()
       .then(setConnections)
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
       })
-  }
-
-  function openLocalTerminal(): void {
-    setHiddenPane(null)
-    setTerminalPage('terminal')
-    const defaultTab = tabsRef.current.find((tab) => tab.id === 'default')
-    const canUseDefaultTab =
-      defaultTab &&
-      !defaultTab.sessionId &&
-      !defaultTab.terminalOutput &&
-      defaultTab.agentLog.length === 0 &&
-      !defaultTab.connectionId
-
-    if (canUseDefaultTab) {
-      setActiveTabId('default')
-      return
-    }
-
-    const nextTab = createTerminalTab({
-      title: getNextTerminalTitle('Local', tabsRef.current),
-      providerId: config.providerId
-    })
-
-    setTabs((current) => [...current, nextTab])
-    setActiveTabId(nextTab.id)
   }
 
   function openConnectionTerminal(connection: ConnectionConfig): void {
@@ -2536,8 +2560,9 @@ function App(): React.JSX.Element {
   }
 
   function connectFromConnectionManager(connection: ConnectionConfig): void {
-    if (terminalPage === 'connections') {
+    if (connectionModalOpen) {
       openConnectionTerminal(connection)
+      setConnectionModalOpen(false)
       return
     }
 
@@ -3185,9 +3210,9 @@ function App(): React.JSX.Element {
     const provider: AgentProviderConfig = {
       id,
       name: id,
-      baseUrl: 'https://api.deepseek.com',
+      baseUrl: '',
       apiKey: '',
-      models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', reasoning: false }]
+      models: []
     }
 
     setConfig((current) => ({ ...current, providers: [...current.providers, provider] }))
@@ -3215,8 +3240,87 @@ function App(): React.JSX.Element {
       providerId: modelStillAvailable ? modelProvider?.id : nextProvider?.id,
       model: modelStillAvailable ? config.model : (nextProvider?.models[0]?.id ?? '')
     })
-    setSettingsProviderId(nextProvider?.id ?? 'nova-litellm')
+    setSettingsProviderId(nextProvider?.id ?? '')
     setProviderModelsText(formatProviderModels(nextProvider?.models ?? []))
+    setValidation(undefined)
+  }
+
+  function updateSettingsMcpServer<K extends keyof AgentMcpServerConfig>(
+    key: K,
+    value: AgentMcpServerConfig[K]
+  ): void {
+    const nextServerId = key === 'id' ? String(value) : settingsMcpServerId
+    if (
+      key === 'id' &&
+      config.mcpServers.some(
+        (server) => server.id !== settingsMcpServer.id && server.id === nextServerId
+      )
+    ) {
+      return
+    }
+
+    setConfig((current) => ({
+      ...current,
+      mcpServers: current.mcpServers.map((server) =>
+        server.id === settingsMcpServer.id ? { ...server, [key]: value } : server
+      )
+    }))
+    if (key === 'id') setSettingsMcpServerId(nextServerId)
+    setValidation(undefined)
+  }
+
+  function updateSettingsMcpArgs(value: string): void {
+    setMcpArgsText(value)
+    updateSettingsMcpServer('args', parseMcpArgs(value))
+  }
+
+  function updateSettingsMcpEnv(value: string): void {
+    setMcpEnvText(value)
+    updateSettingsMcpServer('env', parseMcpEnv(value))
+  }
+
+  function selectSettingsMcpServer(serverId: string): void {
+    const server = config.mcpServers.find((candidate) => candidate.id === serverId)
+    setSettingsMcpServerId(serverId)
+    setMcpArgsText(formatMcpArgs(server?.args ?? []))
+    setMcpEnvText(formatMcpEnv(server?.env ?? {}))
+  }
+
+  function createMcpServer(): void {
+    const id = `mcp-${Date.now()}`
+    const server: AgentMcpServerConfig = {
+      id,
+      name: id,
+      transport: 'stdio',
+      command: '',
+      args: [],
+      env: {},
+      enabled: true
+    }
+
+    setConfig((current) => ({ ...current, mcpServers: [...current.mcpServers, server] }))
+    setSettingsMcpServerId(id)
+    setMcpArgsText('')
+    setMcpEnvText('')
+    setValidation(undefined)
+  }
+
+  function deleteSettingsMcpServer(): void {
+    if (!settingsMcpServer.id) return
+    if (!window.confirm(`${t.confirm.deleteMcpServer}\n\n${settingsMcpServer.name}`)) return
+
+    const remainingServers = config.mcpServers.filter(
+      (server) => server.id !== settingsMcpServer.id
+    )
+    const nextServer = remainingServers[0]
+
+    setConfig({
+      ...config,
+      mcpServers: remainingServers
+    })
+    setSettingsMcpServerId(nextServer?.id ?? '')
+    setMcpArgsText(formatMcpArgs(nextServer?.args ?? []))
+    setMcpEnvText(formatMcpEnv(nextServer?.env ?? {}))
     setValidation(undefined)
   }
 
@@ -3379,7 +3483,7 @@ function App(): React.JSX.Element {
           setTerminalPage('terminal')
         } else {
           setActiveTabId('default')
-          setTerminalPage('connections')
+          setTerminalPage('terminal')
         }
       }
       return next
@@ -3466,12 +3570,13 @@ function App(): React.JSX.Element {
   const selectedSkillInstallLog = skillInstallLogResultId
     ? (skillInstallLogs[skillInstallLogResultId] ?? '')
     : ''
+  const skillSidePanelOpen = Boolean(skillInstallLogResultId || selectedSkillPreview)
 
   const skillSheet = (
     <Sheet open={skillOpen} onOpenChange={setSkillOpen}>
       <SheetContent
         side="right"
-        className={`w-full ${skillInstallLogResultId ? 'sm:max-w-6xl' : 'sm:max-w-2xl'}`}
+        className={`w-full ${skillSidePanelOpen ? 'sm:max-w-6xl' : 'sm:max-w-2xl'}`}
       >
         <SheetHeader>
           <SheetTitle>{t.settings.skillsManagement}</SheetTitle>
@@ -3524,13 +3629,32 @@ function App(): React.JSX.Element {
                   filteredLocalSkills.map((skill) => (
                     <div
                       key={skill.path}
-                      className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
+                      className={`flex cursor-pointer items-start justify-between gap-3 rounded-md border p-3 text-xs transition ${
+                        selectedSkillPreview?.skill.path === skill.path
+                          ? 'border-primary/50 bg-primary/5'
+                          : 'bg-background hover:bg-muted/40'
+                      }`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => void previewSkill(skill)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          void previewSkill(skill)
+                        }
+                      }}
                     >
                       <div className="min-w-0 space-y-1">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="truncate font-medium">{skill.name}</span>
                           {!skill.removable && (
                             <Badge variant="outline">{t.settings.protectedSkill}</Badge>
+                          )}
+                          {skillPreviewLoadingPath === skill.path && (
+                            <Loader2Icon
+                              className="size-3 shrink-0 animate-spin text-muted-foreground"
+                              aria-hidden="true"
+                            />
                           )}
                         </div>
                         {skill.description && (
@@ -3550,7 +3674,10 @@ function App(): React.JSX.Element {
                         disabled={!skill.removable || skillDeletingPath === skill.path}
                         aria-label={t.settings.deleteSkill}
                         title={t.settings.deleteSkill}
-                        onClick={() => void deleteSkill(skill)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void deleteSkill(skill)
+                        }}
                       >
                         {skillDeletingPath === skill.path ? (
                           <Loader2Icon className="animate-spin" aria-hidden="true" />
@@ -3666,7 +3793,7 @@ function App(): React.JSX.Element {
               <SkillManageStatus message={skillManageMessage} />
             </div>
           </div>
-          {skillInstallLogResultId && (
+          {skillInstallLogResultId ? (
             <div className="flex w-[680px] shrink-0 overflow-hidden rounded-md border bg-background">
               <div className="w-44 shrink-0 overflow-auto border-r bg-muted/20 p-1">
                 {skillInstallLogResultIds.map((resultId) => {
@@ -3781,7 +3908,46 @@ function App(): React.JSX.Element {
                 </div>
               </div>
             </div>
-          )}
+          ) : selectedSkillPreview ? (
+            <div className="flex w-[680px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+              <div className="flex items-start justify-between gap-3 border-b px-3 py-2">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+                    <BookOpenIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">
+                      {t.settings.skillPreview}: {selectedSkillPreview.skill.name}
+                    </span>
+                    {!selectedSkillPreview.skill.removable && (
+                      <Badge variant="outline">{t.settings.protectedSkill}</Badge>
+                    )}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {selectedSkillPreview.skill.path}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={t.common.close}
+                  title={t.common.close}
+                  onClick={() => setSelectedSkillPreview(null)}
+                >
+                  <XIcon aria-hidden="true" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3 text-sm">
+                {selectedSkillPreview.content ? (
+                  <MarkdownContent value={selectedSkillPreview.content} t={t} />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                    <Loader2Icon className="mr-2 size-4 animate-spin" aria-hidden="true" />
+                    {t.settings.skillPreviewLoading}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
         </div>
         <SheetFooter>
           <Button
@@ -4164,6 +4330,16 @@ function App(): React.JSX.Element {
             type="button"
             variant="outline"
             size="icon-sm"
+            aria-label={t.connections.manageConnections}
+            title={t.connections.manageConnections}
+            onClick={showConnectionList}
+          >
+            <ServerIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
             aria-label={t.settings.skillsManagement}
             title={t.settings.skillsManagement}
             onClick={() => setSkillOpen(true)}
@@ -4251,7 +4427,11 @@ function App(): React.JSX.Element {
                         </Button>
                       </div>
                     </div>
-                    <Select value={settingsProvider.id} onValueChange={selectSettingsProvider}>
+                    <Select
+                      value={settingsProvider.id}
+                      onValueChange={selectSettingsProvider}
+                      disabled={config.providers.length === 0}
+                    >
                       <SelectTrigger id="provider" className="w-full">
                         <SelectValue placeholder={t.settings.providerList} />
                       </SelectTrigger>
@@ -4274,7 +4454,7 @@ function App(): React.JSX.Element {
                         id="provider-id"
                         value={settingsProvider.id}
                         onChange={(event) => updateSettingsProvider('id', event.target.value)}
-                        placeholder="nova-litellm"
+                        placeholder="provider-id"
                       />
                     </Field>
                     <Field>
@@ -4283,7 +4463,7 @@ function App(): React.JSX.Element {
                         id="provider-name"
                         value={settingsProvider.name}
                         onChange={(event) => updateSettingsProvider('name', event.target.value)}
-                        placeholder="Nova LiteLLM"
+                        placeholder={t.settings.providerName}
                       />
                     </Field>
                   </div>
@@ -4314,7 +4494,7 @@ function App(): React.JSX.Element {
                       className="min-h-28 resize-y font-mono text-xs"
                       value={providerModelsText}
                       onChange={(event) => updateSettingsProviderModels(event.target.value)}
-                      placeholder={'deepseek-v4-flash\ndeepseek-v4-pro'}
+                      placeholder={'model-id\nmodel-id-reasoner'}
                     />
                     <FieldDescription>{t.settings.modelListHint}</FieldDescription>
                   </Field>
@@ -4393,6 +4573,133 @@ function App(): React.JSX.Element {
                     />
                     <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
                   </Field>
+                  <Separator />
+                  <Field>
+                    <div className="flex items-center justify-between gap-2">
+                      <FieldLabel htmlFor="mcp-server">{t.settings.mcpServers}</FieldLabel>
+                      <div className="flex items-center gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={createMcpServer}>
+                          <PlusIcon data-icon="inline-start" />
+                          {t.settings.newMcpServer}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={!settingsMcpServer.id}
+                          aria-label={t.settings.deleteMcpServer}
+                          title={t.settings.deleteMcpServer}
+                          onClick={deleteSettingsMcpServer}
+                        >
+                          <Trash2Icon aria-hidden="true" />
+                        </Button>
+                      </div>
+                    </div>
+                    <Select
+                      value={settingsMcpServer.id}
+                      onValueChange={selectSettingsMcpServer}
+                      disabled={config.mcpServers.length === 0}
+                    >
+                      <SelectTrigger id="mcp-server" className="w-full">
+                        <SelectValue placeholder={t.settings.mcpServerList} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>{t.settings.mcpServerList}</SelectLabel>
+                          {config.mcpServers.map((server) => (
+                            <SelectItem key={server.id} value={server.id}>
+                              {server.name || server.id}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>{t.settings.mcpServersHint}</FieldDescription>
+                  </Field>
+                  {settingsMcpServer.id ? (
+                    <>
+                      <label
+                        htmlFor="mcp-enabled"
+                        className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                      >
+                        <span className="space-y-1">
+                          <span className="block text-sm font-medium">{t.settings.mcpEnabled}</span>
+                          <FieldDescription>{t.settings.mcpEnabledHint}</FieldDescription>
+                        </span>
+                        <Input
+                          id="mcp-enabled"
+                          type="checkbox"
+                          checked={settingsMcpServer.enabled}
+                          onChange={(event) =>
+                            updateSettingsMcpServer('enabled', event.target.checked)
+                          }
+                          className="mt-0.5 size-4 shrink-0 accent-primary"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field>
+                          <FieldLabel htmlFor="mcp-id">{t.settings.mcpServerId}</FieldLabel>
+                          <Input
+                            id="mcp-id"
+                            value={settingsMcpServer.id}
+                            onChange={(event) => updateSettingsMcpServer('id', event.target.value)}
+                            placeholder="filesystem"
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="mcp-name">{t.settings.mcpServerName}</FieldLabel>
+                          <Input
+                            id="mcp-name"
+                            value={settingsMcpServer.name}
+                            onChange={(event) =>
+                              updateSettingsMcpServer('name', event.target.value)
+                            }
+                            placeholder={t.settings.mcpServerName}
+                          />
+                        </Field>
+                      </div>
+                      <Field>
+                        <FieldLabel htmlFor="mcp-command">{t.settings.mcpCommand}</FieldLabel>
+                        <Input
+                          id="mcp-command"
+                          value={settingsMcpServer.command}
+                          onChange={(event) =>
+                            updateSettingsMcpServer('command', event.target.value)
+                          }
+                          placeholder="npx"
+                        />
+                        <FieldDescription>{t.settings.mcpCommandHint}</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="mcp-args">{t.settings.mcpArgs}</FieldLabel>
+                        <Textarea
+                          id="mcp-args"
+                          className="min-h-24 resize-y font-mono text-xs"
+                          value={mcpArgsText}
+                          onChange={(event) => updateSettingsMcpArgs(event.target.value)}
+                          placeholder={'-y\n@modelcontextprotocol/server-filesystem\n~/Documents'}
+                        />
+                        <FieldDescription>{t.settings.mcpArgsHint}</FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="mcp-env">{t.settings.mcpEnv}</FieldLabel>
+                        <Textarea
+                          id="mcp-env"
+                          className="min-h-24 resize-y font-mono text-xs"
+                          value={mcpEnvText}
+                          onChange={(event) => updateSettingsMcpEnv(event.target.value)}
+                          placeholder={'API_KEY=value\nNODE_ENV=production'}
+                        />
+                        <FieldDescription>{t.settings.mcpEnvHint}</FieldDescription>
+                      </Field>
+                    </>
+                  ) : (
+                    <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                      <PlugIcon className="mr-2 inline size-3" aria-hidden="true" />
+                      {t.settings.noMcpServers}
+                    </div>
+                  )}
                   <Separator />
                   <Field>
                     <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
@@ -4537,24 +4844,6 @@ function App(): React.JSX.Element {
                   </button>
                 )
               })}
-              {terminalPage === 'connections' && (
-                <button
-                  type="button"
-                  className="h-7 rounded bg-secondary px-2 text-xs text-secondary-foreground"
-                >
-                  {t.connections.connectionList}
-                </button>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.connections.openConnectionList}
-                title={t.connections.openConnectionList}
-                onClick={showConnectionList}
-              >
-                <PlusIcon aria-hidden="true" />
-              </Button>
               {tabMenu && (
                 <div
                   className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
@@ -4578,284 +4867,157 @@ function App(): React.JSX.Element {
                 </div>
               )}
             </div>
-            {terminalPage === 'terminal' ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div ref={terminalHostRef} className="min-h-0 flex-1" />
-                {activeTab.subTerminals.length > 0 && (
-                  <div
-                    className="shrink-0 border-t border-white/10 bg-background"
-                    style={{ height: subterminalCollapsed ? undefined : subterminalPanelHeight }}
-                  >
-                    {!subterminalCollapsed && (
-                      <div
-                        className="h-1.5 cursor-row-resize bg-border/60 hover:bg-primary/60"
-                        role="separator"
-                        aria-orientation="horizontal"
-                        aria-label={t.terminal.resizeSubterminalHeight}
-                        title={t.terminal.resizeSubterminalHeight}
-                        onPointerDown={(event) => {
-                          event.preventDefault()
-                          event.currentTarget.setPointerCapture(event.pointerId)
-                          subterminalHeightResizeRef.current = {
-                            startY: event.clientY,
-                            startHeight: subterminalPanelHeight
-                          }
-                          document.body.style.cursor = 'row-resize'
-                          document.body.style.userSelect = 'none'
-                        }}
-                      />
-                    )}
-                    <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
-                      <div className="min-w-0 truncate text-xs font-medium">
-                        {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={
-                            subterminalCollapsed
-                              ? t.terminal.expandSubterminals
-                              : t.terminal.collapseSubterminals
-                          }
-                          title={
-                            subterminalCollapsed
-                              ? t.terminal.expandSubterminals
-                              : t.terminal.collapseSubterminals
-                          }
-                          onClick={() => setSubterminalCollapsed((current) => !current)}
-                        >
-                          {subterminalCollapsed ? (
-                            <ChevronUpIcon aria-hidden="true" />
-                          ) : (
-                            <ChevronDownIcon aria-hidden="true" />
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          aria-label={t.terminal.closeAllSubterminals}
-                          title={t.terminal.closeAllSubterminals}
-                          onClick={() => closeAllSubterminals(activeTab.id)}
-                        >
-                          <Trash2Icon aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </div>
-                    {!subterminalCollapsed && (
-                      <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
-                        <div className="flex h-full min-w-full gap-0">
-                          {activeTab.subTerminals.map((subterminal, index) => {
-                            const widths = getSubterminalWidths(activeTab.subTerminals)
-                            const width = widths[index]
-                            const nextSubterminal = activeTab.subTerminals[index + 1]
-
-                            return (
-                              <div
-                                key={subterminal.id}
-                                className="flex min-w-0"
-                                style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
-                              >
-                                <section className="flex min-w-0 flex-1 flex-col rounded-md border bg-card text-xs">
-                                  <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
-                                    <div className="min-w-0">
-                                      <p className="truncate font-medium">
-                                        {t.terminal.temporarySubterminal}: {subterminal.name}
-                                      </p>
-                                      {subterminal.cwd && (
-                                        <p className="truncate text-[10px] text-muted-foreground">
-                                          {subterminal.cwd}
-                                        </p>
-                                      )}
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-1">
-                                      <Badge
-                                        variant={
-                                          subterminal.status === 'active' ? 'secondary' : 'outline'
-                                        }
-                                      >
-                                        {subterminal.status === 'active'
-                                          ? t.terminal.subterminalActive
-                                          : t.terminal.subterminalExited}
-                                      </Badge>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                        aria-label={t.terminal.closeSubterminal}
-                                        title={t.terminal.closeSubterminal}
-                                        onClick={() =>
-                                          closeSubterminal(activeTab.id, subterminal.id)
-                                        }
-                                      >
-                                        <XIcon aria-hidden="true" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                  <pre className="min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                                    {subterminal.output || t.terminal.recentOutputEmpty}
-                                  </pre>
-                                </section>
-                                {nextSubterminal && (
-                                  <div
-                                    className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
-                                    role="separator"
-                                    aria-orientation="vertical"
-                                    aria-label={t.terminal.resizeSubterminals}
-                                    title={t.terminal.resizeSubterminals}
-                                    onPointerDown={(event) => {
-                                      event.preventDefault()
-                                      event.currentTarget.setPointerCapture(event.pointerId)
-                                      subterminalResizeRef.current = {
-                                        tabId: activeTab.id,
-                                        leftId: subterminal.id,
-                                        rightId: nextSubterminal.id,
-                                        startX: event.clientX,
-                                        leftStart: width,
-                                        rightStart: widths[index + 1]
-                                      }
-                                      document.body.style.cursor = 'col-resize'
-                                      document.body.style.userSelect = 'none'
-                                    }}
-                                  />
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
-                <div className="mx-auto max-w-3xl space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-semibold">{t.connections.connectionList}</h2>
-                      <p className="text-xs text-muted-foreground">
-                        {t.connections.connectionListDescription}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setConnectionModalOpen(true)}
-                    >
-                      <SettingsIcon data-icon="inline-start" />
-                      {t.connections.manageConnections}
-                    </Button>
-                  </div>
-                  <div className="relative">
-                    <SearchIcon
-                      className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                      aria-hidden="true"
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div ref={terminalHostRef} className="min-h-0 flex-1" />
+              {activeTab.subTerminals.length > 0 && (
+                <div
+                  className="shrink-0 border-t border-white/10 bg-background"
+                  style={{ height: subterminalCollapsed ? undefined : subterminalPanelHeight }}
+                >
+                  {!subterminalCollapsed && (
+                    <div
+                      className="h-1.5 cursor-row-resize bg-border/60 hover:bg-primary/60"
+                      role="separator"
+                      aria-orientation="horizontal"
+                      aria-label={t.terminal.resizeSubterminalHeight}
+                      title={t.terminal.resizeSubterminalHeight}
+                      onPointerDown={(event) => {
+                        event.preventDefault()
+                        event.currentTarget.setPointerCapture(event.pointerId)
+                        subterminalHeightResizeRef.current = {
+                          startY: event.clientY,
+                          startHeight: subterminalPanelHeight
+                        }
+                        document.body.style.cursor = 'row-resize'
+                        document.body.style.userSelect = 'none'
+                      }}
                     />
-                    <Input
-                      ref={connectionSearchInputRef}
-                      value={connectionSearchQuery}
-                      onChange={(event) => setConnectionSearchQuery(event.target.value)}
-                      placeholder={t.connections.searchPlaceholder}
-                      className="h-9 pl-9 pr-9"
-                    />
-                    {connectionSearchQuery && (
+                  )}
+                  <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
+                    <div className="min-w-0 truncate text-xs font-medium">
+                      {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        className="absolute right-1 top-1/2 -translate-y-1/2"
-                        aria-label={t.common.close}
-                        title={t.common.close}
-                        onClick={() => setConnectionSearchQuery('')}
+                        aria-label={
+                          subterminalCollapsed
+                            ? t.terminal.expandSubterminals
+                            : t.terminal.collapseSubterminals
+                        }
+                        title={
+                          subterminalCollapsed
+                            ? t.terminal.expandSubterminals
+                            : t.terminal.collapseSubterminals
+                        }
+                        onClick={() => setSubterminalCollapsed((current) => !current)}
                       >
-                        <XIcon aria-hidden="true" />
+                        {subterminalCollapsed ? (
+                          <ChevronUpIcon aria-hidden="true" />
+                        ) : (
+                          <ChevronDownIcon aria-hidden="true" />
+                        )}
                       </Button>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    {localTerminalMatchesSearch && (
-                      <button
+                      <Button
                         type="button"
-                        className={`flex w-full items-center justify-between gap-3 rounded-md border bg-card p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
-                          activeTabId === 'default'
-                            ? 'border-primary/70 ring-1 ring-primary/30'
-                            : ''
-                        }`}
-                        onClick={openLocalTerminal}
+                        variant="ghost"
+                        size="icon-xs"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={t.terminal.closeAllSubterminals}
+                        title={t.terminal.closeAllSubterminals}
+                        onClick={() => closeAllSubterminals(activeTab.id)}
                       >
-                        <span className="flex min-w-0 items-center gap-3">
-                          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
-                            <TerminalIcon className="size-4" aria-hidden="true" />
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium">
-                              {t.connections.localTerminal}
-                            </span>
-                            <span className="block truncate text-muted-foreground">
-                              {t.connections.defaultTerminal}
-                            </span>
-                          </span>
-                        </span>
-                        <Badge variant="outline">{t.app.workingDirectory}</Badge>
-                      </button>
-                    )}
-                    {connections.length === 0 && !connectionSearchText ? (
-                      <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                        {t.connections.noConnections}
-                      </p>
-                    ) : filteredConnections.length === 0 && !localTerminalMatchesSearch ? (
-                      <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                        {t.connections.noSearchResults}
-                      </p>
-                    ) : (
-                      filteredConnections.map((connection) => {
-                        const connectionTab = tabs.find((tab) => tab.connectionId === connection.id)
-                        const selected = connectionTab?.id === activeTabId
-
-                        return (
-                          <button
-                            key={connection.id}
-                            type="button"
-                            className={`flex w-full items-center justify-between gap-3 rounded-md border bg-card p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
-                              selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
-                            }`}
-                            onClick={() => openConnectionTerminal(connection)}
-                          >
-                            <span className="flex min-w-0 items-center gap-3">
-                              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
-                                <ServerIcon className="size-4" aria-hidden="true" />
-                              </span>
-                              <span className="min-w-0">
-                                <span className="block truncate font-medium">
-                                  {connection.name}
-                                </span>
-                                <span className="block truncate text-muted-foreground">
-                                  {formatConnectionTarget(connection)}
-                                </span>
-                              </span>
-                            </span>
-                            <span className="flex shrink-0 items-center gap-2">
-                              {connectionTab && <Badge variant="secondary">{t.app.running}</Badge>}
-                              <Badge variant="outline">
-                                {connection.source === 'ssh-config'
-                                  ? '~/.ssh/config'
-                                  : t.connections.customConnectionName}
-                              </Badge>
-                            </span>
-                          </button>
-                        )
-                      })
-                    )}
+                        <Trash2Icon aria-hidden="true" />
+                      </Button>
+                    </div>
                   </div>
+                  {!subterminalCollapsed && (
+                    <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
+                      <div className="flex h-full min-w-full gap-0">
+                        {activeTab.subTerminals.map((subterminal, index) => {
+                          const widths = getSubterminalWidths(activeTab.subTerminals)
+                          const width = widths[index]
+                          const nextSubterminal = activeTab.subTerminals[index + 1]
+
+                          return (
+                            <div
+                              key={subterminal.id}
+                              className="flex min-w-0"
+                              style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
+                            >
+                              <section className="flex min-w-0 flex-1 flex-col rounded-md border bg-card text-xs">
+                                <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
+                                  <div className="min-w-0">
+                                    <p className="truncate font-medium">
+                                      {t.terminal.temporarySubterminal}: {subterminal.name}
+                                    </p>
+                                    {subterminal.cwd && (
+                                      <p className="truncate text-[10px] text-muted-foreground">
+                                        {subterminal.cwd}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <Badge
+                                      variant={
+                                        subterminal.status === 'active' ? 'secondary' : 'outline'
+                                      }
+                                    >
+                                      {subterminal.status === 'active'
+                                        ? t.terminal.subterminalActive
+                                        : t.terminal.subterminalExited}
+                                    </Badge>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                      aria-label={t.terminal.closeSubterminal}
+                                      title={t.terminal.closeSubterminal}
+                                      onClick={() => closeSubterminal(activeTab.id, subterminal.id)}
+                                    >
+                                      <XIcon aria-hidden="true" />
+                                    </Button>
+                                  </div>
+                                </div>
+                                <pre className="min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                                  {subterminal.output || t.terminal.recentOutputEmpty}
+                                </pre>
+                              </section>
+                              {nextSubterminal && (
+                                <div
+                                  className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
+                                  role="separator"
+                                  aria-orientation="vertical"
+                                  aria-label={t.terminal.resizeSubterminals}
+                                  title={t.terminal.resizeSubterminals}
+                                  onPointerDown={(event) => {
+                                    event.preventDefault()
+                                    event.currentTarget.setPointerCapture(event.pointerId)
+                                    subterminalResizeRef.current = {
+                                      tabId: activeTab.id,
+                                      leftId: subterminal.id,
+                                      rightId: nextSubterminal.id,
+                                      startX: event.clientX,
+                                      leftStart: width,
+                                      rightStart: widths[index + 1]
+                                    }
+                                    document.body.style.cursor = 'col-resize'
+                                    document.body.style.userSelect = 'none'
+                                  }}
+                                />
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
         {!hiddenPane && (
@@ -4863,9 +5025,7 @@ function App(): React.JSX.Element {
             className="w-1.5 shrink-0 cursor-col-resize border-x border-border bg-muted/30 hover:bg-primary/40"
             role="separator"
             aria-orientation="vertical"
-            aria-label={
-              locale === 'zh-CN' ? '调整终端和对话区域宽度' : 'Resize terminal and chat panes'
-            }
+            aria-label="Resize terminal and chat panes"
             onPointerDown={(event) => {
               event.preventDefault()
               splitDragRef.current = true
@@ -4941,7 +5101,11 @@ function App(): React.JSX.Element {
                       <PanelLeftCloseIcon aria-hidden="true" />
                     )}
                   </Button>
-                  <Select value={activeProviderId} onValueChange={applyProvider}>
+                  <Select
+                    value={activeProviderId}
+                    onValueChange={applyProvider}
+                    disabled={providerOptions.length === 0}
+                  >
                     <SelectTrigger className="h-8 min-w-0 flex-1">
                       <SelectValue aria-label={t.app.provider} />
                     </SelectTrigger>
@@ -4956,7 +5120,11 @@ function App(): React.JSX.Element {
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <Select value={activeTabModelId} onValueChange={applyModel}>
+                  <Select
+                    value={activeTabModelId}
+                    onValueChange={applyModel}
+                    disabled={visibleModels.length === 0}
+                  >
                     <SelectTrigger className="h-8 min-w-0 flex-1" title={aiStatusText}>
                       <span className="sr-only">
                         <SelectValue aria-label={t.app.model} />
@@ -5757,27 +5925,17 @@ function App(): React.JSX.Element {
         </div>
       )}
       <footer className="flex h-9 shrink-0 items-center border-t px-4 text-xs text-muted-foreground">
-        {terminalPage === 'connections' ? (
-          <span className="inline-flex items-center gap-2">
-            <StatusDot state="pending" />
-            {t.connections.connectionList}
-            <span className="text-muted-foreground/70">
-              {connections.length} {t.connections.sshConnections}
-            </span>
+        <span className="inline-flex items-center gap-2">
+          <StatusDot state={shellState} />
+          {shellState === 'ready'
+            ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
+            : shellState === 'pending'
+              ? t.app.shellStarting
+              : t.app.shellStopped}
+          <span className="text-muted-foreground/70">
+            {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
           </span>
-        ) : (
-          <span className="inline-flex items-center gap-2">
-            <StatusDot state={shellState} />
-            {shellState === 'ready'
-              ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
-              : shellState === 'pending'
-                ? t.app.shellStarting
-                : t.app.shellStopped}
-            <span className="text-muted-foreground/70">
-              {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
-            </span>
-          </span>
-        )}
+        </span>
       </footer>
     </main>
   )
@@ -5937,18 +6095,14 @@ function isContinueIntent(value: string): boolean {
   const normalized = value
     .trim()
     .toLowerCase()
-    .replace(/[。.!！?？\s]+$/g, '')
+    .replace(/[.!?\s]+$/g, '')
     .replace(/\s+/g, ' ')
 
-  return (
-    /^(继续|继续处理|继续执行|继续未完成的工作|接着来|接着处理|接着执行|恢复|恢复继续|继续刚才的任务)$/.test(
-      normalized
-    ) || /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
-  )
+  return /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
 }
 
 function isExplicitConnectionRequest(value: string): boolean {
-  return /(^|\s)(ssh|login|connect)\b|登录|登陆|连接|进入.*机器|切换.*连接|打开.*终端/i.test(value)
+  return /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value)
 }
 
 function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
@@ -6290,17 +6444,6 @@ function formatConnectionTarget(connection: ConnectionConfig): string {
   return `${user}${connection.host}${port}`
 }
 
-function matchesConnectionSearch(connection: ConnectionConfig, query: string): boolean {
-  return [
-    connection.name,
-    connection.host,
-    connection.user ?? '',
-    connection.description ?? '',
-    connection.source,
-    formatConnectionTarget(connection)
-  ].some((value) => value.toLowerCase().includes(query))
-}
-
 function parseSubterminalTabId(tabId: string): { parentTabId: string; name: string } | undefined {
   const marker = '::subterminal::'
   const markerIndex = tabId.indexOf(marker)
@@ -6521,6 +6664,39 @@ function formatProviderModels(models: AgentProviderModelConfig[]): string {
   return models.map((model) => model.id).join('\n')
 }
 
+function parseMcpArgs(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function formatMcpArgs(args: string[]): string {
+  return args.join('\n')
+}
+
+function parseMcpEnv(value: string): Record<string, string> {
+  return Object.fromEntries(
+    value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separatorIndex = line.indexOf('=')
+        if (separatorIndex < 0) return [line, ''] as const
+
+        return [line.slice(0, separatorIndex).trim(), line.slice(separatorIndex + 1)] as const
+      })
+      .filter(([key]) => Boolean(key))
+  )
+}
+
+function formatMcpEnv(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n')
+}
+
 function isReasoningModelId(id: string): boolean {
   const normalized = id.toLowerCase()
   return (
@@ -6553,7 +6729,7 @@ function filterLocalSkills(skills: AgentSkillOption[], query: string): AgentSkil
 }
 
 function normalizeSkillSearchQuery(value: string): string {
-  return value.toLowerCase().replace(/[\s"'`。，、,.:：;；/\\|()[\]{}_-]+/g, '')
+  return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
 }
 
 function buildInstalledSkillNameSet(skills: AgentSkillOption[]): Set<string> {
@@ -6769,21 +6945,21 @@ function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       title: t.input.slashMode,
       description: t.input.slashModeDescription,
       value: '/mode:',
-      keywords: ['mode', 'agent', 'react', 'plan', '模式', '对话模式']
+      keywords: ['mode', 'agent', 'react', 'plan']
     },
     {
       id: 'connection',
       title: t.input.slashConnection,
       description: t.input.slashConnectionDescription,
       value: '/connection:',
-      keywords: ['connection', 'ssh', 'host', '连接', '主机']
+      keywords: ['connection', 'ssh', 'host']
     },
     {
       id: 'file',
       title: t.input.referenceFile,
       description: t.input.slashFileDescription,
       value: '',
-      keywords: ['file', 'reference', 'context', '文件', '引用'],
+      keywords: ['file', 'reference', 'context'],
       pathReferenceKind: 'file'
     },
     {
@@ -6791,7 +6967,7 @@ function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       title: t.input.referenceDirectory,
       description: t.input.slashFolderDescription,
       value: '',
-      keywords: ['folder', 'directory', 'reference', 'context', '文件夹', '目录', '引用'],
+      keywords: ['folder', 'directory', 'reference', 'context'],
       pathReferenceKind: 'directory'
     },
     {
@@ -6799,28 +6975,28 @@ function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       title: t.input.slashTool,
       description: t.input.slashToolDescription,
       value: '/tool:',
-      keywords: ['tool', 'tools', '工具']
+      keywords: ['tool', 'tools']
     },
     {
       id: 'wiki',
       title: t.input.slashWiki,
       description: t.input.slashWikiDescription,
       value: '/wiki:',
-      keywords: ['wiki', 'knowledge', 'sop', '知识库', '最佳实践']
+      keywords: ['wiki', 'knowledge', 'sop', 'best practice']
     },
     {
       id: 'skill',
       title: t.input.slashSkill,
       description: t.input.slashSkillDescription,
       value: '/skill:',
-      keywords: ['skill', 'skills', '技能']
+      keywords: ['skill', 'skills']
     },
     {
       id: 'create-skill',
       title: t.input.slashCreateSkill,
       description: t.input.slashCreateSkillDescription,
       value: '/create-skill',
-      keywords: ['create-skill', 'skill', 'skills', '创建', '自定义', '技能'],
+      keywords: ['create-skill', 'skill', 'skills', 'custom'],
       templateInput: t.input.createSkillPrompt
     }
   ]
@@ -6866,7 +7042,7 @@ function buildModeSlashCommands(t: Dictionary): SlashCommandOption[] {
       title: 'ReAct',
       description: t.settings.planExecuteHint,
       value: '',
-      keywords: ['mode', 'agent', 'react', '模式'],
+      keywords: ['mode', 'agent', 'react'],
       agentMode: 'react'
     },
     {
@@ -6874,7 +7050,7 @@ function buildModeSlashCommands(t: Dictionary): SlashCommandOption[] {
       title: 'Plan-and-Execute',
       description: t.settings.planExecuteHint,
       value: '',
-      keywords: ['mode', 'agent', 'plan', 'execute', 'plan-execute', '规划', '执行'],
+      keywords: ['mode', 'agent', 'plan', 'execute', 'plan-execute'],
       agentMode: 'plan-execute'
     }
   ]
@@ -7097,45 +7273,36 @@ function buildUserRequirementBreakdown(
 }
 
 function extractTargetSystem(input: string): string {
-  return (
-    input.match(
-      /(?:检查|查看|巡检|排查|处理|获取|统计|增加|新增|创建|添加|开通|配置|修改|变更|授权)\s*([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)/i
-    )?.[1] ??
-    input.match(
-      /([A-Za-z0-9_.-]+|[\u4e00-\u9fa5A-Za-z0-9_.-]+)\s*(?:健康|状态|巡检|检查|账号|账户|用户|管理员|权限|角色)/i
-    )?.[1] ??
-    ''
-  )
+  return input.match(/\b(?:for|on|in|against)\s+([A-Za-z0-9_.-]{2,})\b/i)?.[1] ?? ''
 }
 
 function extractArtifactDestination(input: string): string {
   const pathMatch = input.match(
-    /(?:放在|保存到|写到|写入|输出到|导出到|存到)\s*([~./$A-Za-z0-9_\-\u4e00-\u9fa5][^\s，。；,;]*)/i
+    /\b(?:save|write|output|export|store)\s+(?:to|into|at)\s+([~./$A-Za-z0-9_-][^\s,;]*)/i
   )
   if (pathMatch?.[1]) return normalizeArtifactDestination(pathMatch[1])
 
-  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s，。；,;]*)/)
+  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s,;]*)/)
   return loosePathMatch?.[1] ? normalizeArtifactDestination(loosePathMatch[1]) : ''
 }
 
 function normalizeArtifactDestination(value: string): string {
-  return value.replace(/(?:目录下|目录|路径下|路径|下)$/u, '')
+  return value.replace(/\/+$/, '')
 }
 
 function extractRequestedActions(input: string): string[] {
   const actions: string[] = []
-  if (/(登录|登陆|连接|进入|\bssh\b)/i.test(input)) actions.push('login')
-  if (/(检查|查看|巡检|排查|健康|状态|统计|获取)/i.test(input)) actions.push('inspect')
-  if (
-    /(增加|新增|创建|添加|开通|授权).*(账号|账户|用户|管理员|权限|角色)|账号|账户|用户|管理员|权限|角色/i.test(
-      input
-    )
-  ) {
-    actions.push('change-account-or-permission')
+  if (/\b(ssh|login|connect)\b/i.test(input)) actions.push('login')
+  if (/\b(check|inspect|diagnose|troubleshoot|verify|list|get|status|health)\b/i.test(input)) {
+    actions.push('inspect')
   }
-  if (/(配置|修改|变更|处理|执行)/i.test(input)) actions.push('operate')
-  if (/(总结|生成|报告|文档|记录)/i.test(input)) actions.push('summarize')
-  if (/(保存|写入|写到|放在|输出|导出|存到)/i.test(input)) actions.push('write-artifact')
+  if (
+    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(input)
+  ) {
+    actions.push('operate')
+  }
+  if (/\b(summarize|report|document|record)\b/i.test(input)) actions.push('summarize')
+  if (/\b(save|write|output|export|store)\b/i.test(input)) actions.push('write-artifact')
 
   return actions.length ? actions : ['complete-request']
 }
@@ -7347,10 +7514,7 @@ function isTerminalCurrentlyAtPasswordPrompt(output: string): boolean {
 }
 
 function isPasswordPromptLine(line: string): boolean {
-  return (
-    /(?:password|passphrase|verification code|one-time password|otp)\b.*[:：]\s*$/i.test(line) ||
-    /(?:验证码|动态口令|一次性密码|密码).*[:：]\s*$/i.test(line)
-  )
+  return /(?:password|passphrase|verification code|one-time password|otp)\b.*:\s*$/i.test(line)
 }
 
 function hasOutputBeyondEcho(output: string, echo: string): boolean {
@@ -7374,9 +7538,7 @@ function hasInteractivePrompt(output: string): boolean {
   return lines.some((line) => {
     if (/(yes\/no|continue connecting)/i.test(line)) return true
 
-    return /(?:password|passphrase|verification code|one-time password|otp|验证码|密码)\s*[:：]\s*$/i.test(
-      line
-    )
+    return /(?:password|passphrase|verification code|one-time password|otp)\s*:\s*$/i.test(line)
   })
 }
 

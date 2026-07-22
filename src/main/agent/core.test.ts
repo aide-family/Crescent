@@ -6,7 +6,7 @@ describe('sanitizeFinalAnswer', () => {
   it('removes leaked tool-call markup from final answers', () => {
     const text = sanitizeFinalAnswer(
       [
-        '没有默认 StorageClass，需要预创建 hostPath PV。先检查镜像是否可拉取。',
+        'No default StorageClass exists, so a hostPath PV must be created first. Check whether the image can be pulled.',
         '',
         '<｜｜DSML｜｜tool_calls>',
         '<｜｜DSML｜｜invoke name="execute_terminal_command">',
@@ -17,8 +17,8 @@ describe('sanitizeFinalAnswer', () => {
       'safety-limit'
     )
 
-    expect(text).toContain('未完成')
-    expect(text).toContain('没有默认 StorageClass')
+    expect(text).toContain('Incomplete')
+    expect(text).toContain('No default StorageClass')
     expect(text).not.toContain('tool_calls')
     expect(text).not.toContain('execute_terminal_command')
     expect(text).not.toContain('kubectl get pods')
@@ -30,8 +30,8 @@ describe('sanitizeFinalAnswer', () => {
       'safety-limit'
     )
 
-    expect(text).toContain('未完成')
-    expect(text).toContain('下一步')
+    expect(text).toContain('Incomplete')
+    expect(text).toContain('Next Step')
     expect(text).toContain('ls -la /run/containerd/containerd.sock')
   })
 })

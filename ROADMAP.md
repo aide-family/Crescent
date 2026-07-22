@@ -5,7 +5,7 @@ Crescent is a desktop workbench that combines a local terminal with an OpenAPI-c
 ## Phase 1 — Usable MVP
 
 - Local terminal with PTY support and pipe fallback.
-- OpenClaw-like provider/model defaults with local key storage.
+- User-configured provider/model settings with local key storage.
 - OpenAPI document loading, function-tool generation, and HTTP execution.
 - ReAct and Plan-and-Execute modes.
 - Agent run panel with event log, answer output, and `/remember` support.

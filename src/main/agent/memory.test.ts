@@ -34,7 +34,7 @@ describe('AgentMemory', () => {
         { role: 'user', content: 'old cluster context', createdAt: '2026-01-01T00:00:00Z' }
       ],
       longTerm: {
-        preferences: ['reply in Chinese'],
+        preferences: ['reply concisely'],
         notes: [],
         operations: [
           {
@@ -60,7 +60,7 @@ describe('AgentMemory', () => {
     )
 
     expect(memory.getShortTermMessages()).toEqual([])
-    expect(memory.getPromptBlock()).toContain('reply in Chinese')
+    expect(memory.getPromptBlock()).toContain('reply concisely')
     expect(memory.getPromptBlock()).not.toContain('zhangke Elasticsearch')
 
     memory.rememberTurn('new request', 'new answer')
