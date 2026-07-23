@@ -122,6 +122,7 @@ export interface AgentRunInput {
   runId?: string
   input: string
   skillInput?: string
+  conversationContext?: string
   providerId?: string
   model?: string
   terminalContext?: string
@@ -229,6 +230,7 @@ export interface CommandApprovalRequest {
 export interface CommandApprovalDecision {
   requestId: string
   approved: boolean
+  note?: string
   rejectionReason?: string
 }
 

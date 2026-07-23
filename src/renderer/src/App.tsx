@@ -190,6 +190,7 @@ interface CloseTabsConfirmRequest {
 interface PostConnectionTask {
   input: string
   displayInput: string
+  conversationContext?: string
   connection: ConnectionConfig
   appendUserLog: boolean
   startedAt: number
@@ -371,7 +372,8 @@ function App(): React.JSX.Element {
         connectionId?: string,
         displayInput?: string,
         appendUserLog?: boolean,
-        startedAt?: number
+        startedAt?: number,
+        options?: { allowTerminalTools?: boolean; conversationContext?: string }
       ) => Promise<void>)
     | null
   >(null)
@@ -1014,7 +1016,10 @@ function App(): React.JSX.Element {
             task.connection.id,
             task.displayInput,
             task.appendUserLog,
-            task.startedAt
+            task.startedAt,
+            {
+              conversationContext: task.conversationContext
+            }
           )
         })
       )
@@ -2380,10 +2385,11 @@ function App(): React.JSX.Element {
     if (!commandApproval) return
 
     const requestId = commandApproval.id
-    const rejectionReason = approved ? '' : commandRejectionReason.trim()
+    const note = commandRejectionReason.trim()
+    const rejectionReason = approved ? '' : note
     setCommandApproval(null)
     setCommandRejectionReason('')
-    void window.api.agent.resolveCommandApproval({ requestId, approved, rejectionReason })
+    void window.api.agent.resolveCommandApproval({ requestId, approved, note, rejectionReason })
   }
 
   async function getTerminalContextForAgent(tabId = activeTabIdRef.current): Promise<string> {
@@ -2528,6 +2534,7 @@ function App(): React.JSX.Element {
     connection: ConnectionConfig,
     postLoginInput?: string,
     postLoginDisplayInput?: string,
+    postLoginConversationContext?: string,
     postLoginAppendUserLog = true,
     postLoginStartedAt = Date.now()
   ): string {
@@ -2583,6 +2590,7 @@ function App(): React.JSX.Element {
         {
           input: postLoginInput,
           displayInput: postLoginDisplayInput ?? postLoginInput,
+          conversationContext: postLoginConversationContext,
           connection,
           appendUserLog: postLoginAppendUserLog,
           startedAt: postLoginStartedAt
@@ -2753,6 +2761,7 @@ function App(): React.JSX.Element {
       t
     )
     const input = resumeRequested && tab ? buildResumeAgentInput(tab, baseInput, t) : baseInput
+    const conversationContext = tab ? buildRecentConversationContext(tab, displayInput, t) : ''
     const startedAt = Date.now()
 
     if (tab?.agentBusy) {
@@ -2909,6 +2918,7 @@ function App(): React.JSX.Element {
               t
             )
           : undefined,
+        conversationContext,
         false,
         startedAt
       )
@@ -2934,7 +2944,8 @@ function App(): React.JSX.Element {
       false,
       startedAt,
       {
-        allowTerminalTools
+        allowTerminalTools,
+        conversationContext
       }
     )
   }
@@ -2946,7 +2957,7 @@ function App(): React.JSX.Element {
     displayInput = input,
     appendUserLog = true,
     startedAt = Date.now(),
-    options: { allowTerminalTools?: boolean } = {}
+    options: { allowTerminalTools?: boolean; conversationContext?: string } = {}
   ): Promise<void> {
     updateTab(tabId, (current) => ({
       ...current,
@@ -3011,6 +3022,13 @@ function App(): React.JSX.Element {
         runId,
         input,
         skillInput: displayInput,
+        conversationContext:
+          options.conversationContext ??
+          buildRecentConversationContext(
+            tabsRef.current.find((candidate) => candidate.id === tabId),
+            displayInput,
+            t
+          ),
         providerId: runModelSelection.providerId,
         model: runModelSelection.model,
         terminalContext,
@@ -6176,12 +6194,12 @@ function App(): React.JSX.Element {
               </section>
               <section className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.rejectionReason}
+                  {t.commandReview.decisionNote}
                 </h3>
                 <Textarea
                   value={commandRejectionReason}
                   onChange={(event) => setCommandRejectionReason(event.target.value)}
-                  placeholder={t.commandReview.rejectionReasonPlaceholder}
+                  placeholder={t.commandReview.decisionNotePlaceholder}
                   className="min-h-20 resize-y text-sm"
                 />
               </section>
@@ -6431,6 +6449,52 @@ function buildResumeAgentInput(tab: AgentTerminalTab, latestInput: string, t: Di
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+function buildRecentConversationContext(
+  tab: AgentTerminalTab | undefined,
+  currentInput: string,
+  t: Dictionary
+): string {
+  if (!tab) return ''
+
+  const normalizedCurrentInput = currentInput.trim()
+  const entries = tab.agentLog
+    .filter((entry) => {
+      if (entry.kind === 'status') return false
+      if (entry.kind !== 'user') return true
+
+      return entry.text.trim() !== normalizedCurrentInput
+    })
+    .slice(-8)
+
+  const latestAssistant = [...entries].reverse().find((entry) => entry.kind === 'assistant')
+  const compactEntries = entries
+    .filter((entry) => entry.id !== latestAssistant?.id)
+    .slice(-4)
+    .map((entry) => formatRecentConversationEntry(entry, t, 2200))
+    .filter(Boolean)
+
+  const latestAssistantContext = latestAssistant
+    ? [
+        `${t.input.resumeRecentContext} - latest assistant result`,
+        formatRecentConversationEntry(latestAssistant, t, 40_000)
+      ].join('\n')
+    : ''
+
+  return [...compactEntries, latestAssistantContext].filter(Boolean).join('\n\n')
+}
+
+function formatRecentConversationEntry(
+  entry: AgentLogEntry,
+  t: Dictionary,
+  maxChars: number
+): string {
+  const role = logRoleLabel(entry.kind, t)
+  const text = entry.text.trim()
+  if (!text) return ''
+
+  return `[${role}] ${text.length > maxChars ? text.slice(-maxChars) : text}`
 }
 
 function formatResumeContextEntry(entry: AgentLogEntry, t: Dictionary): string {

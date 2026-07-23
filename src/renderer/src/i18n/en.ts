@@ -61,6 +61,9 @@ const en = {
     auditSummary: 'Audit summary',
     autoApproved: 'Command audit passed and was auto-approved',
     command: 'Command to execute',
+    decisionNote: 'Decision note',
+    decisionNotePlaceholder:
+      'Optional. Explain why you approve or reject, constraints, or follow-up requirements, for example read-only only, wrong scope, or approved but check the destination path',
     description:
       'The AI command review subprocess has analyzed the risk. The command is written to the terminal only after approval.',
     highRisk: 'High risk',

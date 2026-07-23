@@ -4,6 +4,7 @@ export interface AgentPromptInput {
   instructionContext?: string
   skillContext?: string
   wikiContext?: string
+  conversationContext?: string
   terminalContext: string
   terminalToolsEnabled?: boolean
   planSteps?: string[]
@@ -70,6 +71,7 @@ export class AgentPromptBuilder {
       'For inspection reports, never choose a default output path yourself. If the user did not specify a local destination directory or filename, complete the inspection evidence collection, then ask the user to confirm the local Crescent-machine directory before writing the report. Do not write reports to /, /root, /tmp, the current terminal working directory, or a remote host unless the user explicitly requested that exact destination.',
       'When the user asks to save operations, inspection notes, troubleshooting steps, SOPs, or best practices to the knowledge base or wiki without naming an external product, treat it as the Crescent local knowledge base and call save_wiki_document. Ask for an external destination only when the user explicitly names one.',
       'For local user-referenced documents and media, use the dedicated parser tools before answering about content: parse_pdf_file for PDF, parse_docx_file for DOCX, parse_markdown_file for Markdown/text/config files such as YAML manifests, analyze_image_file for images, and transcribe_audio_file for audio.',
+      'When the user refers to "above", "previous", "last result", "刚才", "上面", or asks to write/copy/save prior output, use the Recent conversation context as the source of truth. Do not rerun the investigation or regenerate different content unless the user explicitly asks to refresh it.',
       'For local generated reports or documents, call write_local_file only after collecting evidence and only when the user supplied or confirmed a local destination. Preserve the requested local directory and filename intent, create a unique filename when needed, and verify the tool result instead of asking the user to run ls.',
       'Preserve user-specified destinations, filenames, namespaces, clusters, hosts, and credential sources. Do not replace them with convenient temporary paths, inferred defaults, or invented credentials. If a required credential or target is missing, ask for it or use an existing configured source instead of fabricating one.',
       'Work as a closed-loop operator: identify the target, run one useful check or action, verify the observation, then decide the next check or action.',
@@ -90,6 +92,9 @@ export class AgentPromptBuilder {
       input.skillContext ? `Agent skills:\n${input.skillContext}` : '',
       input.wikiContext
         ? `Knowledge base SOPs and best practices:\n${input.wikiContext}\n\nUse these as reference material when relevant. Treat them as stored operational knowledge, but verify current terminal state before making risky changes.`
+        : '',
+      input.conversationContext
+        ? `Recent conversation context:\n${input.conversationContext}\n\nIf the latest user request asks to write, copy, save, move, or format the previous result, preserve this prior assistant content instead of redoing the investigation.`
         : '',
       input.terminalContext
         ? `Recent terminal context, use it to answer accurately but do not claim you executed new commands:\n${input.terminalContext}`

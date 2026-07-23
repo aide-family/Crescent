@@ -60,6 +60,9 @@ const zhCN = {
     auditSummary: '审核摘要',
     autoApproved: '命令审核通过，已自动放行',
     command: '待执行命令',
+    decisionNote: '审批备注',
+    decisionNotePlaceholder:
+      '可选。说明批准或拒绝的原因、约束或后续要求，例如只允许只读、范围不对、批准但注意目标路径',
     description: 'AI 命令审核子进程已完成风险分析。批准后命令才会写入终端。',
     highRisk: '高风险',
     impactAnalysis: '影响分析',
