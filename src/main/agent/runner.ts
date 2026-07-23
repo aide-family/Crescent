@@ -13,6 +13,7 @@ export interface AgentRunControls {
   instructionContext?: string
   skillContext?: string
   wikiContext?: string
+  conversationContext?: string
   consumeSupplementalInputs?: () => string[]
 }
 

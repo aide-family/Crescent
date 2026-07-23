@@ -64,6 +64,21 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('invented credentials')
   })
 
+  it('uses recent conversation context as the source for requests about previous output', () => {
+    const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
+      mode: 'react',
+      memoryBlock: '',
+      conversationContext: '[Assistant] Previous architecture report',
+      terminalContext: ''
+    })
+
+    expect(prompt).toContain('Recent conversation context')
+    expect(prompt).toContain('Previous architecture report')
+    expect(prompt).toContain('use the Recent conversation context as the source of truth')
+    expect(prompt).toContain('preserve this prior assistant content')
+    expect(prompt).toContain('instead of redoing the investigation')
+  })
+
   it('does not advertise terminal commands when terminal tools are disabled', () => {
     const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
       mode: 'react',

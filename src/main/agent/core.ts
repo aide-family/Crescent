@@ -18,11 +18,13 @@ import type { AgentRunControls } from './runner'
 
 const MAX_TOOL_STEPS = 30
 const MAX_REPEATED_TOOL_CALLS = 3
+const LOCAL_FILE_WRITE_TOOL_NAME = 'write_local_file'
 const SAVE_WIKI_DOCUMENT_TOOL_NAME = 'save_wiki_document'
 
 export class TerminalAgentCore {
   private readonly promptBuilder = new AgentPromptBuilder()
   private readonly executedToolNames = new Set<string>()
+  private readonly receivedSupplementalInputs: string[] = []
 
   constructor(
     private readonly config: AgentConfig,
@@ -36,6 +38,8 @@ export class TerminalAgentCore {
 
   async run(userInput: string, terminalContext = ''): Promise<string> {
     assertConfig(this.config)
+    this.executedToolNames.clear()
+    this.receivedSupplementalInputs.splice(0)
     this.throwIfCanceled()
     this.emit({
       type: 'status',
@@ -97,7 +101,8 @@ export class TerminalAgentCore {
       terminalContext,
       planSteps
     })
-    const completedText = await this.ensureRequestedWikiSave(userInput, finalText)
+    const artifactText = await this.ensureSupplementalLocalArtifactSave(userInput, finalText)
+    const completedText = await this.ensureRequestedWikiSave(userInput, artifactText)
 
     this.memory.rememberTurn(userInput, completedText)
     return completedText
@@ -123,6 +128,7 @@ export class TerminalAgentCore {
               instructionContext: this.controls?.instructionContext,
               skillContext: this.controls?.skillContext,
               wikiContext: this.controls?.wikiContext,
+              conversationContext: this.controls?.conversationContext,
               terminalToolsEnabled: Boolean(this.terminalExecutor),
               terminalContext: input.terminalContext
             })
@@ -160,6 +166,7 @@ export class TerminalAgentCore {
           instructionContext: this.controls?.instructionContext,
           skillContext: this.controls?.skillContext,
           wikiContext: this.controls?.wikiContext,
+          conversationContext: this.controls?.conversationContext,
           planSteps: input.planSteps,
           terminalToolsEnabled: Boolean(this.terminalExecutor),
           terminalContext: input.terminalContext
@@ -177,7 +184,11 @@ export class TerminalAgentCore {
 
     for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
       this.throwIfCanceled()
-      appendSupplementalInputs(messages, this.controls?.consumeSupplementalInputs?.())
+      const supplementalInputs = this.controls?.consumeSupplementalInputs?.()
+      if (supplementalInputs?.length) {
+        this.receivedSupplementalInputs.push(...supplementalInputs)
+      }
+      appendSupplementalInputs(messages, supplementalInputs)
       this.emit({
         type: 'thought',
         message: hasToolObservations
@@ -357,6 +368,42 @@ export class TerminalAgentCore {
         .join('\n')
     }
   }
+
+  private async ensureSupplementalLocalArtifactSave(
+    userInput: string,
+    finalText: string
+  ): Promise<string> {
+    if (!this.localFileWriter) return finalText
+    if (this.executedToolNames.has(LOCAL_FILE_WRITE_TOOL_NAME)) return finalText
+
+    const destination = findLatestSupplementalLocalArtifactDestination(
+      this.receivedSupplementalInputs
+    )
+    if (!destination) return finalText
+
+    const targetPath = buildSupplementalArtifactPath(destination, userInput)
+    this.emit({
+      type: 'tool',
+      name: LOCAL_FILE_WRITE_TOOL_NAME,
+      message: `Writing local artifact requested during the run: ${targetPath}`
+    })
+
+    const result = await this.localFileWriter.writeFile(targetPath, finalText.trim(), {
+      overwrite: false,
+      encoding: 'utf-8'
+    })
+
+    return [
+      finalText.trim(),
+      '',
+      '---',
+      result.ok
+        ? `Saved requested architecture document to: \`${result.path}\``
+        : `Requested document save failed for \`${result.path}\`: ${result.error ?? 'unknown error'}`
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
 }
 
 function isWikiSaveIntent(input: string): boolean {
@@ -383,6 +430,63 @@ function buildFallbackWikiContent(userInput: string, finalText: string): string 
     '',
     finalText.trim()
   ].join('\n')
+}
+
+function findLatestSupplementalLocalArtifactDestination(supplements: string[]): string {
+  for (const supplement of [...supplements].reverse()) {
+    const destination = extractLocalArtifactDestination(supplement)
+    if (destination) return destination
+  }
+
+  return ''
+}
+
+function extractLocalArtifactDestination(input: string): string {
+  const patterns = [
+    /(?:写入|保存|输出|导出|存到|保存到|写到)\s*(?:到|至|在|入)?\s*([~/$A-Za-z0-9_.-][^\s，,；;。]*)/i,
+    /\b(?:save|write|output|export|store)\s+(?:to|into|at)\s+([~./$A-Za-z0-9_-][^\s,;]*)/i
+  ]
+
+  for (const pattern of patterns) {
+    const match = input.match(pattern)
+    if (match?.[1]) return normalizeSupplementalDestination(match[1])
+  }
+
+  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s，,；;。]*)/)
+  return loosePathMatch?.[1] ? normalizeSupplementalDestination(loosePathMatch[1]) : ''
+}
+
+function normalizeSupplementalDestination(value: string): string {
+  return value
+    .trim()
+    .replace(/[。.,，;；]+$/, '')
+    .replace(/(?:目录|路径)?下$/, '')
+}
+
+function buildSupplementalArtifactPath(destination: string, userInput: string): string {
+  if (looksLikeFilePath(destination)) return destination
+
+  const directory = destination.replace(/\/+$/, '')
+  return `${directory}/${inferLocalArtifactFilename(userInput)}`
+}
+
+function looksLikeFilePath(path: string): boolean {
+  return /\.[A-Za-z0-9]{1,8}$/.test(path.replace(/\/+$/, ''))
+}
+
+function inferLocalArtifactFilename(userInput: string): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\..+$/, '')
+    .replace('T', '-')
+  const normalized = userInput.toLowerCase()
+  const prefix =
+    /k8s|kubernetes|集群|架构|architecture|network/.test(normalized)
+      ? 'cluster-network-architecture'
+      : 'crescent-agent-result'
+
+  return `${prefix}-${timestamp}.md`
 }
 
 function formatToolCallDetail(toolName: string, rawArguments: string): string {
@@ -555,7 +659,8 @@ function appendSupplementalInputs(
   messages.push({
     role: 'user',
     content: [
-      'Additional context supplied by the user while this run was still active.',
+      'Additional instructions supplied by the user while this run was still active.',
+      'Treat these supplements as high-priority updates to the current goal. If they add or change an artifact destination, update the remaining steps and final completion criteria accordingly.',
       ...supplementalInputs.map((input, index) => `Supplement ${index + 1}:\n${input}`)
     ].join('\n\n')
   })

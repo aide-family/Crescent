@@ -83,6 +83,7 @@ const pendingCommandApprovals = new Map<
 
 interface CommandApprovalDecisionResult {
   approved: boolean
+  note?: string
   rejectionReason?: string
 }
 
@@ -324,6 +325,7 @@ export function registerAgentIpc(): void {
     pendingCommandApprovals.delete(requestId)
     pending.resolve({
       approved: Boolean(payload.approved),
+      note: typeof payload.note === 'string' ? payload.note : '',
       rejectionReason: typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
     })
     return { ok: true }
@@ -505,7 +507,7 @@ export function registerAgentIpc(): void {
         })
 
         if (!approval.approved) {
-          const rejectionReason = approval.rejectionReason?.trim()
+          const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
           event.sender.send('agent:event', {
             type: 'status',
             message: 'Command rejected by user.',
@@ -531,7 +533,28 @@ export function registerAgentIpc(): void {
           runId,
           tabId: payload?.tabId
         })
-        return execute(executableCommand)
+        const approvalNote = approval.note?.trim()
+        if (approvalNote) {
+          activeRuns
+            .get(runId)
+            ?.supplements.push(
+              [
+                'Command execution was approved by the user with an additional note.',
+                `Approved command: ${executableCommand}`,
+                `User approval note: ${approvalNote}`
+              ].join('\n')
+            )
+        }
+
+        const executionResult = await execute(executableCommand)
+        if (!approvalNote) return executionResult
+
+        return {
+          ...executionResult,
+          output: [`User approval note before execution: ${approvalNote}`, executionResult.output]
+            .filter(Boolean)
+            .join('\n')
+        }
       }
       const text = await runTerminalAgent(
         agentConfig,
@@ -576,6 +599,7 @@ export function registerAgentIpc(): void {
           instructionContext,
           skillContext: skillContext.promptBlock,
           wikiContext,
+          conversationContext: payload?.conversationContext?.trim(),
           consumeSupplementalInputs: () => {
             const run = activeRuns.get(runId)
             if (!run?.supplements.length) return []
