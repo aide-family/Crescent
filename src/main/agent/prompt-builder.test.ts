@@ -63,4 +63,18 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('Do not replace them with convenient temporary paths')
     expect(prompt).toContain('invented credentials')
   })
+
+  it('does not advertise terminal commands when terminal tools are disabled', () => {
+    const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
+      mode: 'react',
+      memoryBlock: '',
+      terminalContext: '',
+      terminalToolsEnabled: false
+    })
+
+    expect(prompt).toContain('Terminal tools are not available for this run')
+    expect(prompt).toContain('Use the available non-terminal tools')
+    expect(prompt).not.toContain('call execute_terminal_command')
+    expect(prompt).not.toContain('run one shell command per tool call')
+  })
 })

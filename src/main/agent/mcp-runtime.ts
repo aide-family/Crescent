@@ -4,6 +4,8 @@ import type { AgentConfig, AgentMcpServerConfig, OpenAiTool, ToolCatalogEntry } 
 
 const MCP_PROTOCOL_VERSION = '2024-11-05'
 const MCP_REQUEST_TIMEOUT_MS = 12_000
+const MCP_INITIALIZE_TIMEOUT_MS = 45_000
+const MCP_TOOLS_LIST_TIMEOUT_MS = 30_000
 
 interface JsonRpcResponse {
   id?: number | string
@@ -113,7 +115,7 @@ async function listMcpServerTools(server: AgentMcpServerConfig): Promise<McpTool
   try {
     await client.start()
     await client.initialize()
-    const result = await client.request('tools/list', {})
+    const result = await client.request('tools/list', {}, MCP_TOOLS_LIST_TIMEOUT_MS)
     const tools = isRecord(result) && Array.isArray(result.tools) ? result.tools : []
 
     return tools.map(normalizeMcpToolDefinition).filter((tool) => tool.name)
@@ -125,6 +127,7 @@ async function listMcpServerTools(server: AgentMcpServerConfig): Promise<McpTool
 class StdioMcpClient {
   private child: ChildProcessWithoutNullStreams | undefined
   private buffer = Buffer.alloc(0)
+  private stderr = ''
   private nextId = 1
   private readonly pending = new Map<
     number,
@@ -145,25 +148,36 @@ class StdioMcpClient {
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout.on('data', (chunk: Buffer) => this.consume(chunk))
-    this.child.once('error', (error) => this.rejectAll(error))
+    this.child.stderr.on('data', (chunk: Buffer) => {
+      this.stderr = `${this.stderr}${chunk.toString('utf8')}`.slice(-4000)
+    })
+    this.child.once('error', (error) => this.rejectAll(this.withDiagnostics(error)))
     this.child.once('exit', (code, signal) => {
-      this.rejectAll(new Error(`MCP server exited before completing requests (${code ?? signal})`))
+      this.rejectAll(
+        this.withDiagnostics(
+          new Error(`MCP server exited before completing requests (${code ?? signal})`)
+        )
+      )
     })
   }
 
   async initialize(): Promise<void> {
-    await this.request('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: {
-        name: 'crescent',
-        version: '1.0.0'
-      }
-    })
+    await this.request(
+      'initialize',
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: {
+          name: 'crescent',
+          version: '1.0.0'
+        }
+      },
+      MCP_INITIALIZE_TIMEOUT_MS
+    )
     this.notify('notifications/initialized', {})
   }
 
-  request(method: string, params: unknown): Promise<unknown> {
+  request(method: string, params: unknown, timeoutMs = MCP_REQUEST_TIMEOUT_MS): Promise<unknown> {
     const child = this.requireChild()
     const id = this.nextId
     this.nextId += 1
@@ -178,8 +192,8 @@ class StdioMcpClient {
     const promise = new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`MCP request timed out: ${method}`))
-      }, MCP_REQUEST_TIMEOUT_MS)
+        reject(this.withDiagnostics(new Error(`MCP request timed out: ${method}`)))
+      }, timeoutMs)
       this.pending.set(id, { resolve, reject, timeout })
     })
 
@@ -215,12 +229,19 @@ class StdioMcpClient {
   private consume(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk])
 
-    while (true) {
-      const parsed = readJsonRpcMessage(this.buffer)
-      if (!parsed) return
+    try {
+      while (true) {
+        const parsed = readJsonRpcMessage(this.buffer)
+        if (!parsed) return
 
-      this.buffer = this.buffer.subarray(parsed.bytesRead)
-      this.handleMessage(parsed.message)
+        this.buffer = this.buffer.subarray(parsed.bytesRead)
+        this.handleMessage(parsed.message)
+      }
+    } catch (error) {
+      this.rejectAll(
+        this.withDiagnostics(error instanceof Error ? error : new Error(String(error)))
+      )
+      this.close()
     }
   }
 
@@ -249,29 +270,63 @@ class StdioMcpClient {
       this.pending.delete(id)
     }
   }
+
+  private withDiagnostics(error: Error): Error {
+    const commandLine = [this.server.command, ...this.server.args].filter(Boolean).join(' ')
+    const stderr = this.stderr.trim()
+    const details = [
+      error.message,
+      commandLine ? `Command: ${commandLine}` : '',
+      stderr ? `Stderr: ${stderr}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    return new Error(details)
+  }
 }
 
 function encodeJsonRpcMessage(payload: unknown): string {
-  const body = JSON.stringify(payload)
-  return `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`
+  return `${JSON.stringify(payload)}\n`
 }
 
 function readJsonRpcMessage(buffer: Buffer): { message: unknown; bytesRead: number } | undefined {
-  const headerEnd = buffer.indexOf('\r\n\r\n')
-  if (headerEnd < 0) return undefined
+  const prefix = buffer.subarray(0, Math.min(buffer.length, 64)).toString('utf8')
+  if (/^content-length:/i.test(prefix)) {
+    const crlfHeaderEnd = buffer.indexOf('\r\n\r\n')
+    const lfHeaderEnd = buffer.indexOf('\n\n')
+    const useCrlf = crlfHeaderEnd >= 0 && (lfHeaderEnd < 0 || crlfHeaderEnd <= lfHeaderEnd)
+    const headerEnd = useCrlf ? crlfHeaderEnd : lfHeaderEnd
+    if (headerEnd < 0) return undefined
 
-  const header = buffer.subarray(0, headerEnd).toString('utf8')
-  const lengthMatch = /^content-length:\s*(\d+)$/im.exec(header)
-  if (!lengthMatch) throw new Error('Invalid MCP message: missing Content-Length header.')
+    const header = buffer.subarray(0, headerEnd).toString('utf8')
+    const lengthMatch = /^content-length:\s*(\d+)$/im.exec(header)
+    if (!lengthMatch) throw new Error('Invalid MCP message: missing Content-Length header.')
 
-  const contentLength = Number(lengthMatch[1])
-  const bodyStart = headerEnd + 4
-  const bodyEnd = bodyStart + contentLength
-  if (buffer.length < bodyEnd) return undefined
+    const contentLength = Number(lengthMatch[1])
+    const bodyStart = headerEnd + (useCrlf ? 4 : 2)
+    const bodyEnd = bodyStart + contentLength
+    if (buffer.length < bodyEnd) return undefined
 
-  return {
-    message: JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8')),
-    bytesRead: bodyEnd
+    return {
+      message: JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8')),
+      bytesRead: bodyEnd
+    }
+  }
+
+  const lineEnd = buffer.indexOf('\n')
+  if (lineEnd < 0) return undefined
+
+  const line = buffer.subarray(0, lineEnd).toString('utf8').trim()
+  if (!line) return { message: undefined, bytesRead: lineEnd + 1 }
+
+  try {
+    return {
+      message: JSON.parse(line),
+      bytesRead: lineEnd + 1
+    }
+  } catch {
+    return { message: undefined, bytesRead: lineEnd + 1 }
   }
 }
 

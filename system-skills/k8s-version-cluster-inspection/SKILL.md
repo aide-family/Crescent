@@ -1,6 +1,7 @@
 ---
 name: k8s-version-cluster-inspection
-description: Inspect Kubernetes and K8s clusters across different versions, including cluster version, nodes, workloads, storage, networking, events, add-ons, and upgrade-sensitive API differences.
+description: "Kubernetes/K8s version-aware cluster inspection and troubleshooting: inspect cluster version, nodes, roles, workloads, pods, events, storage, networking, ingress, services, CoreDNS, CNI, add-ons, API resources, deprecated APIs, and upgrade-sensitive behavior. Use when the user asks to inspect, audit,巡检, 排查, troubleshoot, health-check, or produce an operations report for Kubernetes/K8s 集群状态、版本、节点、Pod 异常、存储、网络、事件、升级兼容性。"
+aliases: ["Kubernetes cluster inspection", "K8s health check", "K8s version audit", "kubectl cluster report", "K8s 集群巡检", "Kubernetes 集群检查", "集群版本检查", "节点 Pod 事件存储巡检", "集群健康检查"]
 ---
 
 # Kubernetes Version-Aware Cluster Inspection

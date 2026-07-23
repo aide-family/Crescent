@@ -121,9 +121,11 @@ export interface OperationRecord {
 export interface AgentRunInput {
   runId?: string
   input: string
+  skillInput?: string
   providerId?: string
   model?: string
   terminalContext?: string
+  allowTerminalTools?: boolean
   connectionId?: string
   tabId?: string
   locale?: string
@@ -250,6 +252,7 @@ export interface AgentSkillOption {
   id: string
   name: string
   description: string
+  aliases?: string[]
   path: string
   source: string
   removable?: boolean
@@ -298,6 +301,15 @@ export interface AgentSkillContext {
   promptBlock: string
 }
 
+export interface AgentSkillUsage {
+  name: string
+  description: string
+  path: string
+  source: string
+  reason: 'referenced' | 'matched'
+  removable?: boolean
+}
+
 export interface LocalInstructionDocument {
   name: string
   path: string
@@ -309,6 +321,7 @@ export type AgentEvent =
   | ({ type: 'status'; message: string } & AgentEventMeta)
   | ({ type: 'thought'; message: string } & AgentEventMeta)
   | ({ type: 'plan'; steps: string[] } & AgentEventMeta)
+  | ({ type: 'skills'; message: string; skills: AgentSkillUsage[] } & AgentEventMeta)
   | ({ type: 'tool'; name: string; message: string } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)

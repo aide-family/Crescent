@@ -13,6 +13,10 @@ import { getCrescentSystemSkillsDir } from '../crescent-paths'
 
 const MAX_MATCHED_SKILLS = 3
 const MAX_SKILL_CONTENT_CHARS = 16_000
+const MAX_SKILL_DESCRIPTION_CHARS = 800
+const MIN_SKILL_MATCH_SCORE = 40
+const MIN_RELATIVE_SKILL_MATCH_SCORE = 0.65
+const MIN_MATCHED_SKILL_TOKENS = 2
 const DEFAULT_SKILL_ROOT = '~/.agents/skills'
 const ESCAPE_CHAR = String.fromCharCode(27)
 const BELL_CHAR = String.fromCharCode(7)
@@ -557,10 +561,19 @@ export function readAgentSkillContent(path: string, skillRoot?: string): string 
 export function buildAgentSkillContext(input: string, skillRoot?: string): AgentSkillContext {
   const catalog = listAgentSkills(skillRoot)
   const referenced = findReferencedSkills(input, catalog)
+  const scored = scoreSkills(input, catalog)
+  const bestScore = scored[0]?.score ?? 0
   const matched = referenced.length
     ? referenced.map((skill) => ({ skill, score: 1000, reason: 'referenced' as const }))
-    : scoreSkills(input, catalog)
-        .filter((item) => item.score > 0)
+    : scored
+        .filter((item) => item.score >= MIN_SKILL_MATCH_SCORE)
+        .filter((item) => item.score >= bestScore * MIN_RELATIVE_SKILL_MATCH_SCORE)
+        .filter(
+          (item) =>
+            item.strongMatch ||
+            item.matchedNameTokenCount > 0 ||
+            item.matchedTokenCount >= MIN_MATCHED_SKILL_TOKENS
+        )
         .slice(0, MAX_MATCHED_SKILLS)
         .map((item) => ({ ...item, reason: 'matched' as const }))
 
@@ -599,6 +612,7 @@ function readSkill(path: string, root: string, removable: boolean): AgentSkillOp
     id: name,
     name,
     description: extractSkillDescription(content),
+    aliases: extractSkillAliases(content),
     path,
     source: root,
     removable
@@ -771,6 +785,9 @@ function scoreSkills(
 ): Array<{
   skill: AgentSkillOption
   score: number
+  strongMatch: boolean
+  matchedNameTokenCount: number
+  matchedTokenCount: number
 }> {
   const normalizedInput = normalizeSearchText(input)
   const inputTokens = new Set(tokenizeSearchText(input))
@@ -779,19 +796,45 @@ function scoreSkills(
     .map((skill) => {
       const name = normalizeSearchText(skill.name)
       const description = normalizeSearchText(skill.description)
-      const sourceText = `${skill.name} ${skill.description}`
+      const aliasText = skill.aliases?.join(' ') ?? ''
+      const sourceText = `${skill.name} ${skill.description} ${aliasText}`
+      const nameTokens = new Set(tokenizeSearchText(skill.name))
+      const sourceTokens = tokenizeSearchText(sourceText)
+      const strongMatch = Boolean(
+        (name && normalizedInput.includes(name)) ||
+          (description && normalizedInput.includes(description)) ||
+          (normalizedInput.length >= 4 &&
+            ((name && name.includes(normalizedInput)) ||
+              (description && description.includes(normalizedInput))))
+      )
+      const matchedTokens = new Set<string>()
+      const matchedNameTokens = new Set<string>()
       let score = 0
 
       if (name && normalizedInput.includes(name)) score += 120
       if (description && normalizedInput.includes(description)) score += 80
 
-      for (const token of tokenizeSearchText(sourceText)) {
+      for (const token of sourceTokens) {
         if (token.length < 2) continue
-        if (inputTokens.has(token)) score += 20
-        else if (normalizedInput.includes(token)) score += 8
+        const tokenScore = nameTokens.has(token) ? 40 : 20
+        if (inputTokens.has(token)) {
+          matchedTokens.add(token)
+          if (nameTokens.has(token)) matchedNameTokens.add(token)
+          score += tokenScore
+        } else if (normalizedInput.includes(token)) {
+          matchedTokens.add(token)
+          if (nameTokens.has(token)) matchedNameTokens.add(token)
+          score += Math.floor(tokenScore * 0.4)
+        }
       }
 
-      return { skill, score }
+      return {
+        skill,
+        score,
+        strongMatch,
+        matchedNameTokenCount: matchedNameTokens.size,
+        matchedTokenCount: matchedTokens.size
+      }
     })
     .sort(
       (left, right) => right.score - left.score || left.skill.name.localeCompare(right.skill.name)
@@ -870,14 +913,16 @@ function formatSkillPromptBlock(
 
 function extractSkillName(content: string): string {
   const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim()
-  const name = content.match(/^name:\s*(.+)$/m)?.[1]?.trim()
+  const name = stripFrontmatterScalar(content.match(/^name:\s*(.+)$/m)?.[1])
 
   return name || heading || ''
 }
 
 function extractSkillDescription(content: string): string {
-  const explicitDescription = content.match(/^description:\s*(.+)$/m)?.[1]?.trim()
-  if (explicitDescription) return explicitDescription.slice(0, 240)
+  const explicitDescription = stripFrontmatterScalar(
+    content.match(/^description:\s*(.+)$/m)?.[1]
+  )
+  if (explicitDescription) return explicitDescription.slice(0, MAX_SKILL_DESCRIPTION_CHARS)
 
   const paragraph =
     content
@@ -887,5 +932,51 @@ function extractSkillDescription(content: string): string {
         (line) => line && !line.startsWith('#') && !line.startsWith('---') && !line.includes(':')
       ) ?? ''
 
-  return paragraph.slice(0, 240)
+  return paragraph.slice(0, MAX_SKILL_DESCRIPTION_CHARS)
+}
+
+function extractSkillAliases(content: string): string[] {
+  const values = [
+    ...extractFrontmatterList(content, 'alias'),
+    ...extractFrontmatterList(content, 'aliases'),
+    ...extractFrontmatterList(content, 'keyword'),
+    ...extractFrontmatterList(content, 'keywords'),
+    ...extractFrontmatterList(content, 'tags')
+  ]
+  const seen = new Set<string>()
+
+  return values.filter((value) => {
+    const normalized = normalizeSearchText(value)
+    if (!normalized || seen.has(normalized)) return false
+    seen.add(normalized)
+    return true
+  })
+}
+
+function extractFrontmatterList(content: string, key: string): string[] {
+  const raw = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]
+  if (!raw) return []
+
+  const trimmed = raw.trim()
+  const withoutBrackets =
+    trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed
+
+  return withoutBrackets
+    .split(/[,，;；|]/)
+    .map(stripFrontmatterScalar)
+    .filter((value): value is string => Boolean(value))
+}
+
+function stripFrontmatterScalar(value: string | undefined): string {
+  const trimmed = value?.trim() ?? ''
+  if (!trimmed) return ''
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+
+  return trimmed
 }

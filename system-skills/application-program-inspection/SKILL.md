@@ -1,6 +1,7 @@
 ---
 name: application-program-inspection
-description: Inspect application programs and services across common stacks, including processes, ports, service managers, logs, configuration, health endpoints, dependencies, runtime metrics, and deployment state.
+description: "Application program and service inspection: inspect processes, ports, systemd services, logs, configuration, health endpoints, dependencies, runtime metrics, deployment state, and common middleware. Use when the user asks to inspect, troubleshoot, audit,巡检, 排查, or diagnose an application, API service, web service, daemon, worker, middleware, gateway, Nginx, Redis, MySQL, PostgreSQL, Elasticsearch, Java, Node.js, Go, Python, or Kubernetes workload; supports 应用服务、服务端口、进程、日志、配置、健康检查接口、依赖连通性、运行状态、应用程序检查。"
+aliases: ["application service inspection", "service port log health check", "middleware troubleshooting", "API service diagnosis", "应用服务巡检", "应用程序检查", "服务端口日志排查", "健康检查接口诊断", "中间件服务检查"]
 ---
 
 # Application Program Inspection

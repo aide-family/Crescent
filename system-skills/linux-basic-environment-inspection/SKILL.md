@@ -1,6 +1,7 @@
 ---
 name: linux-basic-environment-inspection
-description: Inspect Linux base environments, including OS version, kernel, CPU, memory, disk, filesystem, network, DNS, time sync, services, logs, users, limits, and security posture.
+description: "Linux base environment inspection and host health check: inspect OS version, kernel, uptime, CPU, memory, swap, disk, inode, filesystem, mount points, network interfaces, routes, DNS, ports, firewall, time sync, services, logs, users, limits, and security posture. Use when the user asks to inspect,巡检, 排查, diagnose, baseline, or preflight a Linux host/server/VM/physical machine, Linux 基础环境、主机资源、内存、磁盘、网络、DNS、时间同步、系统服务、日志。"
+aliases: ["Linux host inspection", "Linux baseline health check", "server resource diagnosis", "OS network DNS disk memory check", "Linux 主机巡检", "Linux 基础环境检查", "服务器内存磁盘网络检查", "DNS 时间同步服务日志巡检"]
 ---
 
 # Linux Basic Environment Inspection
