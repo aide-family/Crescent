@@ -1,6 +1,18 @@
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  FormEvent,
+  KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent
+} from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
+import mermaid from 'mermaid'
 import {
   ArrowUpIcon,
   BookOpenIcon,
@@ -16,6 +28,7 @@ import {
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
+  Maximize2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PencilIcon,
@@ -27,6 +40,8 @@ import {
   TestTube2Icon,
   TriangleAlertIcon,
   Trash2Icon,
+  ZoomInIcon,
+  ZoomOutIcon,
   XIcon
 } from 'lucide-react'
 
@@ -124,6 +139,11 @@ function hasConfiguredModelSelection(config: AgentConfig): boolean {
 }
 
 const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
+let mermaidInitialized = false
+const MERMAID_MIN_ZOOM = 0.4
+const MERMAID_MAX_ZOOM = 10
+const MERMAID_ZOOM_STEP = 0.15
+const MERMAID_ZOOM_EPSILON = 0.001
 
 type AgentLogEntry =
   | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
@@ -195,7 +215,7 @@ interface AgentToolReference {
   id: string
   name: string
   description: string
-  source: 'built-in' | 'openapi'
+  source: 'built-in' | 'openapi' | 'mcp'
 }
 
 interface AgentTerminalTab {
@@ -404,6 +424,8 @@ function App(): React.JSX.Element {
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [skillOpen, setSkillOpen] = useState(false)
+  const [mcpOpen, setMcpOpen] = useState(false)
+  const [mcpEditorOpen, setMcpEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
@@ -525,6 +547,31 @@ function App(): React.JSX.Element {
     config.mcpServers[0] ??
     emptyMcpServer
   const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
+  const mcpToolRefs = useMemo(
+    () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
+    [availableToolRefs]
+  )
+  const mcpServerToolCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const tool of validation?.tools ?? []) {
+      const match = /^mcp:\/\/([^/]+)\//.exec(tool.path)
+      if (!match) continue
+      counts.set(match[1], (counts.get(match[1]) ?? 0) + 1)
+    }
+    return counts
+  }, [validation])
+  const mcpServerTools = useMemo(() => {
+    const tools = new Map<string, NonNullable<AgentValidationResult['tools']>>()
+    for (const tool of validation?.tools ?? []) {
+      const match = /^mcp:\/\/([^/]+)\//.exec(tool.path)
+      if (!match) continue
+      const serverTools = tools.get(match[1]) ?? []
+      serverTools.push(tool)
+      tools.set(match[1], serverTools)
+    }
+    return tools
+  }, [validation])
+  const settingsMcpTools = mcpServerTools.get(settingsMcpServer.id) ?? []
   const filteredWikiDocuments = useMemo(
     () => filterWikiDocuments(wikiDocuments, wikiSearchQuery),
     [wikiDocuments, wikiSearchQuery]
@@ -562,6 +609,11 @@ function App(): React.JSX.Element {
         .map((tool) => buildToolSlashCommand(tool))
         .filter((command) => matchesToolSlashCommand(command, slashCommandQuery ?? ''))
     }
+    if (isMcpSlashQuery(slashCommandQuery)) {
+      return mcpToolRefs
+        .map((tool) => buildMcpSlashCommand(tool, t))
+        .filter((command) => matchesMcpSlashCommand(command, slashCommandQuery ?? ''))
+    }
     if (isWikiSlashQuery(slashCommandQuery)) {
       return wikiDocuments
         .map((document) => buildWikiSlashCommand(document, t))
@@ -581,7 +633,7 @@ function App(): React.JSX.Element {
     return buildSlashCommandOptions(t).filter((command) =>
       matchesSlashCommand(command, slashCommandQuery)
     )
-  }, [availableToolRefs, connections, skills, slashCommandQuery, t, wikiDocuments])
+  }, [availableToolRefs, connections, mcpToolRefs, skills, slashCommandQuery, t, wikiDocuments])
   const slashMenuVisible =
     slashCommandOpen && slashCommandQuery !== undefined && slashCommandOptions.length > 0
   const selectedSlashCommandIndex = slashCommandOptions.length
@@ -875,6 +927,20 @@ function App(): React.JSX.Element {
             {
               title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
               detail: formatCommandAuditActionDetail(event.command, event.audit, t)
+            }
+          ]
+        }))
+        return
+      }
+
+      if (event.type === 'skills') {
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          actions: [
+            ...run.actions,
+            {
+              title: `${t.input.loadedSkills}: ${event.skills.map((skill) => skill.name).join(', ')}`,
+              detail: formatLoadedSkillsActionDetail(event.skills, t)
             }
           ]
         }))
@@ -2744,12 +2810,19 @@ function App(): React.JSX.Element {
     )
     updateTab(tabId, (current) => ({ ...current, agentThinking: true }))
     const terminalContext = await window.api.terminal.getContext(tabId)
+    const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
+    const allowTerminalTools = !explicitNonTerminalRequest
     const shouldUseCurrentTerminal =
       terminalContext.mode !== 'none' &&
       hasUsableCurrentTerminal(tab, terminalContext.output) &&
+      !explicitNonTerminalRequest &&
       !isExplicitConnectionRequest(displayInput)
     const shouldResolveConnectionIntent =
-      !resumeRequested && !tab?.isSsh && !tab?.connectionId && !shouldUseCurrentTerminal
+      !resumeRequested &&
+      !tab?.isSsh &&
+      !tab?.connectionId &&
+      !shouldUseCurrentTerminal &&
+      !explicitNonTerminalRequest
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
       connectionIntent = shouldResolveConnectionIntent
@@ -2806,13 +2879,16 @@ function App(): React.JSX.Element {
                   detail: [
                     matchedConnection.name,
                     `${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`,
-                    connectionIntent.analysis.reason
+                    connectionIntent.analysis.reason,
+                    executeAfterLogin ? t.terminal.postLoginSkillHint : ''
                   ]
                     .filter(Boolean)
                     .join('\n')
                 }
               ],
-              result: t.terminal.connectionIntentResult,
+              result: executeAfterLogin
+                ? t.terminal.connectionIntentWithTaskResult
+                : t.terminal.connectionIntentResult,
               elapsedMs: Date.now() - startedAt
             },
             t
@@ -2856,7 +2932,10 @@ function App(): React.JSX.Element {
       tab?.connectionId || undefined,
       displayInput,
       false,
-      startedAt
+      startedAt,
+      {
+        allowTerminalTools
+      }
     )
   }
 
@@ -2866,7 +2945,8 @@ function App(): React.JSX.Element {
     connectionId?: string,
     displayInput = input,
     appendUserLog = true,
-    startedAt = Date.now()
+    startedAt = Date.now(),
+    options: { allowTerminalTools?: boolean } = {}
   ): Promise<void> {
     updateTab(tabId, (current) => ({
       ...current,
@@ -2892,7 +2972,15 @@ function App(): React.JSX.Element {
         text: formatAgentRunMarkdown(
           {
             logId: -1,
-            actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }]
+            actions: [
+              {
+                title: t.input.startedRun,
+                detail:
+                  options.allowTerminalTools === false
+                    ? t.input.contextSupplementDetail
+                    : t.input.terminalContext
+              }
+            ]
           },
           t
         )
@@ -2901,21 +2989,32 @@ function App(): React.JSX.Element {
     )
     activeAgentRunRef.current.set(tabId, {
       logId: runLogId,
-      actions: [{ title: t.input.startedRun, detail: t.input.terminalContext }],
+      actions: [
+        {
+          title: t.input.startedRun,
+          detail:
+            options.allowTerminalTools === false
+              ? t.input.contextSupplementDetail
+              : t.input.terminalContext
+        }
+      ],
       startedAt
     })
 
     try {
-      await ensureTerminalReadyForAgent(tabId)
-      const terminalContext = await getTerminalContextForAgent(tabId)
+      const allowTerminalTools = options.allowTerminalTools !== false
+      if (allowTerminalTools) await ensureTerminalReadyForAgent(tabId)
+      const terminalContext = allowTerminalTools ? await getTerminalContextForAgent(tabId) : ''
       const runTab = tabsRef.current.find((candidate) => candidate.id === tabId)
       const runModelSelection = resolveTabModelSelection(runTab, config, visibleModels)
       const result = await window.api.agent.run({
         runId,
         input,
+        skillInput: displayInput,
         providerId: runModelSelection.providerId,
         model: runModelSelection.model,
         terminalContext,
+        allowTerminalTools,
         connectionId,
         tabId,
         locale
@@ -3024,6 +3123,7 @@ function App(): React.JSX.Element {
     const shouldOpenSkillList = command.id === 'skill'
     const shouldOpenConnectionList = command.id === 'connection'
     const shouldOpenToolList = command.id === 'tool'
+    const shouldOpenMcpList = command.id === 'mcp'
     const shouldOpenWikiList = command.id === 'wiki'
 
     if (command.pathReferenceKind) {
@@ -3102,6 +3202,7 @@ function App(): React.JSX.Element {
         shouldOpenSkillList ||
         shouldOpenConnectionList ||
         shouldOpenToolList ||
+        shouldOpenMcpList ||
         shouldOpenWikiList
     )
   }
@@ -3269,6 +3370,29 @@ function App(): React.JSX.Element {
     setValidation(undefined)
   }
 
+  function updateSettingsMcpServerForId<K extends keyof AgentMcpServerConfig>(
+    serverId: string,
+    key: K,
+    value: AgentMcpServerConfig[K]
+  ): void {
+    const nextServerId = key === 'id' ? String(value) : serverId
+    if (
+      key === 'id' &&
+      config.mcpServers.some((server) => server.id !== serverId && server.id === nextServerId)
+    ) {
+      return
+    }
+
+    setConfig((current) => ({
+      ...current,
+      mcpServers: current.mcpServers.map((server) =>
+        server.id === serverId ? { ...server, [key]: value } : server
+      )
+    }))
+    if (settingsMcpServerId === serverId || key === 'id') setSettingsMcpServerId(nextServerId)
+    setValidation(undefined)
+  }
+
   function updateSettingsMcpArgs(value: string): void {
     setMcpArgsText(value)
     updateSettingsMcpServer('args', parseMcpArgs(value))
@@ -3284,6 +3408,16 @@ function App(): React.JSX.Element {
     setSettingsMcpServerId(serverId)
     setMcpArgsText(formatMcpArgs(server?.args ?? []))
     setMcpEnvText(formatMcpEnv(server?.env ?? {}))
+  }
+
+  function toggleMcpDetails(serverId: string): void {
+    if (mcpEditorOpen && settingsMcpServerId === serverId) {
+      setMcpEditorOpen(false)
+      return
+    }
+
+    selectSettingsMcpServer(serverId)
+    setMcpEditorOpen(true)
   }
 
   function createMcpServer(): void {
@@ -3302,25 +3436,7 @@ function App(): React.JSX.Element {
     setSettingsMcpServerId(id)
     setMcpArgsText('')
     setMcpEnvText('')
-    setValidation(undefined)
-  }
-
-  function deleteSettingsMcpServer(): void {
-    if (!settingsMcpServer.id) return
-    if (!window.confirm(`${t.confirm.deleteMcpServer}\n\n${settingsMcpServer.name}`)) return
-
-    const remainingServers = config.mcpServers.filter(
-      (server) => server.id !== settingsMcpServer.id
-    )
-    const nextServer = remainingServers[0]
-
-    setConfig({
-      ...config,
-      mcpServers: remainingServers
-    })
-    setSettingsMcpServerId(nextServer?.id ?? '')
-    setMcpArgsText(formatMcpArgs(nextServer?.args ?? []))
-    setMcpEnvText(formatMcpEnv(nextServer?.env ?? {}))
+    setMcpEditorOpen(true)
     setValidation(undefined)
   }
 
@@ -3973,6 +4089,280 @@ function App(): React.JSX.Element {
     </Sheet>
   )
 
+  const mcpSheet = (
+    <Sheet
+      open={mcpOpen}
+      onOpenChange={(open) => {
+        setMcpOpen(open)
+        if (!open) setMcpEditorOpen(false)
+      }}
+    >
+      <SheetContent
+        side="right"
+        className={`w-full ${mcpEditorOpen && settingsMcpServer.id ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
+      >
+        <SheetHeader>
+          <SheetTitle>{t.settings.mcpServers}</SheetTitle>
+          <SheetDescription>{t.settings.mcpServersHint}</SheetDescription>
+        </SheetHeader>
+        <div className="flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+          <div className="min-w-0 flex-1 space-y-4 overflow-auto">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                {t.settings.mcpServerList} · {config.mcpServers.length}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={createMcpServer}>
+                <PlusIcon data-icon="inline-start" />
+                {t.settings.newMcpServer}
+              </Button>
+            </div>
+            {config.mcpServers.length === 0 ? (
+              <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                <PlugIcon className="mr-2 inline size-3" aria-hidden="true" />
+                {t.settings.noMcpServers}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {config.mcpServers.map((server) => {
+                  const toolCount = mcpServerToolCounts.get(server.id) ?? 0
+                  const status = getMcpServerStatus(server, validation, validating, toolCount, t)
+
+                  return (
+                    <div
+                      key={server.id}
+                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                        mcpEditorOpen && settingsMcpServerId === server.id
+                          ? 'border-primary/70 ring-1 ring-primary/30'
+                          : ''
+                      }`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => toggleMcpDetails(server.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          toggleMcpDetails(server.id)
+                        }
+                      }}
+                    >
+                      <div className="min-w-0 text-left">
+                        <div className="flex min-w-0 items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <McpStatusDot status={status.state} title={status.label} />
+                              <span className="truncate text-sm font-medium">
+                                {server.name || server.id}
+                              </span>
+                            </div>
+                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                              {server.id}
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant={server.enabled ? 'destructive' : 'outline'}
+                            size="sm"
+                            className="shrink-0"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              selectSettingsMcpServer(server.id)
+                              updateSettingsMcpServerForId(server.id, 'enabled', !server.enabled)
+                            }}
+                          >
+                            {server.enabled ? (
+                              <TriangleAlertIcon data-icon="inline-start" />
+                            ) : (
+                              <CheckIcon data-icon="inline-start" />
+                            )}
+                            {server.enabled ? t.settings.disableMcpServer : t.settings.enableMcpServer}
+                          </Button>
+                        </div>
+                        <div className="mt-3 line-clamp-2 font-mono text-[11px] text-muted-foreground">
+                          {[server.command, ...server.args].filter(Boolean).join(' ') || '-'}
+                        </div>
+                        <div className="mt-2 text-[11px] text-muted-foreground">
+                          {t.settings.mcpToolCount}: {toolCount}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          {mcpEditorOpen && settingsMcpServer.id ? (
+            <div className="flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+              <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">
+                    {t.settings.mcpServers}: {settingsMcpServer.name || settingsMcpServer.id}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {settingsMcpServer.id}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={t.common.close}
+                  title={t.common.close}
+                  onClick={() => setMcpEditorOpen(false)}
+                >
+                  <XIcon aria-hidden="true" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3">
+                <FieldGroup>
+                  <label
+                    htmlFor="mcp-enabled"
+                    className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                  >
+                    <span className="space-y-1">
+                      <span className="block text-sm font-medium">{t.settings.mcpEnabled}</span>
+                      <FieldDescription>{t.settings.mcpEnabledHint}</FieldDescription>
+                    </span>
+                    <Input
+                      id="mcp-enabled"
+                      type="checkbox"
+                      checked={settingsMcpServer.enabled}
+                      onChange={(event) => updateSettingsMcpServer('enabled', event.target.checked)}
+                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field>
+                      <FieldLabel htmlFor="mcp-id">{t.settings.mcpServerId}</FieldLabel>
+                      <Input
+                        id="mcp-id"
+                        value={settingsMcpServer.id}
+                        onChange={(event) => updateSettingsMcpServer('id', event.target.value)}
+                        placeholder="filesystem"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-name">{t.settings.mcpServerName}</FieldLabel>
+                      <Input
+                        id="mcp-name"
+                        value={settingsMcpServer.name}
+                        onChange={(event) => updateSettingsMcpServer('name', event.target.value)}
+                        placeholder={t.settings.mcpServerName}
+                      />
+                    </Field>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="mcp-command">{t.settings.mcpCommand}</FieldLabel>
+                    <Input
+                      id="mcp-command"
+                      value={settingsMcpServer.command}
+                      onChange={(event) => updateSettingsMcpServer('command', event.target.value)}
+                      placeholder="npx"
+                    />
+                    <FieldDescription>{t.settings.mcpCommandHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="mcp-args">{t.settings.mcpArgs}</FieldLabel>
+                    <Textarea
+                      id="mcp-args"
+                      className="min-h-24 resize-y font-mono text-xs"
+                      value={mcpArgsText}
+                      onChange={(event) => updateSettingsMcpArgs(event.target.value)}
+                      placeholder={'-y\n@modelcontextprotocol/server-filesystem\n~/Documents'}
+                    />
+                    <FieldDescription>{t.settings.mcpArgsHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="mcp-env">{t.settings.mcpEnv}</FieldLabel>
+                    <Textarea
+                      id="mcp-env"
+                      className="min-h-24 resize-y font-mono text-xs"
+                      value={mcpEnvText}
+                      onChange={(event) => updateSettingsMcpEnv(event.target.value)}
+                      placeholder={'API_KEY=value\nNODE_ENV=production'}
+                    />
+                    <FieldDescription>{t.settings.mcpEnvHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <div className="flex items-center justify-between gap-2">
+                      <FieldLabel>{t.settings.mcpTools}</FieldLabel>
+                      <span className="text-xs text-muted-foreground">
+                        {settingsMcpTools.length}
+                      </span>
+                    </div>
+                    {settingsMcpTools.length === 0 ? (
+                      <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                        {t.settings.noMcpTools}
+                      </div>
+                    ) : (
+                      <div className="max-h-56 space-y-2 overflow-auto rounded-md border bg-muted/10 p-2">
+                        {settingsMcpTools.map((tool) => (
+                          <div
+                            key={`${tool.method}:${tool.path}:${tool.name}`}
+                            className="min-w-0 rounded-md border bg-background p-2 text-xs"
+                          >
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="min-w-0 truncate font-medium">{tool.name}</span>
+                              <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
+                                {tool.method.toUpperCase()}
+                              </Badge>
+                            </div>
+                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                              {tool.path}
+                            </div>
+                            {tool.description ? (
+                              <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                                {tool.description}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Field>
+                </FieldGroup>
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
+                <Button
+                  type="button"
+                  onClick={async () => {
+                    await saveConfig()
+                    setMcpEditorOpen(false)
+                  }}
+                >
+                  {saved ? (
+                    <CheckIcon data-icon="inline-start" />
+                  ) : (
+                    <PlugIcon data-icon="inline-start" />
+                  )}
+                  {saved ? t.settings.saved : t.settings.saveSettings}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <SheetFooter className="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => validateConfig()}
+            disabled={validating}
+          >
+            {validating ? (
+              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <TestTube2Icon data-icon="inline-start" />
+            )}
+            {validating ? t.settings.validating : t.settings.validateTools}
+          </Button>
+          <Button onClick={saveConfig}>
+            {saved ? <CheckIcon data-icon="inline-start" /> : <PlugIcon data-icon="inline-start" />}
+            {saved ? t.settings.saved : t.settings.saveSettings}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+
   const historySheet = (
     <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
       <SheetContent side="left" className="w-[420px] sm:max-w-[420px]">
@@ -4340,6 +4730,16 @@ function App(): React.JSX.Element {
             type="button"
             variant="outline"
             size="icon-sm"
+            aria-label={t.settings.mcpServers}
+            title={t.settings.mcpServers}
+            onClick={() => setMcpOpen(true)}
+          >
+            <PlugIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
             aria-label={t.settings.skillsManagement}
             title={t.settings.skillsManagement}
             onClick={() => setSkillOpen(true)}
@@ -4575,133 +4975,6 @@ function App(): React.JSX.Element {
                   </Field>
                   <Separator />
                   <Field>
-                    <div className="flex items-center justify-between gap-2">
-                      <FieldLabel htmlFor="mcp-server">{t.settings.mcpServers}</FieldLabel>
-                      <div className="flex items-center gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={createMcpServer}>
-                          <PlusIcon data-icon="inline-start" />
-                          {t.settings.newMcpServer}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          disabled={!settingsMcpServer.id}
-                          aria-label={t.settings.deleteMcpServer}
-                          title={t.settings.deleteMcpServer}
-                          onClick={deleteSettingsMcpServer}
-                        >
-                          <Trash2Icon aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </div>
-                    <Select
-                      value={settingsMcpServer.id}
-                      onValueChange={selectSettingsMcpServer}
-                      disabled={config.mcpServers.length === 0}
-                    >
-                      <SelectTrigger id="mcp-server" className="w-full">
-                        <SelectValue placeholder={t.settings.mcpServerList} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>{t.settings.mcpServerList}</SelectLabel>
-                          {config.mcpServers.map((server) => (
-                            <SelectItem key={server.id} value={server.id}>
-                              {server.name || server.id}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>{t.settings.mcpServersHint}</FieldDescription>
-                  </Field>
-                  {settingsMcpServer.id ? (
-                    <>
-                      <label
-                        htmlFor="mcp-enabled"
-                        className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
-                      >
-                        <span className="space-y-1">
-                          <span className="block text-sm font-medium">{t.settings.mcpEnabled}</span>
-                          <FieldDescription>{t.settings.mcpEnabledHint}</FieldDescription>
-                        </span>
-                        <Input
-                          id="mcp-enabled"
-                          type="checkbox"
-                          checked={settingsMcpServer.enabled}
-                          onChange={(event) =>
-                            updateSettingsMcpServer('enabled', event.target.checked)
-                          }
-                          className="mt-0.5 size-4 shrink-0 accent-primary"
-                        />
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Field>
-                          <FieldLabel htmlFor="mcp-id">{t.settings.mcpServerId}</FieldLabel>
-                          <Input
-                            id="mcp-id"
-                            value={settingsMcpServer.id}
-                            onChange={(event) => updateSettingsMcpServer('id', event.target.value)}
-                            placeholder="filesystem"
-                          />
-                        </Field>
-                        <Field>
-                          <FieldLabel htmlFor="mcp-name">{t.settings.mcpServerName}</FieldLabel>
-                          <Input
-                            id="mcp-name"
-                            value={settingsMcpServer.name}
-                            onChange={(event) =>
-                              updateSettingsMcpServer('name', event.target.value)
-                            }
-                            placeholder={t.settings.mcpServerName}
-                          />
-                        </Field>
-                      </div>
-                      <Field>
-                        <FieldLabel htmlFor="mcp-command">{t.settings.mcpCommand}</FieldLabel>
-                        <Input
-                          id="mcp-command"
-                          value={settingsMcpServer.command}
-                          onChange={(event) =>
-                            updateSettingsMcpServer('command', event.target.value)
-                          }
-                          placeholder="npx"
-                        />
-                        <FieldDescription>{t.settings.mcpCommandHint}</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="mcp-args">{t.settings.mcpArgs}</FieldLabel>
-                        <Textarea
-                          id="mcp-args"
-                          className="min-h-24 resize-y font-mono text-xs"
-                          value={mcpArgsText}
-                          onChange={(event) => updateSettingsMcpArgs(event.target.value)}
-                          placeholder={'-y\n@modelcontextprotocol/server-filesystem\n~/Documents'}
-                        />
-                        <FieldDescription>{t.settings.mcpArgsHint}</FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="mcp-env">{t.settings.mcpEnv}</FieldLabel>
-                        <Textarea
-                          id="mcp-env"
-                          className="min-h-24 resize-y font-mono text-xs"
-                          value={mcpEnvText}
-                          onChange={(event) => updateSettingsMcpEnv(event.target.value)}
-                          placeholder={'API_KEY=value\nNODE_ENV=production'}
-                        />
-                        <FieldDescription>{t.settings.mcpEnvHint}</FieldDescription>
-                      </Field>
-                    </>
-                  ) : (
-                    <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
-                      <PlugIcon className="mr-2 inline size-3" aria-hidden="true" />
-                      {t.settings.noMcpServers}
-                    </div>
-                  )}
-                  <Separator />
-                  <Field>
                     <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
                     <div
                       className="flex min-w-0 flex-wrap gap-1 rounded-md border bg-muted/20 p-1"
@@ -4809,6 +5082,7 @@ function App(): React.JSX.Element {
         </div>
       </header>
       {skillSheet}
+      {mcpSheet}
       {historySheet}
       {wikiSheet}
       <section className="flex min-h-0 flex-1">
@@ -5247,6 +5521,9 @@ function App(): React.JSX.Element {
                           className="max-w-full gap-1 rounded-md pr-1"
                           title={tool.description}
                         >
+                          {tool.source === 'mcp' && (
+                            <PlugIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          )}
                           <span className="truncate">
                             {t.input.referencedTool}: {tool.name}
                           </span>
@@ -6105,6 +6382,19 @@ function isExplicitConnectionRequest(value: string): boolean {
   return /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value)
 }
 
+function isExplicitNonTerminalAgentRequest(
+  value: string,
+  toolRefs: AgentToolReference[] = []
+): boolean {
+  if (
+    toolRefs.some((tool) => tool.name.startsWith('mcp_') || tool.description.includes('mcp://'))
+  ) {
+    return true
+  }
+
+  return /\bMCP\b|filesystem\s+MCP|MCP\s+filesystem|使用\s*Filesystem/i.test(value)
+}
+
 function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
   if (tab?.isSsh || tab?.connectionId) return true
   if (tab && tab.id !== 'default' && tab.title !== 'Local') return true
@@ -6160,6 +6450,45 @@ function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): Rea
         : 'bg-red-500 shadow-red-500/40'
 
   return <span className={`size-2 rounded-full shadow-[0_0_8px] ${className}`} />
+}
+
+function McpStatusDot({
+  status,
+  title
+}: {
+  status: 'ready' | 'pending' | 'not-ready'
+  title?: string
+}): React.JSX.Element {
+  if (status === 'ready') {
+    return (
+      <span
+        className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-white"
+        title={title}
+      >
+        <CheckIcon className="size-3" aria-hidden="true" />
+      </span>
+    )
+  }
+
+  if (status === 'pending') {
+    return (
+      <span
+        className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-yellow-950"
+        title={title}
+      >
+        <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-white"
+      title={title}
+    >
+      <XIcon className="size-3" aria-hidden="true" />
+    </span>
+  )
 }
 
 function TerminalActivityDot({ active }: { active: boolean }): React.JSX.Element {
@@ -6320,12 +6649,32 @@ function formatCommandAuditActionDetail(
   return formatCommandAuditDetail(command, audit, t)
 }
 
+function formatLoadedSkillsActionDetail(
+  skills: Extract<AgentEvent, { type: 'skills' }>['skills'],
+  t: Dictionary
+): string {
+  return skills
+    .flatMap((skill, index) => [
+      `${index + 1}. ${skill.name}`,
+      `${t.input.skillMatchReason}: ${
+        skill.reason === 'referenced' ? t.input.skillReasonReferenced : t.input.skillReasonMatched
+      }`,
+      `${t.input.slashSkillPathLabel}: ${skill.path}`,
+      skill.description ? `${t.input.slashSkillDescriptionLabel}: ${skill.description}` : ''
+    ])
+    .filter(Boolean)
+    .join('\n')
+}
+
 function formatAgentEventActionTitle(
-  event: Exclude<AgentEvent, { type: 'token' | 'done' }>,
+  event: Exclude<AgentEvent, { type: 'token' | 'done' | 'skills' }>,
   t: Dictionary
 ): string {
   switch (event.type) {
     case 'status':
+      if (/^Loaded \d+ MCP tools:/.test(event.message)) {
+        return event.message.split('\n')[0]?.replace(/:$/, '.') ?? event.message
+      }
       return localizeAgentEventMessage(event.message, t)
     case 'thought':
       return localizeAgentEventMessage(event.message, t)
@@ -6361,9 +6710,13 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Understanding the user request and current terminal context.') {
     return t.input.understandingRequest
   }
+  if (message === 'Understanding the user request and available non-terminal context.') {
+    return t.input.understandingRequest
+  }
   if (message === 'Breaking the request into verifiable steps before execution.') {
     return t.input.breakingDownTask
   }
+  if (/^Loaded \d+ MCP tools:/.test(message)) return message
   if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
   if (/^Executing plan with ReAct step /.test(message)) return t.input.executingPlanStep
   if (/^Assessing the request and choosing one concrete next action/.test(message)) {
@@ -6814,10 +7167,10 @@ function buildAvailableToolRefs(
     validation?.tools
       ?.filter((tool) => !builtInToolNames.has(tool.name))
       .map((tool) => ({
-        id: `openapi:${tool.name}`,
+        id: tool.path.startsWith('mcp://') ? `mcp:${tool.name}` : `openapi:${tool.name}`,
         name: tool.name,
         description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,
-        source: 'openapi' as const
+        source: tool.path.startsWith('mcp://') ? ('mcp' as const) : ('openapi' as const)
       })) ?? []
 
   const tools = new Map<string, AgentToolReference>()
@@ -6826,6 +7179,26 @@ function buildAvailableToolRefs(
   }
 
   return [...tools.values()]
+}
+
+function getMcpServerStatus(
+  server: AgentMcpServerConfig,
+  validation: AgentValidationResult | undefined,
+  validating: boolean,
+  toolCount: number,
+  t: Dictionary
+): { state: 'ready' | 'pending' | 'not-ready'; label: string } {
+  if (!server.enabled) return { state: 'not-ready', label: t.settings.mcpStatusDisabled }
+  if (!server.command.trim()) return { state: 'not-ready', label: t.settings.mcpStatusIncomplete }
+  if (validating) return { state: 'pending', label: t.settings.mcpStatusChecking }
+  if (toolCount > 0) return { state: 'ready', label: t.settings.mcpStatusConnected }
+
+  const validationError = validation?.ok === false ? (validation.error ?? '') : ''
+  if (validationError.includes(server.name) || validationError.includes(server.id)) {
+    return { state: 'not-ready', label: t.settings.mcpStatusError }
+  }
+
+  return { state: 'pending', label: t.settings.mcpStatusNotChecked }
 }
 
 function getSlashCommandQuery(value: string): string | undefined {
@@ -6873,6 +7246,25 @@ function matchesToolSlashCommand(command: SlashCommandOption, query: string): bo
     .toLowerCase()
 
   return searchable.includes(toolQuery)
+}
+
+function isMcpSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('mcp:')
+}
+
+function matchesMcpSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const mcpQuery = query
+    .replace(/^mcp:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!mcpQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(mcpQuery)
 }
 
 function isWikiSlashQuery(query: string | undefined): boolean {
@@ -6978,6 +7370,13 @@ function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['tool', 'tools']
     },
     {
+      id: 'mcp',
+      title: t.input.slashMcp,
+      description: t.input.slashMcpDescription,
+      value: '/mcp:',
+      keywords: ['mcp', 'tools', 'server']
+    },
+    {
       id: 'wiki',
       title: t.input.slashWiki,
       description: t.input.slashWikiDescription,
@@ -7020,6 +7419,17 @@ function buildToolSlashCommand(tool: AgentToolReference): SlashCommandOption {
     description: tool.description,
     value: '',
     keywords: ['tool', 'tools', tool.name, tool.description, tool.source],
+    toolRef: tool
+  }
+}
+
+function buildMcpSlashCommand(tool: AgentToolReference, t: Dictionary): SlashCommandOption {
+  return {
+    id: `mcp:${tool.name}`,
+    title: tool.name,
+    description: tool.description || t.input.slashMcpDescription,
+    value: '',
+    keywords: ['mcp', 'tool', 'tools', tool.name, tool.description, tool.source],
     toolRef: tool
   }
 }
@@ -7794,12 +8204,17 @@ function MarkdownCodeBlock({
   t: Dictionary
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const normalizedLanguage = language.trim().toLowerCase()
   const label = language || 'text'
 
   async function copyCode(): Promise<void> {
     await copyText(code)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  if (normalizedLanguage === 'mermaid') {
+    return <MermaidBlock code={code} t={t} onCopy={copyCode} copied={copied} />
   }
 
   return (
@@ -7823,6 +8238,330 @@ function MarkdownCodeBlock({
       </pre>
     </div>
   )
+}
+
+function MermaidBlock({
+  code,
+  t,
+  onCopy,
+  copied
+}: {
+  code: string
+  t: Dictionary
+  onCopy: () => Promise<void>
+  copied: boolean
+}): React.JSX.Element {
+  const diagramIdRef = useRef(`mermaid-${crypto.randomUUID()}`)
+  const expandedScrollRef = useRef<HTMLDivElement | null>(null)
+  const expandedPanRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    scrollLeft: number
+    scrollTop: number
+  } | null>(null)
+  const [svg, setSvg] = useState('')
+  const [error, setError] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const [panning, setPanning] = useState(false)
+
+  useEffect(() => {
+    let disposed = false
+
+    async function renderDiagram(): Promise<void> {
+      if (!mermaidInitialized) {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          themeVariables: {
+            darkMode: true,
+            background: '#171717',
+            mainBkg: '#262626',
+            secondBkg: '#333333',
+            tertiaryColor: '#1f1f1f',
+            primaryColor: '#262626',
+            primaryTextColor: '#fafafa',
+            primaryBorderColor: 'rgba(255,255,255,0.18)',
+            secondaryColor: '#333333',
+            secondaryTextColor: '#fafafa',
+            secondaryBorderColor: 'rgba(255,255,255,0.16)',
+            tertiaryTextColor: '#fafafa',
+            tertiaryBorderColor: 'rgba(255,255,255,0.14)',
+            lineColor: '#a3a3a3',
+            textColor: '#fafafa',
+            edgeLabelBackground: '#262626',
+            clusterBkg: '#1f1f1f',
+            clusterBorder: 'rgba(255,255,255,0.16)',
+            noteBkgColor: '#333333',
+            noteTextColor: '#fafafa',
+            noteBorderColor: 'rgba(255,255,255,0.16)',
+            actorBkg: '#262626',
+            actorTextColor: '#fafafa',
+            actorBorder: 'rgba(255,255,255,0.18)',
+            signalColor: '#fafafa',
+            signalTextColor: '#fafafa',
+            labelTextColor: '#fafafa',
+            loopTextColor: '#fafafa',
+            activationBkgColor: '#333333',
+            activationBorderColor: 'rgba(255,255,255,0.18)',
+            sequenceNumberColor: '#171717'
+          },
+          fontFamily: 'ui-sans-serif, system-ui, sans-serif'
+        })
+        mermaidInitialized = true
+      }
+
+      setSvg('')
+      setError('')
+
+      try {
+        const result = await mermaid.render(diagramIdRef.current, code)
+        if (!disposed) setSvg(result.svg)
+      } catch (renderError) {
+        if (!disposed) {
+          setError(renderError instanceof Error ? renderError.message : String(renderError))
+        }
+      }
+    }
+
+    void renderDiagram()
+
+    return () => {
+      disposed = true
+    }
+  }, [code])
+
+  useEffect(() => {
+    if (!expanded) {
+      setZoom(1)
+      setPanning(false)
+      expandedPanRef.current = null
+    }
+  }, [expanded])
+
+  function updateZoom(nextZoom: number, anchor?: { clientX: number; clientY: number }): void {
+    const container = expandedScrollRef.current
+    const previousZoom = zoom
+    const clampedZoom = clampMermaidZoom(nextZoom)
+    if (Math.abs(clampedZoom - previousZoom) < MERMAID_ZOOM_EPSILON) return
+
+    let contentX = 0
+    let contentY = 0
+    let offsetX = 0
+    let offsetY = 0
+
+    if (container) {
+      const rect = container.getBoundingClientRect()
+      offsetX = anchor ? anchor.clientX - rect.left : container.clientWidth / 2
+      offsetY = anchor ? anchor.clientY - rect.top : container.clientHeight / 2
+      contentX = (container.scrollLeft + offsetX) / previousZoom
+      contentY = (container.scrollTop + offsetY) / previousZoom
+    }
+
+    setZoom(clampedZoom)
+
+    if (container) {
+      window.requestAnimationFrame(() => {
+        container.scrollLeft = contentX * clampedZoom - offsetX
+        container.scrollTop = contentY * clampedZoom - offsetY
+      })
+    }
+  }
+
+  function handleExpandedWheel(event: ReactWheelEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    const direction = event.deltaY > 0 ? -1 : 1
+    updateZoom(zoom + direction * MERMAID_ZOOM_STEP, {
+      clientX: event.clientX,
+      clientY: event.clientY
+    })
+  }
+
+  function handleExpandedPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return
+
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    expandedPanRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: event.currentTarget.scrollLeft,
+      scrollTop: event.currentTarget.scrollTop
+    }
+    setPanning(true)
+  }
+
+  function handleExpandedPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const pan = expandedPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+
+    event.preventDefault()
+    event.currentTarget.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX)
+    event.currentTarget.scrollTop = pan.scrollTop - (event.clientY - pan.startY)
+  }
+
+  function stopExpandedPan(event: ReactPointerEvent<HTMLDivElement>): void {
+    const pan = expandedPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    expandedPanRef.current = null
+    setPanning(false)
+  }
+
+  const zoomPercent = Math.round(zoom * 100)
+  const zoomStyle = { zoom } as CSSProperties
+
+  return (
+    <div className="min-w-0 overflow-hidden rounded-md border bg-background">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b bg-muted/30 px-3 py-1.5">
+        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+          mermaid
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="h-6 w-6 shrink-0"
+            aria-label={t.common.enlarge}
+            title={t.common.enlarge}
+            disabled={!svg}
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2Icon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="h-6 w-6 shrink-0"
+            aria-label={copied ? t.common.copied : t.common.copy}
+            title={copied ? t.common.copied : t.common.copy}
+            onClick={() => void onCopy()}
+          >
+            {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+          </Button>
+        </div>
+      </div>
+      {svg ? (
+        <div
+          className="min-w-0 overflow-auto bg-[#171717] p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[#171717]"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      ) : error ? (
+        <div className="space-y-2 p-3">
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            {error}
+          </div>
+          <pre className="min-w-0 overflow-hidden rounded bg-[#111111] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+            <code>{code}</code>
+          </pre>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          mermaid
+        </div>
+      )}
+      {expanded && svg ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.common.enlarge}
+        >
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
+            <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+              mermaid
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t.common.zoomOut}
+                title={t.common.zoomOut}
+                disabled={zoom <= MERMAID_MIN_ZOOM + MERMAID_ZOOM_EPSILON}
+                onClick={() => updateZoom(zoom - MERMAID_ZOOM_STEP)}
+              >
+                <ZoomOutIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-w-16 font-mono"
+                aria-label={t.common.reset}
+                title={t.common.reset}
+                onClick={() => updateZoom(1)}
+              >
+                {zoomPercent}%
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t.common.zoomIn}
+                title={t.common.zoomIn}
+                disabled={zoom >= MERMAID_MAX_ZOOM - MERMAID_ZOOM_EPSILON}
+                onClick={() => updateZoom(zoom + MERMAID_ZOOM_STEP)}
+              >
+                <ZoomInIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={copied ? t.common.copied : t.common.copy}
+                title={copied ? t.common.copied : t.common.copy}
+                onClick={() => void onCopy()}
+              >
+                {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
+                {copied ? t.common.copied : t.common.copy}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t.common.close}
+                title={t.common.close}
+                onClick={() => setExpanded(false)}
+              >
+                <XIcon aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <div
+            ref={expandedScrollRef}
+            className={`min-h-0 flex-1 touch-none overflow-auto bg-[#171717] p-6 select-none ${
+              panning ? 'cursor-grabbing' : 'cursor-grab'
+            }`}
+            onWheel={handleExpandedWheel}
+            onPointerDown={handleExpandedPointerDown}
+            onPointerMove={handleExpandedPointerMove}
+            onPointerUp={stopExpandedPan}
+            onPointerCancel={stopExpandedPan}
+          >
+            <div
+              className="w-max origin-top-left [&_svg]:h-auto [&_svg]:min-w-[900px] [&_svg]:max-w-none [&_svg]:rounded [&_svg]:bg-[#171717]"
+              style={zoomStyle}
+              dangerouslySetInnerHTML={{ __html: svg }}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function clampMermaidZoom(value: number): number {
+  return Math.min(MERMAID_MAX_ZOOM, Math.max(MERMAID_MIN_ZOOM, value))
 }
 
 function isMarkdownBlockStart(line: string): boolean {

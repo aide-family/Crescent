@@ -388,10 +388,13 @@ export class AgentToolRuntime {
         type: 'status',
         message: `Some MCP servers failed to load: ${registry.errors.join('; ')}`
       })
+      if (registry.tools.length === 0 && isExplicitMcpRequest(input.userInput)) {
+        throw new Error(`MCP servers failed to load: ${registry.errors.join('; ')}`)
+      }
     }
     if (registry.tools.length === 0) return
 
-    input.emit({ type: 'status', message: `Loaded ${registry.tools.length} MCP tools.` })
+    input.emit({ type: 'status', message: formatLoadedMcpToolsMessage(registry.catalog) })
 
     const selectedToolNames = await input.brain.selectRelevantTools({
       userInput: input.userInput,
@@ -538,4 +541,18 @@ function hasOpenApiConfig(config: AgentConfig): boolean {
 
 function hasMcpConfig(config: AgentConfig): boolean {
   return config.mcpServers.some((server) => server.enabled && server.command.trim())
+}
+
+function isExplicitMcpRequest(input: string): boolean {
+  return /\bMCP\b|mcp_\w+|mcp:\/\//i.test(input)
+}
+
+function formatLoadedMcpToolsMessage(catalog: ToolCatalogEntry[]): string {
+  const lines = catalog.map((tool) =>
+    [`- ${tool.name}`, `${tool.method.toUpperCase()} ${tool.path}`, tool.description]
+      .filter(Boolean)
+      .join(' · ')
+  )
+
+  return [`Loaded ${catalog.length} MCP tools:`, ...lines].join('\n')
 }

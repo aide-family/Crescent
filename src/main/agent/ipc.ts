@@ -435,8 +435,19 @@ export function registerAgentIpc(): void {
         providerId: payload?.providerId,
         model: payload?.model
       })
-      const skillContext = buildAgentSkillContext(input, agentConfig.skillRoot)
+      const skillInput = getSkillMatchingInput(payload, input)
+      const skillContext = buildAgentSkillContext(skillInput, agentConfig.skillRoot)
+      if (skillContext.matched.length > 0) {
+        event.sender.send('agent:event', {
+          type: 'skills',
+          message: `Loaded ${skillContext.matched.length} skills for this request.`,
+          skills: skillContext.matched.map(({ content: _content, ...skill }) => skill),
+          runId,
+          tabId: payload?.tabId
+        })
+      }
       const commandAuditor = new CommandAuditor(agentConfig)
+      const allowTerminalTools = payload?.allowTerminalTools !== false
       const executeReviewedCommand = async (
         command: string,
         timeoutMs: number | undefined,
@@ -530,31 +541,35 @@ export function registerAgentIpc(): void {
         (agentEvent) => {
           event.sender.send('agent:event', { ...agentEvent, runId, tabId: payload?.tabId })
         },
-        {
-          executeCommand: async (command, timeoutMs) => {
-            return executeReviewedCommand(command, timeoutMs, (executableCommand) =>
-              executeCommandInTerminalWithPermissionRequest(
-                event.sender,
-                executableCommand,
-                timeoutMs,
-                payload?.tabId
-              )
-            )
-          }
-        },
-        {
-          executeCommand: async (command, options) => {
-            return executeReviewedCommand(command, options.timeoutMs, (executableCommand) =>
-              executeCommandInTemporaryTerminal(
-                event.sender,
-                payload?.tabId,
-                options.terminalName,
-                executableCommand,
-                options.timeoutMs
-              )
-            )
-          }
-        },
+        allowTerminalTools
+          ? {
+              executeCommand: async (command, timeoutMs) => {
+                return executeReviewedCommand(command, timeoutMs, (executableCommand) =>
+                  executeCommandInTerminalWithPermissionRequest(
+                    event.sender,
+                    executableCommand,
+                    timeoutMs,
+                    payload?.tabId
+                  )
+                )
+              }
+            }
+          : undefined,
+        allowTerminalTools
+          ? {
+              executeCommand: async (command, options) => {
+                return executeReviewedCommand(command, options.timeoutMs, (executableCommand) =>
+                  executeCommandInTemporaryTerminal(
+                    event.sender,
+                    payload?.tabId,
+                    options.terminalName,
+                    executableCommand,
+                    options.timeoutMs
+                  )
+                )
+              }
+            }
+          : undefined,
         createLocalFileWriter(event.sender),
         {
           signal: controller.signal,
@@ -951,6 +966,27 @@ function findConnection(id: string | undefined): { id: string; name: string } | 
   return [...loadSshConfigConnections(), ...readCustomConnections()].find(
     (connection) => connection.id === id
   )
+}
+
+function getSkillMatchingInput(payload: AgentRunInput, input: string): string {
+  const explicitSkillInput = payload?.skillInput?.trim()
+  if (explicitSkillInput) return explicitSkillInput
+
+  const originalTask = extractOriginalUserTask(input)
+  return originalTask || input
+}
+
+function extractOriginalUserTask(input: string): string {
+  const lines = input.split(/\r?\n/)
+  const markerIndex = lines.findIndex((line) =>
+    /^(用户原始任务|Original user task)\s*:?\s*$/i.test(line.trim())
+  )
+  if (markerIndex < 0) return ''
+
+  return lines
+    .slice(markerIndex + 1)
+    .join('\n')
+    .trim()
 }
 
 function normalizeInteractivePrivilegeCommand(command: string): string {

@@ -39,7 +39,9 @@ export class TerminalAgentCore {
     this.throwIfCanceled()
     this.emit({
       type: 'status',
-      message: 'Understanding the user request and current terminal context.'
+      message: this.terminalExecutor
+        ? 'Understanding the user request and current terminal context.'
+        : 'Understanding the user request and available non-terminal context.'
     })
 
     const brain = new AgentBrain(this.config)
@@ -121,6 +123,7 @@ export class TerminalAgentCore {
               instructionContext: this.controls?.instructionContext,
               skillContext: this.controls?.skillContext,
               wikiContext: this.controls?.wikiContext,
+              terminalToolsEnabled: Boolean(this.terminalExecutor),
               terminalContext: input.terminalContext
             })
           },
@@ -158,6 +161,7 @@ export class TerminalAgentCore {
           skillContext: this.controls?.skillContext,
           wikiContext: this.controls?.wikiContext,
           planSteps: input.planSteps,
+          terminalToolsEnabled: Boolean(this.terminalExecutor),
           terminalContext: input.terminalContext
         })
       },

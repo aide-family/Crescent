@@ -1,6 +1,7 @@
 ---
 name: docker-environment-inspection
-description: Inspect Docker runtime environments, including daemon status, versions, containers, images, storage, logs, networks, compose projects, resource pressure, and safety checks.
+description: "Docker environment inspection and troubleshooting: check Docker daemon status, client/server versions, containers, images, volumes, networks, Compose projects, storage driver, logs, restart loops, disk usage, and resource pressure. Use when the user asks to inspect Docker, docker compose, container runtime, image/container/network/volume problems, 容器环境巡检, Docker 环境检查, 容器日志, 容器网络, 镜像, 卷, or daemon issues."
+aliases: ["Docker environment inspection", "Docker daemon health check", "Docker Compose inspection", "container runtime troubleshooting", "Docker 环境巡检", "Docker 容器检查", "容器网络检查", "容器日志排查", "镜像卷网络巡检"]
 ---
 
 # Docker Environment Inspection

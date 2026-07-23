@@ -13,6 +13,9 @@ files:
   - '!node_modules/node-pty/prebuilds/**/*'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: system-skills
+    to: system-skills
 win:
   executableName: crescent
 nsis:

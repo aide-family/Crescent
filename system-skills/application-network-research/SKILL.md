@@ -1,6 +1,7 @@
 ---
 name: application-network-research
-description: Research application connectivity and online information safely, including DNS, HTTP/TLS reachability, proxy constraints, external documentation lookup via available tools, and evidence-based summaries.
+description: "Application network research and connectivity investigation: verify DNS, HTTP/HTTPS, TLS certificates, proxy/VPN/firewall constraints, external reachability, API endpoints, and online documentation lookup. Use when the user asks to check whether an application, domain, URL, service endpoint, website, webhook, or external dependency can connect or be reached; also supports 应用联网检查、网络连通性、DNS 解析、HTTP/TLS 检查、代理/VPN/防火墙排查、外部文档检索。"
+aliases: ["application network connectivity", "DNS HTTP TLS check", "endpoint reachability investigation", "external dependency lookup", "应用联网检查", "网络连通性排查", "域名 DNS 解析检查", "HTTPS TLS 检查", "接口连通性验证"]
 ---
 
 # Application Network Research

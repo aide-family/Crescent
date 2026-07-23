@@ -20,8 +20,16 @@ export function getCrescentWikiDir(): string {
 
 export function getCrescentSystemSkillsDir(): string {
   const override = process.env.CRESCENT_SYSTEM_SKILL_ROOT?.trim()
+  if (override) return resolve(override)
 
-  return override || join(getCrescentProjectRoot(), 'system-skills')
+  const resourceSystemSkillsDir = process.resourcesPath
+    ? join(process.resourcesPath, 'system-skills')
+    : ''
+  if (resourceSystemSkillsDir && existsSync(resourceSystemSkillsDir)) {
+    return resourceSystemSkillsDir
+  }
+
+  return join(getCrescentProjectRoot(), 'system-skills')
 }
 
 export function getCrescentDatabasePath(): string {
