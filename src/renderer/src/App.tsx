@@ -972,7 +972,17 @@ function App(): React.JSX.Element {
 
   const appendAgentEvent = useCallback(
     (event: AgentEvent, tabId = activeTabIdRef.current): void => {
-      if (event.type === 'token' || event.type === 'done') return
+      if (activeRunCanceledRef.current.has(tabId)) return
+
+      if (event.type === 'token') {
+        updateAgentRun(tabId, (run) => ({
+          ...run,
+          result: `${run.result ?? ''}${event.text}`
+        }))
+        return
+      }
+
+      if (event.type === 'done') return
 
       if (event.type === 'plan') {
         const detail = event.steps.length
@@ -2406,6 +2416,7 @@ function App(): React.JSX.Element {
   function stopAgentRun(tabId = activeTabIdRef.current): void {
     activeRunCanceledRef.current.add(tabId)
     const runId = activeRunIdRef.current.get(tabId)
+    const currentRun = activeAgentRunRef.current.get(tabId)
     if (runId) void window.api.agent.cancel(runId)
     if (runId) {
       setCommandApproval((current) => (current?.runId === runId ? null : current))
@@ -2417,6 +2428,7 @@ function App(): React.JSX.Element {
         tabId,
         input: activeRunInputRef.current.get(tabId) ?? '',
         status: 'canceled',
+        output: currentRun?.result,
         error: t.input.agentCanceled
       })
     }
@@ -3736,7 +3748,7 @@ function App(): React.JSX.Element {
           setTerminalPage('terminal')
         } else {
           setActiveTabId('default')
-          setTerminalPage('terminal')
+          setTerminalPage('connections')
         }
       }
       return next
@@ -5282,32 +5294,44 @@ function App(): React.JSX.Element {
             style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
           >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
-              {terminalTabs.map((tab) => {
-                const selected = terminalPage === 'terminal' && tab.id === activeTabId
+              {terminalTabs.length === 0 ? (
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                  <span className="truncate text-xs font-medium text-muted-foreground">
+                    {t.connections.sshConnections}
+                  </span>
+                  <Button type="button" variant="ghost" size="xs" onClick={openNewConnectionForm}>
+                    <PlusIcon data-icon="inline-start" />
+                    {t.common.new}
+                  </Button>
+                </div>
+              ) : (
+                terminalTabs.map((tab) => {
+                  const selected = terminalPage === 'terminal' && tab.id === activeTabId
 
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
-                      selected
-                        ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
-                        : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
-                    }`}
-                    onClick={() => {
-                      setActiveTabId(tab.id)
-                      setTerminalPage('terminal')
-                    }}
-                    onContextMenu={(event) => {
-                      event.preventDefault()
-                      setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
-                    }}
-                  >
-                    <TerminalActivityDot active={tab.terminalReady} />
-                    <span className="truncate">{tab.title}</span>
-                  </button>
-                )
-              })}
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
+                        selected
+                          ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
+                          : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
+                      }`}
+                      onClick={() => {
+                        setActiveTabId(tab.id)
+                        setTerminalPage('terminal')
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault()
+                        setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+                      }}
+                    >
+                      <TerminalActivityDot active={tab.terminalReady} />
+                      <span className="truncate">{tab.title}</span>
+                    </button>
+                  )
+                })
+              )}
               {tabMenu && (
                 <div
                   className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
@@ -5332,7 +5356,78 @@ function App(): React.JSX.Element {
               )}
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
-              <div ref={terminalHostRef} className="min-h-0 flex-1" />
+              {terminalTabs.length === 0 ? (
+                <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
+                  <div className="mx-auto flex max-w-3xl flex-col gap-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h2 className="text-sm font-semibold">{t.connections.sshConnections}</h2>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t.connections.sshConnectionsDescription}
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" onClick={showConnectionList}>
+                        <ServerIcon data-icon="inline-start" />
+                        {t.connections.manageConnections}
+                      </Button>
+                    </div>
+                    <div className="relative">
+                      <SearchIcon
+                        className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <Input
+                        value={connectionSearchQuery}
+                        onChange={(event) => setConnectionSearchQuery(event.target.value)}
+                        placeholder={t.connections.searchPlaceholder}
+                        className="h-9 pl-8"
+                        aria-label={t.connections.searchPlaceholder}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      {connections.length === 0 ? (
+                        <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                          {t.connections.noConnections}
+                        </p>
+                      ) : filteredConnections.length === 0 ? (
+                        <p className="rounded-md border bg-card p-3 text-xs text-muted-foreground">
+                          {t.connections.noSearchResults}
+                        </p>
+                      ) : (
+                        filteredConnections.map((connection) => (
+                          <div
+                            key={connection.id}
+                            className="flex items-start justify-between gap-3 rounded-md border bg-card p-3 text-xs shadow-sm transition hover:border-primary/50 hover:bg-muted/20"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold">{connection.name}</p>
+                              <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                                {formatConnectionTarget(connection)}
+                              </p>
+                              <p className="truncate text-muted-foreground">
+                                {connection.source === 'ssh-config'
+                                  ? '~/.ssh/config'
+                                  : connection.description || '~/.crescent/config.json'}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="shrink-0"
+                              onClick={() => connectFromConnectionManager(connection)}
+                            >
+                              <ServerIcon data-icon="inline-start" />
+                              {t.connections.connect}
+                            </Button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div ref={terminalHostRef} className="min-h-0 flex-1" />
+              )}
               {activeTab.subTerminals.length > 0 && (
                 <div
                   className="shrink-0 border-t border-white/10 bg-background"
