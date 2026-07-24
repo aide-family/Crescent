@@ -13,6 +13,7 @@ const en = {
     shellReady: 'Shell ready',
     shellStarting: 'Shell starting',
     shellStopped: 'Shell stopped',
+    swapPanes: 'Swap terminal and chat panes',
     title: 'Crescent',
     titleDescription: 'Terminal + SSH + AI command workbench',
     workingDirectory: 'cwd'
@@ -23,10 +24,28 @@ const en = {
     closeOtherTabs: 'Close other tabs',
     closeTab: 'Close tab',
     copy: 'Copy',
+    copyFailed: 'Copy failed',
     copyMarkdown: 'Copy Markdown',
+    copyResult: 'Copy result',
+    copyResultTooltip: 'Copy result body only, excluding action details',
+    copySelectionOrMessage: 'Copy selection, or the whole message',
+    copySucceeded: 'Copied to clipboard',
     delete: 'Delete',
     duplicate: 'Duplicate',
     edit: 'Edit',
+    exportMarkdown: 'Export Markdown',
+    exportFullMarkdownTooltip:
+      'Export full message Markdown, including action details, result, and elapsed time',
+    exportResultMarkdown: 'Export result Markdown',
+    exportResultMarkdownTooltip:
+      'Export only the result area as Markdown, excluding action details',
+    exportDiagram: 'Export diagram',
+    exportCanceled: 'Export canceled',
+    exportFailed: 'Export failed',
+    exportPng: 'Export PNG',
+    exportSucceeded: 'Export succeeded',
+    exportSvg: 'Export SVG',
+    fitToScreen: 'Fit',
     assistant: 'Assistant',
     error: 'Error',
     new: 'New',
@@ -193,8 +212,7 @@ const en = {
     postLoginNotReady:
       'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
     postLoginOriginalTask: 'Original user task',
-    postLoginSkillHint:
-      'Skill matching runs after login when the follow-up agent task starts.',
+    postLoginSkillHint: 'Skill matching runs after login when the follow-up agent task starts.',
     postLoginTaskStarting: 'Login completed; starting the follow-up task.',
     recentOutputEmpty: 'recent output: <empty>',
     resizeSubterminalHeight: 'Resize temporary sub-terminal height',
@@ -219,6 +237,22 @@ const en = {
   },
   input: {
     actionDetails: 'Action details',
+    actionDetailsCompleted: 'Action details (collapsed; result first)',
+    actionAnalysisCommand:
+      'I will check whether the command fits the current context, whether it needs approval, and whether the output contains risk signals or evidence for the next step.',
+    actionAnalysisDefault:
+      'I will use this output as working evidence, then decide whether the goal is clearer, more verification is needed, or the conclusion is ready.',
+    actionAnalysisPlan:
+      'I will check whether the plan covers the goal, whether the sequence is sound, and whether the execution needs more preflight checks.',
+    actionAnalysisPrefix: 'Analysis direction: ',
+    actionAnalysisTool:
+      'I will look at what facts the tool returned, whether they are enough to support the next action, and whether an error means we should switch approach.',
+    actionIntent: 'Action intent',
+    actionIntentCommand: 'Use this command to collect the evidence needed for the current step:',
+    actionIntentPlan: 'Move forward through these verifiable steps:',
+    actionIntentSkill: 'Matched a skill for the current request. Match reason:',
+    actionPurposePrefix: 'I am doing this step to move forward with: ',
+    actionPurposeSuffix: '.',
     actions: 'Actions',
     agentCanceled: 'Agent run was stopped manually.',
     askPlaceholder: 'Ask AI, or type /command check the current terminal',
@@ -248,6 +282,7 @@ const en = {
     referencedTools: 'Specified tools',
     referencedWiki: 'Wiki',
     referencedWikiDocuments: 'Referenced wiki documents',
+    rawActionObservation: 'Raw observation',
     removePathRef: 'Remove file or directory reference',
     removeSkillRef: 'Remove skill reference',
     removeToolRef: 'Remove tool reference',
@@ -401,7 +436,8 @@ const en = {
     mcpStatusNotChecked: 'Not checked',
     mcpToolCount: 'Tools',
     mcpTools: 'MCP tools',
-    noMcpTools: 'No tools loaded for this MCP server. Run validation after saving the configuration.',
+    noMcpTools:
+      'No tools loaded for this MCP server. Run validation after saving the configuration.',
     model: 'Model',
     modelHint: 'Configure OpenAI-compatible providers; API keys stay local.',
     modelListHint: 'One model ID per line. Save, then choose one from the model selector.',

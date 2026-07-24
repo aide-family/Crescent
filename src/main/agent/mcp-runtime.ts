@@ -6,6 +6,14 @@ const MCP_PROTOCOL_VERSION = '2024-11-05'
 const MCP_REQUEST_TIMEOUT_MS = 12_000
 const MCP_INITIALIZE_TIMEOUT_MS = 45_000
 const MCP_TOOLS_LIST_TIMEOUT_MS = 30_000
+const MCP_DEFAULT_PATH_ENTRIES = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin'
+]
 
 interface JsonRpcResponse {
   id?: number | string
@@ -144,7 +152,7 @@ class StdioMcpClient {
     if (this.child) return
 
     this.child = spawn(this.server.command, this.server.args, {
-      env: { ...process.env, ...this.server.env },
+      env: buildMcpProcessEnv(this.server.env),
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout.on('data', (chunk: Buffer) => this.consume(chunk))
@@ -287,7 +295,22 @@ class StdioMcpClient {
 }
 
 function encodeJsonRpcMessage(payload: unknown): string {
-  return `${JSON.stringify(payload)}\n`
+  const body = JSON.stringify(payload)
+  return `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`
+}
+
+function buildMcpProcessEnv(serverEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  const configuredPath = serverEnv?.PATH ?? process.env.PATH ?? ''
+  const mergedPath = [
+    ...configuredPath.split(':').filter(Boolean),
+    ...MCP_DEFAULT_PATH_ENTRIES
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index)
+
+  return {
+    ...process.env,
+    ...serverEnv,
+    PATH: mergedPath.join(':')
+  }
 }
 
 function readJsonRpcMessage(buffer: Buffer): { message: unknown; bytesRead: number } | undefined {

@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent
@@ -14,6 +15,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import mermaid from 'mermaid'
 import {
+  ArrowLeftRightIcon,
   ArrowUpIcon,
   BookOpenIcon,
   BotIcon,
@@ -31,6 +33,8 @@ import {
   Maximize2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
   PencilIcon,
   PlugIcon,
   PlusIcon,
@@ -44,6 +48,7 @@ import {
   ZoomOutIcon,
   XIcon
 } from 'lucide-react'
+import { Toaster, toast } from 'sonner'
 
 import { ProductLogo } from '@renderer/components/ProductLogo'
 import { Badge } from '@renderer/components/ui/badge'
@@ -139,11 +144,55 @@ function hasConfiguredModelSelection(config: AgentConfig): boolean {
 }
 
 const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
-let mermaidInitialized = false
-const MERMAID_MIN_ZOOM = 0.4
+const PANE_ORDER_STORAGE_KEY = 'crescent.paneOrder'
+const MERMAID_MIN_ZOOM = 0.05
 const MERMAID_MAX_ZOOM = 10
 const MERMAID_ZOOM_STEP = 0.15
 const MERMAID_ZOOM_EPSILON = 0.001
+
+const MERMAID_RENDER_CONFIG = {
+  startOnLoad: false,
+  securityLevel: 'strict',
+  htmlLabels: false,
+  flowchart: {
+    htmlLabels: false
+  },
+  theme: 'base',
+  themeVariables: {
+    darkMode: true,
+    background: '#171717',
+    mainBkg: '#262626',
+    secondBkg: '#333333',
+    tertiaryColor: '#1f1f1f',
+    primaryColor: '#262626',
+    primaryTextColor: '#fafafa',
+    primaryBorderColor: 'rgba(255,255,255,0.18)',
+    secondaryColor: '#333333',
+    secondaryTextColor: '#fafafa',
+    secondaryBorderColor: 'rgba(255,255,255,0.16)',
+    tertiaryTextColor: '#fafafa',
+    tertiaryBorderColor: 'rgba(255,255,255,0.14)',
+    lineColor: '#a3a3a3',
+    textColor: '#fafafa',
+    edgeLabelBackground: '#262626',
+    clusterBkg: '#1f1f1f',
+    clusterBorder: 'rgba(255,255,255,0.16)',
+    noteBkgColor: '#333333',
+    noteTextColor: '#fafafa',
+    noteBorderColor: 'rgba(255,255,255,0.16)',
+    actorBkg: '#262626',
+    actorTextColor: '#fafafa',
+    actorBorder: 'rgba(255,255,255,0.18)',
+    signalColor: '#fafafa',
+    signalTextColor: '#fafafa',
+    labelTextColor: '#fafafa',
+    loopTextColor: '#fafafa',
+    activationBkgColor: '#333333',
+    activationBorderColor: 'rgba(255,255,255,0.18)',
+    sequenceNumberColor: '#171717'
+  },
+  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
+} as const
 
 type AgentLogEntry =
   | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
@@ -168,6 +217,13 @@ interface AgentRunAction {
   detail: string
 }
 
+interface ParsedAgentRunMarkdown {
+  actionsMarkdown: string
+  resultMarkdown: string
+  errorMarkdown: string
+  elapsedMarkdown: string
+}
+
 interface PasswordPromptRequest {
   tabId: string
   title: string
@@ -180,6 +236,7 @@ type SkillManageMessage = {
 }
 
 type SkillInstallLogStatus = 'running' | 'success' | 'error'
+type PaneOrder = 'terminal-chat' | 'chat-terminal'
 
 interface CloseTabsConfirmRequest {
   mode: 'tab' | 'other-tabs'
@@ -305,6 +362,12 @@ function getNextTerminalTitle(baseTitle: string, tabs: AgentTerminalTab[]): stri
     const candidate = `${normalizedBase} ${index}`
     if (!titles.has(candidate)) return candidate
   }
+}
+
+function resolveInitialPaneOrder(): PaneOrder {
+  return localStorage.getItem(PANE_ORDER_STORAGE_KEY) === 'chat-terminal'
+    ? 'chat-terminal'
+    : 'terminal-chat'
 }
 
 function formatPipePrompt(cwd: string): string {
@@ -457,6 +520,7 @@ function App(): React.JSX.Element {
   const [passwordPromptValue, setPasswordPromptValue] = useState('')
   const [passwordPromptError, setPasswordPromptError] = useState('')
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
+  const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
   const [connectionEditing, setConnectionEditing] = useState(true)
   const [connectionForm, setConnectionForm] = useState<ConnectionInput>({
@@ -483,6 +547,7 @@ function App(): React.JSX.Element {
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
   const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('terminal')
+  const [paneOrder, setPaneOrder] = useState<PaneOrder>(() => resolveInitialPaneOrder())
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
@@ -644,6 +709,7 @@ function App(): React.JSX.Element {
   const failedToLoadConfigText = t.terminal.failedToLoadConfig
   const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
   const failedToLoadModelsText = t.terminal.failedToLoadModels
+  const terminalPaneFirst = paneOrder === 'terminal-chat'
 
   useEffect(() => {
     if (!slashMenuVisible) return
@@ -655,6 +721,10 @@ function App(): React.JSX.Element {
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
 
   const configured = useMemo(() => Boolean(config.model.trim()), [config.model])
+  const filteredConnections = useMemo(
+    () => filterConnections(connections, connectionSearchQuery),
+    [connectionSearchQuery, connections]
+  )
   const connectionFormReady = useMemo(
     () => Boolean(connectionForm.name.trim() && connectionForm.host.trim()),
     [connectionForm.host, connectionForm.name]
@@ -1171,6 +1241,11 @@ function App(): React.JSX.Element {
   }, [locale])
 
   useEffect(() => {
+    localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
+    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+  }, [paneOrder])
+
+  useEffect(() => {
     localStorage.setItem(
       CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
       closeTerminalConfirmEnabled ? 'true' : 'false'
@@ -1290,7 +1365,11 @@ function App(): React.JSX.Element {
       if (!splitDragRef.current) return
 
       const width = window.innerWidth
-      const nextPercent = Math.max(35, Math.min(78, (event.clientX / width) * 100))
+      const rawPercent =
+        paneOrder === 'terminal-chat'
+          ? (event.clientX / width) * 100
+          : ((width - event.clientX) / width) * 100
+      const nextPercent = Math.max(35, Math.min(78, rawPercent))
       setTerminalPanePercent(nextPercent)
       window.requestAnimationFrame(() => fitAddonRef.current?.fit())
     }
@@ -1310,7 +1389,7 @@ function App(): React.JSX.Element {
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
     }
-  }, [resizeSubterminalPair])
+  }, [paneOrder, resizeSubterminalPair])
 
   const redrawPipeInput = useCallback((terminal: Terminal): void => {
     const buffer = pipeInputBufferRef.current
@@ -1995,7 +2074,7 @@ function App(): React.JSX.Element {
   }
 
   async function copySkillInstallCommand(result: AgentSkillSearchResult): Promise<void> {
-    await copyText(buildSkillInstallCommand(result))
+    await copyText(buildSkillInstallCommand(result), copyFeedback(t))
     setCopiedSkillCommandId(result.id)
     window.setTimeout(() => {
       setCopiedSkillCommandId((current) => (current === result.id ? null : current))
@@ -2009,7 +2088,7 @@ function App(): React.JSX.Element {
     const text = selectedText || selectedSkillInstallLog
     if (!text) return
 
-    await copyText(text)
+    await copyText(text, copyFeedback(t))
     setCopiedSkillInstallLogId(skillInstallLogResultId)
     window.setTimeout(() => {
       setCopiedSkillInstallLogId((current) =>
@@ -2821,22 +2900,41 @@ function App(): React.JSX.Element {
     const terminalContext = await window.api.terminal.getContext(tabId)
     const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
     const allowTerminalTools = !explicitNonTerminalRequest
+    const directlyMentionedConnection =
+      !tab?.isSsh && !tab?.connectionId
+        ? findDirectlyMentionedConnection(displayInput, connections)
+        : undefined
+    const inputMentionsConnection = Boolean(directlyMentionedConnection)
     const shouldUseCurrentTerminal =
       terminalContext.mode !== 'none' &&
       hasUsableCurrentTerminal(tab, terminalContext.output) &&
+      !inputMentionsConnection &&
       !explicitNonTerminalRequest &&
       !isExplicitConnectionRequest(displayInput)
     const shouldResolveConnectionIntent =
       !resumeRequested &&
       !tab?.isSsh &&
       !tab?.connectionId &&
-      !shouldUseCurrentTerminal &&
+      (inputMentionsConnection || !shouldUseCurrentTerminal) &&
       !explicitNonTerminalRequest
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
-      connectionIntent = shouldResolveConnectionIntent
-        ? await resolveConnectionIntentForInput(displayInput)
-        : undefined
+      connectionIntent = directlyMentionedConnection
+        ? {
+            analysis: {
+              ok: true,
+              shouldConnect: true,
+              connectionId: directlyMentionedConnection.id,
+              confidence: 100,
+              executeAfterLogin: !isConnectionOnlyRequest(displayInput, directlyMentionedConnection),
+              matchBasis: 'name',
+              reason: `${t.terminal.connectionMatched}: ${directlyMentionedConnection.name}`
+            },
+            connection: directlyMentionedConnection
+          }
+        : shouldResolveConnectionIntent
+          ? await resolveConnectionIntentForInput(displayInput)
+          : undefined
     } finally {
       updateTab(tabId, (current) => ({ ...current, agentThinking: false }))
     }
@@ -3102,6 +3200,8 @@ function App(): React.JSX.Element {
   }
 
   function handleAgentInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key === 'Enter' && isComposingInput(event)) return
+
     if (slashMenuVisible) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -3134,6 +3234,25 @@ function App(): React.JSX.Element {
 
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
+  }
+
+  async function handleAgentInputPaste(
+    event: ReactClipboardEvent<HTMLTextAreaElement>
+  ): Promise<void> {
+    const files = Array.from(event.clipboardData.files)
+    if (files.length === 0) return
+
+    event.preventDefault()
+    const references = await Promise.all(files.map(resolvePastedFileReference))
+    const validReferences = references.filter((reference): reference is AgentPathReference =>
+      Boolean(reference)
+    )
+    if (validReferences.length === 0) return
+
+    updateTab(activeTabIdRef.current, (tab) => ({
+      ...tab,
+      pathRefs: validReferences.reduce(addUniquePathRef, tab.pathRefs)
+    }))
   }
 
   function insertSlashCommand(command: SlashCommandOption): void {
@@ -3571,7 +3690,7 @@ function App(): React.JSX.Element {
       actions: connection.actions
     }
 
-    await copyText(JSON.stringify(value, null, 2))
+    await copyText(JSON.stringify(value, null, 2), copyFeedback(t))
   }
 
   function importConnectionFromText(): void {
@@ -3678,7 +3797,7 @@ function App(): React.JSX.Element {
 
   async function copyLogEntry(entry: AgentLogEntry): Promise<void> {
     const tabId = activeTabIdRef.current
-    await copyText(entry.text)
+    await copyText(getSelectedTextWithinLog(entry.id) || entry.text, copyFeedback(t))
     updateTab(tabId, (tab) => ({ ...tab, copiedLogId: entry.id }))
     window.setTimeout(() => {
       updateTab(tabId, (tab) => ({
@@ -3686,6 +3805,30 @@ function App(): React.JSX.Element {
         copiedLogId: tab.copiedLogId === entry.id ? null : tab.copiedLogId
       }))
     }, 1200)
+  }
+
+  async function copyLogEntryResult(entry: AgentLogEntry): Promise<void> {
+    const tabId = activeTabIdRef.current
+    await copyText(extractResultMarkdown(entry.text, t) || entry.text, copyFeedback(t))
+    updateTab(tabId, (tab) => ({ ...tab, copiedLogId: entry.id }))
+    window.setTimeout(() => {
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        copiedLogId: tab.copiedLogId === entry.id ? null : tab.copiedLogId
+      }))
+    }, 1200)
+  }
+
+  function exportLogEntryResultMarkdown(entry: AgentLogEntry): void {
+    void downloadMarkdown(
+      extractResultMarkdown(entry.text, t) || entry.text,
+      buildLogMarkdownFilename(entry, 'result'),
+      t
+    )
+  }
+
+  function exportLogEntryFullMarkdown(entry: AgentLogEntry): void {
+    void downloadMarkdown(entry.text, buildLogMarkdownFilename(entry), t)
   }
 
   const skillInstallLogResultIds = Object.keys(skillInstallLogs)
@@ -4192,7 +4335,9 @@ function App(): React.JSX.Element {
                             ) : (
                               <CheckIcon data-icon="inline-start" />
                             )}
-                            {server.enabled ? t.settings.disableMcpServer : t.settings.enableMcpServer}
+                            {server.enabled
+                              ? t.settings.disableMcpServer
+                              : t.settings.enableMcpServer}
                           </Button>
                         </div>
                         <div className="mt-3 line-clamp-2 font-mono text-[11px] text-muted-foreground">
@@ -4200,6 +4345,16 @@ function App(): React.JSX.Element {
                         </div>
                         <div className="mt-2 text-[11px] text-muted-foreground">
                           {t.settings.mcpToolCount}: {toolCount}
+                        </div>
+                        <div
+                          className={`mt-1 line-clamp-3 text-[11px] ${
+                            status.state === 'not-ready'
+                              ? 'text-destructive'
+                              : 'text-muted-foreground'
+                          }`}
+                          title={status.label}
+                        >
+                          {status.label}
                         </div>
                       </div>
                     </div>
@@ -4728,6 +4883,7 @@ function App(): React.JSX.Element {
 
   return (
     <main className="flex h-full flex-col bg-background">
+      <Toaster richColors closeButton position="top-right" />
       <header className="flex h-14 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-3">
           <ProductLogo />
@@ -4783,6 +4939,20 @@ function App(): React.JSX.Element {
             onClick={() => setWikiSheetOpen(true)}
           >
             <BookOpenIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t.app.swapPanes}
+            title={t.app.swapPanes}
+            onClick={() =>
+              setPaneOrder((current) =>
+                current === 'terminal-chat' ? 'chat-terminal' : 'terminal-chat'
+              )
+            }
+          >
+            <ArrowLeftRightIcon aria-hidden="true" />
           </Button>
           <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
             <SelectTrigger
@@ -5103,7 +5273,9 @@ function App(): React.JSX.Element {
       {mcpSheet}
       {historySheet}
       {wikiSheet}
-      <section className="flex min-h-0 flex-1">
+      <section
+        className={`flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
+      >
         {hiddenPane !== 'terminal' && (
           <div
             className="flex min-h-0 flex-col bg-[#111111]"
@@ -5330,11 +5502,12 @@ function App(): React.JSX.Element {
           <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
             <div
               ref={agentLogRef}
-              className="min-h-0 min-w-0 flex-1 space-y-2 overflow-auto p-4 text-sm"
+              className="min-h-0 min-w-0 flex-1 space-y-2 overflow-auto px-4 pb-4 pt-0 text-sm"
             >
               {activeTab.agentLog.map((entry) => (
                 <div
                   key={entry.id}
+                  data-agent-log-entry={entry.id}
                   className={
                     isConversationLog(entry.kind)
                       ? `${logClassName(entry.kind)} min-w-0`
@@ -5350,22 +5523,31 @@ function App(): React.JSX.Element {
                           </span>
                           <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
                         </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={t.common.copy}
-                          title={t.common.copy}
-                          onClick={() => copyLogEntry(entry)}
-                        >
-                          {activeTab.copiedLogId === entry.id ? (
-                            <CheckIcon aria-hidden="true" />
-                          ) : (
-                            <CopyIcon aria-hidden="true" />
-                          )}
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={t.common.copySelectionOrMessage}
+                            title={t.common.copySelectionOrMessage}
+                            onClick={() => copyLogEntry(entry)}
+                          >
+                            {activeTab.copiedLogId === entry.id ? (
+                              <CheckIcon aria-hidden="true" />
+                            ) : (
+                              <CopyIcon aria-hidden="true" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
-                      <AgentLogContent entry={entry} t={t} />
+                      <AgentLogContent
+                        entry={entry}
+                        t={t}
+                        copied={activeTab.copiedLogId === entry.id}
+                        onCopyResult={() => copyLogEntryResult(entry)}
+                        onExportResult={() => exportLogEntryResultMarkdown(entry)}
+                        onExportFull={() => exportLogEntryFullMarkdown(entry)}
+                      />
                     </>
                   ) : (
                     <ActionLogRow entry={entry} t={t} />
@@ -5388,9 +5570,15 @@ function App(): React.JSX.Element {
                     }}
                   >
                     {hiddenPane === 'terminal' ? (
-                      <PanelLeftOpenIcon aria-hidden="true" />
-                    ) : (
+                      terminalPaneFirst ? (
+                        <PanelLeftOpenIcon aria-hidden="true" />
+                      ) : (
+                        <PanelRightOpenIcon aria-hidden="true" />
+                      )
+                    ) : terminalPaneFirst ? (
                       <PanelLeftCloseIcon aria-hidden="true" />
+                    ) : (
+                      <PanelRightCloseIcon aria-hidden="true" />
                     )}
                   </Button>
                   <Select
@@ -5624,6 +5812,7 @@ function App(): React.JSX.Element {
                       updateTab(activeTab.id, (tab) => ({ ...tab, agentInput: event.target.value }))
                     }}
                     onKeyDown={handleAgentInputKeyDown}
+                    onPaste={(event) => void handleAgentInputPaste(event)}
                     placeholder={t.input.askPlaceholder}
                     className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
                   />
@@ -5709,8 +5898,8 @@ function App(): React.JSX.Element {
             if (event.target === event.currentTarget) setConnectionModalOpen(false)
           }}
         >
-          <div className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background shadow-2xl shadow-black/30">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-card/80 px-4 py-3">
               <div>
                 <h2 id="connection-modal-title" className="text-sm font-semibold">
                   {t.connections.sshConnections}
@@ -5721,39 +5910,63 @@ function App(): React.JSX.Element {
               </div>
               <Button
                 type="button"
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t.common.close}
+                title={t.common.close}
                 onClick={() => setConnectionModalOpen(false)}
               >
-                {t.common.close}
+                <XIcon aria-hidden="true" />
               </Button>
             </div>
-            <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,0.9fr)_minmax(360px,1.1fr)] overflow-hidden">
-              <div className="min-h-0 overflow-auto border-r p-4">
+            <div className="grid min-h-0 flex-1 grid-cols-[minmax(300px,0.92fr)_minmax(420px,1.08fr)] overflow-hidden">
+              <div className="min-h-0 overflow-auto border-r bg-muted/15 p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                    {t.connections.existing}
-                  </h3>
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                      {t.connections.existing}
+                    </h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      {filteredConnections.length}/{connections.length}
+                    </p>
+                  </div>
                   <Badge variant="outline">{connections.length}</Badge>
+                </div>
+                <div className="relative mb-3">
+                  <SearchIcon
+                    className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    value={connectionSearchQuery}
+                    onChange={(event) => setConnectionSearchQuery(event.target.value)}
+                    placeholder={t.connections.searchPlaceholder}
+                    className="h-9 pl-8"
+                    aria-label={t.connections.searchPlaceholder}
+                  />
                 </div>
                 <div className="space-y-2">
                   {connections.length === 0 ? (
                     <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
                       {t.connections.noConnections}
                     </p>
+                  ) : filteredConnections.length === 0 ? (
+                    <p className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                      {t.connections.noSearchResults}
+                    </p>
                   ) : (
-                    connections.map((connection) => (
+                    filteredConnections.map((connection) => (
                       <div
                         key={connection.id}
-                        className={`rounded-md border bg-card p-3 text-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md ${selectedConnectionId === connection.id ? 'border-primary/70 shadow-lg shadow-primary/10 ring-1 ring-primary/30' : ''}`}
+                        className={`rounded-md border bg-card/95 p-3 text-xs shadow-sm transition-all duration-200 hover:border-primary/45 hover:bg-background hover:shadow-md ${selectedConnectionId === connection.id ? 'border-primary/70 bg-background shadow-md shadow-primary/10 ring-1 ring-primary/30' : ''}`}
                         onClick={() => {
                           if (connection.source === 'custom') selectConnection(connection)
                         }}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate font-medium">{connection.name}</p>
-                            <p className="truncate text-muted-foreground">
+                            <p className="truncate text-sm font-semibold">{connection.name}</p>
+                            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                               {formatConnectionTarget(connection)}
                             </p>
                             <p className="truncate text-muted-foreground">
@@ -5770,8 +5983,9 @@ function App(): React.JSX.Element {
                           </div>
                           <Button
                             type="button"
-                            variant="outline"
+                            variant="default"
                             size="sm"
+                            className="shrink-0"
                             onClick={(event) => {
                               event.stopPropagation()
                               connectFromConnectionManager(connection)
@@ -5787,7 +6001,7 @@ function App(): React.JSX.Element {
                             <Button
                               type="button"
                               variant="ghost"
-                              size="sm"
+                              size="xs"
                               onClick={(event) => {
                                 event.stopPropagation()
                                 copyConnection(connection)
@@ -5799,7 +6013,7 @@ function App(): React.JSX.Element {
                             <Button
                               type="button"
                               variant="ghost"
-                              size="sm"
+                              size="xs"
                               onClick={(event) => {
                                 event.stopPropagation()
                                 duplicateConnection(connection)
@@ -5810,7 +6024,7 @@ function App(): React.JSX.Element {
                             <Button
                               type="button"
                               variant="ghost"
-                              size="sm"
+                              size="xs"
                               onClick={(event) => {
                                 event.stopPropagation()
                                 editConnection(connection)
@@ -5821,7 +6035,7 @@ function App(): React.JSX.Element {
                             <Button
                               type="button"
                               variant="destructive"
-                              size="sm"
+                              size="xs"
                               onClick={(event) => {
                                 event.stopPropagation()
                                 deleteConnection(connection.id)
@@ -6336,20 +6550,145 @@ function SkillManageStatus({
   )
 }
 
-function AgentLogContent({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
-  if (isConversationLog(entry.kind)) return <MarkdownContent value={entry.text} t={t} />
+function AgentLogContent({
+  entry,
+  t,
+  copied,
+  onCopyResult,
+  onExportResult,
+  onExportFull
+}: {
+  entry: AgentLogEntry
+  t: Dictionary
+  copied?: boolean
+  onCopyResult?: () => void
+  onExportResult?: () => void
+  onExportFull?: () => void
+}): React.JSX.Element {
+  if (isConversationLog(entry.kind)) {
+    const parsedRun = entry.kind === 'assistant' ? parseAgentRunMarkdown(entry.text, t) : null
+    if (parsedRun) {
+      return (
+        <AgentRunMarkdownContent
+          parsed={parsedRun}
+          t={t}
+          copied={Boolean(copied)}
+          onCopyResult={onCopyResult}
+          onExportResult={onExportResult}
+          onExportFull={onExportFull}
+        />
+      )
+    }
+
+    return <MarkdownContent value={entry.text} t={t} />
+  }
 
   const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
 
   return (
     <details className="group rounded-md border bg-background/60">
-      <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium marker:text-muted-foreground">
+      <summary className="sticky top-0 z-10 cursor-pointer border-b bg-background/95 px-3 py-2 text-sm font-medium backdrop-blur marker:text-muted-foreground">
         {summary}
       </summary>
-      <pre className="select-text max-h-80 min-w-0 overflow-auto border-t p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+      <pre className="select-text max-h-80 min-w-0 overflow-auto p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
         {entry.text}
       </pre>
     </details>
+  )
+}
+
+function AgentRunMarkdownContent({
+  parsed,
+  t,
+  copied,
+  onCopyResult,
+  onExportResult,
+  onExportFull
+}: {
+  parsed: ParsedAgentRunMarkdown
+  t: Dictionary
+  copied: boolean
+  onCopyResult?: () => void
+  onExportResult?: () => void
+  onExportFull?: () => void
+}): React.JSX.Element {
+  const hasResult = Boolean(parsed.resultMarkdown || parsed.errorMarkdown)
+
+  return (
+    <div className="min-w-0 space-y-3">
+      {hasResult && (
+        <section className="min-w-0 rounded-md border bg-background shadow-sm">
+          <div className="sticky top-0 z-20 flex min-w-0 items-center justify-between gap-3 border-b bg-background/95 px-3 py-2 backdrop-blur">
+            <div className="min-w-0 text-xs font-semibold text-foreground">
+              {parsed.errorMarkdown ? t.input.error : t.input.result}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
+                title={copied ? t.common.copied : t.common.copyResultTooltip}
+                onClick={onCopyResult}
+              >
+                {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.exportResultMarkdownTooltip}
+                title={t.common.exportResultMarkdownTooltip}
+                onClick={onExportResult}
+              >
+                <DownloadIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.exportFullMarkdownTooltip}
+                title={t.common.exportFullMarkdownTooltip}
+                onClick={onExportFull}
+              >
+                <FileTextIcon aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <div className="min-w-0 p-3">
+            {parsed.resultMarkdown && <MarkdownContent value={parsed.resultMarkdown} t={t} />}
+            {parsed.errorMarkdown && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive">
+                <MarkdownContent value={parsed.errorMarkdown} t={t} />
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {parsed.actionsMarkdown && (
+        <details
+          className="group min-w-0 rounded-md border bg-muted/10"
+          open={hasResult ? undefined : true}
+        >
+          <summary className="sticky top-0 z-20 flex cursor-pointer select-none items-center justify-between gap-3 border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur marker:content-none">
+            <span>{hasResult ? t.input.actionDetailsCompleted : t.input.actionDetails}</span>
+            <ChevronDownIcon
+              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="min-w-0 space-y-3 p-3">
+            <MarkdownContent value={parsed.actionsMarkdown} t={t} />
+            {parsed.elapsedMarkdown && (
+              <div className="border-t pt-3 text-xs text-muted-foreground">
+                <MarkdownContent value={parsed.elapsedMarkdown} t={t} />
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
   )
 }
 
@@ -6415,7 +6754,6 @@ function isExplicitNonTerminalAgentRequest(
 
 function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
   if (tab?.isSsh || tab?.connectionId) return true
-  if (tab && tab.id !== 'default' && tab.title !== 'Local') return true
 
   const normalized = normalizeTerminalControlText(output).trim()
   if (!normalized) return false
@@ -6431,6 +6769,70 @@ function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: str
     (line) =>
       !/^\[Crescent\]/.test(line) && !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
   )
+}
+
+function findDirectlyMentionedConnection(
+  input: string,
+  connections: ConnectionConfig[]
+): ConnectionConfig | undefined {
+  const normalizedInput = normalizeConnectionMentionText(input)
+  if (!normalizedInput) return undefined
+
+  const matches = connections.filter((connection) =>
+    getConnectionMentionTokens(connection).some((token) => normalizedInput.includes(token))
+  )
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+function getConnectionMentionTokens(connection: ConnectionConfig): string[] {
+  const values = [connection.name, connection.host, connection.user].filter(
+    (value): value is string => Boolean(value)
+  )
+  const tokens = new Set<string>()
+
+  for (const value of values) {
+    const normalizedValue = normalizeConnectionMentionText(value)
+    if (normalizedValue.length >= 3) tokens.add(normalizedValue)
+
+    for (const token of value.split(/[^\p{L}\p{N}]+/u)) {
+      const normalizedToken = normalizeConnectionMentionText(token)
+      if (normalizedToken.length >= 3) tokens.add(normalizedToken)
+    }
+  }
+
+  return [...tokens]
+}
+
+function normalizeConnectionMentionText(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+function isConnectionOnlyRequest(input: string, connection: ConnectionConfig): boolean {
+  let normalized = normalizeConnectionMentionText(input)
+  const removableTokens = [
+    ...getConnectionMentionTokens(connection),
+    'connection',
+    'connect',
+    'login',
+    'ssh',
+    'open',
+    '连接',
+    '登录',
+    '登入',
+    '打开',
+    '进入',
+    '切换',
+    '集群',
+    '环境',
+    '到',
+    '至'
+  ].sort((left, right) => right.length - left.length)
+
+  for (const token of removableTokens) {
+    normalized = normalized.replaceAll(token, '')
+  }
+
+  return normalized.length === 0
 }
 
 function buildResumeAgentInput(tab: AgentTerminalTab, latestInput: string, t: Dictionary): string {
@@ -6807,15 +7209,21 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
 
 function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
   const lines: string[] = []
+  const completed = Boolean(run.result || run.error)
 
   if (run.actions.length > 0) {
     lines.push(`**${t.input.actions}**`, '')
     for (const action of run.actions) {
       lines.push(`- ${action.title}`)
     }
-    lines.push('', '<details>', `<summary>${t.input.actionDetails}</summary>`, '')
+    lines.push(
+      '',
+      completed ? '<details>' : '<details open>',
+      `<summary>${completed ? t.input.actionDetailsCompleted : t.input.actionDetails}</summary>`,
+      ''
+    )
     for (const [index, action] of run.actions.entries()) {
-      lines.push(`#### ${index + 1}. ${action.title}`, '', '```text', action.detail, '```', '')
+      lines.push(`#### ${index + 1}. ${action.title}`, '', formatActionNarrative(action, t), '')
     }
     lines.push('</details>')
   }
@@ -6833,6 +7241,89 @@ function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
   }
 
   return lines.join('\n').trim()
+}
+
+function formatActionNarrative(action: AgentRunAction, t: Dictionary): string {
+  const intent = extractActionIntent(action, t)
+  const lines = [
+    ...(intent ? [`**${t.input.actionIntent}**`, intent, ''] : []),
+    `**${t.input.rawActionObservation}**`,
+    '```text',
+    action.detail,
+    '```'
+  ]
+
+  return lines.join('\n')
+}
+
+function extractActionIntent(action: AgentRunAction, t: Dictionary): string {
+  const operationReason = extractLabeledSection(action.detail, t.commandReview.operationReason)
+  if (operationReason) return operationReason
+
+  const command = extractActionCommand(action.detail, t)
+  if (command) return `${t.input.actionIntentCommand}\n\`\`\`bash\n${command}\n\`\`\``
+
+  const planSteps = extractNumberedLines(action.detail)
+  if (planSteps.length > 0) return [t.input.actionIntentPlan, ...planSteps].join('\n')
+
+  const skillReason = extractLabeledSection(action.detail, t.input.skillMatchReason)
+  if (skillReason) return `${t.input.actionIntentSkill} ${skillReason}`
+
+  const normalizedDetail = action.detail.trim()
+  if (normalizedDetail && normalizedDetail !== action.title.trim()) return normalizedDetail
+
+  return ''
+}
+
+function extractActionCommand(detail: string, t: Dictionary): string {
+  const labels = [
+    'Command',
+    t.commandReview.command,
+    t.commandReview.submitted,
+    `${t.commandReview.submitted}:`
+  ]
+
+  for (const label of labels) {
+    const value = extractLabeledSection(detail, label)
+    if (value) return value
+  }
+
+  return ''
+}
+
+function extractLabeledSection(detail: string, label: string): string {
+  const lines = detail.replace(/\r\n/g, '\n').split('\n')
+  const normalizedLabel = label.replace(/:$/, '').trim()
+  const startIndex = lines.findIndex((line) => {
+    const trimmed = line.trim()
+    return trimmed === `${normalizedLabel}:` || trimmed.startsWith(`${normalizedLabel}: `)
+  })
+  if (startIndex < 0) return ''
+
+  const firstLine = lines[startIndex].trim()
+  const inlineValue = firstLine.slice(`${normalizedLabel}:`.length).trim()
+  if (inlineValue) return inlineValue
+
+  const valueLines: string[] = []
+  for (const line of lines.slice(startIndex + 1)) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      if (valueLines.length > 0) break
+      continue
+    }
+    if (/^[^:：]{1,32}[:：]\s*$/.test(trimmed) && valueLines.length > 0) break
+    valueLines.push(line.trimEnd())
+  }
+
+  return trimMarkdownLines(valueLines)
+}
+
+function extractNumberedLines(detail: string): string[] {
+  return detail
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^\d+\.\s+/.test(line))
 }
 
 function appendElapsedFooter(text: string, elapsedMs: number, t: Dictionary): string {
@@ -7257,12 +7748,36 @@ function getMcpServerStatus(
   if (validating) return { state: 'pending', label: t.settings.mcpStatusChecking }
   if (toolCount > 0) return { state: 'ready', label: t.settings.mcpStatusConnected }
 
-  const validationError = validation?.ok === false ? (validation.error ?? '') : ''
-  if (validationError.includes(server.name) || validationError.includes(server.id)) {
-    return { state: 'not-ready', label: t.settings.mcpStatusError }
+  const validationError = extractMcpServerValidationError(server, validation)
+  if (validationError) {
+    return {
+      state: 'not-ready',
+      label: `${t.settings.mcpStatusError}: ${validationError}`
+    }
   }
 
   return { state: 'pending', label: t.settings.mcpStatusNotChecked }
+}
+
+function extractMcpServerValidationError(
+  server: AgentMcpServerConfig,
+  validation: AgentValidationResult | undefined
+): string {
+  const validationError = validation?.ok === false ? (validation.error ?? '') : ''
+  if (!validationError) return ''
+
+  const prefix = 'MCP server load failed:'
+  const mcpError = validationError.includes(prefix)
+    ? validationError.slice(validationError.indexOf(prefix) + prefix.length).trim()
+    : validationError
+  const parts = mcpError
+    .split(/\s*;\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const serverNames = [server.name, server.id].filter(Boolean)
+  const matched = parts.find((part) => serverNames.some((name) => part.includes(name)))
+
+  return matched ?? (validationError.includes(prefix) ? mcpError : '')
 }
 
 function getSlashCommandQuery(value: string): string | undefined {
@@ -7552,6 +8067,35 @@ function buildConnectionSlashCommand(
   }
 }
 
+function filterConnections(connections: ConnectionConfig[], query: string): ConnectionConfig[] {
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return connections
+
+  return connections.filter((connection) =>
+    normalizeSearchText(
+      [
+        connection.name,
+        connection.host,
+        connection.user,
+        connection.port,
+        connection.identityFile,
+        connection.description,
+        connection.source,
+        ...(connection.sshOptions ?? []),
+        ...(connection.actions ?? [])
+      ]
+        .filter(Boolean)
+        .join(' ')
+    ).includes(normalizedQuery)
+  )
+}
+
+function normalizeSearchText(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+}
+
 function addUniqueSkillRef(
   skillRefs: AgentSkillOption[],
   skill: AgentSkillOption
@@ -7586,6 +8130,51 @@ function addUniquePathRef(
   if (pathRefs.some((current) => current.id === reference.id)) return pathRefs
 
   return [...pathRefs, reference]
+}
+
+function isComposingInput(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+  const reactEvent = event as KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean }
+  const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & {
+    isComposing?: boolean
+    keyCode?: number
+  }
+
+  return Boolean(reactEvent.isComposing || nativeEvent.isComposing || nativeEvent.keyCode === 229)
+}
+
+async function resolvePastedFileReference(file: File): Promise<AgentPathReference | undefined> {
+  const path = (file as File & { path?: string }).path
+  if (path) {
+    return {
+      id: `file:${path}`,
+      kind: 'file',
+      path,
+      name: file.name || path.split(/[\\/]/).pop() || path
+    }
+  }
+
+  const base64 = await fileToBase64(file)
+  return window.api.agent.savePastedAttachment({
+    name: file.name || defaultPastedFileName(file.type),
+    mimeType: file.type,
+    base64
+  })
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return window.btoa(binary)
+}
+
+function defaultPastedFileName(mimeType: string): string {
+  if (mimeType === 'image/png') return 'pasted-image.png'
+  if (mimeType === 'image/jpeg') return 'pasted-image.jpg'
+  if (mimeType === 'image/gif') return 'pasted-image.gif'
+  if (mimeType === 'image/webp') return 'pasted-image.webp'
+  return 'pasted-file'
 }
 
 function buildAgentInputWithReferences(
@@ -8065,22 +8654,360 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
-async function copyText(value: string): Promise<void> {
+type OperationFeedback = {
+  success: string
+  failed: string
+  canceled?: string
+}
+
+function copyFeedback(t: Dictionary): OperationFeedback {
+  return {
+    success: t.common.copySucceeded,
+    failed: t.common.copyFailed
+  }
+}
+
+function exportFeedback(t: Dictionary): OperationFeedback {
+  return {
+    success: t.common.exportSucceeded,
+    failed: t.common.exportFailed,
+    canceled: t.common.exportCanceled
+  }
+}
+
+function notifyOperationError(message: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error || '')
+  toast.error(detail ? `${message}: ${detail}` : message)
+}
+
+async function copyText(value: string, feedback?: OperationFeedback): Promise<void> {
   try {
     await navigator.clipboard.writeText(value)
+    if (feedback) toast.success(feedback.success)
     return
-  } catch {
+  } catch (clipboardError) {
     const textArea = document.createElement('textarea')
-    textArea.value = value
-    textArea.style.position = 'fixed'
-    textArea.style.left = '-9999px'
-    textArea.style.top = '0'
-    document.body.appendChild(textArea)
-    textArea.focus()
-    textArea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textArea)
+    try {
+      textArea.value = value
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-9999px'
+      textArea.style.top = '0'
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+      const copied = document.execCommand('copy')
+      if (!copied) throw clipboardError
+      if (feedback) toast.success(feedback.success)
+    } catch (fallbackError) {
+      if (feedback) notifyOperationError(feedback.failed, fallbackError)
+      throw fallbackError
+    } finally {
+      document.body.removeChild(textArea)
+    }
   }
+}
+
+function getSelectedTextWithinLog(logId: number): string {
+  const selection = window.getSelection()
+  const selectedText = selection?.toString().trim()
+  if (!selection || !selectedText) return ''
+
+  const container = document.querySelector(`[data-agent-log-entry="${logId}"]`)
+  const anchorNode = selection.anchorNode
+  const focusNode = selection.focusNode
+  if (!container || (!container.contains(anchorNode) && !container.contains(focusNode))) return ''
+
+  return selectedText
+}
+
+async function textToDataUrl(value: string, type: string): Promise<string> {
+  const blob = new Blob([value], { type })
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read export content.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function saveTextFile(
+  value: string,
+  filename: string,
+  type: string,
+  feedback: OperationFeedback,
+  filters?: Array<{ name: string; extensions: string[] }>
+): Promise<void> {
+  try {
+    const selection = await window.api.agent.pickSavePath({
+      defaultPath: filename,
+      filters
+    })
+    if (!selection.ok || !selection.path) {
+      toast.info(feedback.canceled ?? feedback.failed)
+      return
+    }
+
+    const dataUrl = await textToDataUrl(value, type)
+    const result = await window.api.agent.writeDataUrlFile({ path: selection.path, dataUrl })
+    if (!result.ok) throw new Error(result.error || 'Failed to write export file.')
+    toast.success(feedback.success)
+  } catch (error) {
+    notifyOperationError(feedback.failed, error)
+  }
+}
+
+async function downloadMarkdown(value: string, filename: string, t: Dictionary): Promise<void> {
+  await saveTextFile(value, filename, 'text/markdown;charset=utf-8', exportFeedback(t), [
+    { name: 'Markdown', extensions: ['md', 'markdown'] }
+  ])
+}
+
+async function downloadSvg(value: string, filename: string, t: Dictionary): Promise<void> {
+  await saveTextFile(
+    normalizeSvgForExport(value),
+    filename,
+    'image/svg+xml;charset=utf-8',
+    exportFeedback(t),
+    [{ name: 'SVG image', extensions: ['svg'] }]
+  )
+}
+
+async function savePngFromSvg(value: string, filename: string, t: Dictionary): Promise<void> {
+  const feedback = exportFeedback(t)
+  try {
+    const { svg, width, height } = normalizeSvgForPng(value)
+    const result = await window.api.agent.saveSvgAsPng({
+      svg,
+      defaultPath: filename,
+      width,
+      height
+    })
+    if (result.canceled) {
+      toast.info(feedback.canceled ?? feedback.failed)
+      return
+    }
+
+    if (!result.ok) throw new Error(result.error || 'Failed to write PNG file.')
+    toast.success(feedback.success)
+  } catch (error) {
+    notifyOperationError(feedback.failed, error)
+  }
+}
+
+function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): string {
+  const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
+  return `crescent-${entry.kind}${scope ? `-${scope}` : ''}-${timestamp}.md`
+}
+
+function getSvgDimensions(value: string): { width: number; height: number } {
+  const svgTag = getSvgRootTag(value)
+  const viewBox = getSvgAttribute(svgTag, 'viewBox')?.trim().split(/\s+/).map(Number)
+  if (viewBox && viewBox.length === 4 && viewBox.every(Number.isFinite)) {
+    return { width: Math.max(1, viewBox[2]), height: Math.max(1, viewBox[3]) }
+  }
+
+  return {
+    width: Math.max(1, parseFloat(getSvgAttribute(svgTag, 'width') ?? '1200') || 1200),
+    height: Math.max(1, parseFloat(getSvgAttribute(svgTag, 'height') ?? '800') || 800)
+  }
+}
+
+function normalizeSvgForExport(value: string): string {
+  const svg = normalizeSvgVoidElements(value.trim())
+  return svg.startsWith('<?xml') ? svg : `<?xml version="1.0" encoding="UTF-8"?>\n${svg}`
+}
+
+function normalizeSvgForPng(value: string): { svg: string; width: number; height: number } {
+  let svg = normalizeSvgVoidElements(value.trim().replace(/^\s*<\?xml[^>]*>\s*/i, ''))
+  svg = replaceForeignObjectsWithSvgText(svg)
+  const rootTag = getSvgRootTag(svg)
+  const { width, height } = getSvgDimensions(value)
+
+  let nextRootTag = setSvgAttribute(rootTag, 'xmlns', 'http://www.w3.org/2000/svg')
+  nextRootTag = setSvgAttribute(nextRootTag, 'xmlns:xlink', 'http://www.w3.org/1999/xlink')
+  if (!getSvgAttribute(nextRootTag, 'viewBox')) {
+    nextRootTag = setSvgAttribute(nextRootTag, 'viewBox', `0 0 ${width} ${height}`)
+  }
+  nextRootTag = setSvgAttribute(nextRootTag, 'width', String(width))
+  nextRootTag = setSvgAttribute(nextRootTag, 'height', String(height))
+  nextRootTag = setSvgAttribute(
+    nextRootTag,
+    'style',
+    `${getSvgAttribute(nextRootTag, 'style') ?? ''}; background: #171717;`
+  )
+
+  svg = svg.replace(rootTag, nextRootTag)
+  return {
+    svg: `<?xml version="1.0" encoding="UTF-8"?>\n${svg}`,
+    width,
+    height
+  }
+}
+
+function normalizeSvgVoidElements(value: string): string {
+  return value
+    .replace(/&nbsp;/g, '&#160;')
+    .replace(/<(br|hr|img|input|meta|link)(\s[^<>]*?)?>/gi, (match, tag, attrs = '') => {
+      if (/\/\s*>$/.test(match)) return match
+      return `<${tag}${attrs}/>`
+    })
+}
+
+function replaceForeignObjectsWithSvgText(value: string): string {
+  return value.replace(
+    /<foreignObject\b([^>]*)>([\s\S]*?)<\/foreignObject>/gi,
+    (_match, attrs: string, html: string) => {
+      const x = parseFloat(getSvgAttribute(attrs, 'x') ?? '0') || 0
+      const y = parseFloat(getSvgAttribute(attrs, 'y') ?? '0') || 0
+      const text = extractForeignObjectText(html)
+      if (!text) return ''
+
+      const lines = text.split('\n').filter(Boolean)
+      const tspans = lines
+        .map((line, index) => {
+          const dy = index === 0 ? '1em' : '1.25em'
+          return `<tspan x="${x}" dy="${dy}">${escapeXml(line)}</tspan>`
+        })
+        .join('')
+
+      return `<text x="${x}" y="${y}" fill="#fafafa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">${tspans}</text>`
+    }
+  )
+}
+
+function extractForeignObjectText(value: string): string {
+  const container = document.createElement('div')
+  container.innerHTML = value.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+  return (container.textContent ?? '')
+    .replace(/\u00a0/g, ' ')
+    .split('\n')
+    .map((line) => line.trim().replace(/\s+/g, ' '))
+    .filter(Boolean)
+    .join('\n')
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+function getSvgRootTag(value: string): string {
+  const match = value.match(/<svg\b[^>]*>/i)
+  if (!match) throw new Error('Invalid SVG.')
+  return match[0]
+}
+
+function getSvgAttribute(tag: string, name: string): string | undefined {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = tag.match(new RegExp(`\\s${escapedName}=(?:"([^"]*)"|'([^']*)')`, 'i'))
+  return match?.[1] ?? match?.[2]
+}
+
+function setSvgAttribute(tag: string, name: string, value: string): string {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const escapedValue = value.replace(/"/g, '&quot;')
+  const attributePattern = new RegExp(`(\\s${escapedName}=)(?:"[^"]*"|'[^']*')`, 'i')
+  if (attributePattern.test(tag)) return tag.replace(attributePattern, `$1"${escapedValue}"`)
+
+  return tag.replace(/>$/, ` ${name}="${escapedValue}">`)
+}
+
+function buildMermaidFilename(extension: 'svg' | 'png'): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .replace(/T/, '_')
+    .replace(/Z$/, '')
+  return `crescent-mermaid-${timestamp}.${extension}`
+}
+
+function extractResultMarkdown(value: string, t: Dictionary): string {
+  const parsed = parseAgentRunMarkdown(value, t)
+  if (parsed) {
+    return trimMarkdownLines([parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean))
+  }
+
+  return stripActionMarkdown(value.replace(/\r\n/g, '\n').split('\n'), t)
+}
+
+function parseAgentRunMarkdown(value: string, t: Dictionary): ParsedAgentRunMarkdown | null {
+  const normalized = value.replace(/\r\n/g, '\n')
+  const lines = normalized.split('\n')
+  const actionsHeading = `**${t.input.actions}**`
+  const resultHeading = `**${t.input.result}**`
+  const errorHeading = `**${t.input.error}**`
+  const actionsIndex = lines.findIndex((line) => line.trim() === actionsHeading)
+  const resultIndex = lines.findIndex((line) => line.trim() === resultHeading)
+  const errorIndex = lines.findIndex((line) => line.trim() === errorHeading)
+  const elapsedIndex = findElapsedFooterIndex(lines, t)
+
+  if (actionsIndex < 0 && resultIndex < 0 && errorIndex < 0) return null
+
+  const actionsEnd = firstExistingIndexAfter(actionsIndex, [resultIndex, errorIndex, elapsedIndex])
+  const resultEnd = firstExistingIndexAfter(resultIndex, [errorIndex, elapsedIndex])
+  const errorEnd = firstExistingIndexAfter(errorIndex, [elapsedIndex])
+
+  return {
+    actionsMarkdown:
+      actionsIndex >= 0
+        ? trimMarkdownLines(lines.slice(actionsIndex + 1, actionsEnd ?? lines.length))
+        : '',
+    resultMarkdown:
+      resultIndex >= 0
+        ? trimMarkdownLines(lines.slice(resultIndex + 1, resultEnd ?? lines.length))
+        : '',
+    errorMarkdown:
+      errorIndex >= 0
+        ? trimMarkdownLines(lines.slice(errorIndex + 1, errorEnd ?? lines.length))
+        : '',
+    elapsedMarkdown: elapsedIndex >= 0 ? trimMarkdownLines(lines.slice(elapsedIndex + 1)) : ''
+  }
+}
+
+function findElapsedFooterIndex(lines: string[], t: Dictionary): number {
+  return lines.findIndex((line, index) => {
+    if (line.trim() !== '---') return false
+    return lines.slice(index + 1).some((next) => next.trim().startsWith(`${t.input.elapsed}:`))
+  })
+}
+
+function firstExistingIndexAfter(startIndex: number, indexes: number[]): number | undefined {
+  if (startIndex < 0) return undefined
+
+  const nextIndexes = indexes.filter((index) => index > startIndex)
+  if (nextIndexes.length === 0) return undefined
+  return Math.min(...nextIndexes)
+}
+
+function stripActionMarkdown(lines: string[], t: Dictionary): string {
+  const actionHeading = `**${t.input.actions}**`
+  const actionIndex = lines.findIndex((line) => line.trim() === actionHeading)
+  if (actionIndex < 0) return trimMarkdownLines(lines)
+
+  const nextSectionIndex = lines.findIndex((line, index) => {
+    if (index <= actionIndex) return false
+    const trimmed = line.trim()
+    return (
+      trimmed === `**${t.input.result}**` || trimmed === `**${t.input.error}**` || trimmed === '---'
+    )
+  })
+
+  return trimMarkdownLines([
+    ...lines.slice(0, actionIndex),
+    ...(nextSectionIndex >= 0 ? lines.slice(nextSectionIndex) : [])
+  ])
+}
+
+function trimMarkdownLines(lines: string[]): string {
+  let start = 0
+  let end = lines.length
+  while (start < end && !lines[start].trim()) start += 1
+  while (end > start && !lines[end - 1].trim()) end -= 1
+  return lines.slice(start, end).join('\n').trim()
 }
 
 function MarkdownContent({ value, t }: { value: string; t: Dictionary }): React.JSX.Element {
@@ -8110,7 +9037,8 @@ function renderMarkdownBlocks(value: string, t: Dictionary): React.ReactNode[] {
       continue
     }
 
-    if (line.trim() === '<details>') {
+    if (/^<details(?:\s+open)?>$/.test(line.trim())) {
+      const detailsOpen = line.trim() === '<details open>'
       index += 1
       let summary = 'Details'
       const contentLines: string[] = []
@@ -8130,13 +9058,14 @@ function renderMarkdownBlocks(value: string, t: Dictionary): React.ReactNode[] {
       index += 1
       nodes.push(
         <details
-          key={nodes.length}
-          className="min-w-0 overflow-hidden rounded-md border bg-muted/20 p-2"
+          key={`${nodes.length}:${summary}`}
+          className="min-w-0 rounded-md border bg-muted/20"
+          open={detailsOpen ? true : undefined}
         >
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+          <summary className="sticky top-0 z-10 cursor-pointer border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
             {summary}
           </summary>
-          <div className="mt-2 min-w-0 space-y-2 overflow-hidden">
+          <div className="min-w-0 space-y-2 p-3">
             {renderMarkdownBlocks(contentLines.join('\n'), t)}
           </div>
         </details>
@@ -8272,7 +9201,7 @@ function MarkdownCodeBlock({
   const label = language || 'text'
 
   async function copyCode(): Promise<void> {
-    await copyText(code)
+    await copyText(code, copyFeedback(t))
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1200)
   }
@@ -8282,8 +9211,8 @@ function MarkdownCodeBlock({
   }
 
   return (
-    <div className="min-w-0 overflow-hidden rounded-md border bg-[#111111] text-zinc-100">
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-white/5 px-3 py-1.5">
+    <div className="min-w-0 rounded-md border bg-[#111111] text-zinc-100">
+      <div className="sticky top-0 z-10 flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[#1b1b1b]/95 px-3 py-1.5 backdrop-blur">
         <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">{label}</span>
         <Button
           type="button"
@@ -8317,6 +9246,7 @@ function MermaidBlock({
 }): React.JSX.Element {
   const diagramIdRef = useRef(`mermaid-${crypto.randomUUID()}`)
   const expandedScrollRef = useRef<HTMLDivElement | null>(null)
+  const expandedContentRef = useRef<HTMLDivElement | null>(null)
   const expandedPanRef = useRef<{
     pointerId: number
     startX: number
@@ -8329,60 +9259,24 @@ function MermaidBlock({
   const [expanded, setExpanded] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [panning, setPanning] = useState(false)
+  const [exportSelectKey, setExportSelectKey] = useState(0)
+  const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
 
   useEffect(() => {
     let disposed = false
 
     async function renderDiagram(): Promise<void> {
-      if (!mermaidInitialized) {
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: 'base',
-          themeVariables: {
-            darkMode: true,
-            background: '#171717',
-            mainBkg: '#262626',
-            secondBkg: '#333333',
-            tertiaryColor: '#1f1f1f',
-            primaryColor: '#262626',
-            primaryTextColor: '#fafafa',
-            primaryBorderColor: 'rgba(255,255,255,0.18)',
-            secondaryColor: '#333333',
-            secondaryTextColor: '#fafafa',
-            secondaryBorderColor: 'rgba(255,255,255,0.16)',
-            tertiaryTextColor: '#fafafa',
-            tertiaryBorderColor: 'rgba(255,255,255,0.14)',
-            lineColor: '#a3a3a3',
-            textColor: '#fafafa',
-            edgeLabelBackground: '#262626',
-            clusterBkg: '#1f1f1f',
-            clusterBorder: 'rgba(255,255,255,0.16)',
-            noteBkgColor: '#333333',
-            noteTextColor: '#fafafa',
-            noteBorderColor: 'rgba(255,255,255,0.16)',
-            actorBkg: '#262626',
-            actorTextColor: '#fafafa',
-            actorBorder: 'rgba(255,255,255,0.18)',
-            signalColor: '#fafafa',
-            signalTextColor: '#fafafa',
-            labelTextColor: '#fafafa',
-            loopTextColor: '#fafafa',
-            activationBkgColor: '#333333',
-            activationBorderColor: 'rgba(255,255,255,0.18)',
-            sequenceNumberColor: '#171717'
-          },
-          fontFamily: 'ui-sans-serif, system-ui, sans-serif'
-        })
-        mermaidInitialized = true
-      }
+      mermaid.initialize(MERMAID_RENDER_CONFIG)
 
       setSvg('')
       setError('')
 
       try {
         const result = await mermaid.render(diagramIdRef.current, code)
-        if (!disposed) setSvg(result.svg)
+        if (!disposed) {
+          setSvg(result.svg)
+          setDiagramSize(getSvgDimensions(result.svg))
+        }
       } catch (renderError) {
         if (!disposed) {
           setError(renderError instanceof Error ? renderError.message : String(renderError))
@@ -8397,13 +9291,60 @@ function MermaidBlock({
     }
   }, [code])
 
+  function centerExpandedMermaid(
+    container: HTMLDivElement,
+    contentWidth: number,
+    contentHeight: number
+  ): void {
+    container.scrollLeft = Math.max(0, (contentWidth - container.clientWidth) / 2)
+    container.scrollTop = Math.max(0, (contentHeight - container.clientHeight) / 2)
+  }
+
+  const fitExpandedMermaidToViewport = useCallback((): void => {
+    const container = expandedScrollRef.current
+    if (!container || !diagramSize.width || !diagramSize.height) return
+
+    const nextZoom = clampMermaidZoom(
+      Math.max(
+        container.clientWidth / diagramSize.width,
+        container.clientHeight / diagramSize.height
+      )
+    )
+
+    setZoom(nextZoom)
+    window.requestAnimationFrame(() => {
+      centerExpandedMermaid(container, diagramSize.width * nextZoom, diagramSize.height * nextZoom)
+    })
+  }, [diagramSize.height, diagramSize.width])
+
   useEffect(() => {
     if (!expanded) {
-      setZoom(1)
-      setPanning(false)
       expandedPanRef.current = null
+      return
     }
-  }, [expanded])
+
+    const fitOnNextFrame = (): number =>
+      window.requestAnimationFrame(() => {
+        fitExpandedMermaidToViewport()
+      })
+
+    let animationFrame = fitOnNextFrame()
+    const handleResize = (): void => {
+      window.cancelAnimationFrame(animationFrame)
+      animationFrame = fitOnNextFrame()
+    }
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(handleResize)
+
+    window.addEventListener('resize', handleResize)
+    if (expandedScrollRef.current) resizeObserver?.observe(expandedScrollRef.current)
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      window.removeEventListener('resize', handleResize)
+      resizeObserver?.disconnect()
+    }
+  }, [expanded, fitExpandedMermaidToViewport, svg])
 
   function updateZoom(nextZoom: number, anchor?: { clientX: number; clientY: number }): void {
     const container = expandedScrollRef.current
@@ -8420,16 +9361,23 @@ function MermaidBlock({
       const rect = container.getBoundingClientRect()
       offsetX = anchor ? anchor.clientX - rect.left : container.clientWidth / 2
       offsetY = anchor ? anchor.clientY - rect.top : container.clientHeight / 2
-      contentX = (container.scrollLeft + offsetX) / previousZoom
-      contentY = (container.scrollTop + offsetY) / previousZoom
+      const previousContentWidth = Math.max(container.clientWidth, diagramSize.width * previousZoom)
+      const previousContentHeight = Math.max(
+        container.clientHeight,
+        diagramSize.height * previousZoom
+      )
+      contentX = (container.scrollLeft + offsetX) / previousContentWidth
+      contentY = (container.scrollTop + offsetY) / previousContentHeight
     }
 
     setZoom(clampedZoom)
 
     if (container) {
       window.requestAnimationFrame(() => {
-        container.scrollLeft = contentX * clampedZoom - offsetX
-        container.scrollTop = contentY * clampedZoom - offsetY
+        const nextContentWidth = Math.max(container.clientWidth, diagramSize.width * clampedZoom)
+        const nextContentHeight = Math.max(container.clientHeight, diagramSize.height * clampedZoom)
+        container.scrollLeft = contentX * nextContentWidth - offsetX
+        container.scrollTop = contentY * nextContentHeight - offsetY
       })
     }
   }
@@ -8478,12 +9426,50 @@ function MermaidBlock({
     setPanning(false)
   }
 
+  async function renderExportSvg(): Promise<string> {
+    mermaid.initialize(MERMAID_RENDER_CONFIG)
+    const result = await mermaid.render(`mermaid-export-${crypto.randomUUID()}`, code)
+    return result.svg
+  }
+
+  async function exportSvg(): Promise<void> {
+    if (!svg) return
+    try {
+      await downloadSvg(await renderExportSvg(), buildMermaidFilename('svg'), t)
+    } catch (exportError) {
+      notifyOperationError(exportFeedback(t).failed, exportError)
+    }
+  }
+
+  async function exportPng(): Promise<void> {
+    if (!svg) return
+    try {
+      await savePngFromSvg(await renderExportSvg(), buildMermaidFilename('png'), t)
+    } catch (exportError) {
+      notifyOperationError(exportFeedback(t).failed, exportError)
+    }
+  }
+
+  function handleMermaidExportFormat(format: string): void {
+    if (format === 'svg') void exportSvg()
+    if (format === 'png') void exportPng()
+    setExportSelectKey((current) => current + 1)
+  }
+
   const zoomPercent = Math.round(zoom * 100)
-  const zoomStyle = { zoom } as CSSProperties
+  const expandedCanvasStyle = {
+    width: expanded ? `max(100%, ${Math.max(1, diagramSize.width * zoom)}px)` : undefined,
+    height: expanded ? `max(100%, ${Math.max(1, diagramSize.height * zoom)}px)` : undefined
+  } as CSSProperties
+  const expandedContentStyle = {
+    width: diagramSize.width,
+    height: diagramSize.height,
+    transform: `translate(-50%, -50%) scale(${zoom})`
+  } as CSSProperties
 
   return (
-    <div className="min-w-0 overflow-hidden rounded-md border bg-background">
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b bg-muted/30 px-3 py-1.5">
+    <div className="min-w-0 rounded-md border bg-background">
+      <div className="sticky top-0 z-10 flex min-w-0 items-center justify-between gap-2 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
         <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           mermaid
         </span>
@@ -8500,6 +9486,23 @@ function MermaidBlock({
           >
             <Maximize2Icon aria-hidden="true" />
           </Button>
+          <Select
+            key={`inline-export-${exportSelectKey}`}
+            onValueChange={handleMermaidExportFormat}
+            disabled={!svg}
+          >
+            <SelectTrigger
+              className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+              aria-label={t.common.exportDiagram}
+              title={t.common.exportDiagram}
+            >
+              <SelectValue placeholder={t.common.exportDiagram} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
+              <SelectItem value="png">{t.common.exportPng}</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant="ghost"
@@ -8541,9 +9544,7 @@ function MermaidBlock({
           aria-label={t.common.enlarge}
         >
           <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
-            <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-              mermaid
-            </div>
+            <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">mermaid</div>
             <div className="flex shrink-0 items-center gap-2">
               <Button
                 type="button"
@@ -8570,6 +9571,16 @@ function MermaidBlock({
               <Button
                 type="button"
                 variant="ghost"
+                size="sm"
+                aria-label={t.common.fitToScreen}
+                title={t.common.fitToScreen}
+                onClick={fitExpandedMermaidToViewport}
+              >
+                {t.common.fitToScreen}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
                 size="icon"
                 aria-label={t.common.zoomIn}
                 title={t.common.zoomIn}
@@ -8578,6 +9589,23 @@ function MermaidBlock({
               >
                 <ZoomInIcon aria-hidden="true" />
               </Button>
+              <Select
+                key={`expanded-export-${exportSelectKey}`}
+                onValueChange={handleMermaidExportFormat}
+              >
+                <SelectTrigger
+                  className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+                  aria-label={t.common.exportDiagram}
+                  title={t.common.exportDiagram}
+                >
+                  <DownloadIcon className="size-3.5" aria-hidden="true" />
+                  <SelectValue placeholder={t.common.exportDiagram} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
+                  <SelectItem value="png">{t.common.exportPng}</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 type="button"
                 variant="outline"
@@ -8586,7 +9614,11 @@ function MermaidBlock({
                 title={copied ? t.common.copied : t.common.copy}
                 onClick={() => void onCopy()}
               >
-                {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
+                {copied ? (
+                  <CheckIcon data-icon="inline-start" />
+                ) : (
+                  <CopyIcon data-icon="inline-start" />
+                )}
                 {copied ? t.common.copied : t.common.copy}
               </Button>
               <Button
@@ -8595,7 +9627,12 @@ function MermaidBlock({
                 size="icon"
                 aria-label={t.common.close}
                 title={t.common.close}
-                onClick={() => setExpanded(false)}
+                onClick={() => {
+                  setExpanded(false)
+                  setZoom(1)
+                  setPanning(false)
+                  expandedPanRef.current = null
+                }}
               >
                 <XIcon aria-hidden="true" />
               </Button>
@@ -8603,7 +9640,7 @@ function MermaidBlock({
           </div>
           <div
             ref={expandedScrollRef}
-            className={`min-h-0 flex-1 touch-none overflow-auto bg-[#171717] p-6 select-none ${
+            className={`min-h-0 flex-1 touch-none overflow-auto bg-[#171717] select-none ${
               panning ? 'cursor-grabbing' : 'cursor-grab'
             }`}
             onWheel={handleExpandedWheel}
@@ -8612,11 +9649,14 @@ function MermaidBlock({
             onPointerUp={stopExpandedPan}
             onPointerCancel={stopExpandedPan}
           >
-            <div
-              className="w-max origin-top-left [&_svg]:h-auto [&_svg]:min-w-[900px] [&_svg]:max-w-none [&_svg]:rounded [&_svg]:bg-[#171717]"
-              style={zoomStyle}
-              dangerouslySetInnerHTML={{ __html: svg }}
-            />
+            <div className="relative" style={expandedCanvasStyle}>
+              <div
+                ref={expandedContentRef}
+                className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[#171717]"
+                style={expandedContentStyle}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </div>
           </div>
         </div>
       ) : null}
@@ -8633,7 +9673,7 @@ function isMarkdownBlockStart(line: string): boolean {
     /^```/.test(line) ||
     /^\s*---+\s*$/.test(line) ||
     isMarkdownTableLine(line) ||
-    /^<details>$/.test(line.trim()) ||
+    /^<details(?:\s+open)?>$/.test(line.trim()) ||
     /^(#{1,4})\s+/.test(line) ||
     /^>\s+/.test(line) ||
     /^\s*[-*]\s+/.test(line) ||

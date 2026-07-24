@@ -55,6 +55,14 @@ describe('mcp-runtime', () => {
     expect(registry.errors).toEqual([])
     expect(registry.entries.get('mcp_test_mcp_echo')).toBeDefined()
   })
+
+  it('sends MCP requests with Content-Length framing', async () => {
+    writeFileSync(serverPath, buildStrictHeaderMcpServerScript(), 'utf8')
+    const registry = await loadMcpToolRegistry(buildConfig(serverPath))
+
+    expect(registry.errors).toEqual([])
+    expect(registry.entries.get('mcp_test_mcp_echo')).toBeDefined()
+  })
 })
 
 function buildConfig(serverPath: string): AgentConfig {
@@ -98,6 +106,7 @@ process.stdin.on('data', (chunk) => {
 })
 
 function readMessage() {
+  if (buffer.length === 0) return undefined
   const prefix = buffer.subarray(0, Math.min(buffer.length, 64)).toString('utf8')
   if (/^content-length:/i.test(prefix)) {
     const headerEnd = buffer.indexOf('\\r\\n\\r\\n')
@@ -140,6 +149,59 @@ function handle(request) {
 function respond(id, result) {
   const body = JSON.stringify({ jsonrpc: '2.0', id, result })
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + responseSeparator + body)
+}
+`.trim()
+}
+
+function buildStrictHeaderMcpServerScript(): string {
+  return `
+let buffer = Buffer.alloc(0)
+
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk])
+  while (true) {
+    const parsed = readMessage()
+    if (!parsed) return
+    handle(parsed)
+  }
+})
+
+function readMessage() {
+  if (buffer.length === 0) return undefined
+  const prefix = buffer.subarray(0, Math.min(buffer.length, 64)).toString('utf8')
+  if (!/^content-length:/i.test(prefix)) {
+    process.stderr.write('expected content-length framing')
+    process.exit(2)
+  }
+  const headerEnd = buffer.indexOf('\\r\\n\\r\\n')
+  if (headerEnd < 0) return undefined
+  const header = buffer.subarray(0, headerEnd).toString('utf8')
+  const match = /^content-length:\\s*(\\d+)$/im.exec(header)
+  if (!match) throw new Error('missing content length')
+  const bodyStart = headerEnd + 4
+  const bodyEnd = bodyStart + Number(match[1])
+  if (buffer.length < bodyEnd) return undefined
+  const request = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8'))
+  buffer = buffer.subarray(bodyEnd)
+  return request
+}
+
+function handle(request) {
+  if (!request.id) return
+  if (request.method === 'initialize') {
+    respond(request.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1.0.0' } })
+    return
+  }
+  if (request.method === 'tools/list') {
+    respond(request.id, { tools: [{ name: 'echo', description: 'Echo text', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] })
+    return
+  }
+  respond(request.id, {})
+}
+
+function respond(id, result) {
+  const body = JSON.stringify({ jsonrpc: '2.0', id, result })
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body)
 }
 `.trim()
 }

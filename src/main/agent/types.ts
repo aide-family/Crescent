@@ -45,6 +45,7 @@ export type {
   LocalFileWriteResult,
   OpenApiOperationMeta,
   OperationRecord,
+  PastedAttachmentInput,
   StoredAgentLogEntry,
   StoredAgentRun,
   StoredSessionHistoryDetail,
