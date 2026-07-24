@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentPathReference,
+  PastedAttachmentInput,
   AgentRunInput,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
@@ -92,6 +93,25 @@ interface TerminalAgentApi {
     saveWikiDocument: (input: WikiSaveInput) => Promise<WikiDocument>
     searchWikiDocuments: (query: string) => Promise<WikiDocument[]>
     pickPathReference: (kind: AgentPathReference['kind']) => Promise<AgentPathReference | undefined>
+    savePastedAttachment: (input: PastedAttachmentInput) => Promise<AgentPathReference>
+    saveRenderedImage: (input: {
+      dataUrl: string
+      defaultPath: string
+    }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+    saveSvgAsPng: (input: {
+      svg: string
+      defaultPath: string
+      width: number
+      height: number
+    }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+    pickSavePath: (input: {
+      defaultPath: string
+      filters?: Array<{ name: string; extensions: string[] }>
+    }) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
+    writeDataUrlFile: (input: {
+      path: string
+      dataUrl: string
+    }) => Promise<{ ok: boolean; path?: string; error?: string }>
     saveInstructionFile: (input: {
       name: string
       content: string

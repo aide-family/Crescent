@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   AgentModelOption,
   AgentPathReference,
+  PastedAttachmentInput,
   AgentRunInput,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
@@ -143,6 +144,30 @@ const api = {
       kind: AgentPathReference['kind']
     ): Promise<AgentPathReference | undefined> =>
       ipcRenderer.invoke('agent:pick-path-reference', { kind }),
+    savePastedAttachment: (input: PastedAttachmentInput): Promise<AgentPathReference> =>
+      ipcRenderer.invoke('agent:save-pasted-attachment', input),
+    saveRenderedImage: (input: {
+      dataUrl: string
+      defaultPath: string
+    }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:save-rendered-image', input),
+    saveSvgAsPng: (input: {
+      svg: string
+      defaultPath: string
+      width: number
+      height: number
+    }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:save-svg-as-png', input),
+    pickSavePath: (input: {
+      defaultPath: string
+      filters?: Array<{ name: string; extensions: string[] }>
+    }): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
+      ipcRenderer.invoke('agent:pick-save-path', input),
+    writeDataUrlFile: (input: {
+      path: string
+      dataUrl: string
+    }): Promise<{ ok: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:write-data-url-file', input),
     saveInstructionFile: (input: {
       name: string
       content: string

@@ -82,6 +82,12 @@ export interface AgentPathReference {
   name: string
 }
 
+export interface PastedAttachmentInput {
+  name: string
+  mimeType?: string
+  base64: string
+}
+
 export interface AgentWikiReference {
   id: string
   title: string
