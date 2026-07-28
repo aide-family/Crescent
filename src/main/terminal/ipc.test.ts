@@ -62,14 +62,15 @@ describe('terminal ipc automation display helpers', () => {
     expect(filterAutomationControlOutputWithState('__CRESCENT_CMD_START_test__\r\n', state)).toBe(
       ''
     )
-    expect(
-      filterAutomationControlOutputWithState('[sudo] password for self: ', state)
-    ).toBe('[sudo] password for self: ')
+    expect(filterAutomationControlOutputWithState('[sudo] password for self: ', state)).toBe(
+      '[sudo] password for self: '
+    )
   })
 
   it('allows sudo for concrete commands but blocks interactive sudo shells', () => {
     expect(isInteractiveCommand('sudo resolvectl status')).toBe(false)
     expect(isInteractiveCommand('sudo -i')).toBe(true)
     expect(isInteractiveCommand('sudo su')).toBe(true)
+    expect(isInteractiveCommand("ssh 10.42.131.142 'df -hT /home'")).toBe(true)
   })
 })

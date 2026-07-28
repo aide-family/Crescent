@@ -135,7 +135,11 @@ async function migrateLegacyProjectWikiDir(): Promise<void> {
 
         const targetPath = join(WIKI_DIR, filename)
         try {
-          await fs.copyFile(join(LEGACY_PROJECT_WIKI_DIR, entry.name), targetPath, fs.constants.COPYFILE_EXCL)
+          await fs.copyFile(
+            join(LEGACY_PROJECT_WIKI_DIR, entry.name),
+            targetPath,
+            fs.constants.COPYFILE_EXCL
+          )
         } catch (error) {
           if (isErrorWithCode(error) && error.code === 'EEXIST') return
           throw error

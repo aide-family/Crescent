@@ -21,6 +21,7 @@ const zhCN = {
   common: {
     cancel: '取消',
     close: '关闭',
+    closeAllTabs: '关闭全部 Tab',
     closeOtherTabs: '关闭其他 Tab',
     closeTab: '关闭 Tab',
     copy: '复制',
@@ -60,6 +61,7 @@ const zhCN = {
     user: '用户'
   },
   confirm: {
+    closeAllTabs: '关闭所有 Tab？这些终端会话都会被停止。',
     closeTab: '关闭这个 Tab？该 Tab 的终端会话会被停止。',
     closeOtherTabs: '关闭其他所有 Tab？这些 Tab 的终端会话会被停止。',
     closeTabsTitle: '关闭 Tab',
@@ -152,7 +154,7 @@ const zhCN = {
     connectionStarting: '正在建立连接，登录动作数量',
     connectionTarget: '连接目标',
     currentTerminalInstruction:
-      '当前终端已经处于可工作的目标环境中。不要重新匹配连接或再次 SSH 登录；先分析用户请求，建立工作步骤，然后直接基于当前终端继续执行和验证。',
+      '当前终端已经处于可工作的目标环境中。不要重新匹配 Crescent 连接；先分析用户请求，建立工作步骤，然后基于当前终端继续执行和验证。若用户任务涉及非当前主机，可以在当前终端中使用 SSH 执行对应主机的具体命令；如需密码或验证码，等待用户通过终端密钥输入弹窗提供。',
     commandExecuted: '已执行',
     fallbackLimited: '受限备用模式；SSH/密码提示不可用',
     failedToLoadConfig: '加载配置失败',
@@ -170,7 +172,7 @@ const zhCN = {
     terminalReconnecting: '终端连接已断开，正在自动恢复。',
     terminalReconnectUnavailable: '终端异常，当前会话无法自动恢复，已停止自动命令执行。',
     postLoginAgentInstruction:
-      '当前终端已经完成目标连接登录。不要再次登录或切换连接；先按下方需求拆解理解用户目标，再基于当前终端继续完成登录后的检查、验证、总结和必要处理，直到用户目标完成。若涉及删除或清理文件，先检查范围和影响，只清理确认可以清除的日志文件，并总结执行结果。',
+      '当前终端已经完成 Crescent 目标连接登录。不要重新匹配 Crescent 连接；先按下方需求拆解理解用户目标，再基于当前终端继续完成登录后的检查、验证、总结和必要处理，直到用户目标完成。若用户任务涉及非当前主机，可以在当前终端中使用 SSH 执行对应主机的具体命令；如需密码或验证码，等待用户通过终端密钥输入弹窗提供。若涉及删除或清理文件，先检查范围和影响，只清理确认可以清除的日志文件，并总结执行结果。',
     requirementBreakdown: '用户需求拆解（必须按此完成）',
     breakdownActions: '工作步骤',
     breakdownArtifact: '产物要求',

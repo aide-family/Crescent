@@ -571,7 +571,7 @@ export function buildAgentSkillContext(input: string, skillRoot?: string): Agent
         .filter(
           (item) =>
             item.strongMatch ||
-            item.matchedNameTokenCount > 0 ||
+            item.matchedNameTokenCount >= 2 ||
             item.matchedTokenCount >= MIN_MATCHED_SKILL_TOKENS
         )
         .slice(0, MAX_MATCHED_SKILLS)
@@ -802,10 +802,10 @@ function scoreSkills(
       const sourceTokens = tokenizeSearchText(sourceText)
       const strongMatch = Boolean(
         (name && normalizedInput.includes(name)) ||
-          (description && normalizedInput.includes(description)) ||
-          (normalizedInput.length >= 4 &&
-            ((name && name.includes(normalizedInput)) ||
-              (description && description.includes(normalizedInput))))
+        (description && normalizedInput.includes(description)) ||
+        (normalizedInput.length >= 4 &&
+          ((name && name.includes(normalizedInput)) ||
+            (description && description.includes(normalizedInput))))
       )
       const matchedTokens = new Set<string>()
       const matchedNameTokens = new Set<string>()
@@ -919,9 +919,7 @@ function extractSkillName(content: string): string {
 }
 
 function extractSkillDescription(content: string): string {
-  const explicitDescription = stripFrontmatterScalar(
-    content.match(/^description:\s*(.+)$/m)?.[1]
-  )
+  const explicitDescription = stripFrontmatterScalar(content.match(/^description:\s*(.+)$/m)?.[1])
   if (explicitDescription) return explicitDescription.slice(0, MAX_SKILL_DESCRIPTION_CHARS)
 
   const paragraph =
@@ -954,10 +952,17 @@ function extractSkillAliases(content: string): string[] {
 }
 
 function extractFrontmatterList(content: string, key: string): string[] {
-  const raw = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]
+  const raw = extractFrontmatterListRaw(content, key)
   if (!raw) return []
 
   const trimmed = raw.trim()
+  const yamlItems = trimmed
+    .split(/\r?\n/)
+    .map((line) => stripFrontmatterScalar(line.trim().replace(/^-\s*/, '').replace(/,$/, '')))
+    .filter((value): value is string => Boolean(value) && value !== '[' && value !== ']')
+
+  if (yamlItems.length > 1 && !trimmed.includes(',')) return yamlItems
+
   const withoutBrackets =
     trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed
 
@@ -965,6 +970,34 @@ function extractFrontmatterList(content: string, key: string): string[] {
     .split(/[,，;；|]/)
     .map(stripFrontmatterScalar)
     .filter((value): value is string => Boolean(value))
+}
+
+function extractFrontmatterListRaw(content: string, key: string): string {
+  const lines = content.split(/\r?\n/)
+  const keyPattern = new RegExp(`^${key}:\\s*(.*)$`)
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(keyPattern)
+    if (!match) continue
+
+    const firstValue = match[1].trim()
+    if (firstValue && firstValue !== '[') return firstValue
+
+    const values = firstValue ? [firstValue] : []
+    for (let nextIndex = index + 1; nextIndex < lines.length; nextIndex += 1) {
+      const line = lines[nextIndex]
+      if (/^---\s*$/.test(line)) break
+      if (/^[A-Za-z][A-Za-z0-9_-]*:\s*/.test(line)) break
+      if (!line.trim()) continue
+
+      values.push(line.trim())
+      if (line.trim() === ']') break
+    }
+
+    return values.join('\n')
+  }
+
+  return ''
 }
 
 function stripFrontmatterScalar(value: string | undefined): string {

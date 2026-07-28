@@ -56,8 +56,8 @@ describe('mcp-runtime', () => {
     expect(registry.entries.get('mcp_test_mcp_echo')).toBeDefined()
   })
 
-  it('sends MCP requests with Content-Length framing', async () => {
-    writeFileSync(serverPath, buildStrictHeaderMcpServerScript(), 'utf8')
+  it('sends MCP requests as newline-delimited JSON', async () => {
+    writeFileSync(serverPath, buildStrictLineMcpServerScript(), 'utf8')
     const registry = await loadMcpToolRegistry(buildConfig(serverPath))
 
     expect(registry.errors).toEqual([])
@@ -132,7 +132,7 @@ function readMessage() {
 function handle(request) {
   if (!request.id) return
   if (request.method === 'initialize') {
-    respond(request.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1.0.0' } })
+    respond(request.id, { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1.0.0' } })
     return
   }
   if (request.method === 'tools/list') {
@@ -153,7 +153,7 @@ function respond(id, result) {
 `.trim()
 }
 
-function buildStrictHeaderMcpServerScript(): string {
+function buildStrictLineMcpServerScript(): string {
   return `
 let buffer = Buffer.alloc(0)
 
@@ -168,28 +168,22 @@ process.stdin.on('data', (chunk) => {
 
 function readMessage() {
   if (buffer.length === 0) return undefined
-  const prefix = buffer.subarray(0, Math.min(buffer.length, 64)).toString('utf8')
-  if (!/^content-length:/i.test(prefix)) {
-    process.stderr.write('expected content-length framing')
+  const lineEnd = buffer.indexOf('\\n')
+  if (lineEnd < 0) return undefined
+  const line = buffer.subarray(0, lineEnd).toString('utf8').trim()
+  buffer = buffer.subarray(lineEnd + 1)
+  if (!line) return undefined
+  if (/^content-length:/i.test(line)) {
+    process.stderr.write('expected newline-delimited JSON')
     process.exit(2)
   }
-  const headerEnd = buffer.indexOf('\\r\\n\\r\\n')
-  if (headerEnd < 0) return undefined
-  const header = buffer.subarray(0, headerEnd).toString('utf8')
-  const match = /^content-length:\\s*(\\d+)$/im.exec(header)
-  if (!match) throw new Error('missing content length')
-  const bodyStart = headerEnd + 4
-  const bodyEnd = bodyStart + Number(match[1])
-  if (buffer.length < bodyEnd) return undefined
-  const request = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString('utf8'))
-  buffer = buffer.subarray(bodyEnd)
-  return request
+  return JSON.parse(line)
 }
 
 function handle(request) {
   if (!request.id) return
   if (request.method === 'initialize') {
-    respond(request.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1.0.0' } })
+    respond(request.id, { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1.0.0' } })
     return
   }
   if (request.method === 'tools/list') {
@@ -201,7 +195,7 @@ function handle(request) {
 
 function respond(id, result) {
   const body = JSON.stringify({ jsonrpc: '2.0', id, result })
-  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body)
+  process.stdout.write(body + '\\n')
 }
 `.trim()
 }

@@ -35,7 +35,9 @@ export async function parseOpenApiToTools(openApiSpec: string | object): Promise
   return tools
 }
 
-export async function parseOpenApiToToolBundle(openApiSpec: string | object): Promise<ParsedToolBundle> {
+export async function parseOpenApiToToolBundle(
+  openApiSpec: string | object
+): Promise<ParsedToolBundle> {
   let api: any
 
   try {

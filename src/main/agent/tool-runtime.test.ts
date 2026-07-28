@@ -63,11 +63,14 @@ describe('AgentToolRuntime', () => {
     expect(runtime.tools.map((tool) => tool.function.name)).toEqual(
       expect.arrayContaining(['execute_terminal_command', 'parse_pdf_file', 'parse_docx_file'])
     )
-    expect(runtime.tools[0]?.function.description).toContain('Execute one non-interactive')
+    expect(runtime.tools[0]?.function.description).toContain('Execute one shell command')
+    expect(runtime.tools[0]?.function.description).toContain(
+      'use ssh with a concrete remote command'
+    )
     expect(runtime.tools[0]?.function.parameters).toMatchObject({
       properties: {
         command: {
-          description: expect.stringContaining('single shell command')
+          description: expect.stringContaining('For another host, use ssh')
         }
       }
     })
@@ -101,6 +104,43 @@ describe('AgentToolRuntime', () => {
       ok: false,
       command: '&&',
       error: expect.stringContaining('incomplete shell syntax')
+    })
+  })
+
+  it('dispatches ssh commands to the terminal executor', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const commandResult: TerminalCommandResult = {
+      ok: true,
+      command: "ssh 10.42.131.142 'df -hT /home'",
+      mode: 'pty',
+      cwd: '/tmp',
+      exitCode: 0,
+      output: 'ok'
+    }
+    const terminalExecutor: TerminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string) => ({ ...commandResult, command }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'handle disk alert on 10.42.131.142',
+      terminalExecutor,
+      emit
+    })
+    const result = await runtime.execute(
+      'execute_terminal_command',
+      JSON.stringify({ command: "ssh 10.42.131.142 'df -hT /home'" })
+    )
+
+    expect(terminalExecutor.executeCommand).toHaveBeenCalledWith(
+      "ssh 10.42.131.142 'df -hT /home'",
+      undefined
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      command: "ssh 10.42.131.142 'df -hT /home'",
+      output: 'ok'
     })
   })
 
@@ -147,6 +187,56 @@ describe('AgentToolRuntime', () => {
       timeoutMs: undefined
     })
     expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
+  })
+
+  it('dispatches ssh commands to the temporary sub-terminal executor', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const terminalExecutor: TerminalCommandExecutor = {
+      executeCommand: vi.fn()
+    }
+    const commandResult: TerminalCommandResult = {
+      ok: true,
+      command: "ssh 10.42.131.142 'df -hT /home'",
+      mode: 'pty',
+      cwd: '/tmp',
+      exitCode: 0,
+      output: 'ok',
+      subterminalName: 'target'
+    }
+    const subterminalExecutor: SubterminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string, options) => ({
+        ...commandResult,
+        command,
+        subterminalName: options.terminalName
+      }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'handle disk alert on 10.42.131.142',
+      terminalExecutor,
+      subterminalExecutor,
+      emit
+    })
+    const result = await runtime.execute(
+      'execute_subterminal_command',
+      JSON.stringify({ terminalName: 'target', command: "ssh 10.42.131.142 'df -hT /home'" })
+    )
+
+    expect(subterminalExecutor.executeCommand).toHaveBeenCalledWith(
+      "ssh 10.42.131.142 'df -hT /home'",
+      {
+        terminalName: 'target',
+        timeoutMs: undefined
+      }
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      command: "ssh 10.42.131.142 'df -hT /home'",
+      subterminalName: 'target',
+      output: 'ok'
+    })
   })
 
   it('registers and dispatches the local file writer tool', async () => {

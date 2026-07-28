@@ -61,9 +61,9 @@ describe('agent skills', () => {
     expect(skills.find((skill) => skill.name === 'custom-app-check')).toMatchObject({
       removable: true
     })
-    expect(skills.find((skill) => skill.name === 'k8s-cluster-architecture-mermaid')?.aliases).toEqual(
-      expect.arrayContaining(['整理集群网络架构图', 'K8s network topology diagram'])
-    )
+    expect(
+      skills.find((skill) => skill.name === 'k8s-cluster-architecture-mermaid')?.aliases
+    ).toEqual(expect.arrayContaining(['整理集群网络架构图', 'K8s network topology diagram']))
     expect(
       skills.findIndex((skill) => skill.name === 'k8s-version-cluster-inspection')
     ).toBeLessThan(skills.findIndex((skill) => skill.name === 'custom-app-check'))
@@ -95,12 +95,8 @@ describe('agent skills', () => {
       customRoot
     )
 
-    expect(context.catalog.map((skill) => skill.name)).toContain(
-      'k8s-cluster-architecture-mermaid'
-    )
-    expect(context.matched.map((skill) => skill.name)).toContain(
-      'k8s-cluster-architecture-mermaid'
-    )
+    expect(context.catalog.map((skill) => skill.name)).toContain('k8s-cluster-architecture-mermaid')
+    expect(context.matched.map((skill) => skill.name)).toContain('k8s-cluster-architecture-mermaid')
     expect(context.promptBlock).toContain('Kubernetes Cluster Architecture Mermaid Mapping')
   })
 
@@ -108,24 +104,14 @@ describe('agent skills', () => {
     for (const [directory, name, description] of [
       ['document-management', 'document-management', '创建和编辑文档，整理文档目录。'],
       ['file-management', 'file-management', '上传和下载文件，整理文件目录。'],
-      [
-        'table-management',
-        'table-management',
-        '用于表格字段管理、记录读写、视图配置、历史查询。'
-      ],
-      [
-        'meeting-summary',
-        'meeting-summary',
-        '会议纪要整理工作流：汇总会议纪要并生成结构化报告。'
-      ]
+      ['table-management', 'table-management', '用于表格字段管理、记录读写、视图配置、历史查询。'],
+      ['meeting-summary', 'meeting-summary', '会议纪要整理工作流：汇总会议纪要并生成结构化报告。']
     ]) {
       const skillDir = join(customRoot, directory)
       mkdirSync(skillDir, { recursive: true })
       writeFileSync(
         join(skillDir, 'SKILL.md'),
-        ['---', `name: ${name}`, `description: ${description}`, '---', '', `# ${name}`].join(
-          '\n'
-        ),
+        ['---', `name: ${name}`, `description: ${description}`, '---', '', `# ${name}`].join('\n'),
         'utf8'
       )
     }
@@ -171,9 +157,7 @@ describe('agent skills', () => {
       mkdirSync(skillDir, { recursive: true })
       writeFileSync(
         join(skillDir, 'SKILL.md'),
-        ['---', `name: ${name}`, `description: ${description}`, '---', '', `# ${name}`].join(
-          '\n'
-        ),
+        ['---', `name: ${name}`, `description: ${description}`, '---', '', `# ${name}`].join('\n'),
         'utf8'
       )
     }
@@ -191,6 +175,14 @@ describe('agent skills', () => {
     ['整理aide集群网络架构图', 'k8s-cluster-architecture-mermaid'],
     ['整理生产集群网络架构图', 'k8s-cluster-architecture-mermaid'],
     ['检查 Docker 容器网络和卷使用情况', 'docker-environment-inspection'],
+    [
+      '实例 web1:9100 的 /home 分区使用率已超过 90%，且可用空间小于100G，处理这个告警',
+      'linux-disk-alert-remediation'
+    ],
+    [
+      "告警级别: 🔴S1告警发生\n告警集群: suzhoucdc\n告警标题: 10.42.131.142  /home 磁盘空间不足\n告警内容: 实例 10.42.131.142 的 /home 分区使用率已超过 90%，且可用空间小于100G（当前值: 95.14%），处理方式参考'Home 盘磁盘空间不足清理 SOP' 'ETL 机器磁盘空间不足清理 SOP'\n\n处理这个告警问题",
+      'linux-disk-alert-remediation'
+    ],
     ['巡检 Linux 主机内存磁盘DNS和系统服务', 'linux-basic-environment-inspection'],
     ['排查应用服务端口日志和健康检查接口', 'application-program-inspection'],
     ['检查应用域名 DNS 解析和 HTTPS TLS 连通性', 'application-network-research'],
@@ -199,5 +191,46 @@ describe('agent skills', () => {
     const context = buildAgentSkillContext(input, customRoot)
 
     expect(context.matched.map((skill) => skill.name)).toContain(expectedSkillName)
+  })
+
+  it('does not match proxy auth skills from a cluster host name alone', () => {
+    const skillDir = join(customRoot, 'proxy-auth')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      [
+        '---',
+        'name: proxy-auth',
+        'description: 处理访问 `*.cluster` 资源时需要通过 `proxy-auth` 网关认证的场景。适用于办公网或 VPN 下读取内部 Wiki、API、平台页面等链接内容，以及 curl/Python/Postman/Apifox 请求。',
+        '---',
+        '# proxy-auth'
+      ].join('\n')
+    )
+
+    const context = buildAgentSkillContext(
+      '实例 web1:9100 的 /home 分区使用率已超过 90%，且可用空间小于100G，处理这个告警',
+      customRoot
+    )
+    const matchedNames = context.matched.map((skill) => skill.name)
+
+    expect(matchedNames).toContain('linux-disk-alert-remediation')
+    expect(matchedNames).not.toContain('proxy-auth')
+  })
+
+  it('loads disk alert workflow guardrails into the agent prompt', () => {
+    const context = buildAgentSkillContext(
+      "告警标题: 10.42.131.142 /home 磁盘空间不足，处理方式参考'Home 盘磁盘空间不足清理 SOP'，处理这个告警",
+      customRoot
+    )
+
+    expect(context.matched.map((skill) => skill.name)).toContain('linux-disk-alert-remediation')
+    expect(context.promptBlock).toContain('Mandatory Triage Rules')
+    expect(context.promptBlock).toContain(
+      'Do not turn a host filesystem alert into broad Kubernetes exploration'
+    )
+    expect(context.promptBlock).toContain(
+      'Do not propose creating a privileged troubleshooting Pod'
+    )
+    expect(context.promptBlock).toContain('Home 盘磁盘空间不足清理 SOP')
   })
 })

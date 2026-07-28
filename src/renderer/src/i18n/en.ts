@@ -21,6 +21,7 @@ const en = {
   common: {
     cancel: 'Cancel',
     close: 'Close',
+    closeAllTabs: 'Close all tabs',
     closeOtherTabs: 'Close other tabs',
     closeTab: 'Close tab',
     copy: 'Copy',
@@ -62,6 +63,7 @@ const en = {
     user: 'User'
   },
   confirm: {
+    closeAllTabs: 'Close all tabs? All terminal sessions will be stopped.',
     closeTab: 'Close this tab? The terminal session in this tab will be stopped.',
     closeOtherTabs: 'Close all other tabs? Their terminal sessions will be stopped.',
     closeTabsTitle: 'Close tabs',
@@ -163,7 +165,7 @@ const en = {
     connectionStarting: 'Starting connection with login actions',
     connectionTarget: 'Connection target',
     currentTerminalInstruction:
-      'The current terminal is already in a usable target environment. Do not match another connection or SSH login again; analyze the user request, create working steps, then continue execution and verification in the current terminal.',
+      'The current terminal is already in a usable target environment. Do not rematch a Crescent connection; analyze the user request, create working steps, then continue execution and verification in the current terminal. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt.',
     commandExecuted: 'Executed',
     fallbackLimited: 'limited fallback; SSH/password prompts are disabled',
     failedToLoadConfig: 'Failed to load config',
@@ -186,7 +188,7 @@ const en = {
     terminalReconnectUnavailable:
       'Terminal is abnormal and this session cannot be restored automatically. Automatic command execution stopped.',
     postLoginAgentInstruction:
-      'The current terminal has already completed the target login. Do not log in again or switch connections; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
+      'The current terminal has already completed the Crescent target connection login. Do not rematch a Crescent connection; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
     requirementBreakdown: 'User requirement breakdown (must complete accordingly)',
     breakdownActions: 'Work steps',
     breakdownArtifact: 'Artifact requirement',

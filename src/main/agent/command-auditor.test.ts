@@ -63,4 +63,71 @@ describe('parseAuditResult', () => {
     expect(audit.requiresApproval).toBe(true)
     expect(audit.recommendation).toContain('confirm a target directory')
   })
+
+  it('requires approval when ssh violates a current-terminal-only constraint', () => {
+    const audit = applyLocalCommandPolicy(
+      "ssh 10.42.131.142 'df -hT /home'",
+      '不要重新 SSH，基于当前终端处理 10.42.131.142 的 /home 磁盘告警',
+      {
+        summary: 'Read-only disk check.',
+        operationReason: 'The command checks the alerted filesystem.',
+        risk: 'low',
+        requiresApproval: false,
+        riskPoints: [],
+        impactAnalysis: 'No system-changing impact is expected.',
+        recommendation: 'Run the read-only command.'
+      },
+      'zh-CN'
+    )
+
+    expect(audit.risk).toBe('medium')
+    expect(audit.requiresApproval).toBe(true)
+    expect(audit.riskPoints.join('\n')).toContain('不要重新 SSH')
+    expect(audit.recommendation).toContain('确认是否允许重新连接')
+  })
+
+  it('does not require approval for ordinary read-only ssh without a no-reconnect constraint', () => {
+    const audit = applyLocalCommandPolicy(
+      "ssh 10.42.131.142 'df -hT /home'",
+      '处理 10.42.131.142 的 /home 磁盘告警',
+      {
+        summary: 'Read-only disk check.',
+        operationReason: 'The command checks the alerted filesystem.',
+        risk: 'low',
+        requiresApproval: false,
+        riskPoints: [],
+        impactAnalysis: 'No system-changing impact is expected.',
+        recommendation: 'Run the read-only command.'
+      },
+      'zh-CN'
+    )
+
+    expect(audit.risk).toBe('low')
+    expect(audit.requiresApproval).toBe(false)
+  })
+
+  it('ignores Crescent post-login wrapper text when the original task did not forbid ssh', () => {
+    const audit = applyLocalCommandPolicy(
+      "ssh 10.42.131.142 'df -hT /home'",
+      [
+        '当前终端已经完成 Crescent 目标连接登录。不要重新匹配 Crescent 连接。',
+        '',
+        '用户原始任务',
+        '处理 10.42.131.142 的 /home 磁盘告警'
+      ].join('\n'),
+      {
+        summary: 'Read-only disk check.',
+        operationReason: 'The command checks the alerted filesystem.',
+        risk: 'low',
+        requiresApproval: false,
+        riskPoints: [],
+        impactAnalysis: 'No system-changing impact is expected.',
+        recommendation: 'Run the read-only command.'
+      },
+      'zh-CN'
+    )
+
+    expect(audit.risk).toBe('low')
+    expect(audit.requiresApproval).toBe(false)
+  })
 })
