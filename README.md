@@ -77,12 +77,12 @@ This makes it possible to connect internal platforms, CMDB systems, alerting too
 
 ## Comparison
 
-| Option | Strength | Limitation | Crescent Difference |
-| --- | --- | --- | --- |
-| Plain terminal | Direct, reliable, controllable | No AI assistance or context understanding | Embeds an Agent beside the terminal and works from real command output |
-| General AI chat | Strong reasoning and explanation | Cannot inspect the live terminal; copy/paste heavy | Connects command execution, output observation, and next-step decisions |
-| API testing tools | Good for endpoint validation | Weak for SSH, system troubleshooting, and terminal workflows | Supports OpenAPI tools while preserving terminal-first operations |
-| Automation platforms | Strong standardization | Less flexible for exploratory troubleshooting | Lets teams evolve Skills and SOPs gradually |
+| Option               | Strength                         | Limitation                                                   | Crescent Difference                                                     |
+| -------------------- | -------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Plain terminal       | Direct, reliable, controllable   | No AI assistance or context understanding                    | Embeds an Agent beside the terminal and works from real command output  |
+| General AI chat      | Strong reasoning and explanation | Cannot inspect the live terminal; copy/paste heavy           | Connects command execution, output observation, and next-step decisions |
+| API testing tools    | Good for endpoint validation     | Weak for SSH, system troubleshooting, and terminal workflows | Supports OpenAPI tools while preserving terminal-first operations       |
+| Automation platforms | Strong standardization           | Less flexible for exploratory troubleshooting                | Lets teams evolve Skills and SOPs gradually                             |
 
 ## Architecture
 

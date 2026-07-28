@@ -1,0 +1,56 @@
+name: Feature request
+description: Suggest an improvement or new capability for Crescent.
+title: '[Feature]: '
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share the workflow you want to improve. Concrete scenarios are more useful than broad feature names.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to do, and where does the current experience fall short?
+      placeholder: When troubleshooting ..., I need to ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, UI, command flow, or API support you would like.
+      placeholder: Crescent could...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Terminal
+        - SSH connections
+        - Agent execution
+        - Command review
+        - Skills
+        - Knowledge base
+        - OpenAPI or MCP tools
+        - Packaging or updates
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention workarounds or other designs you considered.
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to help test this feature.
+        - label: I am willing to submit a pull request.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/aide-family/Crescent/discussions
+    about: Use discussions for ideas, usage questions, and open-ended design topics.
+  - name: Security Reports
+    url: https://github.com/aide-family/Crescent/security/advisories/new
+    about: Please report security issues privately.
