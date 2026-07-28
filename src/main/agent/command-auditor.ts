@@ -187,7 +187,28 @@ export function applyLocalCommandPolicy(
   audit: CommandAuditResult,
   language: 'zh-CN' | 'en'
 ): CommandAuditResult {
-  if (!looksLikeGeneratedReportWrite(command, userInput)) return audit
+  let result = audit
+
+  if (violatesNoReconnectConstraint(command, userInput)) {
+    const riskPoint =
+      language === 'zh-CN'
+        ? '用户要求不要重新 SSH、不要重新登录或只使用当前终端，但该命令会新建 SSH 连接。'
+        : 'The user asked not to reconnect, not to SSH again, or to use only the current terminal, but this command opens a new SSH connection.'
+    const recommendation =
+      language === 'zh-CN'
+        ? '不要直接执行新的 ssh。先使用当前会话中的目标主机上下文，或向用户确认是否允许重新连接到该主机。'
+        : 'Do not run a new ssh command directly. Use the current session target context, or ask the user to confirm that reconnecting to the host is allowed.'
+
+    result = {
+      ...result,
+      risk: result.risk === 'high' ? 'high' : 'medium',
+      requiresApproval: true,
+      riskPoints: appendUnique(result.riskPoints, riskPoint),
+      recommendation: appendSentence(result.recommendation, recommendation)
+    }
+  }
+
+  if (!looksLikeGeneratedReportWrite(command, userInput)) return result
 
   const riskPoint =
     language === 'zh-CN'
@@ -199,12 +220,47 @@ export function applyLocalCommandPolicy(
       : 'Finish the inspection and summarize findings, then ask the user to confirm a target directory on the Crescent client machine; after confirmation, use write_local_file for that directory. Do not default to /, /root, /tmp, or the current terminal directory.'
 
   return {
-    ...audit,
-    risk: audit.risk === 'high' ? 'high' : 'medium',
+    ...result,
+    risk: result.risk === 'high' ? 'high' : 'medium',
     requiresApproval: true,
-    riskPoints: appendUnique(audit.riskPoints, riskPoint),
-    recommendation: appendSentence(audit.recommendation, recommendation)
+    riskPoints: appendUnique(result.riskPoints, riskPoint),
+    recommendation: appendSentence(result.recommendation, recommendation)
   }
+}
+
+function violatesNoReconnectConstraint(command: string, userInput: string): boolean {
+  if (!/(^|[\s;&|({])ssh(?:\s|$)/i.test(command)) return false
+
+  const constraintSource = extractOriginalUserTask(userInput) || userInput
+  const explicitNoReconnect =
+    /(?:不要|不能|无需|不需要|别|禁止|避免).{0,12}(?:重新)?\s*(?:ssh|登录|登陆|连接|切换|匹配连接)/i.test(
+      constraintSource
+    ) ||
+    /(?:不要|不能|无需|不需要|别|禁止|避免).{0,12}(?:新建|再次|重新).{0,8}(?:会话|连接|ssh|登录|登陆)/i.test(
+      constraintSource
+    ) ||
+    /(?:只|仅).{0,8}(?:当前|现有|已有).{0,8}(?:终端|会话|连接)/i.test(constraintSource) ||
+    /(?:do not|don't|dont|avoid|no)\s+(?:reconnect|ssh|login|switch connections?)/i.test(
+      constraintSource
+    ) ||
+    /(?:use|stay in)\s+(?:the\s+)?(?:current|existing)\s+(?:terminal|session|connection)\s+only/i.test(
+      constraintSource
+    )
+
+  return explicitNoReconnect
+}
+
+function extractOriginalUserTask(input: string): string {
+  const lines = input.split(/\r?\n/)
+  const markerIndex = lines.findIndex((line) =>
+    /^(用户原始任务|Original user task)\s*:?\s*$/i.test(line.trim())
+  )
+  if (markerIndex < 0) return ''
+
+  return lines
+    .slice(markerIndex + 1)
+    .join('\n')
+    .trim()
 }
 
 function looksLikeGeneratedReportWrite(command: string, userInput: string): boolean {

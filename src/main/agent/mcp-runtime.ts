@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 
 import type { AgentConfig, AgentMcpServerConfig, OpenAiTool, ToolCatalogEntry } from './types'
 
-const MCP_PROTOCOL_VERSION = '2024-11-05'
+const MCP_PROTOCOL_VERSION = '2025-11-25'
 const MCP_REQUEST_TIMEOUT_MS = 12_000
 const MCP_INITIALIZE_TIMEOUT_MS = 45_000
 const MCP_TOOLS_LIST_TIMEOUT_MS = 30_000
@@ -295,8 +295,7 @@ class StdioMcpClient {
 }
 
 function encodeJsonRpcMessage(payload: unknown): string {
-  const body = JSON.stringify(payload)
-  return `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`
+  return `${JSON.stringify(payload)}\n`
 }
 
 function buildMcpProcessEnv(serverEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {

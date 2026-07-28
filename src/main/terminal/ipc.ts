@@ -99,14 +99,15 @@ export function executeCommandInTerminal(
     })
   }
 
-  if (isInteractiveCommand(normalizedCommand)) {
+  if (session.mode === 'pipe' && isInteractiveCommand(normalizedCommand)) {
     return Promise.resolve({
       ok: false,
       command: normalizedCommand,
       mode: session.mode,
       cwd: session.cwd,
       output: '',
-      error: 'Interactive commands are not supported for automated execution.'
+      error:
+        'Interactive commands such as ssh require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. Restart the app or rebuild node-pty.'
     })
   }
 

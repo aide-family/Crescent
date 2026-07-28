@@ -239,7 +239,7 @@ type SkillInstallLogStatus = 'running' | 'success' | 'error'
 type PaneOrder = 'terminal-chat' | 'chat-terminal'
 
 interface CloseTabsConfirmRequest {
-  mode: 'tab' | 'other-tabs'
+  mode: 'tab' | 'other-tabs' | 'all-tabs'
   tabId: string
   dontAskAgain: boolean
 }
@@ -2912,33 +2912,29 @@ function App(): React.JSX.Element {
     const terminalContext = await window.api.terminal.getContext(tabId)
     const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
     const allowTerminalTools = !explicitNonTerminalRequest
-    const directlyMentionedConnection =
-      !tab?.isSsh && !tab?.connectionId
-        ? findDirectlyMentionedConnection(displayInput, connections)
-        : undefined
-    const inputMentionsConnection = Boolean(directlyMentionedConnection)
-    const shouldUseCurrentTerminal =
-      terminalContext.mode !== 'none' &&
-      hasUsableCurrentTerminal(tab, terminalContext.output) &&
-      !inputMentionsConnection &&
-      !explicitNonTerminalRequest &&
-      !isExplicitConnectionRequest(displayInput)
+    const directlyMentionedConnection = findDirectlyMentionedConnection(displayInput, connections)
+    const directlyMentionsCurrentConnection =
+      Boolean(directlyMentionedConnection) &&
+      isSameConnectionTab(tab, directlyMentionedConnection)
+    const inputMentionsConnection =
+      Boolean(directlyMentionedConnection) && !directlyMentionsCurrentConnection
     const shouldResolveConnectionIntent =
       !resumeRequested &&
-      !tab?.isSsh &&
-      !tab?.connectionId &&
-      (inputMentionsConnection || !shouldUseCurrentTerminal) &&
+      !directlyMentionsCurrentConnection &&
       !explicitNonTerminalRequest
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
-      connectionIntent = directlyMentionedConnection
+      connectionIntent = inputMentionsConnection && directlyMentionedConnection
         ? {
             analysis: {
               ok: true,
               shouldConnect: true,
               connectionId: directlyMentionedConnection.id,
               confidence: 100,
-              executeAfterLogin: !isConnectionOnlyRequest(displayInput, directlyMentionedConnection),
+              executeAfterLogin: !isConnectionOnlyRequest(
+                displayInput,
+                directlyMentionedConnection
+              ),
               matchBasis: 'name',
               reason: `${t.terminal.connectionMatched}: ${directlyMentionedConnection.name}`
             },
@@ -2950,6 +2946,12 @@ function App(): React.JSX.Element {
     } finally {
       updateTab(tabId, (current) => ({ ...current, agentThinking: false }))
     }
+    const shouldUseCurrentTerminal =
+      terminalContext.mode !== 'none' &&
+      hasUsableCurrentTerminal(tab, terminalContext.output) &&
+      !connectionIntent?.analysis?.shouldConnect &&
+      !explicitNonTerminalRequest &&
+      !isExplicitConnectionRequest(displayInput)
     if (connectionIntent?.analysis?.shouldConnect) {
       const matchedConnection = connectionIntent.connection
       const executeAfterLogin = connectionIntent.analysis.executeAfterLogin === true
@@ -3777,11 +3779,29 @@ function App(): React.JSX.Element {
     setTabMenu(null)
   }
 
+  function performCloseAllTabs(): void {
+    for (const tab of tabsRef.current) {
+      suppressTerminalReconnectRef.current.add(tab.id)
+      window.api.terminal.stop(tab.id)
+      tab.subTerminals.forEach((subterminal) => {
+        suppressTerminalReconnectRef.current.add(subterminal.id)
+        window.api.terminal.stop(subterminal.id)
+      })
+      pendingSshRef.current.delete(tab.id)
+    }
+
+    setTabs([])
+    setActiveTabId('default')
+    setTerminalPage('connections')
+    setTabMenu(null)
+  }
+
   function requestCloseTabs(mode: CloseTabsConfirmRequest['mode'], tabId: string): void {
     setTabMenu(null)
     if (!closeTerminalConfirmEnabled) {
       if (mode === 'tab') performCloseTab(tabId)
-      else performCloseOtherTabs(tabId)
+      else if (mode === 'other-tabs') performCloseOtherTabs(tabId)
+      else performCloseAllTabs()
       return
     }
 
@@ -3796,6 +3816,10 @@ function App(): React.JSX.Element {
     requestCloseTabs('other-tabs', tabId)
   }
 
+  function closeAllTabs(tabId: string): void {
+    requestCloseTabs('all-tabs', tabId)
+  }
+
   function confirmCloseTabs(): void {
     if (!closeTabsConfirmRequest) return
 
@@ -3804,7 +3828,8 @@ function App(): React.JSX.Element {
     if (request.dontAskAgain) setCloseTerminalConfirmEnabled(false)
 
     if (request.mode === 'tab') performCloseTab(request.tabId)
-    else performCloseOtherTabs(request.tabId)
+    else if (request.mode === 'other-tabs') performCloseOtherTabs(request.tabId)
+    else performCloseAllTabs()
   }
 
   async function copyLogEntry(entry: AgentLogEntry): Promise<void> {
@@ -5352,6 +5377,13 @@ function App(): React.JSX.Element {
                   >
                     {t.common.closeOtherTabs}
                   </button>
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                    onClick={() => closeAllTabs(tabMenu.tabId)}
+                  >
+                    {t.common.closeAllTabs}
+                  </button>
                 </div>
               )}
             </div>
@@ -5366,7 +5398,12 @@ function App(): React.JSX.Element {
                           {t.connections.sshConnectionsDescription}
                         </p>
                       </div>
-                      <Button type="button" variant="outline" size="sm" onClick={showConnectionList}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={showConnectionList}
+                      >
                         <ServerIcon data-icon="inline-start" />
                         {t.connections.manageConnections}
                       </Button>
@@ -6341,7 +6378,9 @@ function App(): React.JSX.Element {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {closeTabsConfirmRequest.mode === 'tab'
                     ? t.confirm.closeTab
-                    : t.confirm.closeOtherTabs}
+                    : closeTabsConfirmRequest.mode === 'other-tabs'
+                      ? t.confirm.closeOtherTabs
+                      : t.confirm.closeAllTabs}
                 </p>
               </div>
             </div>
@@ -6877,6 +6916,16 @@ function findDirectlyMentionedConnection(
     getConnectionMentionTokens(connection).some((token) => normalizedInput.includes(token))
   )
   return matches.length === 1 ? matches[0] : undefined
+}
+
+function isSameConnectionTab(
+  tab: AgentTerminalTab | undefined,
+  connection: ConnectionConfig | undefined
+): boolean {
+  if (!tab || !connection) return false
+  if (tab.connectionId && tab.connectionId === connection.id) return true
+
+  return Boolean(tab.connectionName && tab.connectionName === connection.name)
 }
 
 function getConnectionMentionTokens(connection: ConnectionConfig): string[] {

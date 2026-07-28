@@ -87,6 +87,9 @@ export class TerminalAgentCore {
       const plan = await planner.createPlan({
         userInput,
         memoryBlock,
+        skillContext: this.controls?.skillContext,
+        wikiContext: this.controls?.wikiContext,
+        terminalContext,
         catalog: toolRuntime.catalog
       })
       planSteps = plan.steps
@@ -481,10 +484,9 @@ function inferLocalArtifactFilename(userInput: string): string {
     .replace(/\..+$/, '')
     .replace('T', '-')
   const normalized = userInput.toLowerCase()
-  const prefix =
-    /k8s|kubernetes|集群|架构|architecture|network/.test(normalized)
-      ? 'cluster-network-architecture'
-      : 'crescent-agent-result'
+  const prefix = /k8s|kubernetes|集群|架构|architecture|network/.test(normalized)
+    ? 'cluster-network-architecture'
+    : 'crescent-agent-result'
 
   return `${prefix}-${timestamp}.md`
 }

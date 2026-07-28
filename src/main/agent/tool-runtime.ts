@@ -25,14 +25,14 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: TERMINAL_TOOL_NAME,
     description:
-      'Execute one non-interactive shell command in the current visible terminal session, wait for completion, and return exit code plus output. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step.',
+      'Execute one shell command in the current visible terminal session, wait for completion, and return exit code plus output. For operations on a non-current host, use ssh with a concrete remote command. In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have watchdog timeouts and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection/reporting step.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The exact single shell command to execute in the current terminal environment. Use safe, non-interactive commands. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+            'The exact single shell command to execute in the current terminal environment. For another host, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
         },
         timeoutMs: {
           type: 'number',
@@ -49,7 +49,7 @@ const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: SUBTERMINAL_TOOL_NAME,
     description:
-      'Execute a non-interactive shell command in a named temporary local-shell sub-terminal displayed under the current terminal. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
+      'Execute one shell command in a named temporary local-shell sub-terminal displayed under the current terminal. For operations on another host, use ssh with a concrete remote command. In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
     parameters: {
       type: 'object',
       properties: {
@@ -61,7 +61,7 @@ const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
         command: {
           type: 'string',
           description:
-            'The exact single shell command to execute in the temporary sub-terminal. Use safe, non-interactive commands. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+            'The exact single shell command to execute in the temporary sub-terminal. For another host, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
         },
         timeoutMs: {
           type: 'number',
