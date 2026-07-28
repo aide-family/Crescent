@@ -31,13 +31,22 @@ export async function loadOpenApiToolRegistry(config: AgentConfig): Promise<Tool
       name: tool.function.name,
       method: operation?.method ?? 'get',
       path: operation?.path ?? '',
-      description: tool.function.description ?? ''
+      description: tool.function.description ?? '',
+      source: 'openapi' as const,
+      risk: isStateChangingHttpMethod(operation?.method) ? ('high' as const) : ('medium' as const),
+      requiresApproval: isStateChangingHttpMethod(operation?.method),
+      external: true,
+      stateChanging: isStateChangingHttpMethod(operation?.method)
     }
   })
   const snapshot = { cacheKey, tools, operations, catalog }
 
   memoryCache.set(cacheKey, snapshot)
   return snapshot
+}
+
+function isStateChangingHttpMethod(method: OpenApiOperationMeta['method'] | undefined): boolean {
+  return method === 'post' || method === 'put' || method === 'patch' || method === 'delete'
 }
 
 async function loadOpenApiDocument(documentInput: string): Promise<string | object> {

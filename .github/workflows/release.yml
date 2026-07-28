@@ -42,6 +42,14 @@ jobs:
             os: macos-latest
             artifact_name: crescent-macos-universal
             build_command: npm run build && npx electron-builder --mac --universal -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
+          - name: macOS arm64
+            os: macos-latest
+            artifact_name: crescent-macos-arm64
+            build_command: npm run build && npx electron-builder --mac --arm64 -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
+          - name: macOS x64
+            os: macos-latest
+            artifact_name: crescent-macos-x64
+            build_command: npm run build && npx electron-builder --mac --x64 -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
           - name: Windows
             os: windows-latest
             artifact_name: crescent-windows
@@ -49,7 +57,7 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             artifact_name: crescent-linux
-            build_command: npm run build && npx electron-builder --linux --publish=never
+            build_command: npm run build && npx electron-builder --linux AppImage deb --publish=never
 
     steps:
       - name: Checkout
@@ -81,7 +89,6 @@ jobs:
             dist/*.deb
             dist/*.dmg
             dist/*.exe
-            dist/*.snap
             dist/*.zip
             dist/*.blockmap
             dist/*.yml

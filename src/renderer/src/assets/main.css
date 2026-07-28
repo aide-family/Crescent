@@ -31,45 +31,61 @@
 
 :root {
   --radius: 0.5rem;
-  --background: #f0f5f3;
-  --foreground: #10201f;
-  --card: #fbfdfc;
-  --card-foreground: #10201f;
-  --popover: #ffffff;
-  --popover-foreground: #10201f;
-  --primary: #0b5f59;
-  --primary-foreground: #f8fffd;
-  --secondary: #dcebe8;
-  --secondary-foreground: #123d38;
-  --muted: #e5eeec;
-  --muted-foreground: #5f706d;
-  --accent: #f2dfd1;
-  --accent-foreground: #7c2d12;
-  --destructive: #dc2626;
-  --border: #cbdad6;
-  --input: #bdcfcb;
-  --ring: #0f766e;
+  --background: #d9dde1;
+  --foreground: #15191f;
+  --card: #eef1f4;
+  --card-foreground: #15191f;
+  --popover: #f5f7f9;
+  --popover-foreground: #15191f;
+  --primary: #13c2c2;
+  --primary-foreground: #f7fbff;
+  --secondary: #c8d0d8;
+  --secondary-foreground: #202832;
+  --muted: #d2d8de;
+  --muted-foreground: #58616d;
+  --accent: #e2c08a;
+  --accent-foreground: #4a3111;
+  --destructive: #c0392b;
+  --border: #b7c0ca;
+  --input: #aeb8c4;
+  --ring: #13c2c2;
+  --app-chrome: #c8cdd3;
+  --app-panel: #e5e9ed;
+  --app-panel-strong: #f2f4f6;
+  --app-terminal: #0b0d10;
+  --app-terminal-rail: #171b21;
+  --app-copper: #13c2c2;
+  --app-cyan: #13c2c2;
+  --app-shadow: 0 18px 50px rgb(18 24 31 / 18%);
 }
 
 .dark {
-  --background: #0f1514;
-  --foreground: #eefaf7;
-  --card: #141e1c;
-  --card-foreground: #eefaf7;
-  --popover: #141e1c;
-  --popover-foreground: #eefaf7;
-  --primary: #14b8a6;
-  --primary-foreground: #042f2e;
-  --secondary: #1b2926;
-  --secondary-foreground: #d8f3ee;
-  --muted: #192421;
-  --muted-foreground: #8ca39f;
-  --accent: #2d2119;
-  --accent-foreground: #f6c79b;
+  --background: #0b0d10;
+  --foreground: #eef2f7;
+  --card: #12161c;
+  --card-foreground: #eef2f7;
+  --popover: #151a21;
+  --popover-foreground: #eef2f7;
+  --primary: #13c2c2;
+  --primary-foreground: #061019;
+  --secondary: #1c232d;
+  --secondary-foreground: #d8e0ea;
+  --muted: #171d25;
+  --muted-foreground: #8994a3;
+  --accent: #302719;
+  --accent-foreground: #f0bd75;
   --destructive: #f87171;
-  --border: rgb(255 255 255 / 11%);
-  --input: rgb(255 255 255 / 16%);
-  --ring: #14b8a6;
+  --border: rgb(203 213 225 / 13%);
+  --input: rgb(203 213 225 / 18%);
+  --ring: #13c2c2;
+  --app-chrome: #11151b;
+  --app-panel: #131820;
+  --app-panel-strong: #1a2029;
+  --app-terminal: #050608;
+  --app-terminal-rail: #10141a;
+  --app-copper: #13c2c2;
+  --app-cyan: #13c2c2;
+  --app-shadow: 0 18px 60px rgb(0 0 0 / 42%);
 }
 
 @layer base {
@@ -137,9 +153,382 @@
   }
 }
 
+.app-shell {
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--app-chrome) 88%, black 4%) 0%,
+    var(--background) 52%,
+    color-mix(in oklch, var(--app-terminal) 36%, var(--background)) 100%
+  );
+}
+
+.app-titlebar {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--app-panel-strong) 82%, transparent),
+    color-mix(in oklch, var(--app-chrome) 92%, transparent)
+  );
+  box-shadow: 0 1px 0 rgb(255 255 255 / 45%) inset;
+}
+
+.dark .app-titlebar {
+  box-shadow: 0 1px 0 rgb(255 255 255 / 7%) inset;
+}
+
+.app-commandbar [data-slot='button'],
+.app-commandbar [data-slot='select-trigger'] {
+  background-color: color-mix(in oklch, var(--app-panel-strong) 72%, transparent);
+  border-color: color-mix(in oklch, var(--border) 80%, transparent);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 34%) inset;
+}
+
+.dark .app-commandbar [data-slot='button'],
+.dark .app-commandbar [data-slot='select-trigger'] {
+  background-color: color-mix(in oklch, var(--app-panel-strong) 58%, transparent);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 7%) inset;
+}
+
+.app-frame {
+  padding: 10px;
+  gap: 0;
+}
+
+.app-terminal-pane,
+.app-agent-pane {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  box-shadow: var(--app-shadow);
+}
+
+.app-terminal-pane {
+  background: var(--app-terminal);
+  border-radius: 10px 0 0 10px;
+}
+
+.app-agent-pane {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--app-panel) 96%, transparent),
+    color-mix(in oklch, var(--background) 96%, transparent)
+  );
+  border-left-width: 0;
+  border-radius: 0 10px 10px 0;
+}
+
+.flex-row-reverse > .app-terminal-pane {
+  border-right-width: 0;
+  border-left-width: 1px;
+  border-radius: 0 10px 10px 0;
+}
+
+.flex-row-reverse > .app-agent-pane {
+  border-right-width: 0;
+  border-left-width: 1px;
+  border-radius: 10px 0 0 10px;
+}
+
+.app-tabbar {
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--app-terminal-rail) 94%, white 4%),
+    var(--app-terminal-rail)
+  );
+}
+
+.terminal-canvas {
+  background:
+    linear-gradient(90deg, rgb(91 213 255 / 3%) 0 1px, transparent 1px 100%),
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--app-terminal) 94%, black),
+      var(--app-terminal)
+    );
+  background-size:
+    48px 48px,
+    auto;
+}
+
+.app-pane-resizer {
+  border-block: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  background: color-mix(in oklch, var(--app-chrome) 70%, transparent);
+  transition: background-color 160ms ease;
+}
+
+.app-pane-resizer:hover {
+  background: color-mix(in oklch, var(--primary) 32%, var(--app-chrome));
+}
+
+.app-input-dock {
+  border-top: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      transparent,
+      color-mix(in oklch, var(--app-panel-strong) 82%, transparent) 18%
+    ),
+    color-mix(in oklch, var(--app-panel) 92%, transparent);
+}
+
+.app-footer {
+  border-top: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  background: color-mix(in oklch, var(--app-chrome) 86%, transparent);
+}
+
+[data-slot='sheet-content'] {
+  border-color: color-mix(in oklch, var(--border) 88%, transparent);
+}
+
+[data-slot='sheet-header'] {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--app-panel-strong) 82%, transparent),
+    color-mix(in oklch, var(--app-panel) 78%, transparent)
+  );
+}
+
+[data-slot='sheet-footer'] {
+  border-top: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  background: color-mix(in oklch, var(--app-panel) 82%, transparent);
+}
+
+[data-slot='sheet-title'] {
+  letter-spacing: 0;
+}
+
+.app-modal-overlay {
+  backdrop-filter: blur(10px);
+}
+
+.app-modal-panel {
+  border-color: color-mix(in oklch, var(--border) 88%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--app-panel-strong) 88%, transparent),
+      transparent 34%
+    ),
+    var(--background);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 12%) inset,
+    0 28px 80px rgb(0 0 0 / 38%);
+}
+
+.app-modal-header {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--app-panel-strong) 78%, transparent),
+    color-mix(in oklch, var(--app-panel) 72%, transparent)
+  );
+}
+
+.app-sheet-split {
+  padding-block: 0.25rem;
+}
+
+.app-sheet-main > .rounded-md.border,
+.app-sheet-list > .rounded-md.border,
+.app-document-panel,
+.app-sheet-detail {
+  border-color: color-mix(in oklch, var(--border) 86%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--app-panel-strong) 58%, transparent),
+      transparent 42%
+    ),
+    color-mix(in oklch, var(--app-panel) 92%, transparent);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 8%) inset;
+}
+
+.app-sheet-main [role='button'],
+.app-sheet-list > div,
+.app-wiki-grid button,
+.app-connection-grid .rounded-md.border {
+  box-shadow: 0 1px 0 rgb(255 255 255 / 5%) inset;
+}
+
+.app-sheet-main [role='button']:hover,
+.app-sheet-list > div:hover,
+.app-wiki-grid button:hover,
+.app-connection-grid .rounded-md.border:hover {
+  transform: translateY(-1px);
+}
+
+.app-sheet-detail {
+  max-width: min(52vw, 680px);
+}
+
+.app-document-panel article {
+  color: color-mix(in oklch, var(--foreground) 94%, var(--muted-foreground));
+}
+
+.app-connection-grid {
+  background: color-mix(in oklch, var(--app-panel) 74%, transparent);
+}
+
+.app-connection-grid > :first-child {
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--app-chrome) 72%, transparent), transparent),
+    color-mix(in oklch, var(--muted) 18%, transparent);
+}
+
+.app-connection-grid > :last-child {
+  background: color-mix(in oklch, var(--background) 72%, transparent);
+}
+
+.markdown-body {
+  color: color-mix(in oklch, var(--foreground) 92%, var(--muted-foreground));
+}
+
+.markdown-body code {
+  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border-radius: 0.375rem;
+  background: color-mix(in oklch, var(--muted) 50%, transparent);
+  padding: 0.08rem 0.28rem;
+  color: var(--foreground);
+  font-size: 0.88em;
+}
+
+.markdown-body pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  border-radius: 0 0.375rem 0.375rem 0;
+  padding-block: 0.45rem;
+}
+
+.markdown-body table {
+  overflow: hidden;
+  border-radius: 0.375rem;
+}
+
+.app-code-panel,
+.app-mermaid-panel {
+  border-color: rgb(255 255 255 / 10%);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 5%) inset,
+    0 10px 28px rgb(0 0 0 / 18%);
+}
+
+.app-mermaid-panel {
+  background: color-mix(in oklch, var(--app-terminal) 72%, var(--background));
+}
+
+.app-mermaid-expanded {
+  background:
+    radial-gradient(
+      circle at top left,
+      color-mix(in oklch, var(--primary) 12%, transparent),
+      transparent 26rem
+    ),
+    color-mix(in oklch, var(--app-terminal) 92%, black);
+}
+
+.app-mermaid-expanded > :first-child {
+  border-bottom-color: rgb(255 255 255 / 10%);
+  background: color-mix(in oklch, var(--app-terminal-rail) 88%, transparent);
+}
+
+.app-tabbar button {
+  box-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset;
+}
+
+.app-tabbar button[aria-selected='true'] {
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
+}
+
+.app-agent-pane details,
+.app-agent-pane section {
+  border-color: color-mix(in oklch, var(--border) 86%, transparent);
+}
+
+.app-input-dock form > div:first-child {
+  border-radius: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-titlebar {
+    height: auto;
+    min-height: 4rem;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding-block: 0.75rem;
+  }
+
+  .app-commandbar {
+    max-width: 58vw;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .app-frame {
+    padding: 6px;
+  }
+
+  .app-agent-pane {
+    min-width: min(100%, 320px);
+  }
+}
+
+@media (max-width: 980px) {
+  .app-sheet-split {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .app-sheet-main,
+  .app-sheet-detail {
+    width: 100% !important;
+    max-width: none;
+    min-height: 0;
+  }
+
+  .app-sheet-detail {
+    max-height: min(58vh, 520px);
+  }
+
+  .app-wiki-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    overflow: auto;
+  }
+
+  .app-document-panel {
+    min-height: 420px;
+  }
+
+  .app-connection-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    overflow: auto;
+  }
+
+  .app-connection-grid > :first-child {
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  }
+}
+
 .xterm {
   height: 100%;
-  padding: 12px;
+  padding: 14px;
 }
 
 .xterm .xterm-viewport {

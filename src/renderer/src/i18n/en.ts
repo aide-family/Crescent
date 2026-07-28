@@ -57,6 +57,7 @@ const en = {
     stop: 'Stop',
     copied: 'Copied',
     enlarge: 'Enlarge',
+    navigation: 'Navigation',
     reset: 'Reset',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
@@ -240,6 +241,8 @@ const en = {
   input: {
     actionDetails: 'Action details',
     actionDetailsCompleted: 'Action details (collapsed; result first)',
+    actionSummary: 'Action summary',
+    actionSummaryCompleted: 'Action summary (collapsed; result first)',
     actionAnalysisCommand:
       'I will check whether the command fits the current context, whether it needs approval, and whether the output contains risk signals or evidence for the next step.',
     actionAnalysisDefault:

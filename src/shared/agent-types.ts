@@ -368,6 +368,11 @@ export interface ToolCatalogEntry {
   method: HttpMethod
   path: string
   description: string
+  source?: 'built-in' | 'openapi' | 'mcp'
+  risk?: CommandRiskLevel
+  requiresApproval?: boolean
+  external?: boolean
+  stateChanging?: boolean
 }
 
 export interface StoredSessionTab {
