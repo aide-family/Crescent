@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is on main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release tags must point to a commit contained in main."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            artifact_name: crescent-macos-universal
+            build_command: npm run build && npx electron-builder --mac --universal -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
+          - name: Windows
+            os: windows-latest
+            artifact_name: crescent-windows
+            build_command: npm run build && npx electron-builder --win --publish=never
+          - name: Linux
+            os: ubuntu-latest
+            artifact_name: crescent-linux
+            build_command: npm run build && npx electron-builder --linux --publish=never
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release assets
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ${{ matrix.build_command }}
+
+      - name: Upload build assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
+          if-no-files-found: error
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.dmg
+            dist/*.exe
+            dist/*.snap
+            dist/*.zip
+            dist/*.blockmap
+            dist/*.yml
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          shasum -a 256 * > SHA256SUMS.txt
+
+      - name: Render release notes
+        run: |
+          sed \
+            -e "s/{{VERSION}}/${GITHUB_REF_NAME}/g" \
+            -e "s/{{DATE}}/$(date -u +%Y-%m-%d)/g" \
+            -e "s#{{REPOSITORY}}#${GITHUB_REPOSITORY}#g" \
+            .github/release-template.md > release-notes.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Crescent ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release-assets/*

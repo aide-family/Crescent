@@ -1,0 +1,33 @@
+name: Maintenance task
+description: Track documentation, refactoring, packaging, or release work.
+title: '[Task]: '
+labels:
+  - chore
+  - needs-triage
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What should be completed?
+      placeholder: Update...
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the files, modules, or workflows expected to change.
+      placeholder: |
+        - ...
+        - ...
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How should reviewers verify this task is done?
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true

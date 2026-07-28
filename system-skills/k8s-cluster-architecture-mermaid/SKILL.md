@@ -1,7 +1,19 @@
 ---
 name: k8s-cluster-architecture-mermaid
-description: "Kubernetes/K8s cluster architecture mapping and Mermaid diagram generation: collect read-only evidence and map control plane, worker nodes, namespaces, workloads, Services, Ingress/Gateway, CNI, DNS/CoreDNS, kube-proxy, load balancers, storage, observability, and external dependencies. Use when the user asks to draw, map, document,梳理, 整理, 生成, or explain a Kubernetes/K8s 集群架构图、集群网络架构、网络拓扑图、服务调用链路、Mermaid 图、架构图、节点关系、入口流量、Pod/Service 网络。"
-aliases: ["Kubernetes cluster architecture diagram", "K8s network topology diagram", "K8s Mermaid architecture", "cluster network architecture map", "整理集群网络架构图", "梳理集群网络架构", "生成集群架构 Mermaid 图", "K8s 集群网络拓扑图", "Kubernetes 架构图", "服务入口流量链路图"]
+description: 'Kubernetes/K8s cluster architecture mapping and Mermaid diagram generation: collect read-only evidence and map control plane, worker nodes, namespaces, workloads, Services, Ingress/Gateway, CNI, DNS/CoreDNS, kube-proxy, load balancers, storage, observability, and external dependencies. Use when the user asks to draw, map, document,梳理, 整理, 生成, or explain a Kubernetes/K8s 集群架构图、集群网络架构、网络拓扑图、服务调用链路、Mermaid 图、架构图、节点关系、入口流量、Pod/Service 网络。'
+aliases:
+  [
+    'Kubernetes cluster architecture diagram',
+    'K8s network topology diagram',
+    'K8s Mermaid architecture',
+    'cluster network architecture map',
+    '整理集群网络架构图',
+    '梳理集群网络架构',
+    '生成集群架构 Mermaid 图',
+    'K8s 集群网络拓扑图',
+    'Kubernetes 架构图',
+    '服务入口流量链路图'
+  ]
 ---
 
 # Kubernetes Cluster Architecture Mermaid Mapping
