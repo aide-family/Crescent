@@ -1,0 +1,443 @@
+import type { Dictionary } from '@renderer/i18n'
+import { logRoleLabel } from '@renderer/lib/agent-log'
+import { formatConnectionTarget } from '@renderer/lib/connections'
+import { normalizeTerminalControlText } from '@renderer/lib/terminal-text'
+import type {
+  AgentLogEntry,
+  AgentTerminalTab,
+  AgentToolReference
+} from '@renderer/lib/terminal-tabs'
+import type {
+  AgentPathReference,
+  AgentSkillOption,
+  AgentWikiReference,
+  ConnectionConfig
+} from '../../../shared/agent-types'
+
+export function isContinueIntent(value: string): boolean {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+
+  return /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
+}
+
+export function isExplicitConnectionRequest(value: string): boolean {
+  return /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value)
+}
+
+export function isExplicitNonTerminalAgentRequest(
+  value: string,
+  toolRefs: AgentToolReference[] = []
+): boolean {
+  if (
+    toolRefs.some((tool) => tool.name.startsWith('mcp_') || tool.description.includes('mcp://'))
+  ) {
+    return true
+  }
+
+  return /\bMCP\b|filesystem\s+MCP|MCP\s+filesystem|使用\s*Filesystem/i.test(value)
+}
+
+export function hasUsableCurrentTerminal(
+  tab: AgentTerminalTab | undefined,
+  output: string
+): boolean {
+  if (tab?.isSsh || tab?.connectionId) return true
+
+  const normalized = normalizeTerminalControlText(output).trim()
+  if (!normalized) return false
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-20)
+  if (lines.length === 0) return false
+
+  return lines.some(
+    (line) =>
+      !/^\[Crescent\]/.test(line) && !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
+  )
+}
+
+export function findDirectlyMentionedConnection(
+  input: string,
+  connections: ConnectionConfig[]
+): ConnectionConfig | undefined {
+  const normalizedInput = normalizeConnectionMentionText(input)
+  if (!normalizedInput) return undefined
+
+  const matches = connections.filter((connection) =>
+    getConnectionMentionTokens(connection).some((token) => normalizedInput.includes(token))
+  )
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+export function isSameConnectionTab(
+  tab: AgentTerminalTab | undefined,
+  connection: ConnectionConfig | undefined
+): boolean {
+  if (!tab || !connection) return false
+  if (tab.connectionId && tab.connectionId === connection.id) return true
+
+  return Boolean(tab.connectionName && tab.connectionName === connection.name)
+}
+
+export function getConnectionMentionTokens(connection: ConnectionConfig): string[] {
+  const values = [connection.name, connection.host, connection.user].filter(
+    (value): value is string => Boolean(value)
+  )
+  const tokens = new Set<string>()
+
+  for (const value of values) {
+    const normalizedValue = normalizeConnectionMentionText(value)
+    if (normalizedValue.length >= 3) tokens.add(normalizedValue)
+
+    for (const token of value.split(/[^\p{L}\p{N}]+/u)) {
+      const normalizedToken = normalizeConnectionMentionText(token)
+      if (normalizedToken.length >= 3) tokens.add(normalizedToken)
+    }
+  }
+
+  return [...tokens]
+}
+
+export function normalizeConnectionMentionText(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+export function isConnectionOnlyRequest(input: string, connection: ConnectionConfig): boolean {
+  let normalized = normalizeConnectionMentionText(input)
+  const removableTokens = [
+    ...getConnectionMentionTokens(connection),
+    'connection',
+    'connect',
+    'login',
+    'ssh',
+    'open',
+    '连接',
+    '登录',
+    '登入',
+    '打开',
+    '进入',
+    '切换',
+    '集群',
+    '环境',
+    '到',
+    '至'
+  ].sort((left, right) => right.length - left.length)
+
+  for (const token of removableTokens) {
+    normalized = normalized.replaceAll(token, '')
+  }
+
+  return normalized.length === 0
+}
+
+export function buildResumeAgentInput(
+  tab: AgentTerminalTab,
+  latestInput: string,
+  t: Dictionary
+): string {
+  const previousUserEntry = [...tab.agentLog].reverse().find((entry) => entry.kind === 'user')
+  const recentContext = tab.agentLog
+    .slice(-10)
+    .map((entry) => formatResumeContextEntry(entry, t))
+    .filter(Boolean)
+    .join('\n\n')
+
+  return [
+    t.input.resumeInstruction,
+    previousUserEntry ? `${t.input.resumePreviousGoal}\n${previousUserEntry.text}` : '',
+    `${t.input.resumeLatestInput}\n${latestInput}`,
+    recentContext ? `${t.input.resumeRecentContext}\n${recentContext}` : t.input.resumeNoContext
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+export function buildRecentConversationContext(
+  tab: AgentTerminalTab | undefined,
+  currentInput: string,
+  t: Dictionary
+): string {
+  if (!tab) return ''
+
+  const normalizedCurrentInput = currentInput.trim()
+  const entries = tab.agentLog
+    .filter((entry) => {
+      if (entry.kind === 'status') return false
+      if (entry.kind !== 'user') return true
+
+      return entry.text.trim() !== normalizedCurrentInput
+    })
+    .slice(-8)
+
+  const latestAssistant = [...entries].reverse().find((entry) => entry.kind === 'assistant')
+  const compactEntries = entries
+    .filter((entry) => entry.id !== latestAssistant?.id)
+    .slice(-4)
+    .map((entry) => formatRecentConversationEntry(entry, t, 2200))
+    .filter(Boolean)
+
+  const latestAssistantContext = latestAssistant
+    ? [
+        `${t.input.resumeRecentContext} - latest assistant result`,
+        formatRecentConversationEntry(latestAssistant, t, 40_000)
+      ].join('\n')
+    : ''
+
+  return [...compactEntries, latestAssistantContext].filter(Boolean).join('\n\n')
+}
+
+export function formatRecentConversationEntry(
+  entry: AgentLogEntry,
+  t: Dictionary,
+  maxChars: number
+): string {
+  const role = logRoleLabel(entry.kind, t)
+  const text = entry.text.trim()
+  if (!text) return ''
+
+  return `[${role}] ${text.length > maxChars ? text.slice(-maxChars) : text}`
+}
+
+export function formatResumeContextEntry(entry: AgentLogEntry, t: Dictionary): string {
+  const role = logRoleLabel(entry.kind, t)
+  const text = entry.text.trim()
+  if (!text) return ''
+
+  return `[${role}] ${text.slice(-1800)}`
+}
+
+export function addUniqueSkillRef(
+  skillRefs: AgentSkillOption[],
+  skill: AgentSkillOption
+): AgentSkillOption[] {
+  if (skillRefs.some((current) => current.id === skill.id)) return skillRefs
+
+  return [...skillRefs, skill]
+}
+
+export function addUniqueToolRef(
+  toolRefs: AgentToolReference[],
+  tool: AgentToolReference
+): AgentToolReference[] {
+  if (toolRefs.some((current) => current.id === tool.id)) return toolRefs
+
+  return [...toolRefs, tool]
+}
+
+export function addUniqueWikiRef(
+  wikiRefs: AgentWikiReference[],
+  wiki: AgentWikiReference
+): AgentWikiReference[] {
+  if (wikiRefs.some((current) => current.id === wiki.id)) return wikiRefs
+
+  return [...wikiRefs, wiki]
+}
+
+export function addUniquePathRef(
+  pathRefs: AgentPathReference[],
+  reference: AgentPathReference
+): AgentPathReference[] {
+  if (pathRefs.some((current) => current.id === reference.id)) return pathRefs
+
+  return [...pathRefs, reference]
+}
+
+export function buildAgentInputWithReferences(
+  input: string,
+  skillRefs: AgentSkillOption[],
+  pathRefs: AgentPathReference[],
+  toolRefs: AgentToolReference[],
+  wikiRefs: AgentWikiReference[],
+  t: Dictionary
+): string {
+  const toolLines = toolRefs.flatMap((tool) => [
+    `- ${t.input.slashToolUseLabel}: ${tool.name}`,
+    tool.description ? `  ${t.input.slashToolDescriptionLabel}: ${tool.description}` : '',
+    `  ${t.input.slashToolRequirement}`
+  ])
+
+  const skillLines = skillRefs.flatMap((skill) => [
+    `- ${t.input.slashSkillUseLabel}: ${skill.name}`,
+    `  ${t.input.slashSkillPathLabel}: ${skill.path}`,
+    skill.description ? `  ${t.input.slashSkillDescriptionLabel}: ${skill.description}` : '',
+    `  ${t.input.slashSkillRequirement}`
+  ])
+
+  const pathLines = pathRefs.map((reference) => {
+    const label =
+      reference.kind === 'directory' ? t.input.referencedDirectory : t.input.referencedFile
+    return `- ${label}: ${reference.path}`
+  })
+  const wikiLines = wikiRefs.flatMap((wiki) => [
+    `- ${t.input.slashWikiUseLabel}: ${wiki.title}`,
+    `  ${t.input.slashSkillPathLabel}: ${wiki.path}`,
+    '  ```markdown',
+    wiki.content,
+    '  ```'
+  ])
+
+  const referenceSections = [
+    ...(toolRefs.length > 0 ? [`${t.input.referencedTools}:`, ...toolLines.filter(Boolean)] : []),
+    ...(skillRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 ? [''] : []),
+          `${t.input.referencedSkills}:`,
+          ...skillLines.filter(Boolean)
+        ]
+      : []),
+    ...(pathRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 || skillRefs.length > 0 ? [''] : []),
+          `${t.input.referencedPaths}:`,
+          ...pathLines,
+          t.input.pathReferenceRequirement
+        ]
+      : []),
+    ...(wikiRefs.length > 0
+      ? [
+          ...(toolRefs.length > 0 || skillRefs.length > 0 || pathRefs.length > 0 ? [''] : []),
+          `${t.input.referencedWikiDocuments}:`,
+          ...wikiLines,
+          t.input.slashWikiRequirement
+        ]
+      : [])
+  ]
+
+  if (referenceSections.length === 0) return input
+
+  return [...referenceSections, '', `${t.input.slashSkillTaskLabel}:`, input].join('\n')
+}
+
+export function formatVisibleInputWithReferences(
+  input: string,
+  skillRefs: AgentSkillOption[],
+  pathRefs: AgentPathReference[],
+  toolRefs: AgentToolReference[],
+  wikiRefs: AgentWikiReference[],
+  t: Dictionary
+): string {
+  const visibleReferences = [
+    toolRefs.length > 0
+      ? `${t.input.referencedTools}: ${toolRefs.map((tool) => `\`${tool.name}\``).join(', ')}`
+      : '',
+    skillRefs.length > 0
+      ? `${t.input.referencedSkills}: ${skillRefs.map((skill) => `\`${skill.name}\``).join(', ')}`
+      : '',
+    pathRefs.length > 0
+      ? `${t.input.referencedPaths}: ${pathRefs
+          .map((reference) => `\`${reference.name}\``)
+          .join(', ')}`
+      : '',
+    wikiRefs.length > 0
+      ? `${t.input.referencedWikiDocuments}: ${wikiRefs
+          .map((wiki) => `\`${wiki.title}\``)
+          .join(', ')}`
+      : ''
+  ].filter(Boolean)
+
+  if (visibleReferences.length === 0) return input
+
+  return `${visibleReferences.join('\n')}\n\n${input}`
+}
+
+export function buildPostLoginAgentInput(
+  input: string,
+  connection: ConnectionConfig,
+  t: Dictionary
+): string {
+  return [
+    t.terminal.postLoginAgentInstruction,
+    `${t.terminal.connectionTarget}: ${connection.name} (${formatConnectionTarget(connection)})`,
+    '',
+    buildUserRequirementBreakdown(input, connection, t),
+    '',
+    t.terminal.postLoginOriginalTask,
+    input
+  ].join('\n')
+}
+
+export function buildCurrentTerminalAgentInput(
+  input: string,
+  terminalContext: { cwd: string; mode: string; output: string; shell: string },
+  t: Dictionary
+): string {
+  return [
+    t.terminal.currentTerminalInstruction,
+    `${t.terminal.terminalMode}: ${terminalContext.mode}`,
+    `${t.app.workingDirectory}: ${terminalContext.cwd || '-'}`,
+    '',
+    t.terminal.postLoginOriginalTask,
+    input
+  ].join('\n')
+}
+
+export function buildUserRequirementBreakdown(
+  input: string,
+  connection: ConnectionConfig,
+  t: Dictionary
+): string {
+  const artifactDestination = extractArtifactDestination(input)
+  const targetSystem = extractTargetSystem(input)
+  const requestedActions = extractRequestedActions(input)
+  const lines = [
+    t.terminal.requirementBreakdown,
+    `1. ${t.terminal.breakdownTargetConnection}: ${connection.name} (${formatConnectionTarget(connection)})`,
+    `2. ${t.terminal.breakdownTargetSystem}: ${targetSystem || t.terminal.breakdownInferFromTask}`,
+    `3. ${t.terminal.breakdownActions}: ${requestedActions.join(' -> ')}`,
+    `4. ${t.terminal.breakdownArtifact}: ${
+      artifactDestination
+        ? `${t.terminal.breakdownArtifactDestination}: ${artifactDestination}`
+        : t.terminal.breakdownNoExplicitArtifact
+    }`,
+    '',
+    t.terminal.breakdownExecutionRules,
+    `- ${t.terminal.breakdownRuleUseCurrentTerminal}`,
+    `- ${t.terminal.breakdownRuleUseSubterminal}`,
+    `- ${t.terminal.breakdownRulePreserveDestination}`,
+    `- ${t.terminal.breakdownRuleNoFabrication}`
+  ]
+
+  return lines.join('\n')
+}
+
+export function extractTargetSystem(input: string): string {
+  return input.match(/\b(?:for|on|in|against)\s+([A-Za-z0-9_.-]{2,})\b/i)?.[1] ?? ''
+}
+
+export function extractArtifactDestination(input: string): string {
+  const pathMatch = input.match(
+    /\b(?:save|write|output|export|store)\s+(?:to|into|at)\s+([~./$A-Za-z0-9_-][^\s,;]*)/i
+  )
+  if (pathMatch?.[1]) return normalizeArtifactDestination(pathMatch[1])
+
+  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s,;]*)/)
+  return loosePathMatch?.[1] ? normalizeArtifactDestination(loosePathMatch[1]) : ''
+}
+
+export function normalizeArtifactDestination(value: string): string {
+  return value.replace(/\/+$/, '')
+}
+
+export function extractRequestedActions(input: string): string[] {
+  const actions: string[] = []
+  if (/\b(ssh|login|connect)\b/i.test(input)) actions.push('login')
+  if (/\b(check|inspect|diagnose|troubleshoot|verify|list|get|status|health)\b/i.test(input)) {
+    actions.push('inspect')
+  }
+  if (
+    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(input)
+  ) {
+    actions.push('operate')
+  }
+  if (/\b(summarize|report|document|record)\b/i.test(input)) actions.push('summarize')
+  if (/\b(save|write|output|export|store)\b/i.test(input)) actions.push('write-artifact')
+
+  return actions.length ? actions : ['complete-request']
+}

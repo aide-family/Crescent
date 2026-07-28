@@ -9,6 +9,7 @@ import { findBuiltInToolCatalogEntry } from '../../shared/agent-tool-catalog'
 import type {
   AgentConfig,
   AgentEvent,
+  HttpMethod,
   LocalFileWriter,
   OpenAiTool,
   SubterminalCommandExecutor,
@@ -113,7 +114,7 @@ const SAVE_WIKI_DOCUMENT_TOOL: OpenAiTool = {
         title: {
           type: 'string',
           description:
-            'Knowledge-base document title. Use a concise operational title, for example "zhangke K8s inspection SOP".'
+            'Knowledge-base document title. Use a concise operational title, for example "aide K8s inspection SOP".'
         },
         content: {
           type: 'string',
@@ -373,7 +374,12 @@ export class AgentToolRuntime {
           name: schema.function.name,
           method: operation?.method ?? 'get',
           path: operation?.path ?? '',
-          description: schema.function.description ?? ''
+          description: schema.function.description ?? '',
+          source: 'openapi',
+          risk: isStateChangingHttpMethod(operation?.method) ? 'high' : 'medium',
+          requiresApproval: isStateChangingHttpMethod(operation?.method),
+          external: true,
+          stateChanging: isStateChangingHttpMethod(operation?.method)
         },
         execute: (rawArguments) => executor.execute(schema.function.name, rawArguments)
       })
@@ -427,6 +433,10 @@ function requiresConfirmedLocalReportDestination(userInput: string, path: string
 
 function hasExplicitLocalPath(value: string): boolean {
   return /(?:~|\/|\$HOME)[^\s,;]*/.test(value)
+}
+
+function isStateChangingHttpMethod(method: HttpMethod | undefined): boolean {
+  return method === 'post' || method === 'put' || method === 'patch' || method === 'delete'
 }
 
 function parseTerminalCommandArgs(rawArguments: string): { command: string; timeoutMs?: number } {

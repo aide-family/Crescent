@@ -31,3 +31,10 @@ body:
         - ...
     validations:
       required: true
+  - type: checkboxes
+    id: risk
+    attributes:
+      label: Risk review
+      options:
+        - label: This task touches command execution, file writes, SSH, OpenAPI, MCP, credentials, packaging, or updates.
+        - label: This task needs tests or a documented manual verification note.

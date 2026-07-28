@@ -55,6 +55,7 @@ const zhCN = {
     stop: '停止',
     copied: '已复制',
     enlarge: '放大查看',
+    navigation: '导航',
     reset: '重置',
     zoomIn: '放大',
     zoomOut: '缩小',
@@ -221,6 +222,8 @@ const zhCN = {
   input: {
     actionDetails: '动作明细',
     actionDetailsCompleted: '动作明细（已折叠，优先查看结果）',
+    actionSummary: '动作概要',
+    actionSummaryCompleted: '动作概要（已折叠，优先查看结果）',
     actionAnalysisCommand:
       '我会重点确认命令是否符合当前上下文、是否需要审批，以及输出里有没有风险信号或下一步证据。',
     actionAnalysisDefault:

@@ -38,7 +38,7 @@ export async function parseOpenApiToTools(openApiSpec: string | object): Promise
 export async function parseOpenApiToToolBundle(
   openApiSpec: string | object
 ): Promise<ParsedToolBundle> {
-  let api: any
+  let api: unknown
 
   try {
     const input = typeof openApiSpec === 'string' ? JSON.parse(openApiSpec) : openApiSpec
@@ -49,27 +49,27 @@ export async function parseOpenApiToToolBundle(
     )
   }
 
-  if (!api || typeof api !== 'object' || !api.paths || typeof api.paths !== 'object') {
+  if (!isRecord(api) || !isRecord(api.paths)) {
     throw new Error('OpenAPI document is missing a valid paths object.')
   }
 
   const tools: OpenAiTool[] = []
-  const operations = new Map()
+  const operations: ParsedToolBundle['operations'] = new Map()
   const usedNames = new Set<string>()
 
-  for (const [path, pathItem] of Object.entries<any>(api.paths)) {
-    if (!pathItem || typeof pathItem !== 'object') continue
+  for (const [path, pathItem] of Object.entries(api.paths)) {
+    if (!isRecord(pathItem)) continue
 
     const inheritedParameters = Array.isArray(pathItem.parameters) ? pathItem.parameters : []
 
-    for (const [rawMethod, operation] of Object.entries<any>(pathItem)) {
+    for (const [rawMethod, operation] of Object.entries(pathItem)) {
       const method = rawMethod.toLowerCase() as HttpMethod
 
-      if (!HTTP_METHODS.has(method) || !operation || typeof operation !== 'object') continue
+      if (!HTTP_METHODS.has(method) || !isRecord(operation)) continue
 
       const name = uniqueToolName(
         sanitizeToolName(
-          operation.operationId ??
+          stringValue(operation.operationId) ??
             `${method}_${path.replace(/[{}]/g, '').replace(/[^a-zA-Z0-9]+/g, '_')}`
         ),
         usedNames
@@ -120,9 +120,9 @@ export async function parseOpenApiToToolBundle(
         name,
         method,
         path,
-        operationId: operation.operationId,
-        summary: operation.summary,
-        description: operation.description,
+        operationId: stringValue(operation.operationId),
+        summary: stringValue(operation.summary),
+        description: stringValue(operation.description),
         requestBodyContentType: requestBodySchema?.contentType
       })
     }
@@ -135,7 +135,11 @@ export async function parseOpenApiToToolBundle(
   return { tools, operations }
 }
 
-function buildOperationDescription(operation: any, method: HttpMethod, path: string): string {
+function buildOperationDescription(
+  operation: Record<string, unknown>,
+  method: HttpMethod,
+  path: string
+): string {
   const summary = typeof operation.summary === 'string' ? operation.summary : ''
   const description = typeof operation.description === 'string' ? operation.description : ''
   const text = [summary, description].filter(Boolean).join('\n\n').trim()
@@ -143,7 +147,7 @@ function buildOperationDescription(operation: any, method: HttpMethod, path: str
   return text || `${method.toUpperCase()} ${path}`
 }
 
-function buildParametersSchema(parameters: any[]): {
+function buildParametersSchema(parameters: unknown[]): {
   path?: JsonSchema
   query?: JsonSchema
   headers?: JsonSchema
@@ -155,7 +159,7 @@ function buildParametersSchema(parameters: any[]): {
   }
 
   for (const parameter of parameters) {
-    if (!parameter || typeof parameter !== 'object') continue
+    if (!isRecord(parameter)) continue
 
     const location = parameter.in as string | undefined
     const name = parameter.name as string | undefined
@@ -171,7 +175,7 @@ function buildParametersSchema(parameters: any[]): {
     if (!name || !bucket) continue
 
     bucket.properties![name] = normalizeSchema(parameter.schema ?? {}, {
-      description: parameter.description
+      description: stringValue(parameter.description)
     })
 
     if (parameter.required === true || location === 'path') {
@@ -188,27 +192,28 @@ function buildParametersSchema(parameters: any[]): {
 }
 
 function buildRequestBodySchema(
-  requestBody: any
+  requestBody: unknown
 ): { schema: JsonSchema; contentType: string; required: boolean } | undefined {
-  if (!requestBody || typeof requestBody !== 'object') return undefined
+  if (!isRecord(requestBody)) return undefined
 
   const content = requestBody.content
-  if (!content || typeof content !== 'object') return undefined
+  if (!isRecord(content)) return undefined
 
   const contentType = content['application/json'] ? 'application/json' : Object.keys(content)[0]
   if (!contentType) return undefined
+  const mediaType = content[contentType]
 
   return {
-    schema: normalizeSchema(content[contentType]?.schema ?? { type: 'object' }, {
-      description: requestBody.description
+    schema: normalizeSchema(isRecord(mediaType) ? mediaType.schema : { type: 'object' }, {
+      description: stringValue(requestBody.description)
     }),
     contentType,
     required: requestBody.required === true
   }
 }
 
-function normalizeSchema(schema: any, extra?: { description?: string }): JsonSchema {
-  if (!schema || typeof schema !== 'object') {
+function normalizeSchema(schema: unknown, extra?: { description?: string }): JsonSchema {
+  if (!isRecord(schema)) {
     return {
       type: 'object',
       additionalProperties: true,
@@ -246,6 +251,14 @@ function normalizeSchema(schema: any, extra?: { description?: string }): JsonSch
   }
 
   return result
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 function createObjectSchema(): JsonSchema {

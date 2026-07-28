@@ -9,6 +9,7 @@ body:
     attributes:
       value: |
         Thanks for helping improve Crescent. Clear reproduction details help us investigate faster.
+        Do not paste API keys, passwords, tokens, private hostnames, private paths, or production command output that contains sensitive data.
   - type: input
     id: version
     attributes:

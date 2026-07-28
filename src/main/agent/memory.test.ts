@@ -41,7 +41,7 @@ describe('AgentMemory', () => {
             id: 'op-1',
             createdAt: '2026-01-01T00:00:00Z',
             status: 'success',
-            summary: 'checked zhangke Elasticsearch'
+            summary: 'checked aide Elasticsearch'
           }
         ]
       }
@@ -61,7 +61,7 @@ describe('AgentMemory', () => {
 
     expect(memory.getShortTermMessages()).toEqual([])
     expect(memory.getPromptBlock()).toContain('reply concisely')
-    expect(memory.getPromptBlock()).not.toContain('zhangke Elasticsearch')
+    expect(memory.getPromptBlock()).not.toContain('aide Elasticsearch')
 
     memory.rememberTurn('new request', 'new answer')
     expect(persisted).toBeUndefined()

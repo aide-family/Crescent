@@ -6,22 +6,16 @@ import {
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent as ReactClipboardEvent,
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent
+  type ClipboardEvent as ReactClipboardEvent
 } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import mermaid from 'mermaid'
 import {
   ArrowLeftRightIcon,
   ArrowUpIcon,
   BookOpenIcon,
   BotIcon,
   CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
   CopyIcon,
   DownloadIcon,
   FileIcon,
@@ -30,7 +24,6 @@ import {
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
-  Maximize2Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PanelRightCloseIcon,
@@ -44,13 +37,35 @@ import {
   TestTube2Icon,
   TriangleAlertIcon,
   Trash2Icon,
-  ZoomInIcon,
-  ZoomOutIcon,
   XIcon
 } from 'lucide-react'
-import { Toaster, toast } from 'sonner'
+import { Toaster } from 'sonner'
 
+import { AgentLogList } from '@renderer/components/AgentLogList'
+import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
+import { AppFooter } from '@renderer/components/AppFooter'
+import {
+  CloseTabsConfirmModal,
+  CommandApprovalModal,
+  PasswordPromptModal,
+  type CloseTabsConfirmRequest,
+  type PasswordPromptRequest
+} from '@renderer/components/AppModals'
+import { ConnectionList } from '@renderer/components/ConnectionList'
+import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
+import { MarkdownContent, extractResultMarkdown } from '@renderer/components/MarkdownContent'
 import { ProductLogo } from '@renderer/components/ProductLogo'
+import {
+  McpStatusDot,
+  SkillInstallStatusDot,
+  SkillManageStatus,
+  StatusDot,
+  type SkillInstallLogStatus,
+  type SkillManageMessage
+} from '@renderer/components/StatusIndicators'
+import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
+import { SubterminalPanel } from '@renderer/components/SubterminalPanel'
+import { TerminalTabBar } from '@renderer/components/TerminalTabBar'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
@@ -82,6 +97,116 @@ import {
   type Dictionary,
   type Locale
 } from '@renderer/i18n'
+import {
+  appendElapsedFooter,
+  formatAgentRunMarkdown,
+  formatHistoryTime,
+  hydrateStoredAgentLog
+} from '@renderer/lib/agent-log'
+import {
+  buildAvailableToolRefs,
+  flattenProviderModels,
+  formatMcpArgs,
+  formatMcpEnv,
+  formatProviderModels,
+  parseCommandWhitelist,
+  parseMcpArgs,
+  parseMcpEnv,
+  parseProviderModels
+} from '@renderer/lib/agent-config'
+import {
+  CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
+  PANE_ORDER_STORAGE_KEY,
+  formatPipePrompt,
+  getPipePrompt,
+  hasConfiguredModelSelection,
+  resolveInitialPaneOrder,
+  type PaneOrder
+} from '@renderer/lib/app-shell'
+import {
+  addUniquePathRef,
+  addUniqueSkillRef,
+  addUniqueToolRef,
+  addUniqueWikiRef,
+  buildAgentInputWithReferences,
+  buildCurrentTerminalAgentInput,
+  buildPostLoginAgentInput,
+  buildRecentConversationContext,
+  buildResumeAgentInput,
+  findDirectlyMentionedConnection,
+  formatVisibleInputWithReferences,
+  hasUsableCurrentTerminal,
+  isConnectionOnlyRequest,
+  isContinueIntent,
+  isExplicitConnectionRequest,
+  isExplicitNonTerminalAgentRequest,
+  isSameConnectionTab
+} from '@renderer/lib/agent-input'
+import {
+  buildConnectionCommands,
+  buildConnectionLoginActions,
+  buildSshCommand,
+  createCustomConnectionId,
+  formatConnectionActionLog,
+  isPasswordEnvVarMissing,
+  mergeConnectionInput,
+  parseLoginActions,
+  parseSshOptions,
+  shellQuote
+} from '@renderer/lib/connection-commands'
+import { filterConnections, formatConnectionTarget } from '@renderer/lib/connections'
+import { appTerminalTheme } from '@renderer/lib/design-system'
+import { copyFeedback, copyText, downloadMarkdown } from '@renderer/lib/operation-feedback'
+import {
+  extractPasswordPromptLine,
+  formatReadableSubterminalOutput,
+  getSubterminalWidths,
+  hasInteractivePrompt,
+  hasOutputBeyondEcho,
+  isTerminalCurrentlyAtPasswordPrompt,
+  parseSubterminalTabId
+} from '@renderer/lib/terminal-text'
+import {
+  createTerminalTab,
+  getNextTerminalTitle,
+  getTerminalDisplayTitle,
+  resolveTabModelSelection,
+  toStoredSessionTabs,
+  type AgentLogEntry,
+  type AgentRunViewState,
+  type AgentTerminalTab,
+  type AgentToolReference,
+  type TemporarySubterminal
+} from '@renderer/lib/terminal-tabs'
+import {
+  buildWikiContentFromHistory,
+  filterWikiDocuments,
+  upsertWikiSummary
+} from '@renderer/lib/wiki'
+import {
+  buildConnectionSlashCommand,
+  buildMcpSlashCommand,
+  buildModeSlashCommands,
+  buildSkillSlashCommand,
+  buildSlashCommandOptions,
+  buildToolSlashCommand,
+  buildWikiSlashCommand,
+  getSlashCommandQuery,
+  isConnectionSlashQuery,
+  isMcpSlashQuery,
+  isModeSlashQuery,
+  isToolSlashQuery,
+  isWikiSlashQuery,
+  matchesConnectionSlashCommand,
+  matchesMcpSlashCommand,
+  matchesModeSlashCommand,
+  matchesSkillSlashCommand,
+  matchesSlashCommand,
+  matchesToolSlashCommand,
+  matchesWikiSlashCommand,
+  replaceSlashCommandInput,
+  type SlashCommandOption
+} from '@renderer/lib/slash-commands'
 import type {
   AgentConfig,
   AgentConnectionIntentResult,
@@ -90,7 +215,6 @@ import type {
   AgentModelOption,
   AgentPathReference,
   AgentProviderConfig,
-  AgentProviderModelConfig,
   AgentSkillInstallEvent,
   AgentSkillSearchResult,
   AgentValidationResult,
@@ -101,14 +225,11 @@ import type {
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
-  StoredAgentLogEntry,
-  StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary
 } from '../../shared/agent-types'
-import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -139,111 +260,6 @@ const emptyMcpServer: AgentMcpServerConfig = {
   enabled: true
 }
 
-function hasConfiguredModelSelection(config: AgentConfig): boolean {
-  return Boolean(config.providerId?.trim() && config.model.trim() && config.providers.length > 0)
-}
-
-const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirmEnabled'
-const PANE_ORDER_STORAGE_KEY = 'crescent.paneOrder'
-const MERMAID_MIN_ZOOM = 0.05
-const MERMAID_MAX_ZOOM = 10
-const MERMAID_ZOOM_STEP = 0.15
-const MERMAID_ZOOM_EPSILON = 0.001
-
-const MERMAID_RENDER_CONFIG = {
-  startOnLoad: false,
-  securityLevel: 'strict',
-  htmlLabels: false,
-  flowchart: {
-    htmlLabels: false
-  },
-  theme: 'base',
-  themeVariables: {
-    darkMode: true,
-    background: '#171717',
-    mainBkg: '#262626',
-    secondBkg: '#333333',
-    tertiaryColor: '#1f1f1f',
-    primaryColor: '#262626',
-    primaryTextColor: '#fafafa',
-    primaryBorderColor: 'rgba(255,255,255,0.18)',
-    secondaryColor: '#333333',
-    secondaryTextColor: '#fafafa',
-    secondaryBorderColor: 'rgba(255,255,255,0.16)',
-    tertiaryTextColor: '#fafafa',
-    tertiaryBorderColor: 'rgba(255,255,255,0.14)',
-    lineColor: '#a3a3a3',
-    textColor: '#fafafa',
-    edgeLabelBackground: '#262626',
-    clusterBkg: '#1f1f1f',
-    clusterBorder: 'rgba(255,255,255,0.16)',
-    noteBkgColor: '#333333',
-    noteTextColor: '#fafafa',
-    noteBorderColor: 'rgba(255,255,255,0.16)',
-    actorBkg: '#262626',
-    actorTextColor: '#fafafa',
-    actorBorder: 'rgba(255,255,255,0.18)',
-    signalColor: '#fafafa',
-    signalTextColor: '#fafafa',
-    labelTextColor: '#fafafa',
-    loopTextColor: '#fafafa',
-    activationBkgColor: '#333333',
-    activationBorderColor: 'rgba(255,255,255,0.18)',
-    sequenceNumberColor: '#171717'
-  },
-  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
-} as const
-
-type AgentLogEntry =
-  | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
-  | {
-      id: number
-      kind: 'status' | 'thought' | 'tool' | 'plan' | 'command'
-      text: string
-      createdAt: string
-    }
-
-interface AgentRunViewState {
-  logId: number
-  actions: AgentRunAction[]
-  startedAt?: number
-  result?: string
-  error?: string
-  elapsedMs?: number
-}
-
-interface AgentRunAction {
-  title: string
-  detail: string
-}
-
-interface ParsedAgentRunMarkdown {
-  actionsMarkdown: string
-  resultMarkdown: string
-  errorMarkdown: string
-  elapsedMarkdown: string
-}
-
-interface PasswordPromptRequest {
-  tabId: string
-  title: string
-  prompt: string
-}
-
-type SkillManageMessage = {
-  type: 'info' | 'success' | 'error'
-  text: string
-}
-
-type SkillInstallLogStatus = 'running' | 'success' | 'error'
-type PaneOrder = 'terminal-chat' | 'chat-terminal'
-
-interface CloseTabsConfirmRequest {
-  mode: 'tab' | 'other-tabs' | 'all-tabs'
-  tabId: string
-  dontAskAgain: boolean
-}
-
 interface PostConnectionTask {
   input: string
   displayInput: string
@@ -253,132 +269,7 @@ interface PostConnectionTask {
   startedAt: number
 }
 
-interface SlashCommandOption {
-  id: string
-  title: string
-  description: string
-  value: string
-  keywords: string[]
-  skill?: AgentSkillOption
-  connection?: ConnectionConfig
-  agentMode?: AgentConfig['agentMode']
-  pathReferenceKind?: AgentPathReference['kind']
-  toolRef?: AgentToolReference
-  wikiRef?: AgentWikiReference
-  wikiDocument?: WikiDocumentSummary
-  templateInput?: string
-}
-
-interface AgentToolReference {
-  id: string
-  name: string
-  description: string
-  source: 'built-in' | 'openapi' | 'mcp'
-}
-
-interface AgentTerminalTab {
-  id: string
-  title: string
-  providerId?: string
-  model?: string
-  connectionId?: string
-  connectionName?: string
-  isSsh: boolean
-  sessionId?: number
-  terminalReady: boolean
-  terminalCwd: string
-  terminalMode: 'pty' | 'pipe'
-  terminalOutput: string
-  agentInput: string
-  skillRefs: AgentSkillOption[]
-  pathRefs: AgentPathReference[]
-  toolRefs: AgentToolReference[]
-  wikiRefs: AgentWikiReference[]
-  agentBusy: boolean
-  agentThinking: boolean
-  copiedLogId: number | null
-  agentLog: AgentLogEntry[]
-  subTerminals: TemporarySubterminal[]
-}
-
-interface TemporarySubterminal {
-  id: string
-  name: string
-  output: string
-  rawOutput: string
-  cwd: string
-  status: 'active' | 'exited'
-  widthPercent?: number
-}
-
-function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab {
-  return {
-    id: input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    title: input?.title ?? 'Local',
-    providerId: input?.providerId,
-    model: input?.model,
-    connectionId: input?.connectionId,
-    connectionName: input?.connectionName,
-    isSsh: input?.isSsh ?? false,
-    sessionId: input?.sessionId,
-    terminalReady: input?.terminalReady ?? false,
-    terminalCwd: input?.terminalCwd ?? '',
-    terminalMode: input?.terminalMode ?? 'pty',
-    terminalOutput: input?.terminalOutput ?? '',
-    agentInput: input?.agentInput ?? '',
-    skillRefs: input?.skillRefs ?? [],
-    pathRefs: input?.pathRefs ?? [],
-    toolRefs: input?.toolRefs ?? [],
-    wikiRefs: input?.wikiRefs ?? [],
-    agentBusy: input?.agentBusy ?? false,
-    agentThinking: input?.agentThinking ?? false,
-    copiedLogId: input?.copiedLogId ?? null,
-    agentLog: input?.agentLog ?? [],
-    subTerminals: input?.subTerminals ?? []
-  }
-}
-
-function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[] {
-  return tabs.map((tab) => ({
-    tabId: tab.id,
-    title: tab.title,
-    connectionId: tab.connectionId,
-    connectionName: tab.connectionName,
-    isSsh: tab.isSsh,
-    terminalCwd: tab.terminalCwd,
-    terminalMode: tab.terminalMode
-  }))
-}
-
 const emptyLocalTab = createTerminalTab({ id: 'default', title: 'Local' })
-
-function getNextTerminalTitle(baseTitle: string, tabs: AgentTerminalTab[]): string {
-  const normalizedBase = baseTitle.trim() || 'Terminal'
-  const titles = new Set(tabs.map((tab) => tab.title))
-
-  if (!titles.has(normalizedBase)) return normalizedBase
-
-  for (let index = 1; ; index += 1) {
-    const candidate = `${normalizedBase} ${index}`
-    if (!titles.has(candidate)) return candidate
-  }
-}
-
-function resolveInitialPaneOrder(): PaneOrder {
-  return localStorage.getItem(PANE_ORDER_STORAGE_KEY) === 'chat-terminal'
-    ? 'chat-terminal'
-    : 'terminal-chat'
-}
-
-function formatPipePrompt(cwd: string): string {
-  const home = cwd.replace(/^\/Users\/[^/]+/, '~')
-
-  return `\x1b[38;5;45m${home}\x1b[0m $ `
-}
-
-function getPipePrompt(prompt: string, cwd: string): string {
-  return prompt || formatPipePrompt(cwd)
-}
 
 function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
@@ -490,6 +381,8 @@ function App(): React.JSX.Element {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [skillOpen, setSkillOpen] = useState(false)
   const [mcpOpen, setMcpOpen] = useState(false)
+  const [providerEditorOpen, setProviderEditorOpen] = useState(false)
+  const [instructionEditorOpen, setInstructionEditorOpen] = useState(false)
   const [mcpEditorOpen, setMcpEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -984,6 +877,8 @@ function App(): React.JSX.Element {
 
       if (event.type === 'done') return
 
+      if (event.type === 'status' && isNoisyMcpCatalogMessage(event.message)) return
+
       if (event.type === 'plan') {
         const detail = event.steps.length
           ? event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
@@ -1173,7 +1068,7 @@ function App(): React.JSX.Element {
         passwordPromptBuffersRef.current.set(targetTabId, '')
       }
     },
-    [appendLog, locale, t, updateTab]
+    [appendLog, t, updateTab]
   )
 
   const executeConnectionCommands = useCallback(
@@ -1645,9 +1540,6 @@ function App(): React.JSX.Element {
             : item
         )
       )
-      setTabs((current) =>
-        current.map((tab) => (tab.id === event.tabId ? { ...tab, title: event.title } : tab))
-      )
     })
   }, [])
 
@@ -1669,6 +1561,8 @@ function App(): React.JSX.Element {
     )
 
     return () => window.clearTimeout(timeout)
+    // Rebuild this timer only when the tracked log state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skillInstallIds, skillInstallLogCreatedAt])
 
   useEffect(() => {
@@ -1689,20 +1583,7 @@ function App(): React.JSX.Element {
       fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.25,
-      theme: {
-        background: '#111111',
-        foreground: '#f5f5f5',
-        cursor: '#ffffff',
-        selectionBackground: '#3f3f46',
-        black: '#18181b',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#38bdf8',
-        magenta: '#d946ef',
-        cyan: '#06b6d4',
-        white: '#f4f4f5'
-      }
+      theme: appTerminalTheme
     })
     const fitAddon = new FitAddon()
 
@@ -1893,6 +1774,17 @@ function App(): React.JSX.Element {
     setSelectedInstructionName(name)
     setInstructionContent(instructionFiles.find((file) => file.name === name)?.content ?? '')
     setInstructionSaved(false)
+  }
+
+  function toggleInstructionDetails(name: string): void {
+    if (instructionEditorOpen && selectedInstructionName === name) {
+      setInstructionEditorOpen(false)
+      return
+    }
+
+    selectInstructionFile(name)
+    setProviderEditorOpen(false)
+    setInstructionEditorOpen(true)
   }
 
   async function refreshSkills(): Promise<void> {
@@ -2914,35 +2806,33 @@ function App(): React.JSX.Element {
     const allowTerminalTools = !explicitNonTerminalRequest
     const directlyMentionedConnection = findDirectlyMentionedConnection(displayInput, connections)
     const directlyMentionsCurrentConnection =
-      Boolean(directlyMentionedConnection) &&
-      isSameConnectionTab(tab, directlyMentionedConnection)
+      Boolean(directlyMentionedConnection) && isSameConnectionTab(tab, directlyMentionedConnection)
     const inputMentionsConnection =
       Boolean(directlyMentionedConnection) && !directlyMentionsCurrentConnection
     const shouldResolveConnectionIntent =
-      !resumeRequested &&
-      !directlyMentionsCurrentConnection &&
-      !explicitNonTerminalRequest
+      !resumeRequested && !directlyMentionsCurrentConnection && !explicitNonTerminalRequest
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
-      connectionIntent = inputMentionsConnection && directlyMentionedConnection
-        ? {
-            analysis: {
-              ok: true,
-              shouldConnect: true,
-              connectionId: directlyMentionedConnection.id,
-              confidence: 100,
-              executeAfterLogin: !isConnectionOnlyRequest(
-                displayInput,
-                directlyMentionedConnection
-              ),
-              matchBasis: 'name',
-              reason: `${t.terminal.connectionMatched}: ${directlyMentionedConnection.name}`
-            },
-            connection: directlyMentionedConnection
-          }
-        : shouldResolveConnectionIntent
-          ? await resolveConnectionIntentForInput(displayInput)
-          : undefined
+      connectionIntent =
+        inputMentionsConnection && directlyMentionedConnection
+          ? {
+              analysis: {
+                ok: true,
+                shouldConnect: true,
+                connectionId: directlyMentionedConnection.id,
+                confidence: 100,
+                executeAfterLogin: !isConnectionOnlyRequest(
+                  displayInput,
+                  directlyMentionedConnection
+                ),
+                matchBasis: 'name',
+                reason: `${t.terminal.connectionMatched}: ${directlyMentionedConnection.name}`
+              },
+              connection: directlyMentionedConnection
+            }
+          : shouldResolveConnectionIntent
+            ? await resolveConnectionIntentForInput(displayInput)
+            : undefined
     } finally {
       updateTab(tabId, (current) => ({ ...current, agentThinking: false }))
     }
@@ -3457,6 +3347,17 @@ function App(): React.JSX.Element {
     setProviderModelsText(formatProviderModels(provider?.models ?? []))
   }
 
+  function toggleProviderDetails(providerId: string): void {
+    if (providerEditorOpen && settingsProviderId === providerId) {
+      setProviderEditorOpen(false)
+      return
+    }
+
+    selectSettingsProvider(providerId)
+    setInstructionEditorOpen(false)
+    setProviderEditorOpen(true)
+  }
+
   function createProvider(): void {
     const id = `provider-${Date.now()}`
     const provider: AgentProviderConfig = {
@@ -3470,6 +3371,8 @@ function App(): React.JSX.Element {
     setConfig((current) => ({ ...current, providers: [...current.providers, provider] }))
     setSettingsProviderId(id)
     setProviderModelsText(formatProviderModels(provider.models))
+    setInstructionEditorOpen(false)
+    setProviderEditorOpen(true)
     setValidation(undefined)
   }
 
@@ -3494,6 +3397,7 @@ function App(): React.JSX.Element {
     })
     setSettingsProviderId(nextProvider?.id ?? '')
     setProviderModelsText(formatProviderModels(nextProvider?.models ?? []))
+    if (!nextProvider) setProviderEditorOpen(false)
     setValidation(undefined)
   }
 
@@ -3896,8 +3800,8 @@ function App(): React.JSX.Element {
           <SheetTitle>{t.settings.skillsManagement}</SheetTitle>
           <SheetDescription>{t.settings.skillsManagementHint}</SheetDescription>
         </SheetHeader>
-        <div className="flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="min-w-0 flex-1 space-y-4 overflow-auto">
+        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
             <div className="space-y-3 rounded-md border bg-muted/10 p-3">
               <Field>
                 <FieldLabel htmlFor="skill-root">{t.settings.skillDirectory}</FieldLabel>
@@ -4108,7 +4012,7 @@ function App(): React.JSX.Element {
             </div>
           </div>
           {skillInstallLogResultId ? (
-            <div className="flex w-[680px] shrink-0 overflow-hidden rounded-md border bg-background">
+            <div className="app-sheet-detail flex w-[680px] shrink-0 overflow-hidden rounded-md border bg-background">
               <div className="w-44 shrink-0 overflow-auto border-r bg-muted/20 p-1">
                 {skillInstallLogResultIds.map((resultId) => {
                   const running = Boolean(skillInstallIds[resultId])
@@ -4197,7 +4101,7 @@ function App(): React.JSX.Element {
                     </Button>
                   </div>
                 </div>
-                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[#111111] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
                   {selectedSkillInstallLog || t.settings.skillInstallWaitingLog}
                 </pre>
                 <div className="flex items-center justify-end gap-2 border-t px-3 py-2">
@@ -4223,7 +4127,7 @@ function App(): React.JSX.Element {
               </div>
             </div>
           ) : selectedSkillPreview ? (
-            <div className="flex w-[680px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+            <div className="app-sheet-detail flex w-[680px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
               <div className="flex items-start justify-between gap-3 border-b px-3 py-2">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
@@ -4303,8 +4207,8 @@ function App(): React.JSX.Element {
           <SheetTitle>{t.settings.mcpServers}</SheetTitle>
           <SheetDescription>{t.settings.mcpServersHint}</SheetDescription>
         </SheetHeader>
-        <div className="flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="min-w-0 flex-1 space-y-4 overflow-auto">
+        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">
                 {t.settings.mcpServerList} · {config.mcpServers.length}
@@ -4401,7 +4305,7 @@ function App(): React.JSX.Element {
             )}
           </div>
           {mcpEditorOpen && settingsMcpServer.id ? (
-            <div className="flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
               <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">
@@ -4580,7 +4484,7 @@ function App(): React.JSX.Element {
           <SheetTitle>{t.history.title}</SheetTitle>
           <SheetDescription>{t.history.description}</SheetDescription>
         </SheetHeader>
-        <div className="min-h-0 flex-1 space-y-2 overflow-auto px-4">
+        <div className="app-sheet-list min-h-0 flex-1 space-y-2 overflow-auto px-4">
           {historyLoading && (
             <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
@@ -4756,7 +4660,7 @@ function App(): React.JSX.Element {
           <SheetDescription>{t.wiki.description}</SheetDescription>
         </SheetHeader>
         <div
-          className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-4"
+          className="app-wiki-grid grid min-h-0 flex-1 grid-cols-1 gap-3 px-4"
           style={
             selectedWikiDocument
               ? { gridTemplateColumns: `280px minmax(360px, ${wikiPreviewWidth}px)` }
@@ -4811,7 +4715,7 @@ function App(): React.JSX.Element {
             </div>
           </div>
           {selectedWikiDocument && (
-            <div className="relative min-h-0 overflow-auto rounded-md border bg-background">
+            <div className="app-document-panel relative min-h-0 overflow-auto rounded-md border bg-background">
               {wikiDocumentLoadingId === selectedWikiDocument.id ? (
                 <div className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
                   <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
@@ -4919,14 +4823,27 @@ function App(): React.JSX.Element {
   )
 
   return (
-    <main className="flex h-full flex-col bg-background">
+    <main className="app-shell flex h-full flex-col bg-background">
       <Toaster richColors closeButton position="top-right" />
-      <header className="flex h-14 shrink-0 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-3">
+      <header className="app-titlebar flex h-16 shrink-0 items-center justify-between px-4">
+        <div className="flex min-w-0 items-center gap-3">
           <ProductLogo />
-          <span className="text-sm font-semibold">Crescent</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Crescent</span>
+              <Badge
+                variant="outline"
+                className="hidden rounded-md font-mono text-[10px] sm:inline-flex"
+              >
+                {activeTab.terminalMode.toUpperCase()}
+              </Badge>
+            </div>
+            <div className="mt-0.5 hidden max-w-[40vw] truncate text-[11px] text-muted-foreground md:block">
+              {getTerminalDisplayTitle(activeTab)} · {activeTab.terminalCwd || t.app.shellStarting}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="app-commandbar flex items-center gap-1.5">
           <Button
             type="button"
             variant="outline"
@@ -5012,7 +4929,16 @@ function App(): React.JSX.Element {
               </SelectGroup>
             </SelectContent>
           </Select>
-          <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+          <Sheet
+            open={sheetOpen}
+            onOpenChange={(open) => {
+              setSheetOpen(open)
+              if (!open) {
+                setProviderEditorOpen(false)
+                setInstructionEditorOpen(false)
+              }
+            }}
+          >
             <SheetTrigger asChild>
               <Button
                 variant="outline"
@@ -5023,25 +4949,290 @@ function App(): React.JSX.Element {
                 <SettingsIcon aria-hidden="true" />
               </Button>
             </SheetTrigger>
-            <SheetContent className="w-full sm:max-w-xl">
+            <SheetContent
+              className={`w-full ${
+                (providerEditorOpen && settingsProvider.id) ||
+                (instructionEditorOpen && selectedInstructionFile)
+                  ? 'sm:max-w-5xl'
+                  : 'sm:max-w-2xl'
+              }`}
+            >
               <SheetHeader>
                 <SheetTitle>{t.settings.title}</SheetTitle>
                 <SheetDescription>{t.settings.titleDescription}</SheetDescription>
               </SheetHeader>
-              <div className="min-h-0 flex-1 overflow-auto px-4">
-                <FieldGroup>
-                  <Field>
-                    <div className="flex items-center justify-between gap-2">
-                      <FieldLabel htmlFor="provider">{t.settings.providerList}</FieldLabel>
-                      <div className="flex items-center gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={createProvider}>
-                          <PlusIcon data-icon="inline-start" />
-                          {t.settings.newProvider}
-                        </Button>
+              <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+                <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      {t.settings.providerList} · {config.providers.length}
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={createProvider}>
+                      <PlusIcon data-icon="inline-start" />
+                      {t.settings.newProvider}
+                    </Button>
+                  </div>
+                  {config.providers.length === 0 ? (
+                    <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                      <BotIcon className="mr-2 inline size-3" aria-hidden="true" />
+                      {t.settings.modelHint}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {config.providers.map((provider) => {
+                        const selected = providerEditorOpen && settingsProviderId === provider.id
+                        const isDefaultProvider = config.providerId === provider.id
+                        const modelCount = provider.models.length
+                        const hasApiKey = Boolean(provider.apiKey?.trim())
+
+                        return (
+                          <div
+                            key={provider.id}
+                            className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                              selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                            }`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => toggleProviderDetails(provider.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                toggleProviderDetails(provider.id)
+                              }
+                            }}
+                          >
+                            <div className="min-w-0 text-left">
+                              <div className="flex min-w-0 items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <StatusDot
+                                      state={
+                                        provider.baseUrl.trim() && modelCount > 0
+                                          ? 'ready'
+                                          : 'not-ready'
+                                      }
+                                    />
+                                    <span className="truncate text-sm font-medium">
+                                      {provider.name || provider.id}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                                    {provider.id}
+                                  </div>
+                                </div>
+                                {isDefaultProvider && (
+                                  <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                    {t.settings.model}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="mt-3 truncate font-mono text-[11px] text-muted-foreground">
+                                {provider.baseUrl || '-'}
+                              </div>
+                              <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                                <span>
+                                  {t.settings.providerModels}: {modelCount}
+                                </span>
+                                <span>·</span>
+                                <span>{hasApiKey ? t.settings.apiKey : '-'}</span>
+                              </div>
+                              {provider.models.length > 0 && (
+                                <div className="mt-2 line-clamp-2 font-mono text-[11px] text-muted-foreground">
+                                  {provider.models.map((model) => model.id).join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
+                      <Select
+                        value={config.model}
+                        onValueChange={(value) => void applyDefaultModel(value)}
+                      >
+                        <SelectTrigger id="model" className="w-full">
+                          <SelectValue placeholder={t.settings.selectModel} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectLabel>{t.settings.modelGroup}</SelectLabel>
+                            {modelOptions.map((model) => (
+                              <SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
+                                {model.name} · {model.providerName}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>{t.settings.modelHint}</FieldDescription>
+                    </Field>
+                    <Field>
+                      <label
+                        htmlFor="close-terminal-confirm"
+                        className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                      >
+                        <span className="space-y-1">
+                          <span className="block text-sm font-medium">
+                            {t.settings.closeTerminalConfirm}
+                          </span>
+                          <FieldDescription>{t.settings.closeTerminalConfirmHint}</FieldDescription>
+                        </span>
+                        <Input
+                          id="close-terminal-confirm"
+                          type="checkbox"
+                          checked={closeTerminalConfirmEnabled}
+                          onChange={(event) => setCloseTerminalConfirmEnabled(event.target.checked)}
+                          className="mt-0.5 size-4 shrink-0 accent-primary"
+                        />
+                      </label>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="max-active-tools">
+                        {t.settings.dynamicToolLimit}
+                      </FieldLabel>
+                      <Input
+                        id="max-active-tools"
+                        type="number"
+                        min={1}
+                        max={12}
+                        value={config.maxActiveTools}
+                        onChange={(event) =>
+                          updateConfig('maxActiveTools', Number(event.target.value))
+                        }
+                      />
+                      <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="command-whitelist">
+                        {t.settings.commandWhitelist}
+                      </FieldLabel>
+                      <Textarea
+                        id="command-whitelist"
+                        className="min-h-28 resize-y font-mono text-xs"
+                        value={commandWhitelistText}
+                        onChange={(event) => {
+                          const text = event.target.value
+                          setCommandWhitelistText(text)
+                          updateConfig('commandWhitelist', parseCommandWhitelist(text))
+                        }}
+                        placeholder={'exact command\ncommand prefix *\n/^custom regex rule$/'}
+                      />
+                      <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
+                    </Field>
+                    <Separator />
+                    <Field>
+                      <div className="flex items-center justify-between gap-2">
+                        <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
+                        <span className="text-xs text-muted-foreground">
+                          {instructionFiles.length}
+                        </span>
+                      </div>
+                      {instructionFiles.length === 0 ? (
+                        <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                          <FileTextIcon className="mr-2 inline size-3" aria-hidden="true" />
+                          {t.settings.instructionFilePlaceholder}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {instructionFiles.map((file) => {
+                            const selected =
+                              instructionEditorOpen && file.name === selectedInstructionName
+                            const contentLength = file.content.trim().length
+
+                            return (
+                              <div
+                                key={file.name}
+                                className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                                  selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                                }`}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => toggleInstructionDetails(file.name)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    toggleInstructionDetails(file.name)
+                                  }
+                                }}
+                              >
+                                <div className="min-w-0 text-left">
+                                  <div className="flex min-w-0 items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <StatusDot state={file.exists ? 'ready' : 'pending'} />
+                                        <span className="truncate text-sm font-medium">
+                                          {file.name}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                                        {file.path}
+                                      </div>
+                                    </div>
+                                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                      {file.exists
+                                        ? t.settings.instructionFileExists
+                                        : t.settings.instructionFileNew}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-3 text-[11px] text-muted-foreground">
+                                    {contentLength} chars
+                                  </div>
+                                  {file.content.trim() && (
+                                    <div className="mt-2 line-clamp-2 text-[11px] text-muted-foreground">
+                                      {file.content.trim().replace(/\s+/g, ' ')}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </Field>
+                    <Separator />
+                    {validation && (
+                      <div className="rounded-md border bg-muted/40 p-3 text-xs">
+                        {validation.ok ? (
+                          <div className="space-y-2">
+                            <p className="font-medium text-green-400">
+                              {t.settings.selectedTools}: {validation.toolCount}
+                            </p>
+                            <div className="space-y-1 text-muted-foreground">
+                              {validation.tools?.map((tool) => (
+                                <p key={tool.name}>
+                                  {tool.name} · {tool.method.toUpperCase()} {tool.path}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-destructive">{validation.error}</p>
+                        )}
+                      </div>
+                    )}
+                  </FieldGroup>
+                </div>
+                {providerEditorOpen && settingsProvider.id ? (
+                  <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+                    <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">
+                          {t.settings.providerList}: {settingsProvider.name || settingsProvider.id}
+                        </div>
+                        <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                          {settingsProvider.id}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon-sm"
+                          size="icon-xs"
                           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                           disabled={config.providers.length <= 1}
                           aria-label={t.settings.deleteProvider}
@@ -5050,234 +5241,173 @@ function App(): React.JSX.Element {
                         >
                           <Trash2Icon aria-hidden="true" />
                         </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={t.common.close}
+                          title={t.common.close}
+                          onClick={() => setProviderEditorOpen(false)}
+                        >
+                          <XIcon aria-hidden="true" />
+                        </Button>
                       </div>
                     </div>
-                    <Select
-                      value={settingsProvider.id}
-                      onValueChange={selectSettingsProvider}
-                      disabled={config.providers.length === 0}
-                    >
-                      <SelectTrigger id="provider" className="w-full">
-                        <SelectValue placeholder={t.settings.providerList} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>{t.settings.providerList}</SelectLabel>
-                          {config.providers.map((provider) => (
-                            <SelectItem key={provider.id} value={provider.id}>
-                              {provider.name || provider.id}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field>
-                      <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
-                      <Input
-                        id="provider-id"
-                        value={settingsProvider.id}
-                        onChange={(event) => updateSettingsProvider('id', event.target.value)}
-                        placeholder="provider-id"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="provider-name">{t.settings.providerName}</FieldLabel>
-                      <Input
-                        id="provider-name"
-                        value={settingsProvider.name}
-                        onChange={(event) => updateSettingsProvider('name', event.target.value)}
-                        placeholder={t.settings.providerName}
-                      />
-                    </Field>
-                  </div>
-                  <Field>
-                    <FieldLabel htmlFor="provider-base-url">{t.settings.baseUrl}</FieldLabel>
-                    <Input
-                      id="provider-base-url"
-                      value={settingsProvider.baseUrl}
-                      onChange={(event) => updateSettingsProvider('baseUrl', event.target.value)}
-                      placeholder="https://api.deepseek.com"
-                    />
-                    <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="provider-api-key">{t.settings.apiKey}</FieldLabel>
-                    <Input
-                      id="provider-api-key"
-                      type="password"
-                      value={settingsProvider.apiKey ?? ''}
-                      onChange={(event) => updateSettingsProvider('apiKey', event.target.value)}
-                      placeholder="sk-... or leave blank when env key is available"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="provider-models">{t.settings.providerModels}</FieldLabel>
-                    <Textarea
-                      id="provider-models"
-                      className="min-h-28 resize-y font-mono text-xs"
-                      value={providerModelsText}
-                      onChange={(event) => updateSettingsProviderModels(event.target.value)}
-                      placeholder={'model-id\nmodel-id-reasoner'}
-                    />
-                    <FieldDescription>{t.settings.modelListHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
-                    <Select
-                      value={config.model}
-                      onValueChange={(value) => void applyDefaultModel(value)}
-                    >
-                      <SelectTrigger id="model" className="w-full">
-                        <SelectValue placeholder={t.settings.selectModel} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>{t.settings.modelGroup}</SelectLabel>
-                          {modelOptions.map((model) => (
-                            <SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
-                              {model.name} · {model.providerName}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>{t.settings.modelHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <label
-                      htmlFor="close-terminal-confirm"
-                      className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
-                    >
-                      <span className="space-y-1">
-                        <span className="block text-sm font-medium">
-                          {t.settings.closeTerminalConfirm}
-                        </span>
-                        <FieldDescription>{t.settings.closeTerminalConfirmHint}</FieldDescription>
-                      </span>
-                      <Input
-                        id="close-terminal-confirm"
-                        type="checkbox"
-                        checked={closeTerminalConfirmEnabled}
-                        onChange={(event) => setCloseTerminalConfirmEnabled(event.target.checked)}
-                        className="mt-0.5 size-4 shrink-0 accent-primary"
-                      />
-                    </label>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="max-active-tools">
-                      {t.settings.dynamicToolLimit}
-                    </FieldLabel>
-                    <Input
-                      id="max-active-tools"
-                      type="number"
-                      min={1}
-                      max={12}
-                      value={config.maxActiveTools}
-                      onChange={(event) =>
-                        updateConfig('maxActiveTools', Number(event.target.value))
-                      }
-                    />
-                    <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="command-whitelist">
-                      {t.settings.commandWhitelist}
-                    </FieldLabel>
-                    <Textarea
-                      id="command-whitelist"
-                      className="min-h-28 resize-y font-mono text-xs"
-                      value={commandWhitelistText}
-                      onChange={(event) => {
-                        const text = event.target.value
-                        setCommandWhitelistText(text)
-                        updateConfig('commandWhitelist', parseCommandWhitelist(text))
-                      }}
-                      placeholder={'exact command\ncommand prefix *\n/^custom regex rule$/'}
-                    />
-                    <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
-                  </Field>
-                  <Separator />
-                  <Field>
-                    <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
-                    <div
-                      className="flex min-w-0 flex-wrap gap-1 rounded-md border bg-muted/20 p-1"
-                      role="tablist"
-                      aria-label={t.settings.instructionFiles}
-                    >
-                      {instructionFiles.map((file) => {
-                        const selected = file.name === selectedInstructionName
-
-                        return (
-                          <button
-                            key={file.name}
-                            type="button"
-                            role="tab"
-                            aria-selected={selected}
-                            className={`rounded px-3 py-1.5 text-xs font-medium transition ${
-                              selected
-                                ? 'bg-background text-foreground shadow-sm'
-                                : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
-                            }`}
-                            onClick={() => selectInstructionFile(file.name)}
-                          >
-                            {file.name}
-                          </button>
-                        )
-                      })}
+                    <div className="min-h-0 flex-1 overflow-auto p-3">
+                      <FieldGroup>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Field>
+                            <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
+                            <Input
+                              id="provider-id"
+                              value={settingsProvider.id}
+                              onChange={(event) => updateSettingsProvider('id', event.target.value)}
+                              placeholder="provider-id"
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor="provider-name">
+                              {t.settings.providerName}
+                            </FieldLabel>
+                            <Input
+                              id="provider-name"
+                              value={settingsProvider.name}
+                              onChange={(event) =>
+                                updateSettingsProvider('name', event.target.value)
+                              }
+                              placeholder={t.settings.providerName}
+                            />
+                          </Field>
+                        </div>
+                        <Field>
+                          <FieldLabel htmlFor="provider-base-url">{t.settings.baseUrl}</FieldLabel>
+                          <Input
+                            id="provider-base-url"
+                            value={settingsProvider.baseUrl}
+                            onChange={(event) =>
+                              updateSettingsProvider('baseUrl', event.target.value)
+                            }
+                            placeholder="https://api.deepseek.com"
+                          />
+                          <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="provider-api-key">{t.settings.apiKey}</FieldLabel>
+                          <Input
+                            id="provider-api-key"
+                            type="password"
+                            value={settingsProvider.apiKey ?? ''}
+                            onChange={(event) =>
+                              updateSettingsProvider('apiKey', event.target.value)
+                            }
+                            placeholder="sk-... or leave blank when env key is available"
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="provider-models">
+                            {t.settings.providerModels}
+                          </FieldLabel>
+                          <Textarea
+                            id="provider-models"
+                            className="min-h-44 resize-y font-mono text-xs"
+                            value={providerModelsText}
+                            onChange={(event) => updateSettingsProviderModels(event.target.value)}
+                            placeholder={'model-id\nmodel-id-reasoner'}
+                          />
+                          <FieldDescription>{t.settings.modelListHint}</FieldDescription>
+                        </Field>
+                      </FieldGroup>
                     </div>
-                    <FieldDescription>
-                      {selectedInstructionFile?.path ?? '~/.crescent'}
-                      {' · '}
-                      {selectedInstructionFile?.exists
-                        ? t.settings.instructionFileExists
-                        : t.settings.instructionFileNew}
-                    </FieldDescription>
-                    <Textarea
-                      className="min-h-56 resize-y font-mono text-xs"
-                      value={instructionContent}
-                      onChange={(event) => {
-                        setInstructionContent(event.target.value)
-                        setInstructionSaved(false)
-                      }}
-                      placeholder={t.settings.instructionFilePlaceholder}
-                    />
-                    <div className="flex justify-end">
+                    <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
                       <Button
                         type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={saveInstructionFile}
+                        onClick={async () => {
+                          await saveConfig()
+                          setProviderEditorOpen(false)
+                        }}
                       >
+                        {saved ? (
+                          <CheckIcon data-icon="inline-start" />
+                        ) : (
+                          <BotIcon data-icon="inline-start" />
+                        )}
+                        {saved ? t.settings.saved : t.settings.saveSettings}
+                      </Button>
+                    </div>
+                  </div>
+                ) : instructionEditorOpen && selectedInstructionFile ? (
+                  <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+                    <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">
+                          {t.settings.instructionFiles}: {selectedInstructionFile.name}
+                        </div>
+                        <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                          {selectedInstructionFile.path}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.common.close}
+                        title={t.common.close}
+                        onClick={() => setInstructionEditorOpen(false)}
+                      >
+                        <XIcon aria-hidden="true" />
+                      </Button>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-auto p-3">
+                      <FieldGroup>
+                        <Field>
+                          <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                            <div className="min-w-0 space-y-1">
+                              <div className="truncate text-sm font-medium">
+                                {selectedInstructionFile.name}
+                              </div>
+                              <FieldDescription>
+                                {selectedInstructionFile.exists
+                                  ? t.settings.instructionFileExists
+                                  : t.settings.instructionFileNew}
+                              </FieldDescription>
+                            </div>
+                            <Badge variant="secondary" className="shrink-0">
+                              {instructionContent.trim().length} chars
+                            </Badge>
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="instruction-content">
+                            {t.settings.instructionFiles}
+                          </FieldLabel>
+                          <Textarea
+                            id="instruction-content"
+                            className="min-h-[420px] resize-y font-mono text-xs"
+                            value={instructionContent}
+                            onChange={(event) => {
+                              setInstructionContent(event.target.value)
+                              setInstructionSaved(false)
+                            }}
+                            placeholder={t.settings.instructionFilePlaceholder}
+                          />
+                          <FieldDescription>{selectedInstructionFile.path}</FieldDescription>
+                        </Field>
+                      </FieldGroup>
+                    </div>
+                    <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
+                      <Button type="button" onClick={saveInstructionFile}>
+                        {instructionSaved ? (
+                          <CheckIcon data-icon="inline-start" />
+                        ) : (
+                          <FileTextIcon data-icon="inline-start" />
+                        )}
                         {instructionSaved
                           ? t.settings.instructionFileSaved
                           : t.settings.saveInstructionFile}
                       </Button>
                     </div>
-                  </Field>
-                  <Separator />
-                  {validation && (
-                    <div className="rounded-md border bg-muted/40 p-3 text-xs">
-                      {validation.ok ? (
-                        <div className="space-y-2">
-                          <p className="font-medium text-green-400">
-                            {t.settings.selectedTools}: {validation.toolCount}
-                          </p>
-                          <div className="space-y-1 text-muted-foreground">
-                            {validation.tools?.map((tool) => (
-                              <p key={tool.name}>
-                                {tool.name} · {tool.method.toUpperCase()} {tool.path}
-                              </p>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-destructive">{validation.error}</p>
-                      )}
-                    </div>
-                  )}
-                </FieldGroup>
+                  </div>
+                ) : null}
               </div>
               <SheetFooter className="gap-2 sm:justify-between">
                 <Button
@@ -5311,93 +5441,41 @@ function App(): React.JSX.Element {
       {historySheet}
       {wikiSheet}
       <section
-        className={`flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
+        className={`app-frame flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
       >
         {hiddenPane !== 'terminal' && (
           <div
-            className="flex min-h-0 flex-col bg-[#111111]"
+            className="app-terminal-pane flex min-h-0 flex-col"
             style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
           >
-            <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 bg-background px-2">
-              {terminalTabs.length === 0 ? (
-                <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                  <span className="truncate text-xs font-medium text-muted-foreground">
-                    {t.connections.sshConnections}
-                  </span>
-                  <Button type="button" variant="ghost" size="xs" onClick={openNewConnectionForm}>
-                    <PlusIcon data-icon="inline-start" />
-                    {t.common.new}
-                  </Button>
-                </div>
-              ) : (
-                terminalTabs.map((tab) => {
-                  const selected = terminalPage === 'terminal' && tab.id === activeTabId
-
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
-                        selected
-                          ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
-                          : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
-                      }`}
-                      onClick={() => {
-                        setActiveTabId(tab.id)
-                        setTerminalPage('terminal')
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault()
-                        setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
-                      }}
-                    >
-                      <TerminalActivityDot active={tab.terminalReady} />
-                      <span className="truncate">{tab.title}</span>
-                    </button>
-                  )
-                })
-              )}
-              {tabMenu && (
-                <div
-                  className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
-                  style={{ left: tabMenu.x, top: tabMenu.y }}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <button
-                    type="button"
-                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={() => closeTab(tabMenu.tabId)}
-                  >
-                    {t.common.closeTab}
-                  </button>
-                  <button
-                    type="button"
-                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
-                    onClick={() => closeOtherTabs(tabMenu.tabId)}
-                  >
-                    {t.common.closeOtherTabs}
-                  </button>
-                  <button
-                    type="button"
-                    className="block w-full rounded px-2 py-1.5 text-left text-destructive hover:bg-destructive/10"
-                    onClick={() => closeAllTabs(tabMenu.tabId)}
-                  >
-                    {t.common.closeAllTabs}
-                  </button>
-                </div>
-              )}
-            </div>
+            <TerminalTabBar
+              tabs={terminalTabs}
+              terminalPage={terminalPage}
+              activeTabId={activeTabId}
+              tabMenu={tabMenu}
+              t={t}
+              onNewConnection={openNewConnectionForm}
+              onSelectTab={(tabId) => {
+                setActiveTabId(tabId)
+                setTerminalPage('terminal')
+              }}
+              onOpenTabMenu={setTabMenu}
+              onCloseTab={closeTab}
+              onCloseOtherTabs={closeOtherTabs}
+              onCloseAllTabs={closeAllTabs}
+            />
             <div className="flex min-h-0 flex-1 flex-col">
               {terminalTabs.length === 0 ? (
-                <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
-                  <div className="mx-auto flex max-w-3xl flex-col gap-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h2 className="text-sm font-semibold">{t.connections.sshConnections}</h2>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t.connections.sshConnectionsDescription}
-                        </p>
-                      </div>
+                <div className="min-h-0 flex-1 bg-background/80 p-4">
+                  <ConnectionList
+                    className="mx-auto h-full max-w-3xl"
+                    connections={connections}
+                    filteredConnections={filteredConnections}
+                    query={connectionSearchQuery}
+                    t={t}
+                    formatConnectionTarget={formatConnectionTarget}
+                    onQueryChange={setConnectionSearchQuery}
+                    headerAction={
                       <Button
                         type="button"
                         variant="outline"
@@ -5407,218 +5485,40 @@ function App(): React.JSX.Element {
                         <ServerIcon data-icon="inline-start" />
                         {t.connections.manageConnections}
                       </Button>
-                    </div>
-                    <div className="relative">
-                      <SearchIcon
-                        className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                        aria-hidden="true"
-                      />
-                      <Input
-                        value={connectionSearchQuery}
-                        onChange={(event) => setConnectionSearchQuery(event.target.value)}
-                        placeholder={t.connections.searchPlaceholder}
-                        className="h-9 pl-8"
-                        aria-label={t.connections.searchPlaceholder}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      {connections.length === 0 ? (
-                        <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                          {t.connections.noConnections}
-                        </p>
-                      ) : filteredConnections.length === 0 ? (
-                        <p className="rounded-md border bg-card p-3 text-xs text-muted-foreground">
-                          {t.connections.noSearchResults}
-                        </p>
-                      ) : (
-                        filteredConnections.map((connection) => (
-                          <div
-                            key={connection.id}
-                            className="flex items-start justify-between gap-3 rounded-md border bg-card p-3 text-xs shadow-sm transition hover:border-primary/50 hover:bg-muted/20"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold">{connection.name}</p>
-                              <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                                {formatConnectionTarget(connection)}
-                              </p>
-                              <p className="truncate text-muted-foreground">
-                                {connection.source === 'ssh-config'
-                                  ? '~/.ssh/config'
-                                  : connection.description || '~/.crescent/config.json'}
-                              </p>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="shrink-0"
-                              onClick={() => connectFromConnectionManager(connection)}
-                            >
-                              <ServerIcon data-icon="inline-start" />
-                              {t.connections.connect}
-                            </Button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
+                    }
+                    renderConnectionActions={(connection) => (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => connectFromConnectionManager(connection)}
+                      >
+                        <ServerIcon data-icon="inline-start" />
+                        {t.connections.connect}
+                      </Button>
+                    )}
+                  />
                 </div>
               ) : (
-                <div ref={terminalHostRef} className="min-h-0 flex-1" />
+                <div ref={terminalHostRef} className="terminal-canvas min-h-0 flex-1" />
               )}
-              {activeTab.subTerminals.length > 0 && (
-                <div
-                  className="shrink-0 border-t border-white/10 bg-background"
-                  style={{ height: subterminalCollapsed ? undefined : subterminalPanelHeight }}
-                >
-                  {!subterminalCollapsed && (
-                    <div
-                      className="h-1.5 cursor-row-resize bg-border/60 hover:bg-primary/60"
-                      role="separator"
-                      aria-orientation="horizontal"
-                      aria-label={t.terminal.resizeSubterminalHeight}
-                      title={t.terminal.resizeSubterminalHeight}
-                      onPointerDown={(event) => {
-                        event.preventDefault()
-                        event.currentTarget.setPointerCapture(event.pointerId)
-                        subterminalHeightResizeRef.current = {
-                          startY: event.clientY,
-                          startHeight: subterminalPanelHeight
-                        }
-                        document.body.style.cursor = 'row-resize'
-                        document.body.style.userSelect = 'none'
-                      }}
-                    />
-                  )}
-                  <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
-                    <div className="min-w-0 truncate text-xs font-medium">
-                      {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={
-                          subterminalCollapsed
-                            ? t.terminal.expandSubterminals
-                            : t.terminal.collapseSubterminals
-                        }
-                        title={
-                          subterminalCollapsed
-                            ? t.terminal.expandSubterminals
-                            : t.terminal.collapseSubterminals
-                        }
-                        onClick={() => setSubterminalCollapsed((current) => !current)}
-                      >
-                        {subterminalCollapsed ? (
-                          <ChevronUpIcon aria-hidden="true" />
-                        ) : (
-                          <ChevronDownIcon aria-hidden="true" />
-                        )}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        aria-label={t.terminal.closeAllSubterminals}
-                        title={t.terminal.closeAllSubterminals}
-                        onClick={() => closeAllSubterminals(activeTab.id)}
-                      >
-                        <Trash2Icon aria-hidden="true" />
-                      </Button>
-                    </div>
-                  </div>
-                  {!subterminalCollapsed && (
-                    <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
-                      <div className="flex h-full min-w-full gap-0">
-                        {activeTab.subTerminals.map((subterminal, index) => {
-                          const widths = getSubterminalWidths(activeTab.subTerminals)
-                          const width = widths[index]
-                          const nextSubterminal = activeTab.subTerminals[index + 1]
-
-                          return (
-                            <div
-                              key={subterminal.id}
-                              className="flex min-w-0"
-                              style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
-                            >
-                              <section className="flex min-w-0 flex-1 flex-col rounded-md border bg-card text-xs">
-                                <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
-                                  <div className="min-w-0">
-                                    <p className="truncate font-medium">
-                                      {t.terminal.temporarySubterminal}: {subterminal.name}
-                                    </p>
-                                    {subterminal.cwd && (
-                                      <p className="truncate text-[10px] text-muted-foreground">
-                                        {subterminal.cwd}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <div className="flex shrink-0 items-center gap-1">
-                                    <Badge
-                                      variant={
-                                        subterminal.status === 'active' ? 'secondary' : 'outline'
-                                      }
-                                    >
-                                      {subterminal.status === 'active'
-                                        ? t.terminal.subterminalActive
-                                        : t.terminal.subterminalExited}
-                                    </Badge>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-xs"
-                                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                      aria-label={t.terminal.closeSubterminal}
-                                      title={t.terminal.closeSubterminal}
-                                      onClick={() => closeSubterminal(activeTab.id, subterminal.id)}
-                                    >
-                                      <XIcon aria-hidden="true" />
-                                    </Button>
-                                  </div>
-                                </div>
-                                <pre className="min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                                  {subterminal.output || t.terminal.recentOutputEmpty}
-                                </pre>
-                              </section>
-                              {nextSubterminal && (
-                                <div
-                                  className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
-                                  role="separator"
-                                  aria-orientation="vertical"
-                                  aria-label={t.terminal.resizeSubterminals}
-                                  title={t.terminal.resizeSubterminals}
-                                  onPointerDown={(event) => {
-                                    event.preventDefault()
-                                    event.currentTarget.setPointerCapture(event.pointerId)
-                                    subterminalResizeRef.current = {
-                                      tabId: activeTab.id,
-                                      leftId: subterminal.id,
-                                      rightId: nextSubterminal.id,
-                                      startX: event.clientX,
-                                      leftStart: width,
-                                      rightStart: widths[index + 1]
-                                    }
-                                    document.body.style.cursor = 'col-resize'
-                                    document.body.style.userSelect = 'none'
-                                  }}
-                                />
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              <SubterminalPanel
+                activeTab={activeTab}
+                collapsed={subterminalCollapsed}
+                panelHeight={subterminalPanelHeight}
+                resizeRef={subterminalResizeRef}
+                heightResizeRef={subterminalHeightResizeRef}
+                t={t}
+                onCollapsedChange={setSubterminalCollapsed}
+                onCloseSubterminal={closeSubterminal}
+                onCloseAllSubterminals={closeAllSubterminals}
+              />
             </div>
           </div>
         )}
         {!hiddenPane && (
           <div
-            className="w-1.5 shrink-0 cursor-col-resize border-x border-border bg-muted/30 hover:bg-primary/40"
+            className="app-pane-resizer w-2 shrink-0 cursor-col-resize"
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize terminal and chat panes"
@@ -5631,63 +5531,18 @@ function App(): React.JSX.Element {
           />
         )}
         {hiddenPane !== 'chat' && (
-          <aside className="flex min-h-0 min-w-[360px] flex-1 flex-col bg-card">
-            <div
-              ref={agentLogRef}
-              className="min-h-0 min-w-0 flex-1 space-y-2 overflow-auto px-4 pb-4 pt-0 text-sm"
-            >
-              {activeTab.agentLog.map((entry) => (
-                <div
-                  key={entry.id}
-                  data-agent-log-entry={entry.id}
-                  className={
-                    isConversationLog(entry.kind)
-                      ? `${logClassName(entry.kind)} min-w-0`
-                      : 'min-w-0'
-                  }
-                >
-                  {isConversationLog(entry.kind) ? (
-                    <>
-                      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="font-medium uppercase tracking-wide">
-                            {logRoleLabel(entry.kind, t)}
-                          </span>
-                          <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={t.common.copySelectionOrMessage}
-                            title={t.common.copySelectionOrMessage}
-                            onClick={() => copyLogEntry(entry)}
-                          >
-                            {activeTab.copiedLogId === entry.id ? (
-                              <CheckIcon aria-hidden="true" />
-                            ) : (
-                              <CopyIcon aria-hidden="true" />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                      <AgentLogContent
-                        entry={entry}
-                        t={t}
-                        copied={activeTab.copiedLogId === entry.id}
-                        onCopyResult={() => copyLogEntryResult(entry)}
-                        onExportResult={() => exportLogEntryResultMarkdown(entry)}
-                        onExportFull={() => exportLogEntryFullMarkdown(entry)}
-                      />
-                    </>
-                  ) : (
-                    <ActionLogRow entry={entry} t={t} />
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="space-y-3 border-t p-4">
+          <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
+            <AgentLogList
+              logRef={agentLogRef}
+              entries={activeTab.agentLog}
+              copiedLogId={activeTab.copiedLogId}
+              t={t}
+              onCopyEntry={(entry) => void copyLogEntry(entry)}
+              onCopyResult={(entry) => void copyLogEntryResult(entry)}
+              onExportResult={(entry) => void exportLogEntryResultMarkdown(entry)}
+              onExportFull={(entry) => void exportLogEntryFullMarkdown(entry)}
+            />
+            <div className="app-input-dock space-y-3 p-4">
               <form onSubmit={submitAgent} className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Button
@@ -5783,159 +5638,26 @@ function App(): React.JSX.Element {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="relative rounded-lg border bg-background p-2 shadow-sm">
-                  {slashMenuVisible && (
-                    <div className="absolute bottom-full left-2 right-2 z-30 mb-2 overflow-hidden rounded-md border bg-popover text-xs text-popover-foreground shadow-lg">
-                      <div className="border-b px-3 py-2 text-muted-foreground">
-                        {t.input.slashCommandHint}
-                      </div>
-                      <div ref={slashCommandListRef} className="max-h-56 overflow-auto p-1">
-                        {slashCommandOptions.map((command, index) => (
-                          <button
-                            key={command.id}
-                            type="button"
-                            data-slash-command-index={index}
-                            className={`block w-full rounded px-2 py-2 text-left transition-colors ${
-                              index === selectedSlashCommandIndex
-                                ? 'bg-secondary text-secondary-foreground'
-                                : 'hover:bg-muted/50'
-                            }`}
-                            onMouseDown={(event) => {
-                              event.preventDefault()
-                              insertSlashCommand(command)
-                            }}
-                          >
-                            <span className="block font-medium">
-                              {command.connection ||
-                              command.agentMode ||
-                              command.pathReferenceKind ||
-                              command.toolRef ||
-                              command.wikiDocument ||
-                              command.wikiRef
-                                ? command.title
-                                : `/${command.id}`}
-                            </span>
-                            <span className="block text-muted-foreground">
-                              {command.description}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(activeTab.skillRefs.length > 0 ||
-                    activeTab.pathRefs.length > 0 ||
-                    activeTab.toolRefs.length > 0 ||
-                    activeTab.wikiRefs.length > 0) && (
-                    <div className="mb-2 flex flex-wrap gap-2 px-1">
-                      {activeTab.wikiRefs.map((wiki) => (
-                        <Badge
-                          key={wiki.id}
-                          variant="secondary"
-                          className="max-w-full gap-1 rounded-md pr-1"
-                          title={wiki.path}
-                        >
-                          <BookOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                          <span className="truncate">
-                            {t.input.referencedWiki}: {wiki.title}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4 hover:bg-background/70"
-                            aria-label={`${t.input.removeWikiRef}: ${wiki.title}`}
-                            title={`${t.input.removeWikiRef}: ${wiki.title}`}
-                            onClick={() => removeWikiRef(wiki.id)}
-                          >
-                            <XIcon aria-hidden="true" />
-                          </Button>
-                        </Badge>
-                      ))}
-                      {activeTab.toolRefs.map((tool) => (
-                        <Badge
-                          key={tool.id}
-                          variant="secondary"
-                          className="max-w-full gap-1 rounded-md pr-1"
-                          title={tool.description}
-                        >
-                          {tool.source === 'mcp' && (
-                            <PlugIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                          )}
-                          <span className="truncate">
-                            {t.input.referencedTool}: {tool.name}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4 hover:bg-background/70"
-                            aria-label={`${t.input.removeToolRef}: ${tool.name}`}
-                            title={`${t.input.removeToolRef}: ${tool.name}`}
-                            onClick={() => removeToolRef(tool.id)}
-                          >
-                            <XIcon aria-hidden="true" />
-                          </Button>
-                        </Badge>
-                      ))}
-                      {activeTab.skillRefs.map((skill) => (
-                        <Badge
-                          key={skill.id}
-                          variant="secondary"
-                          className="max-w-full gap-1 rounded-md pr-1"
-                          title={[skill.name, skill.description, skill.path]
-                            .filter(Boolean)
-                            .join('\n')}
-                        >
-                          <span className="truncate">
-                            {t.input.referencedSkill}: {skill.name}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4 hover:bg-background/70"
-                            aria-label={`${t.input.removeSkillRef}: ${skill.name}`}
-                            title={`${t.input.removeSkillRef}: ${skill.name}`}
-                            onClick={() => removeSkillRef(skill.id)}
-                          >
-                            <XIcon aria-hidden="true" />
-                          </Button>
-                        </Badge>
-                      ))}
-                      {activeTab.pathRefs.map((reference) => (
-                        <Badge
-                          key={reference.id}
-                          variant="secondary"
-                          className="max-w-full gap-1 rounded-md pr-1"
-                          title={reference.path}
-                        >
-                          {reference.kind === 'directory' ? (
-                            <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                          ) : (
-                            <FileIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                          )}
-                          <span className="truncate">
-                            {reference.kind === 'directory'
-                              ? t.input.referencedDirectory
-                              : t.input.referencedFile}
-                            : {reference.name}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4 hover:bg-background/70"
-                            aria-label={`${t.input.removePathRef}: ${reference.name}`}
-                            title={`${t.input.removePathRef}: ${reference.name}`}
-                            onClick={() => removePathRef(reference.id)}
-                          >
-                            <XIcon aria-hidden="true" />
-                          </Button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
+                <div className="relative rounded-lg border bg-background/95 p-2 shadow-sm">
+                  <SlashCommandMenu
+                    visible={slashMenuVisible}
+                    listRef={slashCommandListRef}
+                    options={slashCommandOptions}
+                    selectedIndex={selectedSlashCommandIndex}
+                    t={t}
+                    onSelect={insertSlashCommand}
+                  />
+                  <AgentReferenceBadges
+                    skillRefs={activeTab.skillRefs}
+                    pathRefs={activeTab.pathRefs}
+                    toolRefs={activeTab.toolRefs}
+                    wikiRefs={activeTab.wikiRefs}
+                    t={t}
+                    onRemoveSkill={removeSkillRef}
+                    onRemovePath={removePathRef}
+                    onRemoveTool={removeToolRef}
+                    onRemoveWiki={removeWikiRef}
+                  />
                   <Textarea
                     value={activeTab.agentInput}
                     onChange={(event) => {
@@ -6020,1140 +5742,71 @@ function App(): React.JSX.Element {
           </aside>
         )}
       </section>
-      {connectionModalOpen && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="connection-modal-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setConnectionModalOpen(false)
-          }}
-        >
-          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background shadow-2xl shadow-black/30">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-card/80 px-4 py-3">
-              <div>
-                <h2 id="connection-modal-title" className="text-sm font-semibold">
-                  {t.connections.sshConnections}
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  {t.connections.sshConnectionsDescription}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t.common.close}
-                title={t.common.close}
-                onClick={() => setConnectionModalOpen(false)}
-              >
-                <XIcon aria-hidden="true" />
-              </Button>
-            </div>
-            <div className="grid min-h-0 flex-1 grid-cols-[minmax(300px,0.92fr)_minmax(420px,1.08fr)] overflow-hidden">
-              <div className="min-h-0 overflow-auto border-r bg-muted/15 p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                      {t.connections.existing}
-                    </h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {filteredConnections.length}/{connections.length}
-                    </p>
-                  </div>
-                  <Badge variant="outline">{connections.length}</Badge>
-                </div>
-                <div className="relative mb-3">
-                  <SearchIcon
-                    className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                  <Input
-                    value={connectionSearchQuery}
-                    onChange={(event) => setConnectionSearchQuery(event.target.value)}
-                    placeholder={t.connections.searchPlaceholder}
-                    className="h-9 pl-8"
-                    aria-label={t.connections.searchPlaceholder}
-                  />
-                </div>
-                <div className="space-y-2">
-                  {connections.length === 0 ? (
-                    <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                      {t.connections.noConnections}
-                    </p>
-                  ) : filteredConnections.length === 0 ? (
-                    <p className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-                      {t.connections.noSearchResults}
-                    </p>
-                  ) : (
-                    filteredConnections.map((connection) => (
-                      <div
-                        key={connection.id}
-                        className={`rounded-md border bg-card/95 p-3 text-xs shadow-sm transition-all duration-200 hover:border-primary/45 hover:bg-background hover:shadow-md ${selectedConnectionId === connection.id ? 'border-primary/70 bg-background shadow-md shadow-primary/10 ring-1 ring-primary/30' : ''}`}
-                        onClick={() => {
-                          if (connection.source === 'custom') selectConnection(connection)
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold">{connection.name}</p>
-                            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                              {formatConnectionTarget(connection)}
-                            </p>
-                            <p className="truncate text-muted-foreground">
-                              {connection.source === 'ssh-config'
-                                ? '~/.ssh/config'
-                                : connection.description || '~/.crescent/config.json'}
-                            </p>
-                            {connection.source === 'custom' && (
-                              <p className="truncate text-muted-foreground">
-                                {connection.sshOptions?.length || 0} {t.connections.sshOptionsCount}{' '}
-                                · {connection.actions?.length || 0} {t.connections.actionsCount}
-                              </p>
-                            )}
-                          </div>
-                          <Button
-                            type="button"
-                            variant="default"
-                            size="sm"
-                            className="shrink-0"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              connectFromConnectionManager(connection)
-                              setConnectionModalOpen(false)
-                            }}
-                          >
-                            <ServerIcon data-icon="inline-start" />
-                            {t.connections.connect}
-                          </Button>
-                        </div>
-                        {connection.source === 'custom' && (
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                copyConnection(connection)
-                              }}
-                            >
-                              <CopyIcon data-icon="inline-start" />
-                              {t.common.copy}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                duplicateConnection(connection)
-                              }}
-                            >
-                              {t.common.duplicate}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                editConnection(connection)
-                              }}
-                            >
-                              {t.common.edit}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="xs"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                deleteConnection(connection.id)
-                              }}
-                            >
-                              {t.common.delete}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="min-h-0 overflow-auto p-4">
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel>{t.connections.copiedConnection}</FieldLabel>
-                    <Textarea
-                      className="min-h-20 resize-y font-mono text-xs"
-                      value={connectionImportText}
-                      onChange={(event) => setConnectionImportText(event.target.value)}
-                      placeholder={t.connections.copiedConnectionPlaceholder}
-                    />
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={importConnectionFromText}
-                        disabled={!connectionImportText.trim()}
-                      >
-                        {t.connections.importAsNew}
-                      </Button>
-                    </div>
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.customConnectionName}</FieldLabel>
-                    <Input
-                      value={connectionForm.name}
-                      onChange={(event) => updateConnectionForm('name', event.target.value)}
-                      placeholder={t.connections.namePlaceholder}
-                      disabled={!connectionEditing}
-                    />
-                  </Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field>
-                      <FieldLabel>{t.connections.host}</FieldLabel>
-                      <Input
-                        value={connectionForm.host}
-                        onChange={(event) => updateConnectionForm('host', event.target.value)}
-                        placeholder="10.0.0.8"
-                        disabled={!connectionEditing}
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel>{t.connections.port}</FieldLabel>
-                      <Input
-                        type="number"
-                        value={connectionForm.port ?? 22}
-                        onChange={(event) =>
-                          updateConnectionForm('port', Number(event.target.value))
-                        }
-                        placeholder="22"
-                        disabled={!connectionEditing}
-                      />
-                    </Field>
-                  </div>
-                  <Field>
-                    <FieldLabel>{t.connections.user}</FieldLabel>
-                    <Input
-                      value={connectionForm.user ?? ''}
-                      onChange={(event) => updateConnectionForm('user', event.target.value)}
-                      placeholder="root"
-                      disabled={!connectionEditing}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.password}</FieldLabel>
-                    <Input
-                      type="password"
-                      value={connectionForm.password ?? ''}
-                      onChange={(event) => updateConnectionForm('password', event.target.value)}
-                      placeholder={t.connections.passwordPlaceholder}
-                      disabled={!connectionEditing}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.passwordEnvVar}</FieldLabel>
-                    <Input
-                      value={connectionForm.passwordEnvVar ?? ''}
-                      onChange={(event) =>
-                        updateConnectionForm('passwordEnvVar', event.target.value)
-                      }
-                      placeholder={t.connections.passwordEnvVarPlaceholder}
-                      disabled={!connectionEditing}
-                    />
-                    <FieldDescription>{t.connections.passwordEnvVarDescription}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.identityFile}</FieldLabel>
-                    <Input
-                      value={connectionForm.identityFile ?? ''}
-                      onChange={(event) => updateConnectionForm('identityFile', event.target.value)}
-                      placeholder="~/.ssh/id_rsa"
-                      disabled={!connectionEditing}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.sshOptions}</FieldLabel>
-                    <Textarea
-                      className="min-h-28 resize-y font-mono text-xs"
-                      value={connectionSshOptionsText}
-                      onChange={(event) => setConnectionSshOptionsText(event.target.value)}
-                      disabled={!connectionEditing}
-                      placeholder={
-                        '-o HostKeyAlgorithms=+ssh-rsa\n-o PubkeyAcceptedAlgorithms=+ssh-rsa\n-t\n-o PreferredAuthentications=keyboard-interactive,password\n-o PubkeyAuthentication=no'
-                      }
-                    />
-                    <FieldDescription>{t.connections.sshOptionsDescription}</FieldDescription>
-                    {connectionCommandPreview && (
-                      <pre className="overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs text-muted-foreground">
-                        {connectionCommandPreview}
-                      </pre>
-                    )}
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.loginActions}</FieldLabel>
-                    <Textarea
-                      className="min-h-32 resize-y font-mono text-xs"
-                      value={connectionActionsText}
-                      onChange={(event) => setConnectionActionsText(event.target.value)}
-                      disabled={!connectionEditing}
-                      placeholder={'your_password\ncd /srv/app\nkubectl get pods'}
-                    />
-                    <FieldDescription>{t.connections.loginActionsDescription}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel>{t.connections.description}</FieldLabel>
-                    <Input
-                      value={connectionForm.description ?? ''}
-                      onChange={(event) => updateConnectionForm('description', event.target.value)}
-                      placeholder={t.connections.descriptionPlaceholder}
-                      disabled={!connectionEditing}
-                    />
-                    <FieldDescription>
-                      {connectionEditing ? t.connections.storedIn : t.connections.readOnlyHint}
-                    </FieldDescription>
-                  </Field>
-                </FieldGroup>
-              </div>
-            </div>
-            <div className="shrink-0 border-t px-4 py-3">
-              <SkillManageStatus message={connectionSaveMessage} />
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <Button type="button" variant="outline" onClick={resetConnectionForm}>
-                  {t.common.new}
-                </Button>
-                <div className="flex items-center gap-2">
-                  {!connectionEditing && connectionForm.id && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setConnectionEditing(true)}
-                    >
-                      {t.common.edit}
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => saveConnection(false)}
-                    disabled={!connectionEditing || !connectionFormReady}
-                  >
-                    {t.common.save}
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => saveConnection(true)}
-                    disabled={!connectionEditing || !connectionFormReady}
-                  >
-                    <ServerIcon data-icon="inline-start" />
-                    {t.common.saveAndConnect}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {closeTabsConfirmRequest && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="close-tabs-confirm-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setCloseTabsConfirmRequest(null)
-          }}
-        >
-          <div className="w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl">
-            <div className="flex items-start gap-3 border-b px-4 py-3">
-              <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
-              <div className="min-w-0">
-                <h2 id="close-tabs-confirm-title" className="text-sm font-semibold">
-                  {t.confirm.closeTabsTitle}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {closeTabsConfirmRequest.mode === 'tab'
-                    ? t.confirm.closeTab
-                    : closeTabsConfirmRequest.mode === 'other-tabs'
-                      ? t.confirm.closeOtherTabs
-                      : t.confirm.closeAllTabs}
-                </p>
-              </div>
-            </div>
-            <div className="space-y-4 px-4 py-4">
-              <label
-                htmlFor="close-tabs-dont-ask"
-                className="flex items-center gap-3 rounded-md border bg-muted/10 p-3 text-sm"
-              >
-                <Input
-                  id="close-tabs-dont-ask"
-                  type="checkbox"
-                  checked={closeTabsConfirmRequest.dontAskAgain}
-                  onChange={(event) =>
-                    setCloseTabsConfirmRequest((current) =>
-                      current ? { ...current, dontAskAgain: event.target.checked } : current
-                    )
-                  }
-                  className="size-4 shrink-0 accent-primary"
-                />
-                <span>{t.confirm.dontAskAgain}</span>
-              </label>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCloseTabsConfirmRequest(null)}
-              >
-                {t.common.cancel}
-              </Button>
-              <Button type="button" variant="destructive" onClick={confirmCloseTabs}>
-                {t.common.close}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {passwordPromptRequest && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="password-prompt-title"
-        >
-          <form
-            onSubmit={submitPasswordPrompt}
-            className="w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl"
-          >
-            <div className="border-b px-4 py-3">
-              <h2 id="password-prompt-title" className="text-sm font-semibold">
-                {t.terminal.passwordPromptTitle}
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">{passwordPromptRequest.title}</p>
-            </div>
-            <div className="space-y-4 px-4 py-4">
-              <div className="rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs text-muted-foreground">
-                {passwordPromptRequest.prompt}
-              </div>
-              <Field>
-                <FieldLabel htmlFor="terminal-password-input">
-                  {t.terminal.passwordPromptLabel}
-                </FieldLabel>
-                <Input
-                  id="terminal-password-input"
-                  ref={passwordPromptInputRef}
-                  type="password"
-                  value={passwordPromptValue}
-                  onChange={(event) => setPasswordPromptValue(event.target.value)}
-                  autoComplete="current-password"
-                />
-                <FieldDescription>{t.terminal.passwordPromptDescription}</FieldDescription>
-              </Field>
-              {passwordPromptError && (
-                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {passwordPromptError}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
-              <Button type="button" variant="outline" onClick={cancelPasswordPrompt}>
-                {t.common.cancel}
-              </Button>
-              <Button type="submit">{t.terminal.passwordPromptSubmit}</Button>
-            </div>
-          </form>
-        </div>
-      )}
-      {commandApproval && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="command-review-title"
-        >
-          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl">
-            <div className="flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <TriangleAlertIcon className="size-4 text-destructive" aria-hidden="true" />
-                  <h2 id="command-review-title" className="text-sm font-semibold">
-                    {t.commandReview.title}
-                  </h2>
-                  <Badge variant={riskBadgeVariant(commandApproval.audit.risk)}>
-                    {riskLabel(commandApproval.audit.risk, t)}
-                  </Badge>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t.commandReview.description}
-                  {commandApproval.tabId ? ` · Tab: ${commandApproval.tabId}` : ''}
-                </p>
-              </div>
-            </div>
-            <div className="select-text min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.command}
-                </h3>
-                <Textarea
-                  readOnly
-                  value={commandApproval.command}
-                  className="min-h-24 max-h-64 resize-y bg-muted/30 font-mono text-xs"
-                />
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.auditSummary}
-                </h3>
-                <p className="text-sm">{commandApproval.audit.summary}</p>
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.operationReason}
-                </h3>
-                <p className="text-sm">{commandApproval.audit.operationReason}</p>
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.riskPoints}
-                </h3>
-                <ul className="space-y-1 text-sm">
-                  {commandApproval.audit.riskPoints.map((point, index) => (
-                    <li key={`${point}-${index}`} className="rounded-md bg-muted/30 px-3 py-2">
-                      {point}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.impactAnalysis}
-                </h3>
-                <p className="text-sm">{commandApproval.audit.impactAnalysis}</p>
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.recommendation}
-                </h3>
-                <p className="text-sm">{commandApproval.audit.recommendation}</p>
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t.commandReview.decisionNote}
-                </h3>
-                <Textarea
-                  value={commandRejectionReason}
-                  onChange={(event) => setCommandRejectionReason(event.target.value)}
-                  placeholder={t.commandReview.decisionNotePlaceholder}
-                  className="min-h-20 resize-y text-sm"
-                />
-              </section>
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
-              <Button type="button" variant="outline" onClick={() => resolveCommandApproval(false)}>
-                {t.commandReview.reject}
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => resolveCommandApproval(true)}
-              >
-                {t.commandReview.approve}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      <footer className="flex h-9 shrink-0 items-center border-t px-4 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          <StatusDot state={shellState} />
-          {shellState === 'ready'
-            ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
-            : shellState === 'pending'
-              ? t.app.shellStarting
-              : t.app.shellStopped}
-          <span className="text-muted-foreground/70">
-            {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
-          </span>
-        </span>
-      </footer>
+      <ConnectionManagerModal
+        open={connectionModalOpen}
+        connections={connections}
+        filteredConnections={filteredConnections}
+        query={connectionSearchQuery}
+        selectedConnectionId={selectedConnectionId}
+        connectionForm={connectionForm}
+        connectionEditing={connectionEditing}
+        connectionImportText={connectionImportText}
+        connectionSshOptionsText={connectionSshOptionsText}
+        connectionActionsText={connectionActionsText}
+        connectionCommandPreview={connectionCommandPreview}
+        connectionFormReady={connectionFormReady}
+        connectionSaveMessage={connectionSaveMessage}
+        t={t}
+        formatConnectionTarget={formatConnectionTarget}
+        onClose={() => setConnectionModalOpen(false)}
+        onQueryChange={setConnectionSearchQuery}
+        onSelectConnection={selectConnection}
+        onConnect={connectFromConnectionManager}
+        onCopyConnection={(connection) => void copyConnection(connection)}
+        onDuplicateConnection={duplicateConnection}
+        onEditConnection={editConnection}
+        onDeleteConnection={(id) => void deleteConnection(id)}
+        onImportTextChange={setConnectionImportText}
+        onImportConnection={importConnectionFromText}
+        onFormChange={updateConnectionForm}
+        onSshOptionsTextChange={setConnectionSshOptionsText}
+        onActionsTextChange={setConnectionActionsText}
+        onResetForm={resetConnectionForm}
+        onStartEditing={() => setConnectionEditing(true)}
+        onSave={(connectAfterSave) => void saveConnection(connectAfterSave)}
+      />
+      <CloseTabsConfirmModal
+        request={closeTabsConfirmRequest}
+        t={t}
+        onCancel={() => setCloseTabsConfirmRequest(null)}
+        onConfirm={confirmCloseTabs}
+        onDontAskAgainChange={(checked) =>
+          setCloseTabsConfirmRequest((current) =>
+            current ? { ...current, dontAskAgain: checked } : current
+          )
+        }
+      />
+      <PasswordPromptModal
+        request={passwordPromptRequest}
+        t={t}
+        value={passwordPromptValue}
+        error={passwordPromptError}
+        inputRef={passwordPromptInputRef}
+        onChange={setPasswordPromptValue}
+        onCancel={cancelPasswordPrompt}
+        onSubmit={submitPasswordPrompt}
+      />
+      <CommandApprovalModal
+        commandApproval={commandApproval}
+        t={t}
+        riskLabel={commandApproval ? riskLabel(commandApproval.audit.risk, t) : ''}
+        rejectionReason={commandRejectionReason}
+        onRejectionReasonChange={setCommandRejectionReason}
+        onResolve={resolveCommandApproval}
+      />
+      <AppFooter shellState={shellState} activeTab={activeTab} t={t} />
     </main>
   )
-}
-
-function logClassName(kind: AgentLogEntry['kind']): string {
-  const base = 'rounded-lg border p-3'
-
-  switch (kind) {
-    case 'user':
-      return `${base} ml-8 border-border bg-muted/20`
-    case 'assistant':
-      return `${base} mr-8 border-border bg-background`
-    case 'error':
-      return `${base} border-destructive/40 bg-destructive/10 text-destructive`
-    case 'tool':
-      return `${base} border-amber-500/30 bg-amber-500/10`
-    case 'command':
-      return `${base} border-cyan-500/30 bg-cyan-500/10`
-    case 'plan':
-      return `${base} border-purple-500/30 bg-purple-500/10`
-    default:
-      return `${base} bg-muted/40 text-muted-foreground`
-  }
-}
-
-function isConversationLog(kind: AgentLogEntry['kind']): boolean {
-  return kind === 'user' || kind === 'assistant' || kind === 'error'
-}
-
-function ActionLogRow({ entry, t }: { entry: AgentLogEntry; t: Dictionary }): React.JSX.Element {
-  const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
-
-  return (
-    <details className={`group rounded-md border text-xs ${actionLogClassName(entry.kind)}`}>
-      <summary className="grid cursor-pointer select-none grid-cols-[5.5rem_4.75rem_minmax(0,1fr)] items-center gap-2 px-3 py-1.5 marker:text-muted-foreground">
-        <span className="truncate font-medium uppercase tracking-wide">
-          {logRoleLabel(entry.kind, t)}
-        </span>
-        <time className="text-muted-foreground" dateTime={entry.createdAt}>
-          {formatLogTime(entry.createdAt)}
-        </time>
-        <span className="truncate text-foreground/90">{summary}</span>
-      </summary>
-      <pre className="select-text max-h-72 min-w-0 overflow-auto border-t bg-background/70 p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
-        {entry.text}
-      </pre>
-    </details>
-  )
-}
-
-function SkillInstallStatusDot({ status }: { status: SkillInstallLogStatus }): React.JSX.Element {
-  if (status === 'running') {
-    return (
-      <span
-        className="mt-0.5 inline-flex size-4 shrink-0 animate-spin rounded-full border-2 border-yellow-500 border-t-transparent"
-        aria-hidden="true"
-      />
-    )
-  }
-
-  if (status === 'error') {
-    return (
-      <span
-        className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-white"
-        aria-hidden="true"
-      >
-        <XIcon className="size-3" />
-      </span>
-    )
-  }
-
-  return (
-    <span
-      className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-white"
-      aria-hidden="true"
-    >
-      <CheckIcon className="size-3" />
-    </span>
-  )
-}
-
-function SkillManageStatus({
-  message
-}: {
-  message: SkillManageMessage | null
-}): React.JSX.Element | null {
-  if (!message) return null
-
-  const className =
-    message.type === 'success'
-      ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300'
-      : message.type === 'error'
-        ? 'border-destructive/40 bg-destructive/10 text-destructive'
-        : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
-
-  return (
-    <pre
-      className={`select-text max-h-32 overflow-auto rounded-md border p-2 text-xs leading-relaxed whitespace-pre-wrap ${className}`}
-    >
-      {message.text}
-    </pre>
-  )
-}
-
-function AgentLogContent({
-  entry,
-  t,
-  copied,
-  onCopyResult,
-  onExportResult,
-  onExportFull
-}: {
-  entry: AgentLogEntry
-  t: Dictionary
-  copied?: boolean
-  onCopyResult?: () => void
-  onExportResult?: () => void
-  onExportFull?: () => void
-}): React.JSX.Element {
-  if (isConversationLog(entry.kind)) {
-    const parsedRun = entry.kind === 'assistant' ? parseAgentRunMarkdown(entry.text, t) : null
-    if (parsedRun) {
-      return (
-        <AgentRunMarkdownContent
-          parsed={parsedRun}
-          t={t}
-          copied={Boolean(copied)}
-          onCopyResult={onCopyResult}
-          onExportResult={onExportResult}
-          onExportFull={onExportFull}
-        />
-      )
-    }
-
-    return <MarkdownContent value={entry.text} t={t} />
-  }
-
-  const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
-
-  return (
-    <details className="group rounded-md border bg-background/60">
-      <summary className="sticky top-0 z-10 cursor-pointer border-b bg-background/95 px-3 py-2 text-sm font-medium backdrop-blur marker:text-muted-foreground">
-        {summary}
-      </summary>
-      <pre className="select-text max-h-80 min-w-0 overflow-auto p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
-        {entry.text}
-      </pre>
-    </details>
-  )
-}
-
-function AgentRunMarkdownContent({
-  parsed,
-  t,
-  copied,
-  onCopyResult,
-  onExportResult,
-  onExportFull
-}: {
-  parsed: ParsedAgentRunMarkdown
-  t: Dictionary
-  copied: boolean
-  onCopyResult?: () => void
-  onExportResult?: () => void
-  onExportFull?: () => void
-}): React.JSX.Element {
-  const hasResult = Boolean(parsed.resultMarkdown || parsed.errorMarkdown)
-
-  return (
-    <div className="min-w-0 space-y-3">
-      {hasResult && (
-        <section className="min-w-0 rounded-md border bg-background shadow-sm">
-          <div className="sticky top-0 z-20 flex min-w-0 items-center justify-between gap-3 border-b bg-background/95 px-3 py-2 backdrop-blur">
-            <div className="min-w-0 text-xs font-semibold text-foreground">
-              {parsed.errorMarkdown ? t.input.error : t.input.result}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
-                title={copied ? t.common.copied : t.common.copyResultTooltip}
-                onClick={onCopyResult}
-              >
-                {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.exportResultMarkdownTooltip}
-                title={t.common.exportResultMarkdownTooltip}
-                onClick={onExportResult}
-              >
-                <DownloadIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.exportFullMarkdownTooltip}
-                title={t.common.exportFullMarkdownTooltip}
-                onClick={onExportFull}
-              >
-                <FileTextIcon aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <div className="min-w-0 p-3">
-            {parsed.resultMarkdown && <MarkdownContent value={parsed.resultMarkdown} t={t} />}
-            {parsed.errorMarkdown && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive">
-                <MarkdownContent value={parsed.errorMarkdown} t={t} />
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {parsed.actionsMarkdown && (
-        <details
-          className="group min-w-0 rounded-md border bg-muted/10"
-          open={hasResult ? undefined : true}
-        >
-          <summary className="sticky top-0 z-20 flex cursor-pointer select-none items-center justify-between gap-3 border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur marker:content-none">
-            <span>{hasResult ? t.input.actionDetailsCompleted : t.input.actionDetails}</span>
-            <ChevronDownIcon
-              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </summary>
-          <div className="min-w-0 space-y-3 p-3">
-            <MarkdownContent value={parsed.actionsMarkdown} t={t} />
-            {parsed.elapsedMarkdown && (
-              <div className="border-t pt-3 text-xs text-muted-foreground">
-                <MarkdownContent value={parsed.elapsedMarkdown} t={t} />
-              </div>
-            )}
-          </div>
-        </details>
-      )}
-    </div>
-  )
-}
-
-function actionLogClassName(kind: AgentLogEntry['kind']): string {
-  switch (kind) {
-    case 'tool':
-      return 'border-amber-500/25 bg-amber-500/5'
-    case 'command':
-      return 'border-cyan-500/25 bg-cyan-500/5'
-    case 'plan':
-      return 'border-purple-500/25 bg-purple-500/5'
-    case 'thought':
-      return 'border-blue-500/25 bg-blue-500/5'
-    default:
-      return 'border-border bg-muted/20'
-  }
-}
-
-function summarizeBehaviorLog(value: string, kind: AgentLogEntry['kind'], t: Dictionary): string {
-  const firstLine = value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-
-  if (kind === 'command') {
-    if (!firstLine) return t.terminal.commandExecuted
-    if (firstLine.startsWith(`${t.terminal.commandExecuted}:`)) return t.terminal.commandExecuted
-    if (firstLine.startsWith(`${t.terminal.connectionAction} `)) {
-      return firstLine.split(':')[0] || t.terminal.connectionAction
-    }
-    return firstLine
-  }
-
-  return firstLine || t.input.actionDetails
-}
-
-function isContinueIntent(value: string): boolean {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[.!?\s]+$/g, '')
-    .replace(/\s+/g, ' ')
-
-  return /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
-}
-
-function isExplicitConnectionRequest(value: string): boolean {
-  return /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value)
-}
-
-function isExplicitNonTerminalAgentRequest(
-  value: string,
-  toolRefs: AgentToolReference[] = []
-): boolean {
-  if (
-    toolRefs.some((tool) => tool.name.startsWith('mcp_') || tool.description.includes('mcp://'))
-  ) {
-    return true
-  }
-
-  return /\bMCP\b|filesystem\s+MCP|MCP\s+filesystem|使用\s*Filesystem/i.test(value)
-}
-
-function hasUsableCurrentTerminal(tab: AgentTerminalTab | undefined, output: string): boolean {
-  if (tab?.isSsh || tab?.connectionId) return true
-
-  const normalized = normalizeTerminalControlText(output).trim()
-  if (!normalized) return false
-
-  const lines = normalized
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-20)
-  if (lines.length === 0) return false
-
-  return lines.some(
-    (line) =>
-      !/^\[Crescent\]/.test(line) && !/^(__CRESCENT_CMD_START_|__CRESCENT_CMD_END_)/.test(line)
-  )
-}
-
-function findDirectlyMentionedConnection(
-  input: string,
-  connections: ConnectionConfig[]
-): ConnectionConfig | undefined {
-  const normalizedInput = normalizeConnectionMentionText(input)
-  if (!normalizedInput) return undefined
-
-  const matches = connections.filter((connection) =>
-    getConnectionMentionTokens(connection).some((token) => normalizedInput.includes(token))
-  )
-  return matches.length === 1 ? matches[0] : undefined
-}
-
-function isSameConnectionTab(
-  tab: AgentTerminalTab | undefined,
-  connection: ConnectionConfig | undefined
-): boolean {
-  if (!tab || !connection) return false
-  if (tab.connectionId && tab.connectionId === connection.id) return true
-
-  return Boolean(tab.connectionName && tab.connectionName === connection.name)
-}
-
-function getConnectionMentionTokens(connection: ConnectionConfig): string[] {
-  const values = [connection.name, connection.host, connection.user].filter(
-    (value): value is string => Boolean(value)
-  )
-  const tokens = new Set<string>()
-
-  for (const value of values) {
-    const normalizedValue = normalizeConnectionMentionText(value)
-    if (normalizedValue.length >= 3) tokens.add(normalizedValue)
-
-    for (const token of value.split(/[^\p{L}\p{N}]+/u)) {
-      const normalizedToken = normalizeConnectionMentionText(token)
-      if (normalizedToken.length >= 3) tokens.add(normalizedToken)
-    }
-  }
-
-  return [...tokens]
-}
-
-function normalizeConnectionMentionText(value: string): string {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
-}
-
-function isConnectionOnlyRequest(input: string, connection: ConnectionConfig): boolean {
-  let normalized = normalizeConnectionMentionText(input)
-  const removableTokens = [
-    ...getConnectionMentionTokens(connection),
-    'connection',
-    'connect',
-    'login',
-    'ssh',
-    'open',
-    '连接',
-    '登录',
-    '登入',
-    '打开',
-    '进入',
-    '切换',
-    '集群',
-    '环境',
-    '到',
-    '至'
-  ].sort((left, right) => right.length - left.length)
-
-  for (const token of removableTokens) {
-    normalized = normalized.replaceAll(token, '')
-  }
-
-  return normalized.length === 0
-}
-
-function buildResumeAgentInput(tab: AgentTerminalTab, latestInput: string, t: Dictionary): string {
-  const previousUserEntry = [...tab.agentLog].reverse().find((entry) => entry.kind === 'user')
-  const recentContext = tab.agentLog
-    .slice(-10)
-    .map((entry) => formatResumeContextEntry(entry, t))
-    .filter(Boolean)
-    .join('\n\n')
-
-  return [
-    t.input.resumeInstruction,
-    previousUserEntry ? `${t.input.resumePreviousGoal}\n${previousUserEntry.text}` : '',
-    `${t.input.resumeLatestInput}\n${latestInput}`,
-    recentContext ? `${t.input.resumeRecentContext}\n${recentContext}` : t.input.resumeNoContext
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function buildRecentConversationContext(
-  tab: AgentTerminalTab | undefined,
-  currentInput: string,
-  t: Dictionary
-): string {
-  if (!tab) return ''
-
-  const normalizedCurrentInput = currentInput.trim()
-  const entries = tab.agentLog
-    .filter((entry) => {
-      if (entry.kind === 'status') return false
-      if (entry.kind !== 'user') return true
-
-      return entry.text.trim() !== normalizedCurrentInput
-    })
-    .slice(-8)
-
-  const latestAssistant = [...entries].reverse().find((entry) => entry.kind === 'assistant')
-  const compactEntries = entries
-    .filter((entry) => entry.id !== latestAssistant?.id)
-    .slice(-4)
-    .map((entry) => formatRecentConversationEntry(entry, t, 2200))
-    .filter(Boolean)
-
-  const latestAssistantContext = latestAssistant
-    ? [
-        `${t.input.resumeRecentContext} - latest assistant result`,
-        formatRecentConversationEntry(latestAssistant, t, 40_000)
-      ].join('\n')
-    : ''
-
-  return [...compactEntries, latestAssistantContext].filter(Boolean).join('\n\n')
-}
-
-function formatRecentConversationEntry(
-  entry: AgentLogEntry,
-  t: Dictionary,
-  maxChars: number
-): string {
-  const role = logRoleLabel(entry.kind, t)
-  const text = entry.text.trim()
-  if (!text) return ''
-
-  return `[${role}] ${text.length > maxChars ? text.slice(-maxChars) : text}`
-}
-
-function formatResumeContextEntry(entry: AgentLogEntry, t: Dictionary): string {
-  const role = logRoleLabel(entry.kind, t)
-  const text = entry.text.trim()
-  if (!text) return ''
-
-  return `[${role}] ${text.slice(-1800)}`
-}
-
-function StatusDot({ state }: { state: 'ready' | 'pending' | 'not-ready' }): React.JSX.Element {
-  const className =
-    state === 'ready'
-      ? 'bg-green-500 shadow-green-500/40'
-      : state === 'pending'
-        ? 'bg-yellow-400 shadow-yellow-400/40'
-        : 'bg-red-500 shadow-red-500/40'
-
-  return <span className={`size-2 rounded-full shadow-[0_0_8px] ${className}`} />
-}
-
-function McpStatusDot({
-  status,
-  title
-}: {
-  status: 'ready' | 'pending' | 'not-ready'
-  title?: string
-}): React.JSX.Element {
-  if (status === 'ready') {
-    return (
-      <span
-        className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-white"
-        title={title}
-      >
-        <CheckIcon className="size-3" aria-hidden="true" />
-      </span>
-    )
-  }
-
-  if (status === 'pending') {
-    return (
-      <span
-        className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-yellow-950"
-        title={title}
-      >
-        <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
-      </span>
-    )
-  }
-
-  return (
-    <span
-      className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-white"
-      title={title}
-    >
-      <XIcon className="size-3" aria-hidden="true" />
-    </span>
-  )
-}
-
-function TerminalActivityDot({ active }: { active: boolean }): React.JSX.Element {
-  return (
-    <span
-      className={`size-1.5 shrink-0 rounded-full ${
-        active ? 'bg-green-500 shadow-[0_0_8px] shadow-green-500/50' : 'bg-muted-foreground/30'
-      }`}
-      aria-hidden="true"
-    />
-  )
-}
-
-function logRoleLabel(kind: AgentLogEntry['kind'], t: Dictionary): string {
-  switch (kind) {
-    case 'user':
-      return t.roles.user
-    case 'assistant':
-      return t.roles.assistant
-    case 'error':
-      return t.roles.error
-    case 'tool':
-      return t.roles.tool
-    case 'command':
-      return t.roles.command
-    case 'plan':
-      return t.roles.plan
-    case 'thought':
-      return t.roles.thought
-    default:
-      return t.roles.system
-  }
-}
-
-function formatLogTime(value: string): string {
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).format(date)
-}
-
-function formatHistoryTime(value: string): string {
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date)
 }
 
 function summarizeHistoryMessage(value: string): string {
@@ -7167,32 +5820,6 @@ function summarizeHistoryMessage(value: string): string {
   return `${compact.slice(0, 120)}...`
 }
 
-function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry {
-  return {
-    id: entry.logId,
-    kind: normalizeStoredAgentLogKind(entry.kind),
-    text: entry.text,
-    createdAt: entry.createdAt
-  }
-}
-
-function normalizeStoredAgentLogKind(kind: string): AgentLogEntry['kind'] {
-  if (
-    kind === 'user' ||
-    kind === 'assistant' ||
-    kind === 'error' ||
-    kind === 'status' ||
-    kind === 'thought' ||
-    kind === 'tool' ||
-    kind === 'plan' ||
-    kind === 'command'
-  ) {
-    return kind
-  }
-
-  return 'status'
-}
-
 function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
   switch (risk) {
     case 'low':
@@ -7202,12 +5829,6 @@ function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
     case 'high':
       return t.commandReview.highRisk
   }
-}
-
-function riskBadgeVariant(risk: CommandRiskLevel): 'outline' | 'secondary' | 'destructive' {
-  if (risk === 'high') return 'destructive'
-  if (risk === 'medium') return 'secondary'
-  return 'outline'
 }
 
 function formatCommandAuditDetail(
@@ -7295,6 +5916,10 @@ function formatAgentEventActionTitle(
   }
 }
 
+function isNoisyMcpCatalogMessage(message: string): boolean {
+  return /^Loaded \d+ MCP tools?\b/i.test(message.trim())
+}
+
 function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Dispatching tool call.') return t.input.toolDispatching
   if (message.startsWith('Submitting command for review:')) {
@@ -7326,7 +5951,7 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   if (message === 'Breaking the request into verifiable steps before execution.') {
     return t.input.breakingDownTask
   }
-  if (/^Loaded \d+ MCP tools:/.test(message)) return message
+  if (isNoisyMcpCatalogMessage(message)) return message
   if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
   if (/^Executing plan with ReAct step /.test(message)) return t.input.executingPlanStep
   if (/^Assessing the request and choosing one concrete next action/.test(message)) {
@@ -7349,418 +5974,6 @@ function localizeAgentEventMessage(message: string, t: Dictionary): string {
   }
 
   return message
-}
-
-function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
-  const lines: string[] = []
-  const completed = Boolean(run.result || run.error)
-
-  if (run.actions.length > 0) {
-    lines.push(`**${t.input.actions}**`, '')
-    for (const action of run.actions) {
-      lines.push(`- ${action.title}`)
-    }
-    lines.push(
-      '',
-      completed ? '<details>' : '<details open>',
-      `<summary>${completed ? t.input.actionDetailsCompleted : t.input.actionDetails}</summary>`,
-      ''
-    )
-    for (const [index, action] of run.actions.entries()) {
-      lines.push(`#### ${index + 1}. ${action.title}`, '', formatActionNarrative(action, t), '')
-    }
-    lines.push('</details>')
-  }
-
-  if (run.result) {
-    lines.push('', `**${t.input.result}**`, '', run.result)
-  }
-
-  if (run.error) {
-    lines.push('', `**${t.input.error}**`, '', run.error)
-  }
-
-  if (typeof run.elapsedMs === 'number') {
-    lines.push('', formatElapsedFooter(run.elapsedMs, t))
-  }
-
-  return lines.join('\n').trim()
-}
-
-function formatActionNarrative(action: AgentRunAction, t: Dictionary): string {
-  const intent = extractActionIntent(action, t)
-  const lines = [
-    ...(intent ? [`**${t.input.actionIntent}**`, intent, ''] : []),
-    `**${t.input.rawActionObservation}**`,
-    '```text',
-    action.detail,
-    '```'
-  ]
-
-  return lines.join('\n')
-}
-
-function extractActionIntent(action: AgentRunAction, t: Dictionary): string {
-  const operationReason = extractLabeledSection(action.detail, t.commandReview.operationReason)
-  if (operationReason) return operationReason
-
-  const command = extractActionCommand(action.detail, t)
-  if (command) return `${t.input.actionIntentCommand}\n\`\`\`bash\n${command}\n\`\`\``
-
-  const planSteps = extractNumberedLines(action.detail)
-  if (planSteps.length > 0) return [t.input.actionIntentPlan, ...planSteps].join('\n')
-
-  const skillReason = extractLabeledSection(action.detail, t.input.skillMatchReason)
-  if (skillReason) return `${t.input.actionIntentSkill} ${skillReason}`
-
-  const normalizedDetail = action.detail.trim()
-  if (normalizedDetail && normalizedDetail !== action.title.trim()) return normalizedDetail
-
-  return ''
-}
-
-function extractActionCommand(detail: string, t: Dictionary): string {
-  const labels = [
-    'Command',
-    t.commandReview.command,
-    t.commandReview.submitted,
-    `${t.commandReview.submitted}:`
-  ]
-
-  for (const label of labels) {
-    const value = extractLabeledSection(detail, label)
-    if (value) return value
-  }
-
-  return ''
-}
-
-function extractLabeledSection(detail: string, label: string): string {
-  const lines = detail.replace(/\r\n/g, '\n').split('\n')
-  const normalizedLabel = label.replace(/:$/, '').trim()
-  const startIndex = lines.findIndex((line) => {
-    const trimmed = line.trim()
-    return trimmed === `${normalizedLabel}:` || trimmed.startsWith(`${normalizedLabel}: `)
-  })
-  if (startIndex < 0) return ''
-
-  const firstLine = lines[startIndex].trim()
-  const inlineValue = firstLine.slice(`${normalizedLabel}:`.length).trim()
-  if (inlineValue) return inlineValue
-
-  const valueLines: string[] = []
-  for (const line of lines.slice(startIndex + 1)) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      if (valueLines.length > 0) break
-      continue
-    }
-    if (/^[^:：]{1,32}[:：]\s*$/.test(trimmed) && valueLines.length > 0) break
-    valueLines.push(line.trimEnd())
-  }
-
-  return trimMarkdownLines(valueLines)
-}
-
-function extractNumberedLines(detail: string): string[] {
-  return detail
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => /^\d+\.\s+/.test(line))
-}
-
-function appendElapsedFooter(text: string, elapsedMs: number, t: Dictionary): string {
-  return [text.trim(), formatElapsedFooter(elapsedMs, t)].filter(Boolean).join('\n\n')
-}
-
-function formatElapsedFooter(elapsedMs: number, t: Dictionary): string {
-  return ['---', '', `${t.input.elapsed}: ${formatElapsedDuration(elapsedMs)}`].join('\n')
-}
-
-function formatElapsedDuration(milliseconds: number): string {
-  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000))
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
-  if (minutes > 0) return `${minutes}m ${seconds}s`
-  return `${seconds}s`
-}
-
-function formatConnectionTarget(connection: ConnectionConfig): string {
-  const user = connection.user ? `${connection.user}@` : ''
-  const port = connection.port ? `:${connection.port}` : ''
-
-  return `${user}${connection.host}${port}`
-}
-
-function parseSubterminalTabId(tabId: string): { parentTabId: string; name: string } | undefined {
-  const marker = '::subterminal::'
-  const markerIndex = tabId.indexOf(marker)
-
-  if (markerIndex === -1) return undefined
-
-  const parentTabId = tabId.slice(0, markerIndex)
-  const encodedName = tabId.slice(markerIndex + marker.length)
-
-  try {
-    return {
-      parentTabId,
-      name: decodeURIComponent(encodedName)
-    }
-  } catch {
-    return {
-      parentTabId,
-      name: encodedName
-    }
-  }
-}
-
-function getSubterminalWidths(subterminals: TemporarySubterminal[]): number[] {
-  if (subterminals.length === 0) return []
-  if (subterminals.length === 1) return [100]
-
-  const defaultWidth = 100 / subterminals.length
-  const widths = subterminals.map((subterminal) => subterminal.widthPercent ?? defaultWidth)
-  const total = widths.reduce((sum, width) => sum + width, 0)
-
-  if (total <= 0) return subterminals.map(() => defaultWidth)
-
-  return widths.map((width) => (width / total) * 100)
-}
-
-function formatReadableSubterminalOutput(raw: string): string {
-  const plain = normalizeTerminalControlText(raw)
-  const commandOutput = extractLatestCrescentCommandOutput(plain)
-  const source = commandOutput ?? plain
-  const lines = source
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter((line) => !isSubterminalDisplayNoise(line))
-
-  return collapseBlankLines(lines).join('\n').trim()
-}
-
-function normalizeTerminalControlText(value: string): string {
-  const withoutControls = applyBackspaces(stripTerminalControlSequences(value))
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-
-  return removeControlCharacters(withoutControls)
-}
-
-function stripTerminalControlSequences(value: string): string {
-  let output = ''
-
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    if (code !== 27) {
-      output += value[index]
-      continue
-    }
-
-    const next = value[index + 1]
-    if (next === ']') {
-      index += 2
-      while (index < value.length) {
-        if (value.charCodeAt(index) === 7) break
-        if (value.charCodeAt(index) === 27 && value[index + 1] === '\\') {
-          index += 1
-          break
-        }
-        index += 1
-      }
-      continue
-    }
-
-    if (next === '[') {
-      index += 1
-      while (index + 1 < value.length) {
-        index += 1
-        const finalCode = value.charCodeAt(index)
-        if (finalCode >= 64 && finalCode <= 126) break
-      }
-      continue
-    }
-
-    if (next === '(' || next === ')') {
-      index += 2
-      continue
-    }
-
-    if (next === '=' || next === '>') {
-      index += 1
-      continue
-    }
-
-    index += 1
-  }
-
-  return output
-}
-
-function applyBackspaces(value: string): string {
-  let output = ''
-
-  for (const char of value) {
-    if (char === '\b') {
-      output = output.slice(0, -1)
-      continue
-    }
-    output += char
-  }
-
-  return output
-}
-
-function removeControlCharacters(value: string): string {
-  let output = ''
-
-  for (const char of value) {
-    const code = char.charCodeAt(0)
-    if (char === '\n' || char === '\t' || code >= 32) output += char
-  }
-
-  return output
-}
-
-function extractLatestCrescentCommandOutput(value: string): string | undefined {
-  const startMatches = [...value.matchAll(/__CRESCENT_CMD_START_[A-Za-z0-9_]+__/g)]
-  const latestStart = startMatches.at(-1)
-  if (latestStart?.index === undefined) return undefined
-
-  const startIndex = latestStart.index + latestStart[0].length
-  const rest = value.slice(startIndex)
-  const endMatch = rest.match(/__CRESCENT_CMD_END_[A-Za-z0-9_]+__:\d+/)
-  if (endMatch?.index === undefined) return rest
-
-  return rest.slice(0, endMatch.index)
-}
-
-function isSubterminalDisplayNoise(line: string): boolean {
-  const trimmed = line.trim()
-  if (!trimmed) return false
-
-  return (
-    trimmed === '%' ||
-    /^➜\s+/.test(trimmed) ||
-    /^stty\s+-?echo(?:\s+2>\/dev\/null)?$/.test(trimmed) ||
-    trimmed.includes('__crescent_script=$(mktemp') ||
-    trimmed.includes('$__crescent_script') ||
-    trimmed.includes('__crescent_status=') ||
-    trimmed.includes('__CRESCENT_CMD_START_') ||
-    trimmed.includes('__CRESCENT_CMD_END_') ||
-    /printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(trimmed) ||
-    /base64\s+-[dD]\s+>/.test(trimmed) ||
-    /^[A-Za-z0-9+/=]{100,}$/.test(trimmed)
-  )
-}
-
-function collapseBlankLines(lines: string[]): string[] {
-  const result: string[] = []
-
-  for (const line of lines) {
-    if (!line.trim() && !result.at(-1)?.trim()) continue
-    result.push(line)
-  }
-
-  return result
-}
-
-function mergeConnectionInput(
-  saved: ConnectionConfig | undefined,
-  fallback: ConnectionConfig
-): ConnectionConfig {
-  return {
-    ...fallback,
-    ...saved,
-    password: saved?.password ?? fallback.password,
-    passwordEnvVar: saved?.passwordEnvVar ?? fallback.passwordEnvVar,
-    resolvedPassword: saved?.resolvedPassword ?? fallback.resolvedPassword,
-    sshOptions: saved?.sshOptions?.length ? saved.sshOptions : fallback.sshOptions,
-    actions: saved?.actions?.length ? saved.actions : fallback.actions
-  }
-}
-
-function parseSshOptions(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .trim()
-        .replace(/\s*\\$/, '')
-        .trim()
-    )
-    .filter(Boolean)
-}
-
-function parseLoginActions(value: string): string[] {
-  return value.split(/\r?\n/).filter((line) => line.trim())
-}
-
-function parseProviderModels(value: string): AgentProviderModelConfig[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((id) => ({
-      id,
-      name: id,
-      reasoning: isReasoningModelId(id)
-    }))
-}
-
-function formatProviderModels(models: AgentProviderModelConfig[]): string {
-  return models.map((model) => model.id).join('\n')
-}
-
-function parseMcpArgs(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
-
-function formatMcpArgs(args: string[]): string {
-  return args.join('\n')
-}
-
-function parseMcpEnv(value: string): Record<string, string> {
-  return Object.fromEntries(
-    value
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const separatorIndex = line.indexOf('=')
-        if (separatorIndex < 0) return [line, ''] as const
-
-        return [line.slice(0, separatorIndex).trim(), line.slice(separatorIndex + 1)] as const
-      })
-      .filter(([key]) => Boolean(key))
-  )
-}
-
-function formatMcpEnv(env: Record<string, string>): string {
-  return Object.entries(env)
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n')
-}
-
-function isReasoningModelId(id: string): boolean {
-  const normalized = id.toLowerCase()
-  return (
-    normalized.includes('gpt-5') || normalized.includes('reasoner') || normalized.endsWith('-pro')
-  )
-}
-
-function parseCommandWhitelist(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
 }
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -7824,62 +6037,6 @@ function formatInstallCount(value: number | undefined): string {
   return String(value)
 }
 
-function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {
-  return providers.flatMap((provider) =>
-    provider.models.map((model) => ({
-      id: model.id,
-      name: model.name || model.id,
-      providerId: provider.id,
-      providerName: provider.name || provider.id,
-      reasoning: Boolean(model.reasoning)
-    }))
-  )
-}
-
-function resolveTabModelSelection(
-  tab: AgentTerminalTab | undefined,
-  config: AgentConfig,
-  models: AgentModelOption[]
-): { providerId?: string; model: string } {
-  const providerId = tab?.providerId ?? config.providerId
-  const providerModels = models.filter((model) => model.providerId === providerId)
-  const model =
-    tab?.model && providerModels.some((candidate) => candidate.id === tab.model)
-      ? tab.model
-      : (providerModels[0]?.id ?? config.model)
-
-  return { providerId, model }
-}
-
-function buildAvailableToolRefs(
-  validation: AgentValidationResult | undefined
-): AgentToolReference[] {
-  const builtInToolNames = new Set(BUILT_IN_TOOL_CATALOG.map((tool) => tool.name))
-  const builtInTools: AgentToolReference[] = BUILT_IN_TOOL_CATALOG.map((tool) => ({
-    id: `built-in:${tool.name}`,
-    name: tool.name,
-    description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,
-    source: 'built-in'
-  }))
-
-  const dynamicTools =
-    validation?.tools
-      ?.filter((tool) => !builtInToolNames.has(tool.name))
-      .map((tool) => ({
-        id: tool.path.startsWith('mcp://') ? `mcp:${tool.name}` : `openapi:${tool.name}`,
-        name: tool.name,
-        description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,
-        source: tool.path.startsWith('mcp://') ? ('mcp' as const) : ('openapi' as const)
-      })) ?? []
-
-  const tools = new Map<string, AgentToolReference>()
-  for (const tool of [...builtInTools, ...dynamicTools]) {
-    tools.set(tool.id, tool)
-  }
-
-  return [...tools.values()]
-}
-
 function getMcpServerStatus(
   server: AgentMcpServerConfig,
   validation: AgentValidationResult | undefined,
@@ -7922,358 +6079,6 @@ function extractMcpServerValidationError(
   const matched = parts.find((part) => serverNames.some((name) => part.includes(name)))
 
   return matched ?? (validationError.includes(prefix) ? mcpError : '')
-}
-
-function getSlashCommandQuery(value: string): string | undefined {
-  if (!value.startsWith('/') || value.includes('\n')) return undefined
-
-  return value.slice(1).trim().toLowerCase()
-}
-
-function matchesSlashCommand(command: SlashCommandOption, query: string | undefined): boolean {
-  if (query === undefined) return false
-  if (!query) return true
-
-  const searchable = [command.id, command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(query)
-}
-
-function matchesSkillSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const skillQuery = query.slice('skill:'.length).trim()
-  if (!skillQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(skillQuery)
-}
-
-function isToolSlashQuery(query: string | undefined): boolean {
-  if (query === undefined) return false
-  return query.startsWith('tool:')
-}
-
-function matchesToolSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const toolQuery = query
-    .replace(/^tool:?/, '')
-    .trim()
-    .toLowerCase()
-  if (!toolQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(toolQuery)
-}
-
-function isMcpSlashQuery(query: string | undefined): boolean {
-  if (query === undefined) return false
-  return query.startsWith('mcp:')
-}
-
-function matchesMcpSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const mcpQuery = query
-    .replace(/^mcp:?/, '')
-    .trim()
-    .toLowerCase()
-  if (!mcpQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(mcpQuery)
-}
-
-function isWikiSlashQuery(query: string | undefined): boolean {
-  if (query === undefined) return false
-  return query.startsWith('wiki:')
-}
-
-function matchesWikiSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const wikiQuery = query
-    .replace(/^wiki:?/, '')
-    .trim()
-    .toLowerCase()
-  if (!wikiQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(wikiQuery)
-}
-
-function isModeSlashQuery(query: string | undefined): boolean {
-  if (query === undefined) return false
-  return query.startsWith('mode:')
-}
-
-function matchesModeSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const modeQuery = query
-    .replace(/^mode:?/, '')
-    .trim()
-    .toLowerCase()
-  if (!modeQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(modeQuery)
-}
-
-function isConnectionSlashQuery(query: string | undefined): boolean {
-  if (query === undefined) return false
-  return query.startsWith('connection:')
-}
-
-function matchesConnectionSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const connectionQuery = query
-    .replace(/^connection:?/, '')
-    .trim()
-    .toLowerCase()
-  if (!connectionQuery) return true
-
-  const searchable = [command.title, command.description, ...command.keywords]
-    .join(' ')
-    .toLowerCase()
-
-  return searchable.includes(connectionQuery)
-}
-
-function replaceSlashCommandInput(value: string, replacement: string): string {
-  if (!value.startsWith('/')) return `${replacement}\n${value}`.trim()
-
-  return `${replacement}\n${value.replace(/^\/[^\n]*/, '').replace(/^\n/, '')}`.trim()
-}
-
-function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
-  return [
-    {
-      id: 'mode',
-      title: t.input.slashMode,
-      description: t.input.slashModeDescription,
-      value: '/mode:',
-      keywords: ['mode', 'agent', 'react', 'plan']
-    },
-    {
-      id: 'connection',
-      title: t.input.slashConnection,
-      description: t.input.slashConnectionDescription,
-      value: '/connection:',
-      keywords: ['connection', 'ssh', 'host']
-    },
-    {
-      id: 'file',
-      title: t.input.referenceFile,
-      description: t.input.slashFileDescription,
-      value: '',
-      keywords: ['file', 'reference', 'context'],
-      pathReferenceKind: 'file'
-    },
-    {
-      id: 'folder',
-      title: t.input.referenceDirectory,
-      description: t.input.slashFolderDescription,
-      value: '',
-      keywords: ['folder', 'directory', 'reference', 'context'],
-      pathReferenceKind: 'directory'
-    },
-    {
-      id: 'tool',
-      title: t.input.slashTool,
-      description: t.input.slashToolDescription,
-      value: '/tool:',
-      keywords: ['tool', 'tools']
-    },
-    {
-      id: 'mcp',
-      title: t.input.slashMcp,
-      description: t.input.slashMcpDescription,
-      value: '/mcp:',
-      keywords: ['mcp', 'tools', 'server']
-    },
-    {
-      id: 'wiki',
-      title: t.input.slashWiki,
-      description: t.input.slashWikiDescription,
-      value: '/wiki:',
-      keywords: ['wiki', 'knowledge', 'sop', 'best practice']
-    },
-    {
-      id: 'skill',
-      title: t.input.slashSkill,
-      description: t.input.slashSkillDescription,
-      value: '/skill:',
-      keywords: ['skill', 'skills']
-    },
-    {
-      id: 'create-skill',
-      title: t.input.slashCreateSkill,
-      description: t.input.slashCreateSkillDescription,
-      value: '/create-skill',
-      keywords: ['create-skill', 'skill', 'skills', 'custom'],
-      templateInput: t.input.createSkillPrompt
-    }
-  ]
-}
-
-function buildSkillSlashCommand(skill: AgentSkillOption, t: Dictionary): SlashCommandOption {
-  return {
-    id: `skill:${skill.name}`,
-    title: skill.name,
-    description: skill.description || t.input.slashSkillDescription,
-    value: '',
-    keywords: ['skill', 'skills', skill.name, skill.description, skill.source],
-    skill
-  }
-}
-
-function buildToolSlashCommand(tool: AgentToolReference): SlashCommandOption {
-  return {
-    id: `tool:${tool.name}`,
-    title: tool.name,
-    description: tool.description,
-    value: '',
-    keywords: ['tool', 'tools', tool.name, tool.description, tool.source],
-    toolRef: tool
-  }
-}
-
-function buildMcpSlashCommand(tool: AgentToolReference, t: Dictionary): SlashCommandOption {
-  return {
-    id: `mcp:${tool.name}`,
-    title: tool.name,
-    description: tool.description || t.input.slashMcpDescription,
-    value: '',
-    keywords: ['mcp', 'tool', 'tools', tool.name, tool.description, tool.source],
-    toolRef: tool
-  }
-}
-
-function buildWikiSlashCommand(document: WikiDocumentSummary, t: Dictionary): SlashCommandOption {
-  return {
-    id: `wiki:${document.id}`,
-    title: document.title,
-    description: document.excerpt || t.input.slashWikiDescription,
-    value: '',
-    keywords: ['wiki', 'knowledge', 'sop', document.title, document.excerpt, document.path],
-    wikiDocument: document
-  }
-}
-
-function buildModeSlashCommands(t: Dictionary): SlashCommandOption[] {
-  return [
-    {
-      id: 'mode:react',
-      title: 'ReAct',
-      description: t.settings.planExecuteHint,
-      value: '',
-      keywords: ['mode', 'agent', 'react'],
-      agentMode: 'react'
-    },
-    {
-      id: 'mode:plan-execute',
-      title: 'Plan-and-Execute',
-      description: t.settings.planExecuteHint,
-      value: '',
-      keywords: ['mode', 'agent', 'plan', 'execute', 'plan-execute'],
-      agentMode: 'plan-execute'
-    }
-  ]
-}
-
-function buildConnectionSlashCommand(
-  connection: ConnectionConfig,
-  t: Dictionary
-): SlashCommandOption {
-  return {
-    id: `connection:${connection.id}`,
-    title: connection.name,
-    description: formatConnectionTarget(connection),
-    value: '',
-    keywords: [
-      'connection',
-      'ssh',
-      connection.name,
-      connection.host,
-      connection.user,
-      connection.description,
-      connection.source === 'ssh-config' ? '~/.ssh/config' : t.connections.customConnectionName
-    ].filter((value): value is string => Boolean(value)),
-    connection
-  }
-}
-
-function filterConnections(connections: ConnectionConfig[], query: string): ConnectionConfig[] {
-  const normalizedQuery = normalizeSearchText(query)
-  if (!normalizedQuery) return connections
-
-  return connections.filter((connection) =>
-    normalizeSearchText(
-      [
-        connection.name,
-        connection.host,
-        connection.user,
-        connection.port,
-        connection.identityFile,
-        connection.description,
-        connection.source,
-        ...(connection.sshOptions ?? []),
-        ...(connection.actions ?? [])
-      ]
-        .filter(Boolean)
-        .join(' ')
-    ).includes(normalizedQuery)
-  )
-}
-
-function normalizeSearchText(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-}
-
-function addUniqueSkillRef(
-  skillRefs: AgentSkillOption[],
-  skill: AgentSkillOption
-): AgentSkillOption[] {
-  if (skillRefs.some((current) => current.id === skill.id)) return skillRefs
-
-  return [...skillRefs, skill]
-}
-
-function addUniqueToolRef(
-  toolRefs: AgentToolReference[],
-  tool: AgentToolReference
-): AgentToolReference[] {
-  if (toolRefs.some((current) => current.id === tool.id)) return toolRefs
-
-  return [...toolRefs, tool]
-}
-
-function addUniqueWikiRef(
-  wikiRefs: AgentWikiReference[],
-  wiki: AgentWikiReference
-): AgentWikiReference[] {
-  if (wikiRefs.some((current) => current.id === wiki.id)) return wikiRefs
-
-  return [...wikiRefs, wiki]
-}
-
-function addUniquePathRef(
-  pathRefs: AgentPathReference[],
-  reference: AgentPathReference
-): AgentPathReference[] {
-  if (pathRefs.some((current) => current.id === reference.id)) return pathRefs
-
-  return [...pathRefs, reference]
 }
 
 function isComposingInput(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
@@ -8319,215 +6124,6 @@ function defaultPastedFileName(mimeType: string): string {
   if (mimeType === 'image/gif') return 'pasted-image.gif'
   if (mimeType === 'image/webp') return 'pasted-image.webp'
   return 'pasted-file'
-}
-
-function buildAgentInputWithReferences(
-  input: string,
-  skillRefs: AgentSkillOption[],
-  pathRefs: AgentPathReference[],
-  toolRefs: AgentToolReference[],
-  wikiRefs: AgentWikiReference[],
-  t: Dictionary
-): string {
-  const toolLines = toolRefs.flatMap((tool) => [
-    `- ${t.input.slashToolUseLabel}: ${tool.name}`,
-    tool.description ? `  ${t.input.slashToolDescriptionLabel}: ${tool.description}` : '',
-    `  ${t.input.slashToolRequirement}`
-  ])
-
-  const skillLines = skillRefs.flatMap((skill) => [
-    `- ${t.input.slashSkillUseLabel}: ${skill.name}`,
-    `  ${t.input.slashSkillPathLabel}: ${skill.path}`,
-    skill.description ? `  ${t.input.slashSkillDescriptionLabel}: ${skill.description}` : '',
-    `  ${t.input.slashSkillRequirement}`
-  ])
-
-  const pathLines = pathRefs.map((reference) => {
-    const label =
-      reference.kind === 'directory' ? t.input.referencedDirectory : t.input.referencedFile
-    return `- ${label}: ${reference.path}`
-  })
-  const wikiLines = wikiRefs.flatMap((wiki) => [
-    `- ${t.input.slashWikiUseLabel}: ${wiki.title}`,
-    `  ${t.input.slashSkillPathLabel}: ${wiki.path}`,
-    '  ```markdown',
-    wiki.content,
-    '  ```'
-  ])
-
-  const referenceSections = [
-    ...(toolRefs.length > 0 ? [`${t.input.referencedTools}:`, ...toolLines.filter(Boolean)] : []),
-    ...(skillRefs.length > 0
-      ? [
-          ...(toolRefs.length > 0 ? [''] : []),
-          `${t.input.referencedSkills}:`,
-          ...skillLines.filter(Boolean)
-        ]
-      : []),
-    ...(pathRefs.length > 0
-      ? [
-          ...(toolRefs.length > 0 || skillRefs.length > 0 ? [''] : []),
-          `${t.input.referencedPaths}:`,
-          ...pathLines,
-          t.input.pathReferenceRequirement
-        ]
-      : []),
-    ...(wikiRefs.length > 0
-      ? [
-          ...(toolRefs.length > 0 || skillRefs.length > 0 || pathRefs.length > 0 ? [''] : []),
-          `${t.input.referencedWikiDocuments}:`,
-          ...wikiLines,
-          t.input.slashWikiRequirement
-        ]
-      : [])
-  ]
-
-  if (referenceSections.length === 0) return input
-
-  return [...referenceSections, '', `${t.input.slashSkillTaskLabel}:`, input].join('\n')
-}
-
-function formatVisibleInputWithReferences(
-  input: string,
-  skillRefs: AgentSkillOption[],
-  pathRefs: AgentPathReference[],
-  toolRefs: AgentToolReference[],
-  wikiRefs: AgentWikiReference[],
-  t: Dictionary
-): string {
-  const visibleReferences = [
-    toolRefs.length > 0
-      ? `${t.input.referencedTools}: ${toolRefs.map((tool) => `\`${tool.name}\``).join(', ')}`
-      : '',
-    skillRefs.length > 0
-      ? `${t.input.referencedSkills}: ${skillRefs.map((skill) => `\`${skill.name}\``).join(', ')}`
-      : '',
-    pathRefs.length > 0
-      ? `${t.input.referencedPaths}: ${pathRefs
-          .map((reference) => `\`${reference.name}\``)
-          .join(', ')}`
-      : '',
-    wikiRefs.length > 0
-      ? `${t.input.referencedWikiDocuments}: ${wikiRefs
-          .map((wiki) => `\`${wiki.title}\``)
-          .join(', ')}`
-      : ''
-  ].filter(Boolean)
-
-  if (visibleReferences.length === 0) return input
-
-  return `${visibleReferences.join('\n')}\n\n${input}`
-}
-
-function buildPostLoginAgentInput(
-  input: string,
-  connection: ConnectionConfig,
-  t: Dictionary
-): string {
-  return [
-    t.terminal.postLoginAgentInstruction,
-    `${t.terminal.connectionTarget}: ${connection.name} (${formatConnectionTarget(connection)})`,
-    '',
-    buildUserRequirementBreakdown(input, connection, t),
-    '',
-    t.terminal.postLoginOriginalTask,
-    input
-  ].join('\n')
-}
-
-function buildCurrentTerminalAgentInput(
-  input: string,
-  terminalContext: { cwd: string; mode: string; output: string; shell: string },
-  t: Dictionary
-): string {
-  return [
-    t.terminal.currentTerminalInstruction,
-    `${t.terminal.terminalMode}: ${terminalContext.mode}`,
-    `${t.app.workingDirectory}: ${terminalContext.cwd || '-'}`,
-    '',
-    t.terminal.postLoginOriginalTask,
-    input
-  ].join('\n')
-}
-
-function buildUserRequirementBreakdown(
-  input: string,
-  connection: ConnectionConfig,
-  t: Dictionary
-): string {
-  const artifactDestination = extractArtifactDestination(input)
-  const targetSystem = extractTargetSystem(input)
-  const requestedActions = extractRequestedActions(input)
-  const lines = [
-    t.terminal.requirementBreakdown,
-    `1. ${t.terminal.breakdownTargetConnection}: ${connection.name} (${formatConnectionTarget(connection)})`,
-    `2. ${t.terminal.breakdownTargetSystem}: ${targetSystem || t.terminal.breakdownInferFromTask}`,
-    `3. ${t.terminal.breakdownActions}: ${requestedActions.join(' -> ')}`,
-    `4. ${t.terminal.breakdownArtifact}: ${
-      artifactDestination
-        ? `${t.terminal.breakdownArtifactDestination}: ${artifactDestination}`
-        : t.terminal.breakdownNoExplicitArtifact
-    }`,
-    '',
-    t.terminal.breakdownExecutionRules,
-    `- ${t.terminal.breakdownRuleUseCurrentTerminal}`,
-    `- ${t.terminal.breakdownRuleUseSubterminal}`,
-    `- ${t.terminal.breakdownRulePreserveDestination}`,
-    `- ${t.terminal.breakdownRuleNoFabrication}`
-  ]
-
-  return lines.join('\n')
-}
-
-function extractTargetSystem(input: string): string {
-  return input.match(/\b(?:for|on|in|against)\s+([A-Za-z0-9_.-]{2,})\b/i)?.[1] ?? ''
-}
-
-function extractArtifactDestination(input: string): string {
-  const pathMatch = input.match(
-    /\b(?:save|write|output|export|store)\s+(?:to|into|at)\s+([~./$A-Za-z0-9_-][^\s,;]*)/i
-  )
-  if (pathMatch?.[1]) return normalizeArtifactDestination(pathMatch[1])
-
-  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s,;]*)/)
-  return loosePathMatch?.[1] ? normalizeArtifactDestination(loosePathMatch[1]) : ''
-}
-
-function normalizeArtifactDestination(value: string): string {
-  return value.replace(/\/+$/, '')
-}
-
-function extractRequestedActions(input: string): string[] {
-  const actions: string[] = []
-  if (/\b(ssh|login|connect)\b/i.test(input)) actions.push('login')
-  if (/\b(check|inspect|diagnose|troubleshoot|verify|list|get|status|health)\b/i.test(input)) {
-    actions.push('inspect')
-  }
-  if (
-    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(input)
-  ) {
-    actions.push('operate')
-  }
-  if (/\b(summarize|report|document|record)\b/i.test(input)) actions.push('summarize')
-  if (/\b(save|write|output|export|store)\b/i.test(input)) actions.push('write-artifact')
-
-  return actions.length ? actions : ['complete-request']
-}
-
-function buildConnectionCommands(connection: ConnectionConfig): string[] {
-  if (!connection.host) return []
-
-  return [buildSshCommand(connection), ...buildConnectionLoginActions(connection)]
-}
-
-function buildConnectionLoginActions(connection: ConnectionConfig): string[] {
-  const password = connection.password || connection.resolvedPassword
-  const passwordActions = password ? [password] : []
-  return [...passwordActions, ...(connection.actions ?? [])]
-}
-
-function isPasswordEnvVarMissing(connection: ConnectionConfig): boolean {
-  return Boolean(connection.passwordEnvVar && !connection.password && !connection.resolvedPassword)
 }
 
 async function runConnectionCommandSequence(
@@ -8694,161 +6290,8 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
   })
 }
 
-function extractPasswordPromptLine(output: string): string | null {
-  const lines = stripTerminalControlSequences(output)
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-8)
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (isPasswordPromptLine(lines[index])) return lines[index]
-  }
-
-  return null
-}
-
-function isTerminalCurrentlyAtPasswordPrompt(output: string): boolean {
-  const lines = stripTerminalControlSequences(output)
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-  const lastLine = lines[lines.length - 1]
-  return Boolean(lastLine && isPasswordPromptLine(lastLine))
-}
-
-function isPasswordPromptLine(line: string): boolean {
-  return /(?:password|passphrase|verification code|one-time password|otp)\b.*:\s*$/i.test(line)
-}
-
-function hasOutputBeyondEcho(output: string, echo: string): boolean {
-  const compactOutput = compactTerminalText(output)
-  const compactEcho = compactTerminalText(echo)
-  const echoIndex = compactOutput.indexOf(compactEcho)
-
-  if (echoIndex === -1) return compactOutput.length > 0
-
-  return compactOutput.slice(echoIndex + compactEcho.length).length > 0
-}
-
-function hasInteractivePrompt(output: string): boolean {
-  const normalizedOutput = stripTerminalControlSequences(output).replace(/\r/g, '\n')
-  const lines = normalizedOutput
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-6)
-
-  return lines.some((line) => {
-    if (/(yes\/no|continue connecting)/i.test(line)) return true
-
-    return /(?:password|passphrase|verification code|one-time password|otp)\s*:\s*$/i.test(line)
-  })
-}
-
-function compactTerminalText(value: string): string {
-  return stripTerminalControlSequences(value).replace(/\s+/g, '')
-}
-
 function sendTerminalInput(value: string, tabId: string): void {
   window.api.terminal.write(`${value}\r`, tabId)
-}
-
-function formatConnectionActionLog(command: string, actionIndex: number, t: Dictionary): string {
-  return `${t.terminal.connectionAction} ${actionIndex}\n${maskPotentialSecret(command)}`
-}
-
-function maskPotentialSecret(value: string): string {
-  if (value.length <= 2) return '<hidden>'
-  if (/^\S+$/.test(value) && !looksLikeCommand(value)) return '<hidden>'
-
-  return value
-}
-
-function looksLikeCommand(value: string): boolean {
-  return /^(ssh|sudo|su|cd|ls|pwd|kubectl|docker|systemctl|journalctl|cat|tail|grep|vim|vi|export)\b/.test(
-    value.trim()
-  )
-}
-
-function createCustomConnectionId(): string {
-  return `custom-${crypto.randomUUID()}`
-}
-
-function buildSshCommand(connection: ConnectionConfig): string {
-  if (connection.source === 'ssh-config') return `ssh ${shellQuote(connection.name)}`
-
-  return [
-    'ssh',
-    connection.port ? `-p ${connection.port}` : '',
-    connection.identityFile ? `-i ${shellQuote(connection.identityFile)}` : '',
-    ...(connection.sshOptions ?? []),
-    connection.user ? `-l ${shellQuote(connection.user)}` : '',
-    shellQuote(connection.host)
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-function shellQuote(value: string): string {
-  if (/^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)) return value
-  return `'${value.replace(/'/g, "'\\''")}'`
-}
-
-type OperationFeedback = {
-  success: string
-  failed: string
-  canceled?: string
-}
-
-function copyFeedback(t: Dictionary): OperationFeedback {
-  return {
-    success: t.common.copySucceeded,
-    failed: t.common.copyFailed
-  }
-}
-
-function exportFeedback(t: Dictionary): OperationFeedback {
-  return {
-    success: t.common.exportSucceeded,
-    failed: t.common.exportFailed,
-    canceled: t.common.exportCanceled
-  }
-}
-
-function notifyOperationError(message: string, error: unknown): void {
-  const detail = error instanceof Error ? error.message : String(error || '')
-  toast.error(detail ? `${message}: ${detail}` : message)
-}
-
-async function copyText(value: string, feedback?: OperationFeedback): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value)
-    if (feedback) toast.success(feedback.success)
-    return
-  } catch (clipboardError) {
-    const textArea = document.createElement('textarea')
-    try {
-      textArea.value = value
-      textArea.style.position = 'fixed'
-      textArea.style.left = '-9999px'
-      textArea.style.top = '0'
-      document.body.appendChild(textArea)
-      textArea.focus()
-      textArea.select()
-      const copied = document.execCommand('copy')
-      if (!copied) throw clipboardError
-      if (feedback) toast.success(feedback.success)
-    } catch (fallbackError) {
-      if (feedback) notifyOperationError(feedback.failed, fallbackError)
-      throw fallbackError
-    } finally {
-      document.body.removeChild(textArea)
-    }
-  }
 }
 
 function getSelectedTextWithinLog(logId: number): string {
@@ -8864,1154 +6307,9 @@ function getSelectedTextWithinLog(logId: number): string {
   return selectedText
 }
 
-async function textToDataUrl(value: string, type: string): Promise<string> {
-  const blob = new Blob([value], { type })
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read export content.'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function saveTextFile(
-  value: string,
-  filename: string,
-  type: string,
-  feedback: OperationFeedback,
-  filters?: Array<{ name: string; extensions: string[] }>
-): Promise<void> {
-  try {
-    const selection = await window.api.agent.pickSavePath({
-      defaultPath: filename,
-      filters
-    })
-    if (!selection.ok || !selection.path) {
-      toast.info(feedback.canceled ?? feedback.failed)
-      return
-    }
-
-    const dataUrl = await textToDataUrl(value, type)
-    const result = await window.api.agent.writeDataUrlFile({ path: selection.path, dataUrl })
-    if (!result.ok) throw new Error(result.error || 'Failed to write export file.')
-    toast.success(feedback.success)
-  } catch (error) {
-    notifyOperationError(feedback.failed, error)
-  }
-}
-
-async function downloadMarkdown(value: string, filename: string, t: Dictionary): Promise<void> {
-  await saveTextFile(value, filename, 'text/markdown;charset=utf-8', exportFeedback(t), [
-    { name: 'Markdown', extensions: ['md', 'markdown'] }
-  ])
-}
-
-async function downloadSvg(value: string, filename: string, t: Dictionary): Promise<void> {
-  await saveTextFile(
-    normalizeSvgForExport(value),
-    filename,
-    'image/svg+xml;charset=utf-8',
-    exportFeedback(t),
-    [{ name: 'SVG image', extensions: ['svg'] }]
-  )
-}
-
-async function savePngFromSvg(value: string, filename: string, t: Dictionary): Promise<void> {
-  const feedback = exportFeedback(t)
-  try {
-    const { svg, width, height } = normalizeSvgForPng(value)
-    const result = await window.api.agent.saveSvgAsPng({
-      svg,
-      defaultPath: filename,
-      width,
-      height
-    })
-    if (result.canceled) {
-      toast.info(feedback.canceled ?? feedback.failed)
-      return
-    }
-
-    if (!result.ok) throw new Error(result.error || 'Failed to write PNG file.')
-    toast.success(feedback.success)
-  } catch (error) {
-    notifyOperationError(feedback.failed, error)
-  }
-}
-
 function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): string {
   const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
   return `crescent-${entry.kind}${scope ? `-${scope}` : ''}-${timestamp}.md`
-}
-
-function getSvgDimensions(value: string): { width: number; height: number } {
-  const svgTag = getSvgRootTag(value)
-  const viewBox = getSvgAttribute(svgTag, 'viewBox')?.trim().split(/\s+/).map(Number)
-  if (viewBox && viewBox.length === 4 && viewBox.every(Number.isFinite)) {
-    return { width: Math.max(1, viewBox[2]), height: Math.max(1, viewBox[3]) }
-  }
-
-  return {
-    width: Math.max(1, parseFloat(getSvgAttribute(svgTag, 'width') ?? '1200') || 1200),
-    height: Math.max(1, parseFloat(getSvgAttribute(svgTag, 'height') ?? '800') || 800)
-  }
-}
-
-function normalizeSvgForExport(value: string): string {
-  const svg = normalizeSvgVoidElements(value.trim())
-  return svg.startsWith('<?xml') ? svg : `<?xml version="1.0" encoding="UTF-8"?>\n${svg}`
-}
-
-function normalizeSvgForPng(value: string): { svg: string; width: number; height: number } {
-  let svg = normalizeSvgVoidElements(value.trim().replace(/^\s*<\?xml[^>]*>\s*/i, ''))
-  svg = replaceForeignObjectsWithSvgText(svg)
-  const rootTag = getSvgRootTag(svg)
-  const { width, height } = getSvgDimensions(value)
-
-  let nextRootTag = setSvgAttribute(rootTag, 'xmlns', 'http://www.w3.org/2000/svg')
-  nextRootTag = setSvgAttribute(nextRootTag, 'xmlns:xlink', 'http://www.w3.org/1999/xlink')
-  if (!getSvgAttribute(nextRootTag, 'viewBox')) {
-    nextRootTag = setSvgAttribute(nextRootTag, 'viewBox', `0 0 ${width} ${height}`)
-  }
-  nextRootTag = setSvgAttribute(nextRootTag, 'width', String(width))
-  nextRootTag = setSvgAttribute(nextRootTag, 'height', String(height))
-  nextRootTag = setSvgAttribute(
-    nextRootTag,
-    'style',
-    `${getSvgAttribute(nextRootTag, 'style') ?? ''}; background: #171717;`
-  )
-
-  svg = svg.replace(rootTag, nextRootTag)
-  return {
-    svg: `<?xml version="1.0" encoding="UTF-8"?>\n${svg}`,
-    width,
-    height
-  }
-}
-
-function normalizeSvgVoidElements(value: string): string {
-  return value
-    .replace(/&nbsp;/g, '&#160;')
-    .replace(/<(br|hr|img|input|meta|link)(\s[^<>]*?)?>/gi, (match, tag, attrs = '') => {
-      if (/\/\s*>$/.test(match)) return match
-      return `<${tag}${attrs}/>`
-    })
-}
-
-function replaceForeignObjectsWithSvgText(value: string): string {
-  return value.replace(
-    /<foreignObject\b([^>]*)>([\s\S]*?)<\/foreignObject>/gi,
-    (_match, attrs: string, html: string) => {
-      const x = parseFloat(getSvgAttribute(attrs, 'x') ?? '0') || 0
-      const y = parseFloat(getSvgAttribute(attrs, 'y') ?? '0') || 0
-      const text = extractForeignObjectText(html)
-      if (!text) return ''
-
-      const lines = text.split('\n').filter(Boolean)
-      const tspans = lines
-        .map((line, index) => {
-          const dy = index === 0 ? '1em' : '1.25em'
-          return `<tspan x="${x}" dy="${dy}">${escapeXml(line)}</tspan>`
-        })
-        .join('')
-
-      return `<text x="${x}" y="${y}" fill="#fafafa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">${tspans}</text>`
-    }
-  )
-}
-
-function extractForeignObjectText(value: string): string {
-  const container = document.createElement('div')
-  container.innerHTML = value.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
-  return (container.textContent ?? '')
-    .replace(/\u00a0/g, ' ')
-    .split('\n')
-    .map((line) => line.trim().replace(/\s+/g, ' '))
-    .filter(Boolean)
-    .join('\n')
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
-
-function getSvgRootTag(value: string): string {
-  const match = value.match(/<svg\b[^>]*>/i)
-  if (!match) throw new Error('Invalid SVG.')
-  return match[0]
-}
-
-function getSvgAttribute(tag: string, name: string): string | undefined {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = tag.match(new RegExp(`\\s${escapedName}=(?:"([^"]*)"|'([^']*)')`, 'i'))
-  return match?.[1] ?? match?.[2]
-}
-
-function setSvgAttribute(tag: string, name: string, value: string): string {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const escapedValue = value.replace(/"/g, '&quot;')
-  const attributePattern = new RegExp(`(\\s${escapedName}=)(?:"[^"]*"|'[^']*')`, 'i')
-  if (attributePattern.test(tag)) return tag.replace(attributePattern, `$1"${escapedValue}"`)
-
-  return tag.replace(/>$/, ` ${name}="${escapedValue}">`)
-}
-
-function buildMermaidFilename(extension: 'svg' | 'png'): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, '-')
-    .replace(/T/, '_')
-    .replace(/Z$/, '')
-  return `crescent-mermaid-${timestamp}.${extension}`
-}
-
-function extractResultMarkdown(value: string, t: Dictionary): string {
-  const parsed = parseAgentRunMarkdown(value, t)
-  if (parsed) {
-    return trimMarkdownLines([parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean))
-  }
-
-  return stripActionMarkdown(value.replace(/\r\n/g, '\n').split('\n'), t)
-}
-
-function parseAgentRunMarkdown(value: string, t: Dictionary): ParsedAgentRunMarkdown | null {
-  const normalized = value.replace(/\r\n/g, '\n')
-  const lines = normalized.split('\n')
-  const actionsHeading = `**${t.input.actions}**`
-  const resultHeading = `**${t.input.result}**`
-  const errorHeading = `**${t.input.error}**`
-  const actionsIndex = lines.findIndex((line) => line.trim() === actionsHeading)
-  const resultIndex = lines.findIndex((line) => line.trim() === resultHeading)
-  const errorIndex = lines.findIndex((line) => line.trim() === errorHeading)
-  const elapsedIndex = findElapsedFooterIndex(lines, t)
-
-  if (actionsIndex < 0 && resultIndex < 0 && errorIndex < 0) return null
-
-  const actionsEnd = firstExistingIndexAfter(actionsIndex, [resultIndex, errorIndex, elapsedIndex])
-  const resultEnd = firstExistingIndexAfter(resultIndex, [errorIndex, elapsedIndex])
-  const errorEnd = firstExistingIndexAfter(errorIndex, [elapsedIndex])
-
-  return {
-    actionsMarkdown:
-      actionsIndex >= 0
-        ? trimMarkdownLines(lines.slice(actionsIndex + 1, actionsEnd ?? lines.length))
-        : '',
-    resultMarkdown:
-      resultIndex >= 0
-        ? trimMarkdownLines(lines.slice(resultIndex + 1, resultEnd ?? lines.length))
-        : '',
-    errorMarkdown:
-      errorIndex >= 0
-        ? trimMarkdownLines(lines.slice(errorIndex + 1, errorEnd ?? lines.length))
-        : '',
-    elapsedMarkdown: elapsedIndex >= 0 ? trimMarkdownLines(lines.slice(elapsedIndex + 1)) : ''
-  }
-}
-
-function findElapsedFooterIndex(lines: string[], t: Dictionary): number {
-  return lines.findIndex((line, index) => {
-    if (line.trim() !== '---') return false
-    return lines.slice(index + 1).some((next) => next.trim().startsWith(`${t.input.elapsed}:`))
-  })
-}
-
-function firstExistingIndexAfter(startIndex: number, indexes: number[]): number | undefined {
-  if (startIndex < 0) return undefined
-
-  const nextIndexes = indexes.filter((index) => index > startIndex)
-  if (nextIndexes.length === 0) return undefined
-  return Math.min(...nextIndexes)
-}
-
-function stripActionMarkdown(lines: string[], t: Dictionary): string {
-  const actionHeading = `**${t.input.actions}**`
-  const actionIndex = lines.findIndex((line) => line.trim() === actionHeading)
-  if (actionIndex < 0) return trimMarkdownLines(lines)
-
-  const nextSectionIndex = lines.findIndex((line, index) => {
-    if (index <= actionIndex) return false
-    const trimmed = line.trim()
-    return (
-      trimmed === `**${t.input.result}**` || trimmed === `**${t.input.error}**` || trimmed === '---'
-    )
-  })
-
-  return trimMarkdownLines([
-    ...lines.slice(0, actionIndex),
-    ...(nextSectionIndex >= 0 ? lines.slice(nextSectionIndex) : [])
-  ])
-}
-
-function trimMarkdownLines(lines: string[]): string {
-  let start = 0
-  let end = lines.length
-  while (start < end && !lines[start].trim()) start += 1
-  while (end > start && !lines[end - 1].trim()) end -= 1
-  return lines.slice(start, end).join('\n').trim()
-}
-
-function MarkdownContent({ value, t }: { value: string; t: Dictionary }): React.JSX.Element {
-  return (
-    <div className="select-text min-w-0 space-y-2 overflow-hidden leading-relaxed break-words">
-      {renderMarkdownBlocks(value, t)}
-    </div>
-  )
-}
-
-function renderMarkdownBlocks(value: string, t: Dictionary): React.ReactNode[] {
-  const lines = value.replace(/\r\n/g, '\n').split('\n')
-  const nodes: React.ReactNode[] = []
-  let index = 0
-
-  while (index < lines.length) {
-    const line = lines[index]
-
-    if (!line.trim()) {
-      index += 1
-      continue
-    }
-
-    if (/^\s*---+\s*$/.test(line)) {
-      nodes.push(<Separator key={nodes.length} />)
-      index += 1
-      continue
-    }
-
-    if (/^<details(?:\s+open)?>$/.test(line.trim())) {
-      const detailsOpen = line.trim() === '<details open>'
-      index += 1
-      let summary = 'Details'
-      const contentLines: string[] = []
-
-      if (lines[index]?.trim().startsWith('<summary>')) {
-        summary = lines[index]
-          .trim()
-          .replace(/^<summary>/, '')
-          .replace(/<\/summary>$/, '')
-        index += 1
-      }
-
-      while (index < lines.length && lines[index].trim() !== '</details>') {
-        contentLines.push(lines[index])
-        index += 1
-      }
-      index += 1
-      nodes.push(
-        <details
-          key={`${nodes.length}:${summary}`}
-          className="min-w-0 rounded-md border bg-muted/20"
-          open={detailsOpen ? true : undefined}
-        >
-          <summary className="sticky top-0 z-10 cursor-pointer border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
-            {summary}
-          </summary>
-          <div className="min-w-0 space-y-2 p-3">
-            {renderMarkdownBlocks(contentLines.join('\n'), t)}
-          </div>
-        </details>
-      )
-      continue
-    }
-
-    if (isMarkdownTableStart(lines, index)) {
-      const tableLines: string[] = []
-      while (index < lines.length && isMarkdownTableLine(lines[index])) {
-        tableLines.push(lines[index])
-        index += 1
-      }
-      nodes.push(<MarkdownTable key={nodes.length} lines={tableLines} />)
-      continue
-    }
-
-    const fence = line.match(/^```([\w-]+)?\s*$/)
-    if (fence) {
-      const codeLines: string[] = []
-      index += 1
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
-        codeLines.push(lines[index])
-        index += 1
-      }
-      index += 1
-      nodes.push(
-        <MarkdownCodeBlock
-          key={nodes.length}
-          code={codeLines.join('\n')}
-          language={fence[1] ?? ''}
-          t={t}
-        />
-      )
-      continue
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/)
-    if (heading) {
-      const level = heading[1].length
-      const className =
-        level === 1
-          ? 'text-base font-semibold'
-          : level === 2
-            ? 'text-sm font-semibold'
-            : 'text-sm font-medium'
-
-      nodes.push(
-        <div key={nodes.length} className={`${className} min-w-0 break-words`}>
-          {renderInlineMarkdown(heading[2])}
-        </div>
-      )
-      index += 1
-      continue
-    }
-
-    if (/^>\s+/.test(line)) {
-      const quoteLines: string[] = []
-      while (index < lines.length && /^>\s?/.test(lines[index])) {
-        quoteLines.push(lines[index].replace(/^>\s?/, ''))
-        index += 1
-      }
-      nodes.push(
-        <blockquote
-          key={nodes.length}
-          className="min-w-0 break-words border-l-2 border-border pl-3 text-muted-foreground"
-        >
-          {renderInlineMarkdown(quoteLines.join(' '))}
-        </blockquote>
-      )
-      continue
-    }
-
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items: string[] = []
-      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*[-*]\s+/, ''))
-        index += 1
-      }
-      nodes.push(
-        <ul key={nodes.length} className="min-w-0 list-disc space-y-1 pl-5 break-words">
-          {items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
-          ))}
-        </ul>
-      )
-      continue
-    }
-
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: string[] = []
-      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*\d+\.\s+/, ''))
-        index += 1
-      }
-      nodes.push(
-        <ol key={nodes.length} className="min-w-0 list-decimal space-y-1 pl-5 break-words">
-          {items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
-          ))}
-        </ol>
-      )
-      continue
-    }
-
-    const paragraphLines = [line]
-    index += 1
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
-      paragraphLines.push(lines[index])
-      index += 1
-    }
-    nodes.push(
-      <p key={nodes.length} className="min-w-0 break-words">
-        {renderInlineMarkdown(paragraphLines.join(' '))}
-      </p>
-    )
-  }
-
-  return nodes
-}
-
-function MarkdownCodeBlock({
-  code,
-  language,
-  t
-}: {
-  code: string
-  language: string
-  t: Dictionary
-}): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
-  const normalizedLanguage = language.trim().toLowerCase()
-  const label = language || 'text'
-
-  async function copyCode(): Promise<void> {
-    await copyText(code, copyFeedback(t))
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
-  }
-
-  if (normalizedLanguage === 'mermaid') {
-    return <MermaidBlock code={code} t={t} onCopy={copyCode} copied={copied} />
-  }
-
-  return (
-    <div className="min-w-0 rounded-md border bg-[#111111] text-zinc-100">
-      <div className="sticky top-0 z-10 flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[#1b1b1b]/95 px-3 py-1.5 backdrop-blur">
-        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">{label}</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 shrink-0 text-zinc-300 hover:bg-white/10 hover:text-white"
-          aria-label={copied ? t.common.copied : t.common.copy}
-          title={copied ? t.common.copied : t.common.copy}
-          onClick={() => void copyCode()}
-        >
-          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-        </Button>
-      </div>
-      <pre className="min-w-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
-        <code className="break-words">{code}</code>
-      </pre>
-    </div>
-  )
-}
-
-function MermaidBlock({
-  code,
-  t,
-  onCopy,
-  copied
-}: {
-  code: string
-  t: Dictionary
-  onCopy: () => Promise<void>
-  copied: boolean
-}): React.JSX.Element {
-  const diagramIdRef = useRef(`mermaid-${crypto.randomUUID()}`)
-  const expandedScrollRef = useRef<HTMLDivElement | null>(null)
-  const expandedContentRef = useRef<HTMLDivElement | null>(null)
-  const expandedPanRef = useRef<{
-    pointerId: number
-    startX: number
-    startY: number
-    scrollLeft: number
-    scrollTop: number
-  } | null>(null)
-  const [svg, setSvg] = useState('')
-  const [error, setError] = useState('')
-  const [expanded, setExpanded] = useState(false)
-  const [zoom, setZoom] = useState(1)
-  const [panning, setPanning] = useState(false)
-  const [exportSelectKey, setExportSelectKey] = useState(0)
-  const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
-
-  useEffect(() => {
-    let disposed = false
-
-    async function renderDiagram(): Promise<void> {
-      mermaid.initialize(MERMAID_RENDER_CONFIG)
-
-      setSvg('')
-      setError('')
-
-      try {
-        const result = await mermaid.render(diagramIdRef.current, code)
-        if (!disposed) {
-          setSvg(result.svg)
-          setDiagramSize(getSvgDimensions(result.svg))
-        }
-      } catch (renderError) {
-        if (!disposed) {
-          setError(renderError instanceof Error ? renderError.message : String(renderError))
-        }
-      }
-    }
-
-    void renderDiagram()
-
-    return () => {
-      disposed = true
-    }
-  }, [code])
-
-  function centerExpandedMermaid(
-    container: HTMLDivElement,
-    contentWidth: number,
-    contentHeight: number
-  ): void {
-    container.scrollLeft = Math.max(0, (contentWidth - container.clientWidth) / 2)
-    container.scrollTop = Math.max(0, (contentHeight - container.clientHeight) / 2)
-  }
-
-  const fitExpandedMermaidToViewport = useCallback((): void => {
-    const container = expandedScrollRef.current
-    if (!container || !diagramSize.width || !diagramSize.height) return
-
-    const nextZoom = clampMermaidZoom(
-      Math.max(
-        container.clientWidth / diagramSize.width,
-        container.clientHeight / diagramSize.height
-      )
-    )
-
-    setZoom(nextZoom)
-    window.requestAnimationFrame(() => {
-      centerExpandedMermaid(container, diagramSize.width * nextZoom, diagramSize.height * nextZoom)
-    })
-  }, [diagramSize.height, diagramSize.width])
-
-  useEffect(() => {
-    if (!expanded) {
-      expandedPanRef.current = null
-      return
-    }
-
-    const fitOnNextFrame = (): number =>
-      window.requestAnimationFrame(() => {
-        fitExpandedMermaidToViewport()
-      })
-
-    let animationFrame = fitOnNextFrame()
-    const handleResize = (): void => {
-      window.cancelAnimationFrame(animationFrame)
-      animationFrame = fitOnNextFrame()
-    }
-    const resizeObserver =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(handleResize)
-
-    window.addEventListener('resize', handleResize)
-    if (expandedScrollRef.current) resizeObserver?.observe(expandedScrollRef.current)
-
-    return () => {
-      window.cancelAnimationFrame(animationFrame)
-      window.removeEventListener('resize', handleResize)
-      resizeObserver?.disconnect()
-    }
-  }, [expanded, fitExpandedMermaidToViewport, svg])
-
-  function updateZoom(nextZoom: number, anchor?: { clientX: number; clientY: number }): void {
-    const container = expandedScrollRef.current
-    const previousZoom = zoom
-    const clampedZoom = clampMermaidZoom(nextZoom)
-    if (Math.abs(clampedZoom - previousZoom) < MERMAID_ZOOM_EPSILON) return
-
-    let contentX = 0
-    let contentY = 0
-    let offsetX = 0
-    let offsetY = 0
-
-    if (container) {
-      const rect = container.getBoundingClientRect()
-      offsetX = anchor ? anchor.clientX - rect.left : container.clientWidth / 2
-      offsetY = anchor ? anchor.clientY - rect.top : container.clientHeight / 2
-      const previousContentWidth = Math.max(container.clientWidth, diagramSize.width * previousZoom)
-      const previousContentHeight = Math.max(
-        container.clientHeight,
-        diagramSize.height * previousZoom
-      )
-      contentX = (container.scrollLeft + offsetX) / previousContentWidth
-      contentY = (container.scrollTop + offsetY) / previousContentHeight
-    }
-
-    setZoom(clampedZoom)
-
-    if (container) {
-      window.requestAnimationFrame(() => {
-        const nextContentWidth = Math.max(container.clientWidth, diagramSize.width * clampedZoom)
-        const nextContentHeight = Math.max(container.clientHeight, diagramSize.height * clampedZoom)
-        container.scrollLeft = contentX * nextContentWidth - offsetX
-        container.scrollTop = contentY * nextContentHeight - offsetY
-      })
-    }
-  }
-
-  function handleExpandedWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    event.preventDefault()
-    const direction = event.deltaY > 0 ? -1 : 1
-    updateZoom(zoom + direction * MERMAID_ZOOM_STEP, {
-      clientX: event.clientX,
-      clientY: event.clientY
-    })
-  }
-
-  function handleExpandedPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (event.button !== 0) return
-
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    expandedPanRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      scrollLeft: event.currentTarget.scrollLeft,
-      scrollTop: event.currentTarget.scrollTop
-    }
-    setPanning(true)
-  }
-
-  function handleExpandedPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
-    const pan = expandedPanRef.current
-    if (!pan || pan.pointerId !== event.pointerId) return
-
-    event.preventDefault()
-    event.currentTarget.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX)
-    event.currentTarget.scrollTop = pan.scrollTop - (event.clientY - pan.startY)
-  }
-
-  function stopExpandedPan(event: ReactPointerEvent<HTMLDivElement>): void {
-    const pan = expandedPanRef.current
-    if (!pan || pan.pointerId !== event.pointerId) return
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    expandedPanRef.current = null
-    setPanning(false)
-  }
-
-  async function renderExportSvg(): Promise<string> {
-    mermaid.initialize(MERMAID_RENDER_CONFIG)
-    const result = await mermaid.render(`mermaid-export-${crypto.randomUUID()}`, code)
-    return result.svg
-  }
-
-  async function exportSvg(): Promise<void> {
-    if (!svg) return
-    try {
-      await downloadSvg(await renderExportSvg(), buildMermaidFilename('svg'), t)
-    } catch (exportError) {
-      notifyOperationError(exportFeedback(t).failed, exportError)
-    }
-  }
-
-  async function exportPng(): Promise<void> {
-    if (!svg) return
-    try {
-      await savePngFromSvg(await renderExportSvg(), buildMermaidFilename('png'), t)
-    } catch (exportError) {
-      notifyOperationError(exportFeedback(t).failed, exportError)
-    }
-  }
-
-  function handleMermaidExportFormat(format: string): void {
-    if (format === 'svg') void exportSvg()
-    if (format === 'png') void exportPng()
-    setExportSelectKey((current) => current + 1)
-  }
-
-  const zoomPercent = Math.round(zoom * 100)
-  const expandedCanvasStyle = {
-    width: expanded ? `max(100%, ${Math.max(1, diagramSize.width * zoom)}px)` : undefined,
-    height: expanded ? `max(100%, ${Math.max(1, diagramSize.height * zoom)}px)` : undefined
-  } as CSSProperties
-  const expandedContentStyle = {
-    width: diagramSize.width,
-    height: diagramSize.height,
-    transform: `translate(-50%, -50%) scale(${zoom})`
-  } as CSSProperties
-
-  return (
-    <div className="min-w-0 rounded-md border bg-background">
-      <div className="sticky top-0 z-10 flex min-w-0 items-center justify-between gap-2 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-          mermaid
-        </span>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="h-6 w-6 shrink-0"
-            aria-label={t.common.enlarge}
-            title={t.common.enlarge}
-            disabled={!svg}
-            onClick={() => setExpanded(true)}
-          >
-            <Maximize2Icon aria-hidden="true" />
-          </Button>
-          <Select
-            key={`inline-export-${exportSelectKey}`}
-            onValueChange={handleMermaidExportFormat}
-            disabled={!svg}
-          >
-            <SelectTrigger
-              className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
-              aria-label={t.common.exportDiagram}
-              title={t.common.exportDiagram}
-            >
-              <SelectValue placeholder={t.common.exportDiagram} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-              <SelectItem value="png">{t.common.exportPng}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="h-6 w-6 shrink-0"
-            aria-label={copied ? t.common.copied : t.common.copy}
-            title={copied ? t.common.copied : t.common.copy}
-            onClick={() => void onCopy()}
-          >
-            {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-          </Button>
-        </div>
-      </div>
-      {svg ? (
-        <div
-          className="min-w-0 overflow-auto bg-[#171717] p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[#171717]"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : error ? (
-        <div className="space-y-2 p-3">
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </div>
-          <pre className="min-w-0 overflow-hidden rounded bg-[#111111] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
-            <code>{code}</code>
-          </pre>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-          mermaid
-        </div>
-      )}
-      {expanded && svg ? (
-        <div
-          className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t.common.enlarge}
-        >
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
-            <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">mermaid</div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.zoomOut}
-                title={t.common.zoomOut}
-                disabled={zoom <= MERMAID_MIN_ZOOM + MERMAID_ZOOM_EPSILON}
-                onClick={() => updateZoom(zoom - MERMAID_ZOOM_STEP)}
-              >
-                <ZoomOutIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="min-w-16 font-mono"
-                aria-label={t.common.reset}
-                title={t.common.reset}
-                onClick={() => updateZoom(1)}
-              >
-                {zoomPercent}%
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={t.common.fitToScreen}
-                title={t.common.fitToScreen}
-                onClick={fitExpandedMermaidToViewport}
-              >
-                {t.common.fitToScreen}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.zoomIn}
-                title={t.common.zoomIn}
-                disabled={zoom >= MERMAID_MAX_ZOOM - MERMAID_ZOOM_EPSILON}
-                onClick={() => updateZoom(zoom + MERMAID_ZOOM_STEP)}
-              >
-                <ZoomInIcon aria-hidden="true" />
-              </Button>
-              <Select
-                key={`expanded-export-${exportSelectKey}`}
-                onValueChange={handleMermaidExportFormat}
-              >
-                <SelectTrigger
-                  className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
-                  aria-label={t.common.exportDiagram}
-                  title={t.common.exportDiagram}
-                >
-                  <DownloadIcon className="size-3.5" aria-hidden="true" />
-                  <SelectValue placeholder={t.common.exportDiagram} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-                  <SelectItem value="png">{t.common.exportPng}</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                aria-label={copied ? t.common.copied : t.common.copy}
-                title={copied ? t.common.copied : t.common.copy}
-                onClick={() => void onCopy()}
-              >
-                {copied ? (
-                  <CheckIcon data-icon="inline-start" />
-                ) : (
-                  <CopyIcon data-icon="inline-start" />
-                )}
-                {copied ? t.common.copied : t.common.copy}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.close}
-                title={t.common.close}
-                onClick={() => {
-                  setExpanded(false)
-                  setZoom(1)
-                  setPanning(false)
-                  expandedPanRef.current = null
-                }}
-              >
-                <XIcon aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <div
-            ref={expandedScrollRef}
-            className={`min-h-0 flex-1 touch-none overflow-auto bg-[#171717] select-none ${
-              panning ? 'cursor-grabbing' : 'cursor-grab'
-            }`}
-            onWheel={handleExpandedWheel}
-            onPointerDown={handleExpandedPointerDown}
-            onPointerMove={handleExpandedPointerMove}
-            onPointerUp={stopExpandedPan}
-            onPointerCancel={stopExpandedPan}
-          >
-            <div className="relative" style={expandedCanvasStyle}>
-              <div
-                ref={expandedContentRef}
-                className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[#171717]"
-                style={expandedContentStyle}
-                dangerouslySetInnerHTML={{ __html: svg }}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function clampMermaidZoom(value: number): number {
-  return Math.min(MERMAID_MAX_ZOOM, Math.max(MERMAID_MIN_ZOOM, value))
-}
-
-function isMarkdownBlockStart(line: string): boolean {
-  return (
-    /^```/.test(line) ||
-    /^\s*---+\s*$/.test(line) ||
-    isMarkdownTableLine(line) ||
-    /^<details(?:\s+open)?>$/.test(line.trim()) ||
-    /^(#{1,4})\s+/.test(line) ||
-    /^>\s+/.test(line) ||
-    /^\s*[-*]\s+/.test(line) ||
-    /^\s*\d+\.\s+/.test(line)
-  )
-}
-
-function isMarkdownTableStart(lines: string[], index: number): boolean {
-  return Boolean(
-    lines[index] &&
-    lines[index + 1] &&
-    isMarkdownTableLine(lines[index]) &&
-    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])
-  )
-}
-
-function isMarkdownTableLine(line: string): boolean {
-  return line.includes('|') && line.trim().split('|').filter(Boolean).length >= 2
-}
-
-function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
-  const [headerLine, , ...bodyLines] = lines
-  const headers = splitMarkdownTableRow(headerLine)
-  const rows = bodyLines.map(splitMarkdownTableRow)
-
-  return (
-    <div className="min-w-0 overflow-hidden rounded-md border">
-      <table className="w-full table-fixed border-collapse text-left text-xs">
-        <thead className="bg-muted/40">
-          <tr>
-            {headers.map((header, index) => (
-              <th key={index} className="break-words border-b px-2 py-1.5 font-medium">
-                {renderInlineMarkdown(header)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b last:border-b-0">
-              {headers.map((_, cellIndex) => (
-                <td key={cellIndex} className="break-words px-2 py-1.5 align-top">
-                  {renderInlineMarkdown(row[cellIndex] ?? '')}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function splitMarkdownTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim())
-}
-
-function renderInlineMarkdown(value: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = []
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(value))) {
-    if (match.index > lastIndex) nodes.push(value.slice(lastIndex, match.index))
-
-    const token = match[0]
-    if (token.startsWith('`')) {
-      nodes.push(
-        <code
-          key={nodes.length}
-          className="break-all rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
-        >
-          {token.slice(1, -1)}
-        </code>
-      )
-    } else if (token.startsWith('**')) {
-      nodes.push(<strong key={nodes.length}>{renderInlineMarkdown(token.slice(2, -2))}</strong>)
-    } else {
-      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      const href = link ? safeHref(link[2]) : ''
-      nodes.push(
-        href ? (
-          <a
-            key={nodes.length}
-            href={href}
-            className="break-words text-cyan-300 underline underline-offset-2"
-            rel="noreferrer"
-            target="_blank"
-          >
-            {link?.[1]}
-          </a>
-        ) : (
-          token
-        )
-      )
-    }
-
-    lastIndex = match.index + token.length
-  }
-
-  if (lastIndex < value.length) nodes.push(value.slice(lastIndex))
-  return nodes
-}
-
-function safeHref(value: string): string {
-  return /^(https?:|mailto:)/i.test(value) ? value : ''
-}
-
-function buildWikiContentFromHistory(detail: StoredSessionHistoryDetail, t: Dictionary): string {
-  const title = `${detail.title} SOP`
-  const logs = detail.logs
-    .filter((log) => log.kind === 'user' || log.kind === 'assistant' || log.kind === 'error')
-    .slice(-20)
-  const sourceLines = [
-    `- ${t.wiki.sourceSession}: ${detail.title}`,
-    detail.connectionName ? `- ${t.terminal.connectionTarget}: ${detail.connectionName}` : '',
-    detail.terminalCwd ? `- ${t.app.workingDirectory}: ${detail.terminalCwd}` : '',
-    `- ${t.history.runs}: ${detail.runCount}`,
-    `- ${t.wiki.savedAt}: ${new Date().toISOString()}`
-  ].filter(Boolean)
-
-  const conversationLines = logs.flatMap((log) => [
-    `### ${formatWikiLogKind(log.kind, t)} · ${log.createdAt}`,
-    '',
-    truncateWikiContent(log.text.trim(), 6000),
-    ''
-  ])
-
-  return [
-    `# ${title}`,
-    '',
-    `## ${t.wiki.overview}`,
-    '',
-    t.wiki.generatedFromHistory,
-    '',
-    `## ${t.wiki.sourceInfo}`,
-    '',
-    ...sourceLines,
-    '',
-    `## ${t.wiki.bestPracticeDraft}`,
-    '',
-    `- ${t.wiki.fillInPurpose}`,
-    `- ${t.wiki.fillInPrerequisites}`,
-    `- ${t.wiki.fillInSteps}`,
-    `- ${t.wiki.fillInRollback}`,
-    '',
-    `## ${t.wiki.historyTranscript}`,
-    '',
-    ...conversationLines
-  ].join('\n')
-}
-
-function formatWikiLogKind(kind: string, t: Dictionary): string {
-  if (kind === 'user') return t.common.user
-  if (kind === 'assistant') return t.common.assistant
-  if (kind === 'error') return t.common.error
-  return kind
-}
-
-function truncateWikiContent(content: string, maxChars: number): string {
-  return content.length > maxChars ? `${content.slice(0, maxChars)}\n...[truncated]` : content
-}
-
-function upsertWikiSummary(
-  documents: WikiDocumentSummary[],
-  document: WikiDocument
-): WikiDocumentSummary[] {
-  const summary: WikiDocumentSummary = {
-    id: document.id,
-    title: document.title,
-    path: document.path,
-    updatedAt: document.updatedAt,
-    excerpt: document.excerpt
-  }
-
-  return [summary, ...documents.filter((candidate) => candidate.id !== document.id)]
-}
-
-function filterWikiDocuments(
-  documents: WikiDocumentSummary[],
-  query: string
-): WikiDocumentSummary[] {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return documents
-
-  return documents.filter((document) =>
-    [document.title, document.excerpt, document.path].join('\n').toLowerCase().includes(normalized)
-  )
 }
 
 export default App
