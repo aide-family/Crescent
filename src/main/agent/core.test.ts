@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sanitizeFinalAnswer, TerminalAgentCore } from './core'
 import { AgentMemory } from './memory'
@@ -68,6 +68,10 @@ describe('sanitizeFinalAnswer', () => {
 })
 
 describe('TerminalAgentCore', () => {
+  beforeEach(() => {
+    mockChat.mockReset()
+  })
+
   it('writes the final answer when a running supplement adds a local artifact destination', async () => {
     mockChat.mockResolvedValueOnce({
       choices: [
@@ -117,5 +121,53 @@ describe('TerminalAgentCore', () => {
       { overwrite: false, encoding: 'utf-8' }
     )
     expect(result).toContain('Saved requested architecture document to:')
+  })
+
+  it('does not treat paths inside approved shell commands as artifact destinations', async () => {
+    mockChat.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '巡检完成，未要求保存本地文档。'
+          }
+        }
+      ]
+    })
+
+    const localFileWriter: LocalFileWriter = {
+      writeFile: vi.fn()
+    }
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    let supplementsConsumed = false
+    const memory = new AgentMemory(
+      { shortTerm: [], longTerm: { preferences: [], notes: [], operations: [] } },
+      vi.fn()
+    )
+
+    const result = await new TerminalAgentCore(
+      config,
+      memory,
+      emit,
+      undefined,
+      undefined,
+      localFileWriter,
+      {
+        consumeSupplementalInputs: () => {
+          if (supplementsConsumed) return []
+          supplementsConsumed = true
+          return [
+            [
+              'Command execution was approved by the user with an additional note.',
+              'Approved command: ls -la /run/containerd/containerd.sock 2>/dev/null; id; groups'
+            ].join('\n')
+          ]
+        }
+      }
+    ).run('登录到aide集群， 做一次巡检')
+
+    expect(localFileWriter.writeFile).not.toHaveBeenCalled()
+    expect(result).not.toContain('Requested document save failed')
+    expect(result).not.toContain('/dev/null')
   })
 })

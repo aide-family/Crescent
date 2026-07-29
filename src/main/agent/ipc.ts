@@ -22,6 +22,7 @@ import {
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './model-provider-config'
 import { AgentBrain } from './brain'
+import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import {
   buildAgentSkillContext,
@@ -38,6 +39,7 @@ import { loadMcpToolRegistry } from './mcp-runtime'
 import {
   formatWikiContext,
   getWikiDocument,
+  deleteWikiDocument,
   listWikiDocuments,
   saveWikiDocument,
   searchWikiDocuments
@@ -56,7 +58,7 @@ import {
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
-import { getCrescentDir } from '../crescent-paths'
+import { getCrescentAttachmentsDir } from '../crescent-paths'
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import type {
   AgentCommandInput,
@@ -220,6 +222,10 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:save-wiki-document', (_, input: WikiSaveInput) => {
     return saveWikiDocument(input)
+  })
+
+  ipcMain.handle('agent:delete-wiki-document', (_, id: string) => {
+    return deleteWikiDocument(id ?? '')
   })
 
   ipcMain.handle('agent:search-wiki-documents', (_, query: string) => {
@@ -414,6 +420,8 @@ export function registerAgentIpc(): void {
     async (_, payload: AgentConnectionIntentInput): Promise<AgentConnectionIntentResult> => {
       const input = payload?.input?.trim()
       if (!input) return { ok: false, error: 'Input is empty.' }
+      const localOnlyIntent = buildLocalOnlyConnectionIntentResult(input)
+      if (localOnlyIntent) return localOnlyIntent
 
       const connections = [...loadSshConfigConnections(), ...readCustomConnections()]
       if (connections.length === 0) return { ok: false, reason: 'No configured connections.' }
@@ -424,8 +432,17 @@ export function registerAgentIpc(): void {
           messages: [
             {
               role: 'system',
-              content:
-                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login. Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","reason":"..."}. Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection. Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting. Matching priority is strict: exact connection name or name-contained request wins first; then host/alias/user-visible identifier; description is only weak context and must never override a plausible name match. If the request names a cluster/environment and a connection name contains that name, choose that connection even if another connection description mentions it. If only descriptions match and names conflict or are ambiguous, lower confidence below 60. Do not invent ids.'
+              content: [
+                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login.',
+                'Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","reason":"..."}.',
+                'Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection.',
+                'Local-only work includes local paths such as /etc/hosts, ~, $HOME, /Users, pasted local shell prompts such as "➜  ~ cat /etc/hosts", and requests that say 本地/local/this machine.',
+                'IP addresses inside pasted file contents are data to edit, not SSH targets.',
+                'Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting.',
+                'Matching priority is strict: exact connection name or name-contained request wins first; then host/alias/user-visible identifier only when the user clearly requests a remote connection; description is only weak context and must never override a plausible name match.',
+                'If the request names a cluster/environment and a connection name contains that name, choose that connection even if another connection description mentions it.',
+                'If only descriptions match and names conflict or are ambiguous, lower confidence below 60. Do not invent ids.'
+              ].join('\n')
             },
             {
               role: 'user',
@@ -506,6 +523,28 @@ export function registerAgentIpc(): void {
         execute: (command: string) => ReturnType<typeof executeCommandInTerminal>
       ): ReturnType<typeof executeCommandInTerminal> => {
         const executableCommand = normalizeInteractivePrivilegeCommand(command)
+        const executeWithProgress = async (): ReturnType<typeof executeCommandInTerminal> => {
+          const startedAt = Date.now()
+          event.sender.send('agent:event', {
+            type: 'command',
+            phase: 'started',
+            command: executableCommand,
+            runId,
+            tabId: payload?.tabId
+          })
+          const result = await execute(executableCommand)
+          event.sender.send('agent:event', {
+            type: 'command',
+            phase: 'finished',
+            command: executableCommand,
+            result,
+            elapsedMs: Date.now() - startedAt,
+            runId,
+            tabId: payload?.tabId
+          })
+
+          return result
+        }
         const whitelistRule = matchCommandWhitelist(executableCommand, agentConfig.commandWhitelist)
         if (whitelistRule) {
           event.sender.send('agent:event', {
@@ -514,7 +553,7 @@ export function registerAgentIpc(): void {
             runId,
             tabId: payload?.tabId
           })
-          return execute(executableCommand)
+          return executeWithProgress()
         }
 
         event.sender.send('agent:event', {
@@ -543,7 +582,7 @@ export function registerAgentIpc(): void {
             runId,
             tabId: payload?.tabId
           })
-          return execute(executableCommand)
+          return executeWithProgress()
         }
 
         const approval = await requestCommandApproval({
@@ -560,7 +599,9 @@ export function registerAgentIpc(): void {
           const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
           event.sender.send('agent:event', {
             type: 'status',
-            message: 'Command rejected by user.',
+            message: rejectionReason
+              ? `Command rejected by user.\nUser rejection reason: ${rejectionReason}`
+              : 'Command rejected by user.',
             runId,
             tabId: payload?.tabId
           })
@@ -579,7 +620,9 @@ export function registerAgentIpc(): void {
 
         event.sender.send('agent:event', {
           type: 'status',
-          message: 'Command approved by user.',
+          message: approval.note?.trim()
+            ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
+            : 'Command approved by user.',
           runId,
           tabId: payload?.tabId
         })
@@ -596,7 +639,7 @@ export function registerAgentIpc(): void {
             )
         }
 
-        const executionResult = await execute(executableCommand)
+        const executionResult = await executeWithProgress()
         if (!approvalNote) return executionResult
 
         return {
@@ -826,7 +869,7 @@ async function pickAgentPathReference(
 }
 
 async function savePastedAttachment(input: PastedAttachmentInput): Promise<AgentPathReference> {
-  const attachmentDir = resolve(getCrescentDir(), 'attachments')
+  const attachmentDir = getCrescentAttachmentsDir()
   await fs.mkdir(attachmentDir, { recursive: true })
 
   const fallbackName = input.mimeType?.startsWith('image/') ? 'pasted-image' : 'pasted-file'

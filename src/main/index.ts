@@ -4,7 +4,10 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerTerminalIpc, stopAllTerminalSessions } from './terminal/ipc'
 
+let stopAttachmentCleanup: (() => void) | undefined
+
 installWarningFilter()
+installNativeLogFilter()
 configureGpuPolicy()
 
 function configureGpuPolicy(): void {
@@ -43,6 +46,19 @@ function installWarningFilter(): void {
     if (isKnownSqliteWarning) return
     ;(originalEmitWarning as (...parameters: unknown[]) => void)(warning, ...args)
   }) as typeof process.emitWarning
+}
+
+function installNativeLogFilter(): void {
+  const originalWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: unknown, ...args: unknown[]) => {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk)
+    const isKnownMacInputMethodNoise =
+      text.includes('TSM AdjustCapsLockLEDForKeyTransitionHandling') ||
+      text.includes('error messaging the mach port for IMKCFRunLoopWakeUpReliable')
+
+    if (isKnownMacInputMethodNoise) return true
+    return (originalWrite as (...parameters: unknown[]) => boolean)(chunk, ...args)
+  }) as typeof process.stderr.write
 }
 
 function createWindow(): void {
@@ -84,20 +100,19 @@ app.whenReady().then(async () => {
   const [
     { registerAgentIpc },
     { registerConnectionIpc },
+    { startAttachmentCleanupScheduler },
     { initializeCrescentDatabase },
     { registerStorageIpc }
   ] = await Promise.all([
     import('./agent/ipc'),
     import('./connections/ipc'),
+    import('./attachment-cleanup'),
     import('./crescent-sqlite'),
     import('./storage/ipc')
   ])
 
   app.setName('Crescent')
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
-  if (process.platform === 'darwin') {
-    console.info('GPU feature status:', app.getGPUFeatureStatus())
-  }
   app.on('child-process-gone', (_event, details) => {
     if (details.type === 'GPU') {
       console.warn('GPU process gone', details)
@@ -121,6 +136,7 @@ app.whenReady().then(async () => {
   registerConnectionIpc()
   registerStorageIpc()
   registerTerminalIpc()
+  stopAttachmentCleanup = startAttachmentCleanupScheduler()
 
   createWindow()
 
@@ -139,6 +155,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  stopAttachmentCleanup?.()
+  stopAttachmentCleanup = undefined
 })
 
 // In this file you can include the rest of your app's specific main process

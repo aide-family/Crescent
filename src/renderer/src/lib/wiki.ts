@@ -89,3 +89,46 @@ export function filterWikiDocuments(
     [document.title, document.excerpt, document.path].join('\n').toLowerCase().includes(normalized)
   )
 }
+
+export interface WikiHeading {
+  level: number
+  text: string
+  index: number
+}
+
+export function parseWikiHeadings(content: string): WikiHeading[] {
+  const headings: WikiHeading[] = []
+  let index = 0
+  let fenceMarker: '```' | '~~~' | null = null
+
+  for (const line of content.replace(/\r\n/g, '\n').split('\n')) {
+    if (fenceMarker) {
+      if (new RegExp(`^\\s*${escapeRegExp(fenceMarker)}\\s*$`).test(line)) {
+        fenceMarker = null
+      }
+      continue
+    }
+
+    const fence = line.match(/^\s*(```|~~~)[\w-]*\s*$/)
+    if (fence) {
+      fenceMarker = fence[1] as '```' | '~~~'
+      continue
+    }
+
+    const match = line.match(/^(#{1,4})\s+(.+?)\s*#*$/)
+    if (!match) continue
+
+    headings.push({
+      level: match[1].length,
+      text: match[2].trim(),
+      index
+    })
+    index += 1
+  }
+
+  return headings
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}

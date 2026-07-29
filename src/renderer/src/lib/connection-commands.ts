@@ -74,6 +74,7 @@ export function createCustomConnectionId(): string {
 }
 
 export function buildSshCommand(connection: ConnectionConfig): string {
+  if (connection.source === 'local') return ''
   if (connection.source === 'ssh-config') return `ssh ${shellQuote(connection.name)}`
 
   return [

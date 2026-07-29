@@ -42,6 +42,8 @@ describe('AgentPlanner', () => {
     expect(systemPrompt).toContain('First infer the business scenario')
     expect(systemPrompt).toContain('goal, affected target, current context')
     expect(systemPrompt).toContain('Do not invent artifact destinations')
+    expect(systemPrompt).toContain('Explicit local file targets take precedence')
+    expect(systemPrompt).toContain('IP addresses inside pasted file contents as data')
     expect(systemPrompt).toContain('available tool capabilities')
     expect(systemPrompt).toContain('plan an ssh command with a concrete remote command')
     expect(systemPrompt).toContain('password/passphrase/OTP')
@@ -66,6 +68,7 @@ describe('AgentPlanner', () => {
     expect(plan.steps).toEqual([
       expect.stringContaining('Understand the requested scenario and target'),
       expect.stringContaining('use ssh with a concrete remote command'),
+      expect.stringContaining('keep the action local'),
       expect.stringContaining('minimum direct evidence'),
       expect.stringContaining('required approval'),
       expect.stringContaining('original request')

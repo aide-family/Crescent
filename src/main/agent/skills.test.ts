@@ -48,6 +48,7 @@ describe('agent skills', () => {
       expect.arrayContaining([
         'application-network-research',
         'application-program-inspection',
+        'crescent-agent-context-regression',
         'docker-environment-inspection',
         'k8s-cluster-architecture-mermaid',
         'k8s-version-cluster-inspection',
@@ -186,6 +187,10 @@ describe('agent skills', () => {
     ['巡检 Linux 主机内存磁盘DNS和系统服务', 'linux-basic-environment-inspection'],
     ['排查应用服务端口日志和健康检查接口', 'application-program-inspection'],
     ['检查应用域名 DNS 解析和 HTTPS TLS 连通性', 'application-network-research'],
+    [
+      'Crescent Agent 把本地 /etc/hosts 内容里的 IP 错误匹配成 SSH 连接，做上下文安全回归检查',
+      'crescent-agent-context-regression'
+    ],
     ['巡检 K8s 集群版本节点Pod事件和存储状态', 'k8s-version-cluster-inspection']
   ])('matches built-in system skill for %s', (input, expectedSkillName) => {
     const context = buildAgentSkillContext(input, customRoot)
@@ -232,5 +237,19 @@ describe('agent skills', () => {
       'Do not propose creating a privileged troubleshooting Pod'
     )
     expect(context.promptBlock).toContain('Home 盘磁盘空间不足清理 SOP')
+  })
+
+  it('loads Crescent Agent context regression guardrails into the agent prompt', () => {
+    const context = buildAgentSkillContext(
+      '用户粘贴 cat /etc/hosts 输出后，Crescent Agent 错误登录 aide SSH，检查本地操作误路由回归',
+      customRoot
+    )
+
+    expect(context.matched.map((skill) => skill.name)).toContain(
+      'crescent-agent-context-regression'
+    )
+    expect(context.promptBlock).toContain('Crescent Agent Context Regression')
+    expect(context.promptBlock).toContain('Treat IPs inside pasted file content as data')
+    expect(context.promptBlock).toContain('Never attempt to create directories under `/dev/null`')
   })
 })

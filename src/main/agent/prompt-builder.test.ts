@@ -41,6 +41,8 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('Do not present prerequisites, discovery, or a proposed next command')
     expect(prompt).toContain('keep prerequisite discovery bounded')
     expect(prompt).toContain('wait for the user to provide it through the terminal prompt flow')
+    expect(prompt).toContain('Local file requests take precedence over inferred remote context')
+    expect(prompt).toContain('IP addresses inside pasted file contents as data')
     expect(prompt).toContain('Do not use sudo -n')
     expect(prompt).toContain(
       'After a terminal command returns enough evidence for the current step'
@@ -61,6 +63,7 @@ describe('AgentPromptBuilder', () => {
     })
 
     expect(prompt).toContain('Interpret execution context and artifact destination separately')
+    expect(prompt).toContain('matching IP in file content override an explicit local file target')
     expect(prompt).toContain('destination context the user requested')
     expect(prompt).toContain('never choose a default output path yourself')
     expect(prompt).toContain('ask the user to confirm the local Crescent-machine directory')

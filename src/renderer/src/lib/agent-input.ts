@@ -1,18 +1,15 @@
-import type { Dictionary } from '@renderer/i18n'
-import { logRoleLabel } from '@renderer/lib/agent-log'
-import { formatConnectionTarget } from '@renderer/lib/connections'
-import { normalizeTerminalControlText } from '@renderer/lib/terminal-text'
-import type {
-  AgentLogEntry,
-  AgentTerminalTab,
-  AgentToolReference
-} from '@renderer/lib/terminal-tabs'
+import type { Dictionary } from '../i18n'
+import { logRoleLabel } from './agent-log'
+import { formatConnectionTarget } from './connections'
+import { normalizeTerminalControlText } from './terminal-text'
+import type { AgentLogEntry, AgentTerminalTab, AgentToolReference } from './terminal-tabs'
 import type {
   AgentPathReference,
   AgentSkillOption,
   AgentWikiReference,
   ConnectionConfig
 } from '../../../shared/agent-types'
+import { hasExplicitLocalFileOperationIntent } from '../../../shared/agent-local-intent'
 
 export function isContinueIntent(value: string): boolean {
   const normalized = value
@@ -25,7 +22,10 @@ export function isContinueIntent(value: string): boolean {
 }
 
 export function isExplicitConnectionRequest(value: string): boolean {
-  return /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value)
+  return (
+    /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value) ||
+    /(?:^|\s)(?:连接|登录|登陆|登入|进入|切换)(?:\s|到|至|$)/.test(value)
+  )
 }
 
 export function isExplicitNonTerminalAgentRequest(
@@ -67,12 +67,21 @@ export function findDirectlyMentionedConnection(
   input: string,
   connections: ConnectionConfig[]
 ): ConnectionConfig | undefined {
+  if (hasExplicitLocalFileOperationIntent(input)) return undefined
+
   const normalizedInput = normalizeConnectionMentionText(input)
   if (!normalizedInput) return undefined
 
-  const matches = connections.filter((connection) =>
-    getConnectionMentionTokens(connection).some((token) => normalizedInput.includes(token))
-  )
+  const allowHostOrUserMatch = isExplicitConnectionRequest(input)
+  const matches = connections.filter((connection) => {
+    const nameTokens = getConnectionNameMentionTokens(connection)
+    if (nameTokens.some((token) => normalizedInput.includes(token))) return true
+    if (!allowHostOrUserMatch) return false
+
+    return getConnectionHostUserMentionTokens(connection).some((token) =>
+      normalizedInput.includes(token)
+    )
+  })
   return matches.length === 1 ? matches[0] : undefined
 }
 
@@ -87,12 +96,25 @@ export function isSameConnectionTab(
 }
 
 export function getConnectionMentionTokens(connection: ConnectionConfig): string[] {
-  const values = [connection.name, connection.host, connection.user].filter(
-    (value): value is string => Boolean(value)
-  )
+  return [
+    ...getConnectionNameMentionTokens(connection),
+    ...getConnectionHostUserMentionTokens(connection)
+  ]
+}
+
+export function getConnectionNameMentionTokens(connection: ConnectionConfig): string[] {
+  return buildConnectionMentionTokens([connection.name])
+}
+
+export function getConnectionHostUserMentionTokens(connection: ConnectionConfig): string[] {
+  return buildConnectionMentionTokens([connection.host, connection.user])
+}
+
+function buildConnectionMentionTokens(values: Array<string | undefined>): string[] {
+  const concreteValues = values.filter((value): value is string => Boolean(value))
   const tokens = new Set<string>()
 
-  for (const value of values) {
+  for (const value of concreteValues) {
     const normalizedValue = normalizeConnectionMentionText(value)
     if (normalizedValue.length >= 3) tokens.add(normalizedValue)
 

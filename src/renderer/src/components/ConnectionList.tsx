@@ -93,9 +93,11 @@ export function ConnectionList({
                     {formatConnectionTarget(connection)}
                   </p>
                   <p className="truncate text-muted-foreground">
-                    {connection.source === 'ssh-config'
-                      ? '~/.ssh/config'
-                      : connection.description || '~/.crescent/config.json'}
+                    {connection.source === 'local'
+                      ? t.connections.defaultTerminal
+                      : connection.source === 'ssh-config'
+                        ? '~/.ssh/config'
+                        : connection.description || '~/.crescent/config.json'}
                   </p>
                   {showCustomMetadata && connection.source === 'custom' && (
                     <p className="truncate text-muted-foreground">

@@ -55,6 +55,14 @@ export function AgentLogContent({
   onExportFull?: () => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
+    if (entry.kind === 'user') {
+      return (
+        <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+          {entry.text}
+        </pre>
+      )
+    }
+
     const parsedRun = entry.kind === 'assistant' ? parseAgentRunMarkdown(entry.text, t) : null
     if (parsedRun) {
       return (

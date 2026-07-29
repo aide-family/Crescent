@@ -52,6 +52,20 @@ export async function saveWikiDocument(input: WikiSaveInput): Promise<WikiDocume
   return document
 }
 
+export async function deleteWikiDocument(id: string): Promise<{ ok: boolean }> {
+  await ensureWikiDir()
+  const filename = idToFilename(id)
+  if (!filename) return { ok: false }
+
+  try {
+    await fs.unlink(join(WIKI_DIR, filename))
+    return { ok: true }
+  } catch (error) {
+    if (isErrorWithCode(error) && error.code === 'ENOENT') return { ok: false }
+    throw error
+  }
+}
+
 export async function searchWikiDocuments(
   query: string,
   limit = 5,

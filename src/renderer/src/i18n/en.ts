@@ -74,6 +74,8 @@ const en = {
     deleteMcpServer: 'Delete this custom MCP server? Its tools will no longer be available.',
     deleteProvider: 'Delete this model provider? Its model configuration will also be removed.',
     deleteSkill: 'Delete this skill? This removes the local skill directory and cannot be undone.',
+    deleteWikiDocument:
+      'Delete this knowledge base document? This removes the local Markdown file and cannot be undone.',
     dontAskAgain: "Don't ask again"
   },
   commandReview: {
@@ -168,6 +170,12 @@ const en = {
     currentTerminalInstruction:
       'The current terminal is already in a usable target environment. Do not rematch a Crescent connection; analyze the user request, create working steps, then continue execution and verification in the current terminal. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt.',
     commandExecuted: 'Executed',
+    commandFailed: 'Command failed',
+    commandExitCode: 'Exit code',
+    commandOutput: 'Command output',
+    commandRunning: 'Running terminal command',
+    commandStatus: 'Execution status',
+    commandTimedOut: 'Command timed out',
     fallbackLimited: 'limited fallback; SSH/password prompts are disabled',
     failedToLoadConfig: 'Failed to load config',
     failedToLoadConnections: 'Failed to load connections',
@@ -223,6 +231,7 @@ const en = {
     shellExited: 'Shell exited with code',
     subterminalActive: 'Active',
     subterminalExited: 'Exited',
+    subterminal: 'Sub-terminal',
     temporarySubterminal: 'Temporary sub-terminal',
     terminalMode: 'Terminal mode'
   },
@@ -369,7 +378,11 @@ const en = {
   wiki: {
     bestPracticeDraft: 'SOP / best-practice draft',
     cancelEdit: 'Cancel edit',
+    delete: 'Delete document',
+    deleted: 'Deleted wiki document',
+    deleteFailed: 'Failed to delete wiki document',
     description: 'Markdown documents stored in ./wiki and available to Agent retrieval.',
+    editMarkdownSource: 'Edit Markdown source',
     edit: 'Edit document',
     empty: 'No wiki documents yet. Save an operations history item to create one.',
     fillInPrerequisites:
@@ -382,7 +395,12 @@ const en = {
       'This document was generated from a saved operations history item. Review and edit it before treating it as final SOP.',
     historyTranscript: 'Source transcript',
     loading: 'Loading wiki documents',
+    markdownPreview: 'Markdown preview',
+    markdownSource: 'Markdown source',
+    navigation: 'Headings',
+    noHeadings: 'No headings',
     overview: 'Overview',
+    previewMarkdown: 'Preview Markdown',
     refresh: 'Refresh wiki',
     resize: 'Resize knowledge base panel',
     saveEdit: 'Save changes',
@@ -395,7 +413,6 @@ const en = {
     sourceSession: 'Source session',
     searchPlaceholder: 'Search title or excerpt',
     titleLabel: 'Title',
-    markdownSource: 'Markdown source',
     title: 'Knowledge base'
   },
   settings: {

@@ -1,6 +1,8 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
 
 export function formatConnectionTarget(connection: ConnectionConfig): string {
+  if (connection.source === 'local') return connection.host || '~'
+
   const user = connection.user ? `${connection.user}@` : ''
   const port = connection.port ? `:${connection.port}` : ''
 
