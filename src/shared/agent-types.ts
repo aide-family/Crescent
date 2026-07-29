@@ -43,7 +43,7 @@ export interface AgentProviderModelConfig {
   reasoning?: boolean
 }
 
-export type ConnectionSource = 'ssh-config' | 'custom'
+export type ConnectionSource = 'ssh-config' | 'custom' | 'local'
 
 export interface ConnectionConfig {
   id: string
@@ -331,6 +331,13 @@ export type AgentEvent =
   | ({ type: 'plan'; steps: string[] } & AgentEventMeta)
   | ({ type: 'skills'; message: string; skills: AgentSkillUsage[] } & AgentEventMeta)
   | ({ type: 'tool'; name: string; message: string } & AgentEventMeta)
+  | ({
+      type: 'command'
+      phase: 'started' | 'finished'
+      command: string
+      result?: TerminalCommandResult
+      elapsedMs?: number
+    } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)
   | ({ type: 'error'; message: string } & AgentEventMeta)

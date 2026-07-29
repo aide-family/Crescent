@@ -313,7 +313,11 @@ export function buildConnectionSlashCommand(
       connection.host,
       connection.user,
       connection.description,
-      connection.source === 'ssh-config' ? '~/.ssh/config' : t.connections.customConnectionName
+      connection.source === 'local'
+        ? t.connections.localTerminal
+        : connection.source === 'ssh-config'
+          ? '~/.ssh/config'
+          : t.connections.customConnectionName
     ].filter((value): value is string => Boolean(value)),
     connection
   }

@@ -14,6 +14,10 @@ export function getCrescentMemoryPath(): string {
   return join(getCrescentDir(), 'memory.json')
 }
 
+export function getCrescentAttachmentsDir(): string {
+  return join(getCrescentDir(), 'attachments')
+}
+
 export function getCrescentWikiDir(): string {
   return join(getCrescentDir(), 'wiki')
 }

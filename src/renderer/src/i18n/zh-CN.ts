@@ -71,6 +71,7 @@ const zhCN = {
     deleteMcpServer: '删除这个自定义 MCP 服务？对应工具将不再可用。',
     deleteProvider: '删除这个模型供应商？对应模型配置也会被移除。',
     deleteSkill: '删除这个 Skill？此操作会移除本地 Skill 目录，且不可恢复。',
+    deleteWikiDocument: '删除这个知识库文档？此操作会移除本地 Markdown 文件，且不可恢复。',
     dontAskAgain: '不再提示'
   },
   commandReview: {
@@ -157,6 +158,12 @@ const zhCN = {
     currentTerminalInstruction:
       '当前终端已经处于可工作的目标环境中。不要重新匹配 Crescent 连接；先分析用户请求，建立工作步骤，然后基于当前终端继续执行和验证。若用户任务涉及非当前主机，可以在当前终端中使用 SSH 执行对应主机的具体命令；如需密码或验证码，等待用户通过终端密钥输入弹窗提供。',
     commandExecuted: '已执行',
+    commandFailed: '命令执行失败',
+    commandExitCode: '退出码',
+    commandOutput: '命令输出',
+    commandRunning: '正在执行终端命令',
+    commandStatus: '执行状态',
+    commandTimedOut: '命令执行超时',
     fallbackLimited: '受限备用模式；SSH/密码提示不可用',
     failedToLoadConfig: '加载配置失败',
     failedToLoadConnections: '加载连接失败',
@@ -205,6 +212,7 @@ const zhCN = {
     shellExited: 'Shell 已退出，退出码',
     subterminalActive: '运行中',
     subterminalExited: '已退出',
+    subterminal: '子终端',
     temporarySubterminal: '临时子终端',
     terminalMode: '终端模式'
   },
@@ -346,7 +354,11 @@ const zhCN = {
   wiki: {
     bestPracticeDraft: 'SOP / 最佳实践草稿',
     cancelEdit: '取消编辑',
+    delete: '删除文档',
+    deleted: '已删除知识库文档',
+    deleteFailed: '删除知识库文档失败',
     description: 'Markdown 文档存储在 ./wiki 中，并可被 Agent 检索使用。',
+    editMarkdownSource: '编辑 Markdown 源码',
     edit: '编辑文档',
     empty: '暂无知识库文档。可以从历史运维记录保存生成。',
     fillInPrerequisites: '前置条件：补充所需权限、主机、服务和安全检查。',
@@ -356,7 +368,12 @@ const zhCN = {
     generatedFromHistory: '本文档由历史运维记录生成。作为正式 SOP 使用前，请先复核并整理内容。',
     historyTranscript: '来源记录',
     loading: '正在加载知识库文档',
+    markdownPreview: 'Markdown 预览',
+    markdownSource: 'Markdown 源码',
+    navigation: '标题导航',
+    noHeadings: '暂无标题',
     overview: '概览',
+    previewMarkdown: '预览 Markdown',
     refresh: '刷新知识库',
     resize: '调整知识库面板宽度',
     saveEdit: '保存修改',
@@ -369,7 +386,6 @@ const zhCN = {
     sourceSession: '来源会话',
     searchPlaceholder: '搜索标题或摘要',
     titleLabel: '标题',
-    markdownSource: 'Markdown 源码',
     title: '知识库'
   },
   settings: {

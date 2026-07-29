@@ -306,11 +306,15 @@ function renderMarkdownBlocks(
       continue
     }
 
-    const fence = line.match(/^```([\w-]+)?\s*$/)
+    const fence = line.match(/^(```|~~~)([\w-]+)?\s*$/)
     if (fence) {
+      const fenceMarker = fence[1]
       const codeLines: string[] = []
       index += 1
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+      while (
+        index < lines.length &&
+        !new RegExp(`^${escapeRegExp(fenceMarker)}\\s*$`).test(lines[index])
+      ) {
         codeLines.push(lines[index])
         index += 1
       }
@@ -319,14 +323,14 @@ function renderMarkdownBlocks(
         <MarkdownCodeBlock
           key={nodes.length}
           code={codeLines.join('\n')}
-          language={fence[1] ?? ''}
+          language={fence[2] ?? ''}
           t={t}
         />
       )
       continue
     }
 
-    const heading = line.match(/^(#{1,4})\s+(.+)$/)
+    const heading = line.match(/^(#{1,4})\s+(.+?)\s*#*$/)
     if (heading) {
       const level = heading[1].length
       const headingText = heading[2].trim()
@@ -340,9 +344,14 @@ function renderMarkdownBlocks(
           : level === 2
             ? 'text-sm font-semibold'
             : 'text-sm font-medium'
+      const scrollMarginClass = options.headingIdPrefix ? 'scroll-mt-28' : ''
 
       nodes.push(
-        <div id={headingId} key={nodes.length} className={`${className} min-w-0 break-words`}>
+        <div
+          id={headingId}
+          key={nodes.length}
+          className={`${className} ${scrollMarginClass} min-w-0 break-words`}
+        >
           {renderInlineMarkdown(headingText)}
         </div>
       )
@@ -470,6 +479,10 @@ export function buildMarkdownHeadingId(prefix: string, text: string, index: numb
       .replace(/\s+/g, '-') || 'heading'
 
   return `${prefix}-${index}-${slug}`
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function MermaidBlock({

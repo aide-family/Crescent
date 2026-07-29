@@ -66,6 +66,7 @@ import {
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
 import { SubterminalPanel } from '@renderer/components/SubterminalPanel'
 import { TerminalTabBar } from '@renderer/components/TerminalTabBar'
+import { WikiSheet } from '@renderer/components/WikiSheet'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
@@ -97,12 +98,17 @@ import {
   type Dictionary,
   type Locale
 } from '@renderer/i18n'
+import { useAgentRuns } from '@renderer/hooks/useAgentRuns'
+import { useConnections } from '@renderer/hooks/useConnections'
+import { useSettings } from '@renderer/hooks/useSettings'
+import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import {
   appendElapsedFooter,
   formatAgentRunMarkdown,
   formatHistoryTime,
   hydrateStoredAgentLog
 } from '@renderer/lib/agent-log'
+import { riskLabel } from '@renderer/lib/agent-event-formatters'
 import {
   buildAvailableToolRefs,
   flattenProviderModels,
@@ -123,6 +129,16 @@ import {
   resolveInitialPaneOrder,
   type PaneOrder
 } from '@renderer/lib/app-shell'
+import {
+  WIKI_MIN_PREVIEW_WIDTH,
+  WIKI_REFRESH_MIN_LOADING_MS,
+  WIKI_SHEET_SELECTED_FIXED_WIDTH,
+  buildModelSelectionValue,
+  getDefaultWikiPreviewWidth,
+  isLocalConnection,
+  parseModelSelectionValue,
+  wait
+} from '@renderer/lib/app-runtime'
 import {
   addUniquePathRef,
   addUniqueSkillRef,
@@ -151,16 +167,21 @@ import {
   isPasswordEnvVarMissing,
   mergeConnectionInput,
   parseLoginActions,
-  parseSshOptions,
-  shellQuote
+  parseSshOptions
 } from '@renderer/lib/connection-commands'
-import { filterConnections, formatConnectionTarget } from '@renderer/lib/connections'
+import { formatConnectionTarget } from '@renderer/lib/connections'
 import { appTerminalTheme } from '@renderer/lib/design-system'
+import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import { copyFeedback, copyText, downloadMarkdown } from '@renderer/lib/operation-feedback'
 import {
+  buildInstalledSkillNameSet,
+  buildSkillInstallCommand,
+  filterLocalSkills,
+  formatInstallCount,
+  isSkillSearchResultInstalled
+} from '@renderer/lib/skill-management'
+import {
   extractPasswordPromptLine,
-  formatReadableSubterminalOutput,
-  getSubterminalWidths,
   hasInteractivePrompt,
   hasOutputBeyondEcho,
   isTerminalCurrentlyAtPasswordPrompt,
@@ -175,8 +196,7 @@ import {
   type AgentLogEntry,
   type AgentRunViewState,
   type AgentTerminalTab,
-  type AgentToolReference,
-  type TemporarySubterminal
+  type AgentToolReference
 } from '@renderer/lib/terminal-tabs'
 import {
   buildWikiContentFromHistory,
@@ -210,7 +230,6 @@ import {
 import type {
   AgentConfig,
   AgentConnectionIntentResult,
-  AgentEvent,
   AgentMcpServerConfig,
   AgentModelOption,
   AgentPathReference,
@@ -221,7 +240,6 @@ import type {
   AgentSkillOption,
   AgentWikiReference,
   CommandApprovalRequest,
-  CommandRiskLevel,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
@@ -230,6 +248,7 @@ import type {
   WikiDocument,
   WikiDocumentSummary
 } from '../../shared/agent-types'
+import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -397,9 +416,9 @@ function App(): React.JSX.Element {
   const [selectedWikiDocument, setSelectedWikiDocument] = useState<WikiDocument | null>(null)
   const [wikiSearchQuery, setWikiSearchQuery] = useState('')
   const [wikiEditing, setWikiEditing] = useState(false)
-  const [wikiEditTitle, setWikiEditTitle] = useState('')
   const [wikiEditContent, setWikiEditContent] = useState('')
   const [wikiSaving, setWikiSaving] = useState(false)
+  const [wikiDeletingId, setWikiDeletingId] = useState<string | null>(null)
   const [wikiMessage, setWikiMessage] = useState<SkillManageMessage | null>(null)
   const [wikiPreviewWidth, setWikiPreviewWidth] = useState(620)
   const [savingHistoryWikiTabId, setSavingHistoryWikiTabId] = useState<string | null>(null)
@@ -463,6 +482,15 @@ function App(): React.JSX.Element {
     x: number
     y: number
   } | null>(null)
+  const {
+    updateTab,
+    updateSubterminalOutput,
+    updateSubterminalCwd,
+    updateSubterminalStatus,
+    closeSubterminal,
+    closeAllSubterminals,
+    resizeSubterminalPair
+  } = useTerminalSessions({ tabsRef, setTabs })
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? emptyLocalTab
   const activeAgentPending = activeTab.agentBusy || activeTab.agentThinking
   const terminalTabs = useMemo(
@@ -474,16 +502,23 @@ function App(): React.JSX.Element {
     [tabs, terminalPage]
   )
   const t = dictionaries[locale]
-  const providerOptions = useMemo(
-    () =>
-      config.providers.map((provider) => ({
-        id: provider.id,
-        name: provider.name || provider.id
-      })),
-    [config.providers]
-  )
-  const modelOptions = useMemo(() => flattenProviderModels(config.providers), [config.providers])
-  const visibleModels = modelOptions.length ? modelOptions : models
+  const { appendLog, updateAgentRun, appendAgentEvent } = useAgentRuns({
+    activeTabIdRef,
+    nextLogIdRef,
+    activeAgentRunRef,
+    activeRunCanceledRef,
+    updateTab,
+    t
+  })
+  const { configured, modelOptions, visibleModels, settingsProvider, settingsMcpServer } =
+    useSettings({
+      config,
+      models,
+      settingsProviderId,
+      settingsMcpServerId,
+      emptyProvider,
+      emptyMcpServer
+    })
   const activeTabProviderId = activeTab.providerId ?? config.providerId
   const activeProviderId = config.providers.some((provider) => provider.id === activeTabProviderId)
     ? (activeTabProviderId ?? config.providers[0]?.id ?? '')
@@ -498,14 +533,7 @@ function App(): React.JSX.Element {
   const activeModel = visibleModels.find(
     (model) => model.id === activeTabModelId && model.providerId === activeProviderId
   )
-  const settingsProvider =
-    config.providers.find((provider) => provider.id === settingsProviderId) ??
-    config.providers[0] ??
-    emptyProvider
-  const settingsMcpServer =
-    config.mcpServers.find((server) => server.id === settingsMcpServerId) ??
-    config.mcpServers[0] ??
-    emptyMcpServer
+  const activeModelSelectionValue = buildModelSelectionValue(activeProviderId, activeTabModelId)
   const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
   const mcpToolRefs = useMemo(
     () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
@@ -555,6 +583,19 @@ function App(): React.JSX.Element {
       ? 'not-ready'
       : 'pending'
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
+  const {
+    displayConnections,
+    filteredDisplayConnections,
+    connectionFormReady,
+    connectionCommandPreview
+  } = useConnections({
+    connections,
+    query: connectionSearchQuery,
+    connectionForm,
+    connectionSshOptionsText,
+    localTerminalLabel: t.connections.localTerminal,
+    localTerminalDescription: t.connections.defaultTerminal
+  })
   const slashCommandQuery = getSlashCommandQuery(activeTab.agentInput)
   const slashCommandOptions = useMemo(() => {
     if (slashCommandQuery === undefined) return []
@@ -613,38 +654,6 @@ function App(): React.JSX.Element {
     selectedItem?.scrollIntoView({ block: 'nearest' })
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
 
-  const configured = useMemo(() => Boolean(config.model.trim()), [config.model])
-  const filteredConnections = useMemo(
-    () => filterConnections(connections, connectionSearchQuery),
-    [connectionSearchQuery, connections]
-  )
-  const connectionFormReady = useMemo(
-    () => Boolean(connectionForm.name.trim() && connectionForm.host.trim()),
-    [connectionForm.host, connectionForm.name]
-  )
-  const connectionCommandPreview = useMemo(() => {
-    const host = connectionForm.host.trim()
-    if (!host) return ''
-
-    return buildSshCommand({
-      id: connectionForm.id || 'preview',
-      source: 'custom',
-      name: connectionForm.name.trim() || 'preview',
-      host,
-      user: connectionForm.user?.trim() || undefined,
-      port: connectionForm.port || undefined,
-      identityFile: connectionForm.identityFile?.trim() || undefined,
-      sshOptions: parseSshOptions(connectionSshOptionsText)
-    })
-  }, [
-    connectionForm.host,
-    connectionForm.id,
-    connectionForm.identityFile,
-    connectionForm.name,
-    connectionForm.port,
-    connectionForm.user,
-    connectionSshOptionsText
-  ])
   const filteredLocalSkills = useMemo(
     () => filterLocalSkills(skills, localSkillSearchQuery),
     [localSkillSearchQuery, skills]
@@ -667,8 +676,8 @@ function App(): React.JSX.Element {
   }
 
   const refreshWikiDocuments = useCallback(async (): Promise<void> => {
-    const initialLoad = wikiDocuments.length === 0
-    if (initialLoad) setWikiLoading(true)
+    const startedAt = Date.now()
+    setWikiLoading(true)
     try {
       const documents = await window.api.agent.listWikiDocuments()
       setWikiDocuments(documents)
@@ -681,9 +690,13 @@ function App(): React.JSX.Element {
         text: error instanceof Error ? error.message : String(error)
       })
     } finally {
-      if (initialLoad) setWikiLoading(false)
+      const elapsed = Date.now() - startedAt
+      if (elapsed < WIKI_REFRESH_MIN_LOADING_MS) {
+        await wait(WIKI_REFRESH_MIN_LOADING_MS - elapsed)
+      }
+      setWikiLoading(false)
     }
-  }, [wikiDocuments.length])
+  }, [])
 
   function setWikiSheetOpen(open: boolean): void {
     setWikiOpen(open)
@@ -693,264 +706,6 @@ function App(): React.JSX.Element {
       void refreshWikiDocuments()
     }
   }
-
-  const updateTab = useCallback(
-    (tabId: string, updater: (tab: AgentTerminalTab) => AgentTerminalTab): void => {
-      setTabs((current) => current.map((tab) => (tab.id === tabId ? updater(tab) : tab)))
-    },
-    []
-  )
-
-  const upsertSubterminal = useCallback(
-    (
-      parentTabId: string,
-      name: string,
-      id: string,
-      updater: (subterminal: TemporarySubterminal) => TemporarySubterminal
-    ): void => {
-      updateTab(parentTabId, (tab) => {
-        const existing = tab.subTerminals.find((subterminal) => subterminal.id === id)
-        const base: TemporarySubterminal = existing ?? {
-          id,
-          name,
-          output: '',
-          rawOutput: '',
-          cwd: '',
-          status: 'active'
-        }
-        const nextSubterminal = updater(base)
-        const nextSubTerminals = existing
-          ? tab.subTerminals.map((subterminal) =>
-              subterminal.id === id ? nextSubterminal : subterminal
-            )
-          : [...tab.subTerminals, nextSubterminal].slice(-3)
-
-        return { ...tab, subTerminals: nextSubTerminals }
-      })
-    },
-    [updateTab]
-  )
-
-  const updateSubterminalOutput = useCallback(
-    (parentTabId: string, name: string, id: string, data: string): void => {
-      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
-        ...subterminal,
-        status: 'active',
-        rawOutput: `${subterminal.rawOutput}${data}`.slice(-120_000),
-        output: formatReadableSubterminalOutput(`${subterminal.rawOutput}${data}`).slice(-80_000)
-      }))
-    },
-    [upsertSubterminal]
-  )
-
-  const updateSubterminalCwd = useCallback(
-    (parentTabId: string, name: string, id: string, cwd: string): void => {
-      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
-        ...subterminal,
-        cwd,
-        status: 'active'
-      }))
-    },
-    [upsertSubterminal]
-  )
-
-  const updateSubterminalStatus = useCallback(
-    (
-      parentTabId: string,
-      name: string,
-      id: string,
-      status: TemporarySubterminal['status']
-    ): void => {
-      upsertSubterminal(parentTabId, name, id, (subterminal) => ({
-        ...subterminal,
-        status
-      }))
-    },
-    [upsertSubterminal]
-  )
-
-  const closeSubterminal = useCallback(
-    (parentTabId: string, subterminalId: string): void => {
-      window.api.terminal.stop(subterminalId)
-      updateTab(parentTabId, (tab) => ({
-        ...tab,
-        subTerminals: tab.subTerminals.filter((subterminal) => subterminal.id !== subterminalId)
-      }))
-    },
-    [updateTab]
-  )
-
-  const closeAllSubterminals = useCallback(
-    (parentTabId: string): void => {
-      const parentTab = tabsRef.current.find((tab) => tab.id === parentTabId)
-      parentTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
-      updateTab(parentTabId, (tab) => ({ ...tab, subTerminals: [] }))
-    },
-    [updateTab]
-  )
-
-  const resizeSubterminalPair = useCallback(
-    (
-      tabId: string,
-      leftId: string,
-      rightId: string,
-      leftWidth: number,
-      rightWidth: number
-    ): void => {
-      updateTab(tabId, (tab) => {
-        const currentWidths = getSubterminalWidths(tab.subTerminals)
-        const total = leftWidth + rightWidth
-        const nextLeft = Math.max(18, Math.min(total - 18, leftWidth))
-        const nextRight = total - nextLeft
-
-        return {
-          ...tab,
-          subTerminals: tab.subTerminals.map((subterminal, index) => {
-            if (subterminal.id === leftId) return { ...subterminal, widthPercent: nextLeft }
-            if (subterminal.id === rightId) return { ...subterminal, widthPercent: nextRight }
-            return {
-              ...subterminal,
-              widthPercent: subterminal.widthPercent ?? currentWidths[index]
-            }
-          })
-        }
-      })
-    },
-    [updateTab]
-  )
-
-  const appendLog = useCallback(
-    (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): number => {
-      const id = nextLogIdRef.current
-      const createdAt = new Date().toISOString()
-      nextLogIdRef.current += 1
-      updateTab(tabId, (tab) => ({
-        ...tab,
-        agentLog: [...tab.agentLog, { id, ...entry, createdAt }].slice(-120)
-      }))
-      void window.api.storage.saveAgentLog({
-        tabId,
-        logId: id,
-        kind: entry.kind,
-        text: entry.text,
-        createdAt
-      })
-      return id
-    },
-    [updateTab]
-  )
-
-  const updateLogEntryText = useCallback(
-    (tabId: string, logId: number, text: string): void => {
-      updateTab(tabId, (tab) => ({
-        ...tab,
-        agentLog: tab.agentLog.map((entry) => (entry.id === logId ? { ...entry, text } : entry))
-      }))
-      void window.api.storage.updateAgentLog({ tabId, logId, text })
-    },
-    [updateTab]
-  )
-
-  const updateAgentRun = useCallback(
-    (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState): void => {
-      const run = activeAgentRunRef.current.get(tabId)
-      if (!run) return
-
-      const nextRun = updater(run)
-      activeAgentRunRef.current.set(tabId, nextRun)
-      updateLogEntryText(tabId, nextRun.logId, formatAgentRunMarkdown(nextRun, t))
-    },
-    [t, updateLogEntryText]
-  )
-
-  const appendAgentEvent = useCallback(
-    (event: AgentEvent, tabId = activeTabIdRef.current): void => {
-      if (activeRunCanceledRef.current.has(tabId)) return
-
-      if (event.type === 'token') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          result: `${run.result ?? ''}${event.text}`
-        }))
-        return
-      }
-
-      if (event.type === 'done') return
-
-      if (event.type === 'status' && isNoisyMcpCatalogMessage(event.message)) return
-
-      if (event.type === 'plan') {
-        const detail = event.steps.length
-          ? event.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
-          : t.input.planUnavailable
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          actions: [
-            ...run.actions,
-            {
-              title: t.input.createdPlan,
-              detail
-            }
-          ]
-        }))
-        return
-      }
-
-      if (event.type === 'command-review') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          actions: [
-            ...run.actions,
-            {
-              title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
-              detail: formatCommandAuditActionDetail(event.command, event.audit, t)
-            }
-          ]
-        }))
-        return
-      }
-
-      if (event.type === 'skills') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          actions: [
-            ...run.actions,
-            {
-              title: `${t.input.loadedSkills}: ${event.skills.map((skill) => skill.name).join(', ')}`,
-              detail: formatLoadedSkillsActionDetail(event.skills, t)
-            }
-          ]
-        }))
-        return
-      }
-
-      if (event.type === 'tool') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          actions: [
-            ...run.actions,
-            {
-              title: `${t.input.usedTool}: ${event.name}`,
-              detail: localizeAgentEventMessage(event.message, t)
-            }
-          ]
-        }))
-        return
-      }
-
-      updateAgentRun(tabId, (run) => ({
-        ...run,
-        actions: [
-          ...run.actions,
-          {
-            title: formatAgentEventActionTitle(event, t),
-            detail: localizeAgentEventMessage(event.message, t)
-          }
-        ]
-      }))
-    },
-    [t, updateAgentRun]
-  )
 
   runAgentConversationRef.current = runAgentConversation
 
@@ -1222,6 +977,15 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    return window.api.terminal.onData((event) => {
+      const subterminal = parseSubterminalTabId(event.tabId)
+      if (subterminal) return
+
+      maybeRequestTerminalPassword(event.tabId, event.data)
+    })
+  }, [maybeRequestTerminalPassword])
+
+  useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
       const subterminalHeightResize = subterminalHeightResizeRef.current
       if (subterminalHeightResize) {
@@ -1243,11 +1007,12 @@ function App(): React.JSX.Element {
 
       const wikiSheetResize = wikiSheetResizeRef.current
       if (wikiSheetResize) {
-        const listWidth = 280
-        const sheetChromeWidth = 62
-        const maxWidth = Math.max(360, window.innerWidth - 48 - listWidth - sheetChromeWidth)
+        const maxWidth = Math.max(
+          WIKI_MIN_PREVIEW_WIDTH,
+          window.innerWidth - 48 - WIKI_SHEET_SELECTED_FIXED_WIDTH
+        )
         const nextWidth = Math.max(
-          360,
+          WIKI_MIN_PREVIEW_WIDTH,
           Math.min(maxWidth, wikiSheetResize.startWidth + event.clientX - wikiSheetResize.startX)
         )
         setWikiPreviewWidth(nextWidth)
@@ -1612,7 +1377,6 @@ function App(): React.JSX.Element {
         ...current,
         terminalOutput: `${current.terminalOutput}${event.data}`.slice(-200_000)
       }))
-      maybeRequestTerminalPassword(event.tabId, event.data)
       if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
@@ -2119,9 +1883,9 @@ function App(): React.JSX.Element {
       })
       setWikiDocuments((current) => upsertWikiSummary(current, document))
       setSelectedWikiDocument(document)
-      setWikiEditTitle(document.title)
       setWikiEditContent(document.content)
       setWikiEditing(false)
+      setWikiPreviewWidth(getDefaultWikiPreviewWidth())
       setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
       setWikiOpen(true)
     } catch (error) {
@@ -2177,8 +1941,8 @@ function App(): React.JSX.Element {
     try {
       const detail = (await window.api.agent.getWikiDocument(document.id)) ?? null
       setSelectedWikiDocument(detail)
-      setWikiEditTitle(detail?.title ?? '')
       setWikiEditContent(detail?.content ?? '')
+      if (detail) setWikiPreviewWidth(getDefaultWikiPreviewWidth())
     } catch (error) {
       setWikiMessage({
         type: 'error',
@@ -2197,11 +1961,10 @@ function App(): React.JSX.Element {
     try {
       const document = await window.api.agent.saveWikiDocument({
         id: selectedWikiDocument.id,
-        title: wikiEditTitle,
+        title: selectedWikiDocument.title,
         content: wikiEditContent
       })
       setSelectedWikiDocument(document)
-      setWikiEditTitle(document.title)
       setWikiEditContent(document.content)
       setWikiDocuments((current) => upsertWikiSummary(current, document))
       setWikiEditing(false)
@@ -2213,6 +1976,34 @@ function App(): React.JSX.Element {
       })
     } finally {
       setWikiSaving(false)
+    }
+  }
+
+  async function deleteWikiDocument(): Promise<void> {
+    if (!selectedWikiDocument) return
+    if (!window.confirm(`${t.confirm.deleteWikiDocument}\n\n${selectedWikiDocument.title}`)) return
+
+    setWikiDeletingId(selectedWikiDocument.id)
+    setWikiMessage(null)
+    try {
+      const deleted = await window.api.agent.deleteWikiDocument(selectedWikiDocument.id)
+      if (!deleted.ok) throw new Error(t.wiki.deleteFailed)
+
+      const deletedTitle = selectedWikiDocument.title
+      setWikiDocuments((current) =>
+        current.filter((document) => document.id !== selectedWikiDocument.id)
+      )
+      setSelectedWikiDocument(null)
+      setWikiEditContent('')
+      setWikiEditing(false)
+      setWikiMessage({ type: 'success', text: `${t.wiki.deleted}: ${deletedTitle}` })
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: `${t.wiki.deleteFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
+    } finally {
+      setWikiDeletingId(null)
     }
   }
 
@@ -2277,32 +2068,19 @@ function App(): React.JSX.Element {
     }
   }
 
-  function applyModel(modelId: string): void {
-    const modelProviderId =
-      filteredModels.find((model) => model.id === modelId)?.providerId ?? activeProviderId
+  function applyConversationModel(selection: string): void {
+    const parsed = parseModelSelectionValue(selection)
+    const selectedModel = visibleModels.find(
+      (model) => model.providerId === parsed.providerId && model.id === parsed.model
+    )
+    if (!selectedModel) return
 
     updateTab(activeTab.id, (tab) => ({
       ...tab,
-      providerId: modelProviderId,
-      model: modelId
+      providerId: selectedModel.providerId,
+      model: selectedModel.id
     }))
-    void persistModelSelection(modelProviderId, modelId)
-  }
-
-  function applyProvider(providerId: string): void {
-    const providerModels = visibleModels.filter((model) => model.providerId === providerId)
-    if (!providerModels.length) return
-    const nextModel =
-      activeTab.model && providerModels.some((model) => model.id === activeTab.model)
-        ? activeTab.model
-        : providerModels[0].id
-
-    updateTab(activeTab.id, (tab) => ({
-      ...tab,
-      providerId,
-      model: nextModel
-    }))
-    void persistModelSelection(providerId, nextModel)
+    void persistModelSelection(selectedModel.providerId, selectedModel.id)
   }
 
   function stopAgentRun(tabId = activeTabIdRef.current): void {
@@ -2600,7 +2378,47 @@ function App(): React.JSX.Element {
       })
   }
 
+  function openLocalTerminal(): void {
+    setHiddenPane(null)
+    setTerminalPage('terminal')
+
+    const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
+    const canReuseCurrentTab =
+      currentTab &&
+      !currentTab.isSsh &&
+      !currentTab.connectionId &&
+      !currentTab.sessionId &&
+      !currentTab.terminalOutput
+
+    const targetTabId = canReuseCurrentTab ? currentTab.id : createTerminalTab().id
+
+    if (canReuseCurrentTab) {
+      updateTab(currentTab.id, (tab) => ({
+        ...tab,
+        title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
+        connectionId: undefined,
+        connectionName: undefined,
+        isSsh: false
+      }))
+    } else {
+      const nextTab = createTerminalTab({
+        id: targetTabId,
+        title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
+        providerId: config.providerId,
+        isSsh: false
+      })
+      setTabs((current) => [...current, nextTab])
+    }
+
+    setActiveTabId(targetTabId)
+  }
+
   function openConnectionTerminal(connection: ConnectionConfig): void {
+    if (isLocalConnection(connection)) {
+      openLocalTerminal()
+      return
+    }
+
     setHiddenPane(null)
     setTerminalPage('terminal')
     const nextTab = createTerminalTab({
@@ -2617,6 +2435,12 @@ function App(): React.JSX.Element {
   }
 
   function connectFromConnectionManager(connection: ConnectionConfig): void {
+    if (isLocalConnection(connection)) {
+      openLocalTerminal()
+      if (connectionModalOpen) setConnectionModalOpen(false)
+      return
+    }
+
     if (connectionModalOpen) {
       openConnectionTerminal(connection)
       setConnectionModalOpen(false)
@@ -2789,28 +2613,27 @@ function App(): React.JSX.Element {
     appendLog(
       {
         kind: 'user',
-        text: formatVisibleInputWithReferences(
-          displayInput,
-          skillRefs,
-          pathRefs,
-          toolRefs,
-          wikiRefs,
-          t
-        )
+        text: displayInput
       },
       tabId
     )
     updateTab(tabId, (current) => ({ ...current, agentThinking: true }))
     const terminalContext = await window.api.terminal.getContext(tabId)
     const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
+    const explicitLocalFileRequest = hasExplicitLocalFileOperationIntent(displayInput)
     const allowTerminalTools = !explicitNonTerminalRequest
-    const directlyMentionedConnection = findDirectlyMentionedConnection(displayInput, connections)
+    const directlyMentionedConnection = explicitLocalFileRequest
+      ? undefined
+      : findDirectlyMentionedConnection(displayInput, connections)
     const directlyMentionsCurrentConnection =
       Boolean(directlyMentionedConnection) && isSameConnectionTab(tab, directlyMentionedConnection)
     const inputMentionsConnection =
       Boolean(directlyMentionedConnection) && !directlyMentionsCurrentConnection
     const shouldResolveConnectionIntent =
-      !resumeRequested && !directlyMentionsCurrentConnection && !explicitNonTerminalRequest
+      !resumeRequested &&
+      !directlyMentionsCurrentConnection &&
+      !explicitNonTerminalRequest &&
+      !explicitLocalFileRequest
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     try {
       connectionIntent =
@@ -4642,184 +4465,42 @@ function App(): React.JSX.Element {
   )
 
   const wikiSheet = (
-    <Sheet open={wikiOpen} onOpenChange={setWikiSheetOpen}>
-      <SheetContent
-        side="left"
-        className="w-[var(--wiki-sheet-width)] max-w-[calc(100vw-3rem)] sm:max-w-[calc(100vw-3rem)]"
-        style={
-          {
-            '--wiki-sheet-width': selectedWikiDocument
-              ? `${280 + 12 + 32 + wikiPreviewWidth}px`
-              : '420px',
-            maxWidth: 'calc(100vw - 3rem)'
-          } as React.CSSProperties
-        }
-      >
-        <SheetHeader>
-          <SheetTitle>{t.wiki.title}</SheetTitle>
-          <SheetDescription>{t.wiki.description}</SheetDescription>
-        </SheetHeader>
-        <div
-          className="app-wiki-grid grid min-h-0 flex-1 grid-cols-1 gap-3 px-4"
-          style={
-            selectedWikiDocument
-              ? { gridTemplateColumns: `280px minmax(360px, ${wikiPreviewWidth}px)` }
-              : undefined
-          }
-        >
-          <div className="flex min-h-0 flex-col gap-2">
-            <Input
-              value={wikiSearchQuery}
-              onChange={(event) => setWikiSearchQuery(event.target.value)}
-              placeholder={t.wiki.searchPlaceholder}
-            />
-            <div className="min-h-0 space-y-2 overflow-auto">
-              {wikiLoading && (
-                <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
-                  <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
-                  {t.wiki.loading}
-                </div>
-              )}
-              {!wikiLoading && wikiDocuments.length === 0 && (
-                <div className="rounded-md border p-3 text-sm text-muted-foreground">
-                  {t.wiki.empty}
-                </div>
-              )}
-              {!wikiLoading && wikiDocuments.length > 0 && filteredWikiDocuments.length === 0 && (
-                <div className="rounded-md border p-3 text-sm text-muted-foreground">
-                  {t.wiki.empty}
-                </div>
-              )}
-              {filteredWikiDocuments.map((document) => (
-                <button
-                  key={document.id}
-                  type="button"
-                  className={`block w-full min-w-0 overflow-hidden rounded-md border p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
-                    selectedWikiDocument?.id === document.id
-                      ? 'border-primary/70 ring-1 ring-primary/30'
-                      : ''
-                  }`}
-                  onClick={() => void openWikiDocument(document)}
-                >
-                  <span className="block truncate font-medium">{document.title}</span>
-                  <span className="mt-1 block truncate text-muted-foreground">
-                    {formatHistoryTime(document.updatedAt)}
-                  </span>
-                  {document.excerpt && (
-                    <span className="mt-2 line-clamp-2 block overflow-hidden break-words leading-snug text-muted-foreground">
-                      {document.excerpt}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          {selectedWikiDocument && (
-            <div className="app-document-panel relative min-h-0 overflow-auto rounded-md border bg-background">
-              {wikiDocumentLoadingId === selectedWikiDocument.id ? (
-                <div className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
-                  <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
-                  {t.wiki.loading}
-                </div>
-              ) : wikiEditing ? (
-                <div className="space-y-4 p-5 text-sm">
-                  <Field>
-                    <FieldLabel htmlFor="wiki-edit-title">{t.wiki.titleLabel}</FieldLabel>
-                    <Input
-                      id="wiki-edit-title"
-                      value={wikiEditTitle}
-                      onChange={(event) => setWikiEditTitle(event.target.value)}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="wiki-edit-content">{t.wiki.markdownSource}</FieldLabel>
-                    <Textarea
-                      id="wiki-edit-content"
-                      className="min-h-[520px] resize-y font-mono text-xs"
-                      value={wikiEditContent}
-                      onChange={(event) => setWikiEditContent(event.target.value)}
-                    />
-                  </Field>
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setWikiEditing(false)
-                        setWikiEditTitle(selectedWikiDocument.title)
-                        setWikiEditContent(selectedWikiDocument.content)
-                      }}
-                      disabled={wikiSaving}
-                    >
-                      {t.wiki.cancelEdit}
-                    </Button>
-                    <Button type="button" onClick={saveWikiEdits} disabled={wikiSaving}>
-                      {wikiSaving && (
-                        <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                      )}
-                      {t.wiki.saveEdit}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <article className="mx-auto w-full max-w-4xl space-y-4 p-5 text-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h2 className="text-base font-semibold">{selectedWikiDocument.title}</h2>
-                      <p className="mt-1 break-all text-xs text-muted-foreground">
-                        {selectedWikiDocument.path}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setWikiEditTitle(selectedWikiDocument.title)
-                        setWikiEditContent(selectedWikiDocument.content)
-                        setWikiEditing(true)
-                      }}
-                    >
-                      {t.wiki.edit}
-                    </Button>
-                  </div>
-                  <MarkdownContent value={selectedWikiDocument.content} t={t} />
-                </article>
-              )}
-              <div
-                className="absolute inset-y-0 right-0 hidden w-2 cursor-col-resize hover:bg-primary/40 lg:block"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label={t.wiki.resize}
-                title={t.wiki.resize}
-                onPointerDown={(event) => {
-                  event.preventDefault()
-                  event.currentTarget.setPointerCapture(event.pointerId)
-                  wikiSheetResizeRef.current = {
-                    startX: event.clientX,
-                    startWidth: wikiPreviewWidth
-                  }
-                  document.body.style.cursor = 'col-resize'
-                  document.body.style.userSelect = 'none'
-                }}
-              />
-            </div>
-          )}
-        </div>
-        <SheetFooter className="gap-2 sm:justify-between">
-          <SkillManageStatus message={wikiMessage} />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void refreshWikiDocuments()}
-            disabled={wikiLoading}
-          >
-            {wikiLoading && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
-            {t.wiki.refresh}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+    <WikiSheet
+      open={wikiOpen}
+      onOpenChange={setWikiSheetOpen}
+      t={t}
+      wikiLoading={wikiLoading}
+      wikiDocumentLoadingId={wikiDocumentLoadingId}
+      wikiDocuments={wikiDocuments}
+      filteredWikiDocuments={filteredWikiDocuments}
+      selectedWikiDocument={selectedWikiDocument}
+      wikiSearchQuery={wikiSearchQuery}
+      wikiEditing={wikiEditing}
+      wikiEditContent={wikiEditContent}
+      wikiSaving={wikiSaving}
+      wikiDeletingId={wikiDeletingId}
+      wikiMessage={wikiMessage}
+      wikiPreviewWidth={wikiPreviewWidth}
+      onRefresh={() => void refreshWikiDocuments()}
+      onSearchQueryChange={setWikiSearchQuery}
+      onOpenDocument={(document) => void openWikiDocument(document)}
+      onStartEdit={() => {
+        if (!selectedWikiDocument) return
+        setWikiEditContent(selectedWikiDocument.content)
+        setWikiEditing(true)
+      }}
+      onCancelEdit={() => {
+        if (!selectedWikiDocument) return
+        setWikiEditing(false)
+        setWikiEditContent(selectedWikiDocument.content)
+      }}
+      onSaveEdits={() => void saveWikiEdits()}
+      onDeleteDocument={() => void deleteWikiDocument()}
+      onEditContentChange={setWikiEditContent}
+      onStartResize={(startX, startWidth) => {
+        wikiSheetResizeRef.current = { startX, startWidth }
+      }}
+    />
   )
 
   return (
@@ -5469,8 +5150,8 @@ function App(): React.JSX.Element {
                 <div className="min-h-0 flex-1 bg-background/80 p-4">
                   <ConnectionList
                     className="mx-auto h-full max-w-3xl"
-                    connections={connections}
-                    filteredConnections={filteredConnections}
+                    connections={displayConnections}
+                    filteredConnections={filteredDisplayConnections}
                     query={connectionSearchQuery}
                     t={t}
                     formatConnectionTarget={formatConnectionTarget}
@@ -5569,27 +5250,8 @@ function App(): React.JSX.Element {
                     )}
                   </Button>
                   <Select
-                    value={activeProviderId}
-                    onValueChange={applyProvider}
-                    disabled={providerOptions.length === 0}
-                  >
-                    <SelectTrigger className="h-8 min-w-0 flex-1">
-                      <SelectValue aria-label={t.app.provider} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>{t.app.provider}</SelectLabel>
-                        {providerOptions.map((provider) => (
-                          <SelectItem key={provider.id} value={provider.id}>
-                            {provider.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={activeTabModelId}
-                    onValueChange={applyModel}
+                    value={activeModelSelectionValue}
+                    onValueChange={applyConversationModel}
                     disabled={visibleModels.length === 0}
                   >
                     <SelectTrigger className="h-8 min-w-0 flex-1" title={aiStatusText}>
@@ -5598,7 +5260,11 @@ function App(): React.JSX.Element {
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
                         <StatusDot state={aiState} />
-                        <span className="truncate">{activeModel?.name ?? activeTabModelId}</span>
+                        <span className="truncate">
+                          {activeModel
+                            ? `${activeModel.name} · ${activeModel.providerName}`
+                            : activeTabModelId}
+                        </span>
                         {validation?.modelOk === false && (
                           <TriangleAlertIcon
                             className="size-3.5 shrink-0 text-destructive"
@@ -5610,9 +5276,12 @@ function App(): React.JSX.Element {
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>{t.app.model}</SelectLabel>
-                        {(filteredModels.length ? filteredModels : visibleModels).map((model) => (
-                          <SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
-                            {model.name}
+                        {visibleModels.map((model) => (
+                          <SelectItem
+                            key={`${model.providerId}:${model.id}`}
+                            value={buildModelSelectionValue(model.providerId, model.id)}
+                          >
+                            {model.name} · {model.providerName}
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -5744,8 +5413,8 @@ function App(): React.JSX.Element {
       </section>
       <ConnectionManagerModal
         open={connectionModalOpen}
-        connections={connections}
-        filteredConnections={filteredConnections}
+        connections={displayConnections}
+        filteredConnections={filteredDisplayConnections}
         query={connectionSearchQuery}
         selectedConnectionId={selectedConnectionId}
         connectionForm={connectionForm}
@@ -5820,265 +5489,10 @@ function summarizeHistoryMessage(value: string): string {
   return `${compact.slice(0, 120)}...`
 }
 
-function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
-  switch (risk) {
-    case 'low':
-      return t.commandReview.lowRisk
-    case 'medium':
-      return t.commandReview.mediumRisk
-    case 'high':
-      return t.commandReview.highRisk
-  }
-}
-
-function formatCommandAuditDetail(
-  command: string,
-  audit: CommandApprovalRequest['audit'],
-  t: Dictionary
-): string {
-  return [
-    `${t.commandReview.command}:`,
-    command,
-    '',
-    `${t.commandReview.auditSummary}:`,
-    audit.summary,
-    '',
-    `${t.commandReview.operationReason}:`,
-    audit.operationReason,
-    '',
-    `${t.commandReview.riskLevel}: ${riskLabel(audit.risk, t)}`,
-    '',
-    `${t.commandReview.riskPoints}:`,
-    ...audit.riskPoints.map((point) => `- ${point}`),
-    '',
-    `${t.commandReview.impactAnalysis}:`,
-    audit.impactAnalysis,
-    '',
-    `${t.commandReview.recommendation}:`,
-    audit.recommendation
-  ].join('\n')
-}
-
-function formatCommandAuditActionDetail(
-  command: string,
-  audit: CommandApprovalRequest['audit'],
-  t: Dictionary
-): string {
-  if (audit.risk === 'low' && !audit.requiresApproval) {
-    return [
-      `${t.commandReview.command}:`,
-      command,
-      '',
-      `${t.commandReview.auditSummary}:`,
-      audit.summary,
-      '',
-      `${t.commandReview.operationReason}:`,
-      audit.operationReason
-    ].join('\n')
-  }
-
-  return formatCommandAuditDetail(command, audit, t)
-}
-
-function formatLoadedSkillsActionDetail(
-  skills: Extract<AgentEvent, { type: 'skills' }>['skills'],
-  t: Dictionary
-): string {
-  return skills
-    .flatMap((skill, index) => [
-      `${index + 1}. ${skill.name}`,
-      `${t.input.skillMatchReason}: ${
-        skill.reason === 'referenced' ? t.input.skillReasonReferenced : t.input.skillReasonMatched
-      }`,
-      `${t.input.slashSkillPathLabel}: ${skill.path}`,
-      skill.description ? `${t.input.slashSkillDescriptionLabel}: ${skill.description}` : ''
-    ])
-    .filter(Boolean)
-    .join('\n')
-}
-
-function formatAgentEventActionTitle(
-  event: Exclude<AgentEvent, { type: 'token' | 'done' | 'skills' }>,
-  t: Dictionary
-): string {
-  switch (event.type) {
-    case 'status':
-      if (/^Loaded \d+ MCP tools:/.test(event.message)) {
-        return event.message.split('\n')[0]?.replace(/:$/, '.') ?? event.message
-      }
-      return localizeAgentEventMessage(event.message, t)
-    case 'thought':
-      return localizeAgentEventMessage(event.message, t)
-    case 'error':
-      return `${t.input.error}: ${localizeAgentEventMessage(event.message, t)}`
-    default:
-      return t.input.genericAction
-  }
-}
-
-function isNoisyMcpCatalogMessage(message: string): boolean {
-  return /^Loaded \d+ MCP tools?\b/i.test(message.trim())
-}
-
-function localizeAgentEventMessage(message: string, t: Dictionary): string {
-  if (message === 'Dispatching tool call.') return t.input.toolDispatching
-  if (message.startsWith('Submitting command for review:')) {
-    return `${t.commandReview.submitted}:\n${message.slice('Submitting command for review:'.length).trim()}`
-  }
-  const subterminalCommand = message.match(
-    /^Submitting command in temporary sub-terminal "([^"]+)":\s*([\s\S]+)$/
-  )
-  if (subterminalCommand) {
-    return `${t.commandReview.submitted} (${subterminalCommand[1]}):\n${subterminalCommand[2].trim()}`
-  }
-  if (message === 'Command audit classified this as read-only inspection.') {
-    return t.commandReview.readOnlyAllowed
-  }
-  if (message === 'Command review subprocess is analyzing risk.') return t.commandReview.analyzing
-  if (message.startsWith('Command matched whitelist:')) return t.commandReview.whitelisted
-  if (message === 'Command approved by user.') return t.commandReview.approved
-  if (message === 'Command rejected by user.') return t.commandReview.rejected
-  if (message === 'Running in chat-only terminal assistant mode.') return t.input.currentTerminal
-  if (message === 'Done.') return t.input.done
-  if (message === 'Agent run canceled.') return t.input.agentCanceled
-  if (message === 'Planning before execution...') return t.input.createdPlan
-  if (message === 'Understanding the user request and current terminal context.') {
-    return t.input.understandingRequest
-  }
-  if (message === 'Understanding the user request and available non-terminal context.') {
-    return t.input.understandingRequest
-  }
-  if (message === 'Breaking the request into verifiable steps before execution.') {
-    return t.input.breakingDownTask
-  }
-  if (isNoisyMcpCatalogMessage(message)) return message
-  if (/^Selected \d+ active tools:/.test(message)) return t.input.toolsConfigured
-  if (/^Executing plan with ReAct step /.test(message)) return t.input.executingPlanStep
-  if (/^Assessing the request and choosing one concrete next action/.test(message)) {
-    return t.input.reasoningNextStep
-  }
-  if (/^Reasoning and acting step /.test(message)) return t.input.reasoningNextStep
-  if (message === 'Analyzing tool results and preparing the next action...') {
-    return t.input.analyzingNextAction
-  }
-  if (
-    message ===
-    'Reviewing the latest observation and deciding whether to continue, verify, or summarize.'
-  ) {
-    return t.input.reviewingObservation
-  }
-  const preparingTool = message.match(/^Preparing to run tool ([\w.-]+) for the current step\.$/)
-  if (preparingTool) return `${t.input.preparingToolAction}: ${preparingTool[1]}`
-  if (message === 'Analyzing tool results and preparing the final answer...') {
-    return t.input.synthesizingResult
-  }
-
-  return message
-}
-
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   const next = { ...record }
   delete next[key]
   return next
-}
-
-function filterLocalSkills(skills: AgentSkillOption[], query: string): AgentSkillOption[] {
-  const normalizedQuery = normalizeSkillSearchQuery(query)
-  if (!normalizedQuery) return skills
-
-  return skills.filter((skill) =>
-    normalizeSkillSearchQuery([skill.name, skill.description].filter(Boolean).join(' ')).includes(
-      normalizedQuery
-    )
-  )
-}
-
-function normalizeSkillSearchQuery(value: string): string {
-  return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
-}
-
-function buildInstalledSkillNameSet(skills: AgentSkillOption[]): Set<string> {
-  return new Set(skills.map((skill) => normalizeSkillIdentity(skill.name)))
-}
-
-function isSkillSearchResultInstalled(
-  result: AgentSkillSearchResult,
-  installedSkillNames: Set<string>
-): boolean {
-  return [result.installSkill, result.name]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .some((value) => installedSkillNames.has(normalizeSkillIdentity(value)))
-}
-
-function normalizeSkillIdentity(value: string): string {
-  return value.toLowerCase().replace(/[\s_.-]+/g, '')
-}
-
-function buildSkillInstallCommand(result: AgentSkillSearchResult): string {
-  return [
-    'npx',
-    '-y',
-    'skills',
-    'add',
-    shellQuote(result.installSource),
-    '--yes',
-    '--global',
-    result.installSkill ? `--skill ${shellQuote(result.installSkill)}` : ''
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-function formatInstallCount(value: number | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}K`
-
-  return String(value)
-}
-
-function getMcpServerStatus(
-  server: AgentMcpServerConfig,
-  validation: AgentValidationResult | undefined,
-  validating: boolean,
-  toolCount: number,
-  t: Dictionary
-): { state: 'ready' | 'pending' | 'not-ready'; label: string } {
-  if (!server.enabled) return { state: 'not-ready', label: t.settings.mcpStatusDisabled }
-  if (!server.command.trim()) return { state: 'not-ready', label: t.settings.mcpStatusIncomplete }
-  if (validating) return { state: 'pending', label: t.settings.mcpStatusChecking }
-  if (toolCount > 0) return { state: 'ready', label: t.settings.mcpStatusConnected }
-
-  const validationError = extractMcpServerValidationError(server, validation)
-  if (validationError) {
-    return {
-      state: 'not-ready',
-      label: `${t.settings.mcpStatusError}: ${validationError}`
-    }
-  }
-
-  return { state: 'pending', label: t.settings.mcpStatusNotChecked }
-}
-
-function extractMcpServerValidationError(
-  server: AgentMcpServerConfig,
-  validation: AgentValidationResult | undefined
-): string {
-  const validationError = validation?.ok === false ? (validation.error ?? '') : ''
-  if (!validationError) return ''
-
-  const prefix = 'MCP server load failed:'
-  const mcpError = validationError.includes(prefix)
-    ? validationError.slice(validationError.indexOf(prefix) + prefix.length).trim()
-    : validationError
-  const parts = mcpError
-    .split(/\s*;\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-  const serverNames = [server.name, server.id].filter(Boolean)
-  const matched = parts.find((part) => serverNames.some((name) => part.includes(name)))
-
-  return matched ?? (validationError.includes(prefix) ? mcpError : '')
 }
 
 function isComposingInput(event: KeyboardEvent<HTMLTextAreaElement>): boolean {

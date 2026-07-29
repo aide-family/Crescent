@@ -32,6 +32,7 @@ export class AgentPlanner {
           'First infer the business scenario from the user request, loaded skills, SOP context, memory, terminal context, and available tools. Identify the goal, affected target, current context, constraints, required evidence, allowed actions, verification standard, and blocker/escalation path.',
           'Each step must describe the immediate action plus why it matters, what evidence or result will decide the next action, and when to stop or ask the user. Prefer detailed but concise steps over generic checklist items.',
           'Do not invent artifact destinations, filenames, namespaces, hosts, credentials, cleanup targets, or business assumptions. If the user did not request writing a report or file, do not include report-writing or file-output steps.',
+          'Explicit local file targets take precedence over memory, skills, SOPs, terminal context, and configured connections. If the request says 本地/local/this machine, references local paths such as /etc/hosts, ~, $HOME, /Users, or includes pasted local shell output such as "➜  ~ cat /etc/hosts", plan local/current-terminal work. Treat IP addresses inside pasted file contents as data, not remote hosts.',
           'Plan only actions that match the available tool capabilities. When work targets a non-current host, plan an ssh command with a concrete remote command; if authentication is required, the user can provide password/passphrase/OTP through the terminal prompt. If terminal context indicates pipe fallback rather than PTY, plan to ask for PTY-capable terminal access before interactive remote execution.',
           'When loaded skill or SOP context is supplied, use it as scenario knowledge: preserve its scope, safety rules, fallback conditions, and verification requirements without hardcoding unrelated domain-specific shortcuts.'
         ].join('\n')
@@ -90,6 +91,7 @@ function buildFallbackPlan(userInput: string): string[] {
       ? `Understand the requested scenario and target: ${task}; extract the goal, affected object, constraints, and completion criteria before acting.`
       : 'Understand the requested scenario; extract the goal, affected object, constraints, and completion criteria before acting.',
     'Compare the required action with the current terminal/tool context; if the target is a different host, use ssh with a concrete remote command, and ask for PTY-capable access only when the terminal cannot handle interactive prompts.',
+    'If the request explicitly targets local files such as /etc/hosts, ~, $HOME, or /Users, keep the action local and treat any IPs in pasted file content as data rather than remote targets.',
     'Collect the minimum direct evidence needed for the next decision, using the loaded Skill/SOP scope when present.',
     'Choose the next handling action from the evidence, state any required approval before changes, and avoid unrelated exploration.',
     'Verify the end state against the original request and report what is complete, incomplete, blocked, and next.'

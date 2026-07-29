@@ -91,6 +91,7 @@ interface TerminalAgentApi {
     listWikiDocuments: () => Promise<WikiDocumentSummary[]>
     getWikiDocument: (id: string) => Promise<WikiDocument | undefined>
     saveWikiDocument: (input: WikiSaveInput) => Promise<WikiDocument>
+    deleteWikiDocument: (id: string) => Promise<{ ok: boolean }>
     searchWikiDocuments: (query: string) => Promise<WikiDocument[]>
     pickPathReference: (kind: AgentPathReference['kind']) => Promise<AgentPathReference | undefined>
     savePastedAttachment: (input: PastedAttachmentInput) => Promise<AgentPathReference>

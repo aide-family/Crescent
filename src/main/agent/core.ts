@@ -446,17 +446,19 @@ function findLatestSupplementalLocalArtifactDestination(supplements: string[]): 
 
 function extractLocalArtifactDestination(input: string): string {
   const patterns = [
-    /(?:写入|保存|输出|导出|存到|保存到|写到)\s*(?:到|至|在|入)?\s*([~/$A-Za-z0-9_.-][^\s，,；;。]*)/i,
-    /\b(?:save|write|output|export|store)\s+(?:to|into|at)\s+([~./$A-Za-z0-9_-][^\s,;]*)/i
+    /(?:写入|保存|输出|导出|存到|保存到|写到|放到)\s*(?:到|至|在|入)?\s*([~/$A-Za-z0-9_.-][^\s，,；;。]*)/i,
+    /\b(?:save|write|output|export|store)\s+(?:(?:to|into|at)\s+)?([~./$A-Za-z0-9_-][^\s,;]*)/i
   ]
 
   for (const pattern of patterns) {
     const match = input.match(pattern)
-    if (match?.[1]) return normalizeSupplementalDestination(match[1])
+    if (match?.[1]) {
+      const destination = normalizeSupplementalDestination(match[1])
+      return isWritableArtifactDestination(destination) ? destination : ''
+    }
   }
 
-  const loosePathMatch = input.match(/((?:~|\/|\$HOME)[^\s，,；;。]*)/)
-  return loosePathMatch?.[1] ? normalizeSupplementalDestination(loosePathMatch[1]) : ''
+  return ''
 }
 
 function normalizeSupplementalDestination(value: string): string {
@@ -475,6 +477,13 @@ function buildSupplementalArtifactPath(destination: string, userInput: string): 
 
 function looksLikeFilePath(path: string): boolean {
   return /\.[A-Za-z0-9]{1,8}$/.test(path.replace(/\/+$/, ''))
+}
+
+function isWritableArtifactDestination(destination: string): boolean {
+  if (!destination) return false
+  if (destination === '/dev/null' || destination.startsWith('/dev/null/')) return false
+
+  return true
 }
 
 function inferLocalArtifactFilename(userInput: string): string {

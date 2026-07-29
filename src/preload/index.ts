@@ -138,6 +138,8 @@ const api = {
       ipcRenderer.invoke('agent:get-wiki-document', id),
     saveWikiDocument: (input: WikiSaveInput): Promise<WikiDocument> =>
       ipcRenderer.invoke('agent:save-wiki-document', input),
+    deleteWikiDocument: (id: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:delete-wiki-document', id),
     searchWikiDocuments: (query: string): Promise<WikiDocument[]> =>
       ipcRenderer.invoke('agent:search-wiki-documents', query),
     pickPathReference: (
