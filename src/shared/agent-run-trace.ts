@@ -38,7 +38,8 @@ export function buildAgentRunTrace(input: AgentRunTraceBuildInput): AgentRunTrac
       buildTraceStep(index + 1, action.title, action.detail)
     ),
     resultSummary: truncateText(redactSensitiveText(input.result?.trim() ?? ''), MAX_RESULT_CHARS),
-    error: truncateText(redactSensitiveText(input.error?.trim() ?? ''), MAX_RESULT_CHARS) || undefined
+    error:
+      truncateText(redactSensitiveText(input.error?.trim() ?? ''), MAX_RESULT_CHARS) || undefined
   }
 }
 

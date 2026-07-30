@@ -164,7 +164,8 @@ const zhCN = {
     connectionMatched: '已匹配连接',
     connectionNoActions: '正在建立 SSH 连接，未配置登录动作。',
     connectionNoMatch: '没有找到匹配的 SSH 连接，请检查已有连接或自定义连接名称。',
-    connectionClarifyFallback: '无法确定目标连接，请说明应登录哪个 SSH 连接，或是否留在当前终端继续。',
+    connectionClarifyFallback:
+      '无法确定目标连接，请说明应登录哪个 SSH 连接，或是否留在当前终端继续。',
     connectionClarifyTitle: '需要确认连接目标',
     connectionClarifyReplyPrefix: '用户补充说明：',
     connectionStarting: '正在建立连接，登录动作数量',

@@ -248,10 +248,8 @@ const api = {
       ipcRenderer.invoke('storage:save-agent-run', run),
     getAgentRun: (runId: string): Promise<StoredAgentRun | undefined> =>
       ipcRenderer.invoke('storage:get-agent-run', runId),
-    listAgentRuns: (input: {
-      tabId: string
-      limit?: number
-    }): Promise<StoredAgentRun[]> => ipcRenderer.invoke('storage:list-agent-runs', input),
+    listAgentRuns: (input: { tabId: string; limit?: number }): Promise<StoredAgentRun[]> =>
+      ipcRenderer.invoke('storage:list-agent-runs', input),
     listSessionHistory: (limit?: number): Promise<StoredSessionHistoryItem[]> =>
       ipcRenderer.invoke('storage:list-session-history', limit),
     getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>

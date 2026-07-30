@@ -96,7 +96,9 @@ export function AgentLogList({
             <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
             {t.input.thinking}
           </div>
-          <p className="mt-1 leading-relaxed">{thinkingMessage || t.input.thinkingAnalyzingRequest}</p>
+          <p className="mt-1 leading-relaxed">
+            {thinkingMessage || t.input.thinkingAnalyzingRequest}
+          </p>
         </div>
       ) : null}
     </div>
