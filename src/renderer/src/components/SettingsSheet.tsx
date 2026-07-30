@@ -1,0 +1,719 @@
+import {
+  BotIcon,
+  CheckIcon,
+  FileTextIcon,
+  Loader2Icon,
+  PlusIcon,
+  SettingsIcon,
+  TestTube2Icon,
+  Trash2Icon,
+  XIcon
+} from 'lucide-react'
+
+import {
+  OpenApiProfileEditorFields,
+  OpenApiProfileList
+} from '@renderer/components/OpenApiSettingsFields'
+import { StatusDot } from '@renderer/components/StatusIndicators'
+import { Badge } from '@renderer/components/ui/badge'
+import { Button } from '@renderer/components/ui/button'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
+import { Input } from '@renderer/components/ui/input'
+import { Separator } from '@renderer/components/ui/separator'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger
+} from '@renderer/components/ui/sheet'
+import { Textarea } from '@renderer/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue
+} from '@renderer/components/ui/select'
+import type { Dictionary } from '@renderer/i18n'
+import {
+  buildModelSelectionValue,
+  parseModelSelectionValue
+} from '@renderer/lib/app-runtime'
+import type {
+  AgentConfig,
+  AgentModelOption,
+  AgentOpenApiProfile,
+  AgentProviderConfig,
+  AgentValidationResult,
+  LocalInstructionDocument
+} from '../../../shared/agent-types'
+
+export type OpenApiProfilePatch = Partial<{
+  name: string
+  baseUrl: string
+  document: string
+  timeoutMs: number
+  maxRetries: number
+  retryBackoffMs: number
+}>
+
+export interface SettingsSheetProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  t: Dictionary
+  config: AgentConfig
+  settingsProvider: AgentProviderConfig
+  settingsProviderId: string
+  modelOptions: AgentModelOption[]
+  providerModelsText: string
+  commandWhitelistText: string
+  instructionFiles: LocalInstructionDocument[]
+  selectedInstructionName: string
+  selectedInstructionFile: LocalInstructionDocument | undefined
+  instructionContent: string
+  instructionSaved: boolean
+  providerEditorOpen: boolean
+  openApiEditorOpen: boolean
+  settingsOpenApiProfile: AgentOpenApiProfile | undefined
+  instructionEditorOpen: boolean
+  validation: AgentValidationResult | undefined
+  validating: boolean
+  saved: boolean
+  importingOpenApi: boolean
+  closeTerminalConfirmEnabled: boolean
+  onCreateProvider: () => void
+  onToggleProviderDetails: (providerId: string) => void
+  onApplyDefaultModel: (selection: string) => void | Promise<void>
+  onCloseTerminalConfirmChange: (enabled: boolean) => void
+  onMaxActiveToolsChange: (value: number) => void
+  onCommandWhitelistChange: (text: string) => void
+  onCreateOpenApiProfile: () => void
+  onToggleOpenApiProfileDetails: (profileId: string) => void
+  onDeleteOpenApiProfile: () => void
+  onOpenApiEditorOpenChange: (open: boolean) => void
+  onPatchActiveOpenApiProfile: (patch: OpenApiProfilePatch) => void
+  onImportOpenApiDocument: () => void | Promise<void>
+  onToggleInstructionDetails: (name: string) => void
+  onDeleteSettingsProvider: () => void
+  onProviderEditorOpenChange: (open: boolean) => void
+  onUpdateSettingsProvider: <K extends keyof AgentProviderConfig>(
+    key: K,
+    value: AgentProviderConfig[K]
+  ) => void
+  onUpdateSettingsProviderModels: (value: string) => void
+  onSaveProviderEditor: () => void | Promise<void>
+  onSaveOpenApiEditor: () => void | Promise<void>
+  onInstructionEditorOpenChange: (open: boolean) => void
+  onInstructionContentChange: (value: string) => void
+  onSaveInstructionFile: () => void | Promise<void>
+  onValidateConfig: () => void | Promise<void>
+  onSaveConfig: () => void | Promise<void>
+}
+
+export function SettingsSheet({
+  open,
+  onOpenChange,
+  t,
+  config,
+  settingsProvider,
+  settingsProviderId,
+  modelOptions,
+  providerModelsText,
+  commandWhitelistText,
+  instructionFiles,
+  selectedInstructionName,
+  selectedInstructionFile,
+  instructionContent,
+  instructionSaved,
+  providerEditorOpen,
+  openApiEditorOpen,
+  settingsOpenApiProfile,
+  instructionEditorOpen,
+  validation,
+  validating,
+  saved,
+  importingOpenApi,
+  closeTerminalConfirmEnabled,
+  onCreateProvider,
+  onToggleProviderDetails,
+  onApplyDefaultModel,
+  onCloseTerminalConfirmChange,
+  onMaxActiveToolsChange,
+  onCommandWhitelistChange,
+  onCreateOpenApiProfile,
+  onToggleOpenApiProfileDetails,
+  onDeleteOpenApiProfile,
+  onOpenApiEditorOpenChange,
+  onPatchActiveOpenApiProfile,
+  onImportOpenApiDocument,
+  onToggleInstructionDetails,
+  onDeleteSettingsProvider,
+  onProviderEditorOpenChange,
+  onUpdateSettingsProvider,
+  onUpdateSettingsProviderModels,
+  onSaveProviderEditor,
+  onSaveOpenApiEditor,
+  onInstructionEditorOpenChange,
+  onInstructionContentChange,
+  onSaveInstructionFile,
+  onValidateConfig,
+  onSaveConfig
+}: SettingsSheetProps): React.JSX.Element {
+  const defaultModelSelection =
+    modelOptions.find(
+      (model) => model.providerId === config.providerId && model.id === config.model
+    ) ?? modelOptions.find((model) => model.id === config.model)
+  const defaultModelValue = defaultModelSelection
+    ? buildModelSelectionValue(defaultModelSelection.providerId, defaultModelSelection.id)
+    : buildModelSelectionValue(config.providerId, config.model)
+  const detailEditorOpen =
+    (providerEditorOpen && Boolean(settingsProvider.id)) ||
+    (openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
+    (instructionEditorOpen && Boolean(selectedInstructionFile))
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          aria-label={t.common.settings}
+          title={t.common.settings}
+        >
+          <SettingsIcon aria-hidden="true" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}>
+        <SheetHeader>
+          <SheetTitle>{t.settings.title}</SheetTitle>
+          <SheetDescription>{t.settings.titleDescription}</SheetDescription>
+        </SheetHeader>
+        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                {t.settings.providerList} · {config.providers.length}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={onCreateProvider}>
+                <PlusIcon data-icon="inline-start" />
+                {t.settings.newProvider}
+              </Button>
+            </div>
+            {config.providers.length === 0 ? (
+              <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                <BotIcon className="mr-2 inline size-3" aria-hidden="true" />
+                {t.settings.modelHint}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {config.providers.map((provider) => {
+                  const selected = providerEditorOpen && settingsProviderId === provider.id
+                  const isDefaultProvider = config.providerId === provider.id
+                  const modelCount = provider.models.length
+                  const hasApiKey = Boolean(provider.apiKey?.trim())
+
+                  return (
+                    <div
+                      key={provider.id}
+                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                        selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                      }`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onToggleProviderDetails(provider.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          onToggleProviderDetails(provider.id)
+                        }
+                      }}
+                    >
+                      <div className="min-w-0 text-left">
+                        <div className="flex min-w-0 items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <StatusDot
+                                state={
+                                  provider.baseUrl.trim() && modelCount > 0 ? 'ready' : 'not-ready'
+                                }
+                              />
+                              <span className="truncate text-sm font-medium">
+                                {provider.name || provider.id}
+                              </span>
+                            </div>
+                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                              {provider.id}
+                            </div>
+                          </div>
+                          {isDefaultProvider && (
+                            <Badge variant="secondary" className="shrink-0 text-[10px]">
+                              {t.settings.model}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-3 truncate font-mono text-[11px] text-muted-foreground">
+                          {provider.baseUrl || '-'}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>
+                            {t.settings.providerModels}: {modelCount}
+                          </span>
+                          <span>·</span>
+                          <span>{hasApiKey ? t.settings.apiKey : '-'}</span>
+                        </div>
+                        {provider.models.length > 0 && (
+                          <div className="mt-2 line-clamp-2 font-mono text-[11px] text-muted-foreground">
+                            {provider.models.map((model) => model.id).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
+                <Select
+                  value={defaultModelValue}
+                  onValueChange={(value) => {
+                    const parsed = parseModelSelectionValue(value)
+                    if (!parsed.model) return
+                    void onApplyDefaultModel(value)
+                  }}
+                >
+                  <SelectTrigger id="model" className="w-full">
+                    <SelectValue placeholder={t.settings.selectModel} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t.settings.modelGroup}</SelectLabel>
+                      {modelOptions.map((model) => (
+                        <SelectItem
+                          key={`${model.providerId}:${model.id}`}
+                          value={buildModelSelectionValue(model.providerId, model.id)}
+                        >
+                          {model.name} · {model.providerName}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{t.settings.modelHint}</FieldDescription>
+              </Field>
+              <Field>
+                <label
+                  htmlFor="close-terminal-confirm"
+                  className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                >
+                  <span className="space-y-1">
+                    <span className="block text-sm font-medium">
+                      {t.settings.closeTerminalConfirm}
+                    </span>
+                    <FieldDescription>{t.settings.closeTerminalConfirmHint}</FieldDescription>
+                  </span>
+                  <Input
+                    id="close-terminal-confirm"
+                    type="checkbox"
+                    checked={closeTerminalConfirmEnabled}
+                    onChange={(event) => onCloseTerminalConfirmChange(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 accent-primary"
+                  />
+                </label>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="max-active-tools">{t.settings.dynamicToolLimit}</FieldLabel>
+                <Input
+                  id="max-active-tools"
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={config.maxActiveTools}
+                  onChange={(event) => onMaxActiveToolsChange(Number(event.target.value))}
+                />
+                <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="command-whitelist">{t.settings.commandWhitelist}</FieldLabel>
+                <Textarea
+                  id="command-whitelist"
+                  className="min-h-28 resize-y font-mono text-xs"
+                  value={commandWhitelistText}
+                  onChange={(event) => onCommandWhitelistChange(event.target.value)}
+                  placeholder={'exact command\ncommand prefix *\n/^custom regex rule$/'}
+                />
+                <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
+              </Field>
+              <Separator />
+              <OpenApiProfileList
+                profiles={config.openApiProfiles}
+                activeProfileId={config.openApiProfileId}
+                editorProfileId={settingsOpenApiProfile?.id}
+                editorOpen={openApiEditorOpen}
+                t={t}
+                onCreateProfile={onCreateOpenApiProfile}
+                onToggleProfileDetails={onToggleOpenApiProfileDetails}
+              />
+              <Separator />
+              <Field>
+                <div className="flex items-center justify-between gap-2">
+                  <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
+                  <span className="text-xs text-muted-foreground">{instructionFiles.length}</span>
+                </div>
+                {instructionFiles.length === 0 ? (
+                  <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                    <FileTextIcon className="mr-2 inline size-3" aria-hidden="true" />
+                    {t.settings.instructionFilePlaceholder}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {instructionFiles.map((file) => {
+                      const selected = instructionEditorOpen && file.name === selectedInstructionName
+                      const contentLength = file.content.trim().length
+
+                      return (
+                        <div
+                          key={file.name}
+                          className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                            selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                          }`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => onToggleInstructionDetails(file.name)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              onToggleInstructionDetails(file.name)
+                            }
+                          }}
+                        >
+                          <div className="min-w-0 text-left">
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <StatusDot state={file.exists ? 'ready' : 'pending'} />
+                                  <span className="truncate text-sm font-medium">{file.name}</span>
+                                </div>
+                                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                                  {file.path}
+                                </div>
+                              </div>
+                              <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                {file.exists
+                                  ? t.settings.instructionFileExists
+                                  : t.settings.instructionFileNew}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 text-[11px] text-muted-foreground">
+                              {contentLength} chars
+                            </div>
+                            {file.content.trim() && (
+                              <div className="mt-2 line-clamp-2 text-[11px] text-muted-foreground">
+                                {file.content.trim().replace(/\s+/g, ' ')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </Field>
+              <Separator />
+              {validation && (
+                <div className="rounded-md border bg-muted/40 p-3 text-xs">
+                  {validation.ok ? (
+                    <div className="space-y-2">
+                      <p className="font-medium text-green-400">
+                        {t.settings.selectedTools}: {validation.toolCount}
+                      </p>
+                      <div className="space-y-1 text-muted-foreground">
+                        {validation.tools?.map((tool) => (
+                          <p key={tool.name}>
+                            {tool.name} · {tool.method.toUpperCase()} {tool.path}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-destructive">{validation.error}</p>
+                  )}
+                </div>
+              )}
+            </FieldGroup>
+          </div>
+          {providerEditorOpen && settingsProvider.id ? (
+            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+              <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">
+                    {t.settings.providerList}: {settingsProvider.name || settingsProvider.id}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {settingsProvider.id}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={config.providers.length <= 1}
+                    aria-label={t.settings.deleteProvider}
+                    title={t.settings.deleteProvider}
+                    onClick={onDeleteSettingsProvider}
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.common.close}
+                    title={t.common.close}
+                    onClick={() => onProviderEditorOpenChange(false)}
+                  >
+                    <XIcon aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3">
+                <FieldGroup>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field>
+                      <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
+                      <Input
+                        id="provider-id"
+                        value={settingsProvider.id}
+                        onChange={(event) => onUpdateSettingsProvider('id', event.target.value)}
+                        placeholder="provider-id"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="provider-name">{t.settings.providerName}</FieldLabel>
+                      <Input
+                        id="provider-name"
+                        value={settingsProvider.name}
+                        onChange={(event) => onUpdateSettingsProvider('name', event.target.value)}
+                        placeholder={t.settings.providerName}
+                      />
+                    </Field>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="provider-base-url">{t.settings.baseUrl}</FieldLabel>
+                    <Input
+                      id="provider-base-url"
+                      value={settingsProvider.baseUrl}
+                      onChange={(event) =>
+                        onUpdateSettingsProvider('baseUrl', event.target.value)
+                      }
+                      placeholder="https://api.deepseek.com"
+                    />
+                    <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="provider-api-key">{t.settings.apiKey}</FieldLabel>
+                    <Input
+                      id="provider-api-key"
+                      type="password"
+                      value={settingsProvider.apiKey ?? ''}
+                      onChange={(event) => onUpdateSettingsProvider('apiKey', event.target.value)}
+                      placeholder="sk-... or leave blank when env key is available"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="provider-models">{t.settings.providerModels}</FieldLabel>
+                    <Textarea
+                      id="provider-models"
+                      className="min-h-44 resize-y font-mono text-xs"
+                      value={providerModelsText}
+                      onChange={(event) => onUpdateSettingsProviderModels(event.target.value)}
+                      placeholder={'model-id\nmodel-id-reasoner'}
+                    />
+                    <FieldDescription>{t.settings.modelListHint}</FieldDescription>
+                  </Field>
+                </FieldGroup>
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
+                <Button type="button" onClick={() => void onSaveProviderEditor()}>
+                  {saved ? (
+                    <CheckIcon data-icon="inline-start" />
+                  ) : (
+                    <BotIcon data-icon="inline-start" />
+                  )}
+                  {saved ? t.settings.saved : t.settings.saveSettings}
+                </Button>
+              </div>
+            </div>
+          ) : openApiEditorOpen && settingsOpenApiProfile ? (
+            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+              <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">
+                    {t.settings.openApiProfiles}:{' '}
+                    {settingsOpenApiProfile.name || settingsOpenApiProfile.id}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {settingsOpenApiProfile.id}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    aria-label={t.settings.deleteOpenApiProfile}
+                    title={t.settings.deleteOpenApiProfile}
+                    onClick={onDeleteOpenApiProfile}
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.common.close}
+                    title={t.common.close}
+                    onClick={() => onOpenApiEditorOpenChange(false)}
+                  >
+                    <XIcon aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3">
+                <OpenApiProfileEditorFields
+                  profile={settingsOpenApiProfile}
+                  openApiBaseUrl={config.openApiBaseUrl}
+                  openApiDocument={config.openApiDocument}
+                  openApiTimeoutMs={config.openApiTimeoutMs}
+                  openApiMaxRetries={config.openApiMaxRetries}
+                  openApiRetryBackoffMs={config.openApiRetryBackoffMs}
+                  validation={validation}
+                  importing={importingOpenApi}
+                  t={t}
+                  onProfileNameChange={(value) => onPatchActiveOpenApiProfile({ name: value })}
+                  onBaseUrlChange={(value) => onPatchActiveOpenApiProfile({ baseUrl: value })}
+                  onDocumentChange={(value) => onPatchActiveOpenApiProfile({ document: value })}
+                  onTimeoutMsChange={(value) => onPatchActiveOpenApiProfile({ timeoutMs: value })}
+                  onMaxRetriesChange={(value) => onPatchActiveOpenApiProfile({ maxRetries: value })}
+                  onRetryBackoffMsChange={(value) =>
+                    onPatchActiveOpenApiProfile({ retryBackoffMs: value })
+                  }
+                  onImportFile={() => void onImportOpenApiDocument()}
+                  onClearDocument={() => onPatchActiveOpenApiProfile({ document: '' })}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
+                <Button type="button" onClick={() => void onSaveOpenApiEditor()}>
+                  {saved ? (
+                    <CheckIcon data-icon="inline-start" />
+                  ) : (
+                    <BotIcon data-icon="inline-start" />
+                  )}
+                  {saved ? t.settings.saved : t.settings.saveSettings}
+                </Button>
+              </div>
+            </div>
+          ) : instructionEditorOpen && selectedInstructionFile ? (
+            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+              <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">
+                    {t.settings.instructionFiles}: {selectedInstructionFile.name}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                    {selectedInstructionFile.path}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={t.common.close}
+                  title={t.common.close}
+                  onClick={() => onInstructionEditorOpenChange(false)}
+                >
+                  <XIcon aria-hidden="true" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-3">
+                <FieldGroup>
+                  <Field>
+                    <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="truncate text-sm font-medium">
+                          {selectedInstructionFile.name}
+                        </div>
+                        <FieldDescription>
+                          {selectedInstructionFile.exists
+                            ? t.settings.instructionFileExists
+                            : t.settings.instructionFileNew}
+                        </FieldDescription>
+                      </div>
+                      <Badge variant="secondary" className="shrink-0">
+                        {instructionContent.trim().length} chars
+                      </Badge>
+                    </div>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="instruction-content">
+                      {t.settings.instructionFiles}
+                    </FieldLabel>
+                    <Textarea
+                      id="instruction-content"
+                      className="min-h-[420px] resize-y font-mono text-xs"
+                      value={instructionContent}
+                      onChange={(event) => onInstructionContentChange(event.target.value)}
+                      placeholder={t.settings.instructionFilePlaceholder}
+                    />
+                    <FieldDescription>{selectedInstructionFile.path}</FieldDescription>
+                  </Field>
+                </FieldGroup>
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
+                <Button type="button" onClick={() => void onSaveInstructionFile()}>
+                  {instructionSaved ? (
+                    <CheckIcon data-icon="inline-start" />
+                  ) : (
+                    <FileTextIcon data-icon="inline-start" />
+                  )}
+                  {instructionSaved
+                    ? t.settings.instructionFileSaved
+                    : t.settings.saveInstructionFile}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <SheetFooter className="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void onValidateConfig()}
+            disabled={validating}
+          >
+            {validating ? (
+              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <TestTube2Icon data-icon="inline-start" />
+            )}
+            {validating ? t.settings.validating : t.settings.validateTools}
+          </Button>
+          <Button onClick={() => void onSaveConfig()}>
+            {saved ? <CheckIcon data-icon="inline-start" /> : <BotIcon data-icon="inline-start" />}
+            {saved ? t.settings.saved : t.settings.saveSettings}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}

@@ -18,6 +18,7 @@ import type {
   AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import type { AgentEvent } from '../../../shared/agent-types'
+import { redactSensitiveText } from '../../../shared/secret-redaction'
 
 interface UseAgentRunsInput {
   activeTabIdRef: MutableRefObject<string>
@@ -153,7 +154,7 @@ export function useAgentRuns({
             ...run.actions,
             {
               title: `${t.input.usedTool}: ${event.name}`,
-              detail: localizeAgentEventMessage(event.message, t)
+              detail: redactSensitiveText(localizeAgentEventMessage(event.message, t))
             }
           ]
         }))

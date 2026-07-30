@@ -40,6 +40,9 @@ const en = {
     exportResultMarkdown: 'Export result Markdown',
     exportResultMarkdownTooltip:
       'Export only the result area as Markdown, excluding action details',
+    exportTraceJson: 'Export trace JSON',
+    exportTraceJsonTooltip:
+      'Export a structured Agent run trace with redacted tool details for debugging',
     exportDiagram: 'Export diagram',
     exportCanceled: 'Export canceled',
     exportFailed: 'Export failed',
@@ -90,6 +93,10 @@ const en = {
       'Optional. Explain why you approve or reject, constraints, or follow-up requirements, for example read-only only, wrong scope, or approved but check the destination path',
     description:
       'The AI command review subprocess has analyzed the risk. The command is written to the terminal only after approval.',
+    sourceSession: 'Source session',
+    currentSession: 'Current session',
+    otherSession: 'Other session',
+    unknownSession: 'Unknown session',
     highRisk: 'High risk',
     impactAnalysis: 'Impact analysis',
     lowRisk: 'Low risk',
@@ -111,15 +118,20 @@ const en = {
   connections: {
     actionsCount: 'login actions',
     connect: 'Connect',
+    connectInSession: 'Open in session',
+    connectInSessionDescription:
+      'Open a comparison terminal in the current chat session and keep the same conversation',
     connectionList: 'Connections',
     connectionListDescription: 'Choose the default local terminal or switch to an SSH terminal.',
     copiedConnection: 'Paste copied connection',
     copiedConnectionPlaceholder:
       'Paste copied connection JSON to edit it as a new custom connection',
+    copyAsJson: 'Copy JSON',
     customConnectionName: 'Custom connection name',
     defaultTerminal: 'Default terminal (local)',
     description: 'Description',
     descriptionPlaceholder: 'Optional note',
+    duplicateAsNew: 'Duplicate as new',
     existing: 'Existing',
     host: 'Host',
     identityFile: 'Identity file',
@@ -165,6 +177,10 @@ const en = {
     connectionNoActions: 'Starting SSH connection without login actions.',
     connectionNoMatch:
       'No matching SSH connection was found. Check existing connections or custom connection names.',
+    connectionClarifyFallback:
+      'I could not determine the target connection. Tell me which SSH connection to log into, or whether to stay in the current terminal.',
+    connectionClarifyTitle: 'Connection target needs confirmation',
+    connectionClarifyReplyPrefix: 'User clarification:',
     connectionStarting: 'Starting connection with login actions',
     connectionTarget: 'Connection target',
     currentTerminalInstruction:
@@ -213,7 +229,7 @@ const en = {
     breakdownRuleUseCurrentTerminal:
       'Run target-system inspection in the currently logged-in terminal and collect enough evidence before summarizing.',
     breakdownRuleUseSubterminal:
-      'Use a temporary sub-terminal when leaving the current terminal context, comparing targets, or writing local artifacts.',
+      'Prefer a peer comparison terminal already in the current chat session when leaving the current terminal context or comparing targets; otherwise use a temporary sub-terminal for that work or for writing local artifacts.',
     breakdownTargetConnection: 'Target connection',
     breakdownTargetSystem: 'Target system',
     closeAllSubterminals: 'Close all temporary sub-terminals',
@@ -233,6 +249,7 @@ const en = {
     subterminalExited: 'Exited',
     subterminal: 'Sub-terminal',
     temporarySubterminal: 'Temporary sub-terminal',
+    openedPeerTerminal: 'Opened a comparison terminal in the current session',
     terminalMode: 'Terminal mode'
   },
   history: {
@@ -311,7 +328,13 @@ const en = {
     startedRun: 'Started agent run',
     terminalContext: 'Collecting terminal context.',
     thinking: 'AI is thinking',
+    thinkingAnalyzingRequest: 'Understanding your request and checking the current terminal context…',
+    thinkingResolvingConnection: 'Deciding whether a configured SSH connection should be opened…',
+    thinkingPreparingRun: 'Preparing the execution plan and available tools…',
     slashCommandHint: 'Type / to reference context, MCP tools, mode, or skills',
+    slashNew: 'New session',
+    slashNewDescription: 'Start a new linked terminal and chat session',
+    sessionLabel: 'Session',
     slashConnection: 'Connect to SSH',
     slashConnectionDescription: 'Choose a saved SSH connection and connect',
     slashCreateSkill: 'Create skill',
@@ -428,8 +451,37 @@ const en = {
       'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
     copySkillInstallCommand: 'Copy install command',
     copySkillInstallLog: 'Copy install log',
-    document: 'OpenAPI URL or JSON',
+    document: 'OpenAPI URL, JSON, or local file path',
     dynamicToolLimit: 'Dynamic tool limit',
+    clearOpenApiDocument: 'Clear',
+    importOpenApiFile: 'Import file',
+    importingOpenApi: 'Importing',
+    openApiBaseUrl: 'REST API base URL',
+    openApiBaseUrlHint: 'Base URL used when executing generated OpenAPI tools.',
+    openApiDocumentHint:
+      'Paste an https URL, OpenAPI JSON, or a local .json/.yaml path. Use Import file to pick a document from disk.',
+    openApiDocumentPlaceholder:
+      'https://api.example.com/openapi.json\nor /absolute/path/openapi.yaml\nor paste OpenAPI JSON',
+    openApiSection: 'OpenAPI tools',
+    openApiSectionHint:
+      'Load an OpenAPI document so the agent can call matching REST endpoints as tools. Save multiple API profiles and switch between them.',
+    openApiProfiles: 'OpenAPI profiles',
+    openApiProfile: 'Active OpenAPI profile',
+    openApiProfileHint:
+      'Click a card to open the detail editor. Each profile stores its own base URL, document, and request policy.',
+    openApiProfileName: 'Profile name',
+    openApiActiveBadge: 'Active',
+    openApiDocumentEmpty: 'No document',
+    selectOpenApiProfile: 'Select a profile',
+    newOpenApiProfile: 'New profile',
+    deleteOpenApiProfile: 'Delete profile',
+    noOpenApiProfiles: 'No OpenAPI profiles yet. Create one to load REST tools.',
+    openApiTimeoutMs: 'Request timeout (ms)',
+    openApiTimeoutMsHint: 'Abort hung OpenAPI HTTP calls after this many milliseconds.',
+    openApiMaxRetries: 'Max retries',
+    openApiMaxRetriesHint: 'Retry network failures and 5xx/429 responses.',
+    openApiRetryBackoffMs: 'Retry backoff (ms)',
+    openApiRetryBackoffMsHint: 'Base delay between retries; multiplied by attempt number.',
     instructionFileExists: 'Created',
     instructionFileNew: 'Not created; saving will create it',
     instructionFilePlaceholder:
@@ -469,7 +521,6 @@ const en = {
     editMcpServer: 'Edit MCP server',
     enableMcpServer: 'Enable',
     disableMcpServer: 'Disable',
-    openApiBaseUrl: 'REST API base URL',
     planExecuteHint: 'Use Plan-and-Execute for longer workflows that may need replanning.',
     providerId: 'Provider ID',
     providerList: 'Provider list',
@@ -531,7 +582,8 @@ const en = {
     skillsSearchPlaceholder: 'Enter a keyword to search skills',
     skillsSearching: 'Searching skills',
     title: 'Agent settings',
-    titleDescription: 'Configure model providers, command review, and local instruction files.',
+    titleDescription:
+      'Configure model providers, OpenAPI tools, command review, and local instruction files.',
     validateTools: 'Validate tools',
     validating: 'Validating'
   }

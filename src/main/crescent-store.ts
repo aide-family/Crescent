@@ -12,6 +12,11 @@ import {
   writeCrescentMemoryToDb
 } from './crescent-sqlite'
 import { getCrescentConfigPath, getCrescentMemoryPath } from './crescent-paths'
+import {
+  normalizeOpenApiProfiles,
+  projectOpenApiProfileFields,
+  resolveActiveOpenApiProfile
+} from '../shared/openapi-profiles'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -51,8 +56,13 @@ export const defaultAgentConfig: AgentConfig = {
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: defaultCommandWhitelist,
+  openApiProfiles: [],
+  openApiProfileId: undefined,
   openApiBaseUrl: '',
   openApiDocument: '',
+  openApiTimeoutMs: 30_000,
+  openApiMaxRetries: 2,
+  openApiRetryBackoffMs: 300,
   skillRoot: '~/.agents/skills',
   mcpServers: []
 }
@@ -171,6 +181,20 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     providers[0]
   const defaultModel = provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? ''
   const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === requestedModel))
+  const openApi = normalizeOpenApiProfiles(config)
+  const activeOpenApiProfile = resolveActiveOpenApiProfile({
+    ...config,
+    openApiProfiles: openApi.openApiProfiles,
+    openApiProfileId: openApi.openApiProfileId,
+    openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
+    openApiDocument: String(config.openApiDocument ?? ''),
+    openApiTimeoutMs: Number(config.openApiTimeoutMs ?? defaultAgentConfig.openApiTimeoutMs),
+    openApiMaxRetries: Number(config.openApiMaxRetries ?? defaultAgentConfig.openApiMaxRetries),
+    openApiRetryBackoffMs: Number(
+      config.openApiRetryBackoffMs ?? defaultAgentConfig.openApiRetryBackoffMs
+    )
+  })
+  const openApiFields = projectOpenApiProfileFields(activeOpenApiProfile)
 
   return {
     providers,
@@ -181,8 +205,9 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     commandWhitelist: normalizeStringList(
       config.commandWhitelist ?? defaultAgentConfig.commandWhitelist
     ),
-    openApiBaseUrl: String(config.openApiBaseUrl ?? ''),
-    openApiDocument: String(config.openApiDocument ?? ''),
+    openApiProfiles: openApi.openApiProfiles,
+    openApiProfileId: openApi.openApiProfileId,
+    ...openApiFields,
     skillRoot: normalizeSkillRoot(config.skillRoot),
     mcpServers: normalizeMcpServers(config.mcpServers)
   }

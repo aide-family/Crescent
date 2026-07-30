@@ -2,6 +2,8 @@ import { ipcMain, type WebContents } from 'electron'
 
 import {
   deleteSessionHistory,
+  getAgentRun,
+  listAgentRunsForTab,
   listSessionHistory,
   readSessionLogsForSummary,
   readSessionHistoryDetail,
@@ -47,6 +49,14 @@ export function registerStorageIpc(): void {
   ipcMain.handle('storage:save-agent-run', (_, run: StoredAgentRun) => {
     saveAgentRun(run)
     return { ok: true }
+  })
+
+  ipcMain.handle('storage:get-agent-run', (_, runId: string) => {
+    return getAgentRun(runId ?? '')
+  })
+
+  ipcMain.handle('storage:list-agent-runs', (_, payload?: { tabId?: string; limit?: number }) => {
+    return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
   })
 
   ipcMain.handle('storage:list-session-history', (_, limit?: number) => {

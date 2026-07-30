@@ -22,6 +22,9 @@ function configureGpuPolicy(): void {
     return
   }
 
+  // Reduce Chromium compositor tile OOM warnings on large terminal canvases.
+  app.commandLine.appendSwitch('force-gpu-mem-available-mb', '4096')
+
   if (shouldEnableExperimentalGpuFlags) {
     app.commandLine.appendSwitch('enable-gpu-rasterization')
     app.commandLine.appendSwitch('enable-zero-copy')
@@ -55,8 +58,9 @@ function installNativeLogFilter(): void {
     const isKnownMacInputMethodNoise =
       text.includes('TSM AdjustCapsLockLEDForKeyTransitionHandling') ||
       text.includes('error messaging the mach port for IMKCFRunLoopWakeUpReliable')
+    const isKnownChromiumTileMemoryNoise = text.includes('tile memory limits exceeded')
 
-    if (isKnownMacInputMethodNoise) return true
+    if (isKnownMacInputMethodNoise || isKnownChromiumTileMemoryNoise) return true
     return (originalWrite as (...parameters: unknown[]) => boolean)(chunk, ...args)
   }) as typeof process.stderr.write
 }

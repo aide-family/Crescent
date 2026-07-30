@@ -13,6 +13,7 @@ export interface TerminalTabMenuState {
 
 export function TerminalTabBar({
   tabs,
+  labelTabs,
   terminalPage,
   activeTabId,
   tabMenu,
@@ -25,6 +26,7 @@ export function TerminalTabBar({
   onCloseAllTabs
 }: {
   tabs: AgentTerminalTab[]
+  labelTabs?: AgentTerminalTab[]
   terminalPage: 'connections' | 'terminal'
   activeTabId: string
   tabMenu: TerminalTabMenuState | null
@@ -36,6 +38,7 @@ export function TerminalTabBar({
   onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: (tabId: string) => void
 }): React.JSX.Element {
+  const titleSource = labelTabs ?? tabs
   return (
     <div className="app-tabbar flex h-10 shrink-0 items-center gap-1 px-2">
       {tabs.length === 0 ? (
@@ -69,7 +72,7 @@ export function TerminalTabBar({
               }}
             >
               <TerminalActivityDot active={tab.terminalReady} />
-              <span className="truncate">{getTerminalDisplayTitle(tab)}</span>
+              <span className="truncate">{getTerminalDisplayTitle(tab, titleSource)}</span>
             </button>
           )
         })

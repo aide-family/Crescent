@@ -94,6 +94,7 @@ interface TerminalAgentApi {
     deleteWikiDocument: (id: string) => Promise<{ ok: boolean }>
     searchWikiDocuments: (query: string) => Promise<WikiDocument[]>
     pickPathReference: (kind: AgentPathReference['kind']) => Promise<AgentPathReference | undefined>
+    importOpenApiDocument: () => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
     savePastedAttachment: (input: PastedAttachmentInput) => Promise<AgentPathReference>
     saveRenderedImage: (input: {
       dataUrl: string
@@ -143,6 +144,8 @@ interface TerminalAgentApi {
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ) => Promise<{ ok: boolean }>
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
+    getAgentRun: (runId: string) => Promise<StoredAgentRun | undefined>
+    listAgentRuns: (input: { tabId: string; limit?: number }) => Promise<StoredAgentRun[]>
     listSessionHistory: (limit?: number) => Promise<StoredSessionHistoryItem[]>
     getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
     renameSessionHistory: (input: { tabId: string; title: string }) => Promise<{ ok: boolean }>

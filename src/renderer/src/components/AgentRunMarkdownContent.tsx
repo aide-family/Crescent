@@ -4,6 +4,7 @@ import {
   ChevronDownIcon,
   CopyIcon,
   DownloadIcon,
+  FileJsonIcon,
   FileTextIcon,
   Maximize2Icon,
   XIcon
@@ -20,7 +21,8 @@ export function AgentRunMarkdownContent({
   copied,
   onCopyResult,
   onExportResult,
-  onExportFull
+  onExportFull,
+  onExportTrace
 }: {
   parsed: ParsedAgentRunMarkdown
   t: Dictionary
@@ -28,6 +30,7 @@ export function AgentRunMarkdownContent({
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
+  onExportTrace?: () => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
   const hasResult = Boolean(parsed.resultMarkdown || parsed.errorMarkdown)
@@ -86,6 +89,16 @@ export function AgentRunMarkdownContent({
                 onClick={onExportFull}
               >
                 <FileTextIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.exportTraceJsonTooltip}
+                title={t.common.exportTraceJsonTooltip}
+                onClick={onExportTrace}
+              >
+                <FileJsonIcon aria-hidden="true" />
               </Button>
             </div>
           </div>

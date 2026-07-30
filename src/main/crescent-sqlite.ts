@@ -12,6 +12,7 @@ import type {
   StoredSessionTab
 } from './agent/types'
 import type { CrescentMemoryFile } from './crescent-store'
+import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
 
 let database: DatabaseSync | undefined
 
@@ -119,6 +120,9 @@ export function initializeCrescentDatabase(): void {
 
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
+  ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
+  ensureColumn(db, 'agent_runs', 'trace_json', 'TEXT')
 }
 
 export function saveSessionTabs(tabs: StoredSessionTab[]): void {
@@ -186,17 +190,23 @@ export function updateAgentLog(input: Pick<StoredAgentLogEntry, 'tabId' | 'logId
 export function saveAgentRun(run: StoredAgentRun): void {
   const db = getDatabase()
   const now = new Date().toISOString()
+  const startedAt = run.startedAt ?? (run.status === 'running' ? now : undefined)
+  const traceJson = run.trace ? serializeAgentRunTrace(run.trace) : null
 
   db.prepare(
     `
     INSERT INTO agent_runs (
-      run_id, tab_id, input, status, connection_id, output, error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      run_id, tab_id, input, status, connection_id, output, error,
+      started_at, elapsed_ms, trace_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       status = excluded.status,
       connection_id = excluded.connection_id,
       output = excluded.output,
       error = excluded.error,
+      started_at = COALESCE(excluded.started_at, agent_runs.started_at),
+      elapsed_ms = excluded.elapsed_ms,
+      trace_json = COALESCE(excluded.trace_json, agent_runs.trace_json),
       updated_at = excluded.updated_at
   `
   ).run(
@@ -207,9 +217,116 @@ export function saveAgentRun(run: StoredAgentRun): void {
     run.connectionId ?? null,
     run.output ?? null,
     run.error ?? null,
+    startedAt ?? null,
+    typeof run.elapsedMs === 'number' ? run.elapsedMs : null,
+    traceJson,
     now,
     now
   )
+}
+
+export function getAgentRun(runId: string): StoredAgentRun | undefined {
+  const normalizedRunId = runId.trim()
+  if (!normalizedRunId) return undefined
+
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT
+        run_id AS runId,
+        tab_id AS tabId,
+        input,
+        status,
+        connection_id AS connectionId,
+        output,
+        error,
+        started_at AS startedAt,
+        elapsed_ms AS elapsedMs,
+        trace_json AS traceJson
+      FROM agent_runs
+      WHERE run_id = ?
+    `
+    )
+    .get(normalizedRunId) as
+    | {
+        runId: string
+        tabId: string
+        input: string
+        status: StoredAgentRun['status']
+        connectionId?: string | null
+        output?: string | null
+        error?: string | null
+        startedAt?: string | null
+        elapsedMs?: number | null
+        traceJson?: string | null
+      }
+    | undefined
+
+  if (!row) return undefined
+
+  return {
+    runId: row.runId,
+    tabId: row.tabId,
+    input: row.input,
+    status: row.status,
+    connectionId: row.connectionId ?? undefined,
+    output: row.output ?? undefined,
+    error: row.error ?? undefined,
+    startedAt: row.startedAt ?? undefined,
+    elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : undefined,
+    trace: parseAgentRunTrace(row.traceJson ?? undefined)
+  }
+}
+
+export function listAgentRunsForTab(tabId: string, limit = 50): StoredAgentRun[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT
+        run_id AS runId,
+        tab_id AS tabId,
+        input,
+        status,
+        connection_id AS connectionId,
+        output,
+        error,
+        started_at AS startedAt,
+        elapsed_ms AS elapsedMs,
+        trace_json AS traceJson
+      FROM agent_runs
+      WHERE tab_id = ?
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `
+    )
+    .all(normalizedTabId, limit) as Array<{
+    runId: string
+    tabId: string
+    input: string
+    status: StoredAgentRun['status']
+    connectionId?: string | null
+    output?: string | null
+    error?: string | null
+    startedAt?: string | null
+    elapsedMs?: number | null
+    traceJson?: string | null
+  }>
+
+  return rows.map((row) => ({
+    runId: row.runId,
+    tabId: row.tabId,
+    input: row.input,
+    status: row.status,
+    connectionId: row.connectionId ?? undefined,
+    output: row.output ?? undefined,
+    error: row.error ?? undefined,
+    startedAt: row.startedAt ?? undefined,
+    elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : undefined,
+    trace: parseAgentRunTrace(row.traceJson ?? undefined)
+  }))
 }
 
 export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {

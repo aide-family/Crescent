@@ -21,17 +21,19 @@ npm run build
 
 ## Phase 2 — Reliability and Observability
 
-- Add request timeout/retry controls per OpenAPI host.
-- Add redaction for sensitive request/response headers in event logs.
-- Add exportable run traces for debugging tool calls.
-- Add mock-server based integration tests for tool execution.
+- [x] Add request timeout/retry controls per OpenAPI host.
+- [x] Add redaction for sensitive request/response headers in event logs.
+- [x] Add exportable run traces for debugging tool calls.
+- [x] Add mock-server based integration tests for tool execution.
 
 ## Phase 3 — Workflow Productivity
 
-- Multiple saved API profiles.
-- Import OpenAPI from local files and remote URLs.
-- Prompt templates and pinned workflows per API profile.
-- Tool allow/deny list and per-operation confirmation rules.
+- [x] Multiple saved API profiles.
+- [x] Import OpenAPI from local files and remote URLs.
+- [ ] Prompt templates and pinned workflows per API profile.
+- [~] Tool allow/deny list and per-operation confirmation rules.
+  - Done: per-operation confirmation for OpenAPI write ops and MCP tools.
+  - Remaining: explicit tool allow/deny lists.
 
 ## Phase 4 — Distribution Polish
 

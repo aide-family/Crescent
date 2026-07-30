@@ -1,3 +1,4 @@
+import { parseJsonFromModelContent } from '../../shared/json-parse'
 import { AgentBrain } from './brain'
 import type { AgentConfig, CommandAuditResult, CommandRiskLevel } from './types'
 
@@ -92,7 +93,7 @@ export function parseAuditResult(
   language: 'zh-CN' | 'en' = 'en'
 ): CommandAuditResult {
   try {
-    const parsed = JSON.parse(content) as {
+    const parsed = parseJsonFromModelContent<{
       summary?: unknown
       risk?: unknown
       requiresApproval?: unknown
@@ -100,7 +101,7 @@ export function parseAuditResult(
       impactAnalysis?: unknown
       recommendation?: unknown
       operationReason?: unknown
-    }
+    }>(content)
     const risk = normalizeRisk(parsed.risk)
     const riskPoints = Array.isArray(parsed.riskPoints)
       ? parsed.riskPoints.filter((point): point is string => typeof point === 'string')

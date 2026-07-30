@@ -75,7 +75,7 @@ export async function loadMcpToolRegistry(config: AgentConfig): Promise<McpToolR
             description: schema.function.description ?? '',
             source: 'mcp',
             risk: 'high',
-            requiresApproval: false,
+            requiresApproval: true,
             external: true,
             stateChanging: true
           }

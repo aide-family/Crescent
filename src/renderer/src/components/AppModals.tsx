@@ -165,6 +165,8 @@ export function PasswordPromptModal({
 
 export function CommandApprovalModal({
   commandApproval,
+  sessionLabel,
+  isCurrentSession,
   t,
   riskLabel,
   rejectionReason,
@@ -172,6 +174,8 @@ export function CommandApprovalModal({
   onResolve
 }: {
   commandApproval: CommandApprovalRequest | null
+  sessionLabel: string
+  isCurrentSession: boolean
   t: Dictionary
   riskLabel: string
   rejectionReason: string
@@ -190,17 +194,23 @@ export function CommandApprovalModal({
       <div className="app-modal-panel flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl">
         <div className="app-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <TriangleAlertIcon className="size-4 text-destructive" aria-hidden="true" />
               <h2 id="command-review-title" className="text-sm font-semibold">
                 {t.commandReview.title}
               </h2>
               <Badge variant={riskBadgeVariant(commandApproval.audit.risk)}>{riskLabel}</Badge>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t.commandReview.description}
-              {commandApproval.tabId ? ` · Tab: ${commandApproval.tabId}` : ''}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{t.commandReview.description}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">{t.commandReview.sourceSession}</span>
+              <Badge variant={isCurrentSession ? 'secondary' : 'outline'} className="font-medium">
+                {sessionLabel}
+              </Badge>
+              <Badge variant="outline" className="text-[10px]">
+                {isCurrentSession ? t.commandReview.currentSession : t.commandReview.otherSession}
+              </Badge>
+            </div>
           </div>
         </div>
         <div className="select-text min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">

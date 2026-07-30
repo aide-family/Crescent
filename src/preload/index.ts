@@ -146,6 +146,8 @@ const api = {
       kind: AgentPathReference['kind']
     ): Promise<AgentPathReference | undefined> =>
       ipcRenderer.invoke('agent:pick-path-reference', { kind }),
+    importOpenApiDocument: (): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
+      ipcRenderer.invoke('agent:import-openapi-document'),
     savePastedAttachment: (input: PastedAttachmentInput): Promise<AgentPathReference> =>
       ipcRenderer.invoke('agent:save-pasted-attachment', input),
     saveRenderedImage: (input: {
@@ -232,6 +234,12 @@ const api = {
     ): Promise<{ ok: boolean }> => ipcRenderer.invoke('storage:update-agent-log', input),
     saveAgentRun: (run: StoredAgentRun): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('storage:save-agent-run', run),
+    getAgentRun: (runId: string): Promise<StoredAgentRun | undefined> =>
+      ipcRenderer.invoke('storage:get-agent-run', runId),
+    listAgentRuns: (input: {
+      tabId: string
+      limit?: number
+    }): Promise<StoredAgentRun[]> => ipcRenderer.invoke('storage:list-agent-runs', input),
     listSessionHistory: (limit?: number): Promise<StoredSessionHistoryItem[]> =>
       ipcRenderer.invoke('storage:list-session-history', limit),
     getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>

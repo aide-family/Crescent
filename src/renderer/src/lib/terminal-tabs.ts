@@ -18,6 +18,7 @@ export type AgentLogEntry =
 
 export interface AgentRunViewState {
   logId: number
+  runId?: string
   actions: AgentRunAction[]
   startedAt?: number
   result?: string
@@ -40,6 +41,8 @@ export interface AgentToolReference {
 export interface AgentTerminalTab {
   id: string
   title: string
+  /** Shared chat session id. Peer comparison terminals reuse the root tab id. */
+  sessionGroupId: string
   providerId?: string
   model?: string
   connectionId?: string
@@ -57,9 +60,17 @@ export interface AgentTerminalTab {
   wikiRefs: AgentWikiReference[]
   agentBusy: boolean
   agentThinking: boolean
+  thinkingMessage?: string
   copiedLogId: number | null
   agentLog: AgentLogEntry[]
   subTerminals: TemporarySubterminal[]
+  pendingClarification?: PendingAgentClarification
+}
+
+export interface PendingAgentClarification {
+  kind: 'connection-intent'
+  originalInput: string
+  question: string
 }
 
 export interface TemporarySubterminal {
@@ -75,9 +86,11 @@ export interface TemporarySubterminal {
 const BLOCKED_TERMINAL_TITLE_PATTERN = /topology/i
 
 export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab {
+  const id = input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`
   return {
-    id: input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id,
     title: input?.title ?? 'Local',
+    sessionGroupId: input?.sessionGroupId ?? id,
     providerId: input?.providerId,
     model: input?.model,
     connectionId: input?.connectionId,
@@ -95,15 +108,18 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     wikiRefs: input?.wikiRefs ?? [],
     agentBusy: input?.agentBusy ?? false,
     agentThinking: input?.agentThinking ?? false,
+    thinkingMessage: input?.thinkingMessage,
     copiedLogId: input?.copiedLogId ?? null,
     agentLog: input?.agentLog ?? [],
-    subTerminals: input?.subTerminals ?? []
+    subTerminals: input?.subTerminals ?? [],
+    pendingClarification: input?.pendingClarification
   }
 }
 
 export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[] {
   return tabs.map((tab) => ({
     tabId: tab.id,
+    sessionGroupId: getSessionGroupId(tab),
     title: tab.title,
     connectionId: tab.connectionId,
     connectionName: tab.connectionName,
@@ -111,6 +127,57 @@ export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[
     terminalCwd: tab.terminalCwd,
     terminalMode: tab.terminalMode
   }))
+}
+
+/** Chat/session id shared by peer comparison terminals. */
+export function getSessionGroupId(tab: Pick<AgentTerminalTab, 'id' | 'sessionGroupId'>): string {
+  return tab.sessionGroupId || tab.id
+}
+
+export function getSessionTerminals(
+  tabs: AgentTerminalTab[],
+  groupId: string
+): AgentTerminalTab[] {
+  return tabs.filter((tab) => getSessionGroupId(tab) === groupId)
+}
+
+/** Chat owner is the session root tab (id === sessionGroupId), else the first peer. */
+export function getSessionChatTab(
+  tabs: AgentTerminalTab[],
+  tabOrGroupId: string
+): AgentTerminalTab | undefined {
+  const seed = tabs.find((tab) => tab.id === tabOrGroupId)
+  const groupId = seed ? getSessionGroupId(seed) : tabOrGroupId
+  const groupTabs = getSessionTerminals(tabs, groupId)
+  if (groupTabs.length === 0) return undefined
+  return groupTabs.find((tab) => tab.id === groupId) ?? groupTabs[0]
+}
+
+export function resolveSessionChatTabId(tabs: AgentTerminalTab[], tabId: string): string {
+  return getSessionChatTab(tabs, tabId)?.id ?? tabId
+}
+
+/** One entry per chat session for the session selector. */
+export function listSessionChatTabs(tabs: AgentTerminalTab[]): AgentTerminalTab[] {
+  const seen = new Set<string>()
+  const sessions: AgentTerminalTab[] = []
+  for (const tab of tabs) {
+    const groupId = getSessionGroupId(tab)
+    if (seen.has(groupId)) continue
+    seen.add(groupId)
+    const chatTab = getSessionChatTab(tabs, groupId)
+    if (chatTab) sessions.push(chatTab)
+  }
+  return sessions
+}
+
+export function getSessionDisplayTitle(tab: AgentTerminalTab, tabs: AgentTerminalTab[]): string {
+  const groupId = getSessionGroupId(tab)
+  const peers = getSessionTerminals(tabs, groupId)
+  const chatTab = getSessionChatTab(tabs, groupId) ?? tab
+  const base = getTerminalDisplayTitle(chatTab, tabs)
+  if (peers.length <= 1) return base
+  return `${base} · ${peers.length}`
 }
 
 export function getNextTerminalTitle(baseTitle: string, tabs: AgentTerminalTab[]): string {
@@ -131,12 +198,43 @@ export function sanitizeTerminalDisplayTitle(value: string | undefined, fallback
   return title
 }
 
-export function getTerminalDisplayTitle(tab: AgentTerminalTab): string {
+/** Stable base name used for grouping same-named sessions/tabs. */
+export function getTerminalSessionBaseName(tab: AgentTerminalTab): string {
   if (tab.isSsh || tab.connectionId) {
-    return sanitizeTerminalDisplayTitle(tab.connectionName || tab.title, 'SSH')
+    const raw = sanitizeTerminalDisplayTitle(tab.connectionName || tab.title, 'SSH')
+    return stripTrailingSessionIndex(raw) || 'SSH'
   }
 
-  return 'Local'
+  const raw = sanitizeTerminalDisplayTitle(tab.title, 'Local')
+  return stripTrailingSessionIndex(raw) || 'Local'
+}
+
+/**
+ * Display label for a session/tab.
+ * Uses the concrete session name, and appends a 1-based index when multiple
+ * tabs share the same base name (e.g. `demo 1`, `demo 2`).
+ */
+export function getTerminalDisplayTitle(
+  tab: AgentTerminalTab,
+  tabs: AgentTerminalTab[] = []
+): string {
+  const baseName = getTerminalSessionBaseName(tab)
+  if (tabs.length === 0) {
+    return sanitizeTerminalDisplayTitle(tab.title, baseName)
+  }
+
+  const sameNameTabs = tabs.filter(
+    (candidate) => getTerminalSessionBaseName(candidate) === baseName
+  )
+  if (sameNameTabs.length <= 1) return baseName
+
+  const index = sameNameTabs.findIndex((candidate) => candidate.id === tab.id)
+  const ordinal = index >= 0 ? index + 1 : sameNameTabs.length
+  return `${baseName} ${ordinal}`
+}
+
+function stripTrailingSessionIndex(value: string): string {
+  return value.replace(/\s+\d+$/u, '').trim()
 }
 
 export function resolveTabModelSelection(

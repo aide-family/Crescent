@@ -45,7 +45,8 @@ export function AgentLogContent({
   copied,
   onCopyResult,
   onExportResult,
-  onExportFull
+  onExportFull,
+  onExportTrace
 }: {
   entry: AgentLogEntry
   t: Dictionary
@@ -53,6 +54,7 @@ export function AgentLogContent({
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
+  onExportTrace?: () => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -73,6 +75,7 @@ export function AgentLogContent({
           onCopyResult={onCopyResult}
           onExportResult={onExportResult}
           onExportFull={onExportFull}
+          onExportTrace={onExportTrace}
         />
       )
     }

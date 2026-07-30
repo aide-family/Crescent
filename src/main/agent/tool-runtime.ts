@@ -6,6 +6,10 @@ import { DOCUMENT_PARSE_TOOLS, executeDocumentParseTool } from './document-tools
 import { executeMcpTool, loadMcpToolRegistry } from './mcp-runtime'
 import { saveWikiDocument } from './wiki'
 import { findBuiltInToolCatalogEntry } from '../../shared/agent-tool-catalog'
+import {
+  shouldRequireExternalToolApproval,
+  type ExternalToolApprover
+} from './external-tool-approval'
 import type {
   AgentConfig,
   AgentEvent,
@@ -145,14 +149,19 @@ export interface AgentToolRuntimeInput {
   terminalExecutor?: TerminalCommandExecutor
   subterminalExecutor?: SubterminalCommandExecutor
   localFileWriter?: LocalFileWriter
+  approveTool?: ExternalToolApprover
   emit: (event: AgentEvent) => void
 }
 
 export class AgentToolRuntime {
   private readonly handlers = new Map<string, ToolHandler>()
+  private approveTool?: ExternalToolApprover
+  private userInput = ''
 
   static async create(input: AgentToolRuntimeInput): Promise<AgentToolRuntime> {
     const runtime = new AgentToolRuntime()
+    runtime.approveTool = input.approveTool
+    runtime.userInput = input.userInput
 
     if (input.terminalExecutor) {
       runtime.registerTerminalTool(input.terminalExecutor, input.emit)
@@ -194,6 +203,29 @@ export class AgentToolRuntime {
     const handler = this.handlers.get(toolName)
 
     if (!handler) return { ok: false, error: `Unknown tool ${toolName}` }
+
+    if (shouldRequireExternalToolApproval(handler.catalog) && this.approveTool) {
+      const decision = await this.approveTool({
+        toolName,
+        rawArguments,
+        catalog: handler.catalog,
+        userInput: this.userInput
+      })
+
+      if (!decision.approved) {
+        const rejectionReason = (decision.rejectionReason || decision.note || '').trim()
+        return {
+          ok: false,
+          error: [
+            `Tool execution was rejected by the user. Continue from this result and do not assume ${toolName} ran.`,
+            rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        }
+      }
+    }
+
     return handler.execute(rawArguments)
   }
 
