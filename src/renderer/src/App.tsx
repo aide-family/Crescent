@@ -182,7 +182,12 @@ import {
 import { formatConnectionTarget } from '@renderer/lib/connections'
 import { appTerminalTheme } from '@renderer/lib/design-system'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
-import { copyFeedback, copyText, downloadJson, downloadMarkdown } from '@renderer/lib/operation-feedback'
+import {
+  copyFeedback,
+  copyText,
+  downloadJson,
+  downloadMarkdown
+} from '@renderer/lib/operation-feedback'
 import {
   buildInstalledSkillNameSet,
   buildSkillInstallCommand,
@@ -614,7 +619,7 @@ function App(): React.JSX.Element {
     (file) => file.name === selectedInstructionName
   )
   const modelValidationError =
-    validation?.modelOk === false ? (validation.error?.trim() || t.common.error) : undefined
+    validation?.modelOk === false ? validation.error?.trim() || t.common.error : undefined
   const aiState: 'ready' | 'pending' | 'not-ready' = validating
     ? 'pending'
     : modelValidationError
@@ -1009,7 +1014,10 @@ function App(): React.JSX.Element {
       passwordPromptBuffersRef.current.set(tabId, '')
       return
     }
-    if (passwordPromptsByTabRef.current.has(tabId) || passwordPromptOpenTabsRef.current.has(tabId)) {
+    if (
+      passwordPromptsByTabRef.current.has(tabId) ||
+      passwordPromptOpenTabsRef.current.has(tabId)
+    ) {
       return
     }
 
@@ -1348,12 +1356,7 @@ function App(): React.JSX.Element {
     const unsubscribe = window.api.agent.onEvent((event) => {
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
-      if (
-        event.type === 'command' &&
-        event.phase === 'started' &&
-        event.runId &&
-        event.tabId
-      ) {
+      if (event.type === 'command' && event.phase === 'started' && event.runId && event.tabId) {
         for (const [ownerTabId, runId] of activeRunIdRef.current) {
           if (runId === event.runId) {
             activeExecutionTabIdRef.current.set(ownerTabId, event.tabId)
@@ -1413,11 +1416,7 @@ function App(): React.JSX.Element {
         (item) => item.id !== payload.requestId && item.runId !== payload.runId
       )
       setCommandApproval((current) => {
-        if (
-          current &&
-          current.id !== payload.requestId &&
-          current.runId !== payload.runId
-        ) {
+        if (current && current.id !== payload.requestId && current.runId !== payload.runId) {
           return current
         }
         const { next, remaining } = takeNextQueuedCommandApproval(
@@ -1475,6 +1474,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
   }, [activeTab?.agentLog, activeTab?.agentThinking, activeTab?.thinkingMessage])
+
+  const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
 
   useEffect(() => {
     if (!terminalVisible) return
@@ -1631,7 +1632,7 @@ function App(): React.JSX.Element {
     maybeRequestTerminalPassword,
     t,
     terminalVisible,
-    tabs.some((tab) => tab.id === activeTabId),
+    activeTabExists,
     updateSubterminalCwd,
     updateSubterminalOutput,
     updateSubterminalStatus,
@@ -2280,10 +2281,7 @@ function App(): React.JSX.Element {
     setConfig((current) => {
       let next = current
       let profileId = current.openApiProfileId
-      if (
-        !profileId ||
-        !current.openApiProfiles.some((profile) => profile.id === profileId)
-      ) {
+      if (!profileId || !current.openApiProfiles.some((profile) => profile.id === profileId)) {
         const profile = createEmptyOpenApiProfile(`openapi-${crypto.randomUUID()}`)
         next = withActiveOpenApiProfile(
           {
@@ -2551,8 +2549,7 @@ function App(): React.JSX.Element {
     const prompts = [...passwordPromptsByTabRef.current.values()]
     const preferred =
       prompts.find(
-        (prompt) =>
-          resolveSessionChatTabId(tabsRef.current, prompt.tabId) === preferredSession
+        (prompt) => resolveSessionChatTabId(tabsRef.current, prompt.tabId) === preferredSession
       ) ?? prompts[0]
     passwordPromptRequestRef.current = preferred ?? null
     setPasswordPromptRequest(preferred ?? null)
@@ -3472,8 +3469,7 @@ function App(): React.JSX.Element {
       chatTabId?: string
     } = {}
   ): Promise<void> {
-    const chatTabId =
-      options.chatTabId ?? resolveSessionChatTabId(tabsRef.current, terminalTabId)
+    const chatTabId = options.chatTabId ?? resolveSessionChatTabId(tabsRef.current, terminalTabId)
     updateTab(chatTabId, (current) => ({
       ...current,
       agentInput: '',
@@ -3545,8 +3541,7 @@ function App(): React.JSX.Element {
         input,
         skillInput: displayInput,
         conversationContext:
-          options.conversationContext ??
-          buildRecentConversationContext(chatTab, displayInput, t),
+          options.conversationContext ?? buildRecentConversationContext(chatTab, displayInput, t),
         providerId: runModelSelection.providerId,
         model: runModelSelection.model,
         terminalContext,
@@ -4425,8 +4420,14 @@ function App(): React.JSX.Element {
     const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
     const resultText = extractResultMarkdown(entry.text, t)
     const storedRun =
-      runs.find((run) => run.trace && run.output && resultText && run.output.trim() === resultText.trim()) ??
-      runs.find((run) => run.trace && Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000)
+      runs.find(
+        (run) => run.trace && run.output && resultText && run.output.trim() === resultText.trim()
+      ) ??
+      runs.find(
+        (run) =>
+          run.trace &&
+          Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000
+      )
 
     const trace = buildTraceFromAgentLogEntry({
       entry,
@@ -5223,7 +5224,9 @@ function App(): React.JSX.Element {
                           title={item.title}
                         >
                           <div className="flex min-w-0 items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
+                            <span className="min-w-0 flex-1 truncate font-medium">
+                              {item.title}
+                            </span>
                             {item.isSsh && (
                               <Badge variant="secondary" className="shrink-0">
                                 SSH
@@ -5699,10 +5702,7 @@ function App(): React.JSX.Element {
                     </SelectContent>
                   </Select>
                   {sessionTerminals.length > 1 && (
-                    <Select
-                      value={activeTab.id}
-                      onValueChange={(tabId) => selectSessionTab(tabId)}
-                    >
+                    <Select value={activeTab.id} onValueChange={(tabId) => selectSessionTab(tabId)}>
                       <SelectTrigger
                         className="h-8 min-w-0 flex-1"
                         title={t.input.sessionTerminalLabel}
@@ -5946,16 +5946,11 @@ function App(): React.JSX.Element {
       />
       <CommandApprovalModal
         commandApproval={commandApproval}
-        sessionLabel={resolveCommandApprovalSessionLabel(
-          commandApproval,
-          tabs,
-          tabsRef.current,
-          t
-        )}
+        sessionLabel={resolveCommandApprovalSessionLabel(commandApproval, tabs, tabsRef.current, t)}
         isCurrentSession={Boolean(
           commandApproval?.tabId &&
-            resolveSessionChatTabId(tabs, commandApproval.tabId) ===
-              resolveSessionChatTabId(tabs, activeTabId)
+          resolveSessionChatTabId(tabs, commandApproval.tabId) ===
+            resolveSessionChatTabId(tabs, activeTabId)
         )}
         t={t}
         riskLabel={commandApproval ? riskLabel(commandApproval.audit.risk, t) : ''}
@@ -5968,10 +5963,7 @@ function App(): React.JSX.Element {
   )
 }
 
-function isApprovalTargetAlive(
-  tabId: string | undefined,
-  tabs: AgentTerminalTab[]
-): boolean {
+function isApprovalTargetAlive(tabId: string | undefined, tabs: AgentTerminalTab[]): boolean {
   if (tabs.length === 0) return false
   if (!tabId) return false
 
@@ -6050,9 +6042,12 @@ function resolveCommandApprovalSessionLabel(
     tabSnapshot.find((candidate) => candidate.id === request.tabId)
   if (!tab) return t.commandReview.unknownSession
 
-  const title = getTerminalDisplayTitle(tab, [...tabs, ...tabSnapshot].filter(
-    (candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index
-  ))
+  const title = getTerminalDisplayTitle(
+    tab,
+    [...tabs, ...tabSnapshot].filter(
+      (candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index
+    )
+  )
   const cwd = tab.terminalCwd.trim()
   return cwd ? `${title} · ${cwd}` : title
 }

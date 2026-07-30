@@ -98,10 +98,7 @@ describe('OpenApiToolExecutor', () => {
     })
 
     const executor = new OpenApiToolExecutor(config, operations)
-    const result = await executor.execute(
-      'get_order',
-      JSON.stringify({ path: { orderId: 'A1' } })
-    )
+    const result = await executor.execute('get_order', JSON.stringify({ path: { orderId: 'A1' } }))
 
     expect(result).toMatchObject({
       ok: true,
@@ -152,10 +149,7 @@ describe('OpenApiToolExecutor', () => {
       .mockResolvedValueOnce({ status: 200, headers: {}, data: { ok: true } })
 
     const executor = new OpenApiToolExecutor(config, operations)
-    const result = await executor.execute(
-      'get_order',
-      JSON.stringify({ path: { orderId: 'A1' } })
-    )
+    const result = await executor.execute('get_order', JSON.stringify({ path: { orderId: 'A1' } }))
 
     expect(request).toHaveBeenCalledTimes(2)
     expect(result).toMatchObject({ ok: true, status: 200, attempts: 2 })
@@ -172,10 +166,7 @@ describe('OpenApiToolExecutor', () => {
       { ...config, openApiMaxRetries: 1, openApiRetryBackoffMs: 0 },
       operations
     )
-    const result = await executor.execute(
-      'get_order',
-      JSON.stringify({ path: { orderId: 'A1' } })
-    )
+    const result = await executor.execute('get_order', JSON.stringify({ path: { orderId: 'A1' } }))
 
     expect(request).toHaveBeenCalledTimes(2)
     expect(result).toMatchObject({

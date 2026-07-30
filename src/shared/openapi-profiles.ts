@@ -16,9 +16,7 @@ export function createEmptyOpenApiProfile(id = `openapi-${Date.now()}`): AgentOp
   }
 }
 
-export function normalizeOpenApiProfiles(
-  config: Partial<AgentConfig>
-): {
+export function normalizeOpenApiProfiles(config: Partial<AgentConfig>): {
   openApiProfiles: AgentOpenApiProfile[]
   openApiProfileId?: string
 } {
@@ -40,8 +38,7 @@ export function normalizeOpenApiProfiles(
   }
 
   const requestedId = String(config.openApiProfileId ?? '').trim()
-  const active =
-    deduped.find((profile) => profile.id === requestedId) ?? deduped[0] ?? undefined
+  const active = deduped.find((profile) => profile.id === requestedId) ?? deduped[0] ?? undefined
 
   return {
     openApiProfiles: deduped,
@@ -86,7 +83,9 @@ export function resolveActiveOpenApiProfile(
   return undefined
 }
 
-export function projectOpenApiProfileFields(profile: AgentOpenApiProfile | undefined): Pick<
+export function projectOpenApiProfileFields(
+  profile: AgentOpenApiProfile | undefined
+): Pick<
   AgentConfig,
   | 'openApiBaseUrl'
   | 'openApiDocument'
@@ -103,10 +102,7 @@ export function projectOpenApiProfileFields(profile: AgentOpenApiProfile | undef
   }
 }
 
-export function withActiveOpenApiProfile(
-  config: AgentConfig,
-  profileId: string
-): AgentConfig {
+export function withActiveOpenApiProfile(config: AgentConfig, profileId: string): AgentConfig {
   const profile = config.openApiProfiles.find((candidate) => candidate.id === profileId)
   if (!profile) return config
 
@@ -123,7 +119,9 @@ export function updateOpenApiProfileInConfig(
   patch: Partial<AgentOpenApiProfile>
 ): AgentConfig {
   const profiles = config.openApiProfiles.map((profile) =>
-    profile.id === profileId ? normalizeOpenApiProfile({ ...profile, ...patch, id: profileId }) : profile
+    profile.id === profileId
+      ? normalizeOpenApiProfile({ ...profile, ...patch, id: profileId })
+      : profile
   )
   const next: AgentConfig = {
     ...config,
@@ -155,9 +153,7 @@ function normalizeOpenApiProfile(value: Partial<AgentOpenApiProfile>): AgentOpen
   }
 }
 
-function buildLegacyOpenApiProfile(
-  config: Partial<AgentConfig>
-): AgentOpenApiProfile | undefined {
+function buildLegacyOpenApiProfile(config: Partial<AgentConfig>): AgentOpenApiProfile | undefined {
   const baseUrl = String(config.openApiBaseUrl ?? '')
   const document = String(config.openApiDocument ?? '')
   if (!baseUrl.trim() && !document.trim()) return undefined

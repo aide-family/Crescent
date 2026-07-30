@@ -137,11 +137,7 @@ async function main() {
   for (const size of icoSizes) {
     icoEntries.push({
       size,
-      png: await sharp(appBuffer)
-        .resize(size, size)
-        .withMetadata({ density: 72 })
-        .png()
-        .toBuffer()
+      png: await sharp(appBuffer).resize(size, size).withMetadata({ density: 72 }).png().toBuffer()
     })
   }
   fs.writeFileSync(outIco, createIcoFromPngs(icoEntries))

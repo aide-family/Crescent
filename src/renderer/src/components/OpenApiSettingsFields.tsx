@@ -191,7 +191,13 @@ export function OpenApiProfileEditorFields({
                 {summary.kind}
               </Badge>
             ) : null}
-            <Button type="button" variant="outline" size="sm" disabled={importing} onClick={onImportFile}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={importing}
+              onClick={onImportFile}
+            >
               <FolderOpenIcon data-icon="inline-start" />
               {importing ? t.settings.importingOpenApi : t.settings.importOpenApiFile}
             </Button>

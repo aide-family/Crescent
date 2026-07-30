@@ -459,9 +459,7 @@ export function extractRequestedActions(input: string): string[] {
     actions.push('inspect')
   }
   if (
-    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(
-      input
-    ) ||
+    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(input) ||
     /(?:创建|添加|配置|修改|修复|部署|安装|执行)/.test(input)
   ) {
     actions.push('operate')

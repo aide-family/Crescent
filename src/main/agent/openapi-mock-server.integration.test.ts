@@ -8,7 +8,7 @@ import type { AgentConfig } from './types'
 describe('OpenAPI mock-server integration', () => {
   let server: Server
   let baseUrl = ''
-  let hits = {
+  const hits = {
     getOrder: 0,
     createOrder: 0,
     flaky: 0

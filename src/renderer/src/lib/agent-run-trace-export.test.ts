@@ -39,7 +39,7 @@ describe('agent-run-trace-export', () => {
     const trace = buildTraceFromAgentLogEntry({
       entry,
       tabId: 'tab-1',
-      t,
+      t
     })
 
     expect(trace.steps[0]?.title).toContain('create_order')

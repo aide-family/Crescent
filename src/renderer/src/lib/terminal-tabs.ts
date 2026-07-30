@@ -109,9 +109,7 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
   const id = resolveTerminalTabId(input?.id)
   const requestedGroupId = input?.sessionGroupId?.trim()
   const sessionGroupId =
-    requestedGroupId && !isReservedTerminalTabId(requestedGroupId)
-      ? requestedGroupId
-      : id
+    requestedGroupId && !isReservedTerminalTabId(requestedGroupId) ? requestedGroupId : id
   return {
     id,
     title: input?.title ?? 'Terminal',
@@ -159,10 +157,7 @@ export function getSessionGroupId(tab: Pick<AgentTerminalTab, 'id' | 'sessionGro
   return tab.sessionGroupId || tab.id
 }
 
-export function getSessionTerminals(
-  tabs: AgentTerminalTab[],
-  groupId: string
-): AgentTerminalTab[] {
+export function getSessionTerminals(tabs: AgentTerminalTab[], groupId: string): AgentTerminalTab[] {
   return tabs.filter((tab) => getSessionGroupId(tab) === groupId)
 }
 

@@ -1,4 +1,12 @@
-import { CopyIcon, CopyPlusIcon, Layers2Icon, PencilIcon, ServerIcon, Trash2Icon, XIcon } from 'lucide-react'
+import {
+  CopyIcon,
+  CopyPlusIcon,
+  Layers2Icon,
+  PencilIcon,
+  ServerIcon,
+  Trash2Icon,
+  XIcon
+} from 'lucide-react'
 
 import { ConnectionList } from '@renderer/components/ConnectionList'
 import { SkillManageStatus, type SkillManageMessage } from '@renderer/components/StatusIndicators'

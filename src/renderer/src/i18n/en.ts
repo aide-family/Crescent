@@ -330,7 +330,8 @@ const en = {
     startedRun: 'Started agent run',
     terminalContext: 'Collecting terminal context.',
     thinking: 'AI is thinking',
-    thinkingAnalyzingRequest: 'Understanding your request and checking the current terminal context…',
+    thinkingAnalyzingRequest:
+      'Understanding your request and checking the current terminal context…',
     thinkingResolvingConnection: 'Deciding whether a configured SSH connection should be opened…',
     thinkingPreparingRun: 'Preparing the execution plan and available tools…',
     slashCommandHint: 'Type / to reference context, MCP tools, mode, or skills',

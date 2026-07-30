@@ -1,10 +1,7 @@
 import type { Dictionary } from '../i18n'
 import { parseAgentRunMarkdown } from './agent-run-markdown'
 import type { AgentLogEntry, AgentRunViewState } from './terminal-tabs'
-import {
-  buildAgentRunTrace,
-  serializeAgentRunTrace
-} from '../../../shared/agent-run-trace'
+import { buildAgentRunTrace, serializeAgentRunTrace } from '../../../shared/agent-run-trace'
 import type { AgentRunTrace, StoredAgentRun } from '../../../shared/agent-types'
 
 export function buildTraceFromAgentRunView(input: {
@@ -62,7 +59,9 @@ export function formatTraceExport(trace: AgentRunTrace): string {
   return serializeAgentRunTrace(trace)
 }
 
-function extractActionsFromMarkdown(actionsMarkdown: string): Array<{ title: string; detail: string }> {
+function extractActionsFromMarkdown(
+  actionsMarkdown: string
+): Array<{ title: string; detail: string }> {
   if (!actionsMarkdown.trim()) return []
 
   const detailBlocks = [...actionsMarkdown.matchAll(/^####\s+(\d+)\.\s+(.+)$/gm)]
@@ -94,7 +93,9 @@ function extractActionsFromMarkdown(actionsMarkdown: string): Array<{ title: str
 }
 
 function parseElapsedMs(elapsedMarkdown: string, t: Dictionary): number | undefined {
-  const match = elapsedMarkdown.match(new RegExp(`${escapeRegExp(t.input.elapsed)}:\\s*(\\d+)ms`, 'i'))
+  const match = elapsedMarkdown.match(
+    new RegExp(`${escapeRegExp(t.input.elapsed)}:\\s*(\\d+)ms`, 'i')
+  )
   if (!match) return undefined
   const value = Number(match[1])
   return Number.isFinite(value) ? value : undefined

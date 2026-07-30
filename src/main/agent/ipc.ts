@@ -14,10 +14,7 @@ import {
 import { generateTerminalCommand } from './command'
 import { CommandAuditor } from './command-auditor'
 import { matchCommandWhitelist } from './command-whitelist'
-import {
-  buildExternalToolApprovalCommand,
-  buildExternalToolAudit
-} from './external-tool-approval'
+import { buildExternalToolApprovalCommand, buildExternalToolAudit } from './external-tool-approval'
 import {
   buildLocalInstructionContext,
   listEditableInstructionFiles,
@@ -135,7 +132,10 @@ function settlePendingCommandApproval(
   return true
 }
 
-function rejectPendingApprovalsForRun(runId: string, rejectionReason = 'Agent run was canceled.'): void {
+function rejectPendingApprovalsForRun(
+  runId: string,
+  rejectionReason = 'Agent run was canceled.'
+): void {
   for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
     if (pending.runId !== runId) continue
     settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
@@ -450,7 +450,8 @@ export function registerAgentIpc(): void {
         {
           approved: Boolean(payload.approved),
           note: typeof payload.note === 'string' ? payload.note : '',
-          rejectionReason: typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
+          rejectionReason:
+            typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
         },
         { dismiss: false }
       )
@@ -596,8 +597,7 @@ export function registerAgentIpc(): void {
       if (defaultTabId === 'default' || defaultTabId.toLowerCase() === 'local') {
         return {
           ok: false,
-          error:
-            'Reserved terminal tab id is not allowed. Each terminal requires a unique tabId.'
+          error: 'Reserved terminal tab id is not allowed. Each terminal requires a unique tabId.'
         }
       }
       const sessionTerminalIds = new Set(

@@ -40,10 +40,7 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import type { Dictionary } from '@renderer/i18n'
-import {
-  buildModelSelectionValue,
-  parseModelSelectionValue
-} from '@renderer/lib/app-runtime'
+import { buildModelSelectionValue, parseModelSelectionValue } from '@renderer/lib/app-runtime'
 import type {
   AgentConfig,
   AgentModelOption,
@@ -375,7 +372,8 @@ export function SettingsSheet({
                 ) : (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {instructionFiles.map((file) => {
-                      const selected = instructionEditorOpen && file.name === selectedInstructionName
+                      const selected =
+                        instructionEditorOpen && file.name === selectedInstructionName
                       const contentLength = file.content.trim().length
 
                       return (
@@ -512,9 +510,7 @@ export function SettingsSheet({
                     <Input
                       id="provider-base-url"
                       value={settingsProvider.baseUrl}
-                      onChange={(event) =>
-                        onUpdateSettingsProvider('baseUrl', event.target.value)
-                      }
+                      onChange={(event) => onUpdateSettingsProvider('baseUrl', event.target.value)}
                       placeholder="https://api.deepseek.com"
                     />
                     <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
