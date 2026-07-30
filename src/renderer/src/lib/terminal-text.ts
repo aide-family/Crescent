@@ -1,4 +1,9 @@
 import type { TemporarySubterminal } from './terminal-tabs'
+import {
+  extractPasswordPromptLine as extractSharedPasswordPromptLine,
+  isPasswordPromptLine as isSharedPasswordPromptLine,
+  isTerminalCurrentlyAtPasswordPrompt as isSharedTerminalCurrentlyAtPasswordPrompt
+} from '../../../shared/terminal-password-prompt'
 
 export function parseSubterminalTabId(
   tabId: string
@@ -108,43 +113,15 @@ export function stripTerminalControlSequences(value: string): string {
 }
 
 export function extractPasswordPromptLine(output: string): string | null {
-  const lines = stripTerminalControlSequences(output)
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-8)
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (isPasswordPromptLine(lines[index])) return lines[index]
-  }
-
-  return null
+  return extractSharedPasswordPromptLine(stripTerminalControlSequences(output))
 }
 
 export function isTerminalCurrentlyAtPasswordPrompt(output: string): boolean {
-  const lines = stripTerminalControlSequences(output)
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-  const lastLine = lines[lines.length - 1]
-  return Boolean(lastLine && isPasswordPromptLine(lastLine))
+  return isSharedTerminalCurrentlyAtPasswordPrompt(stripTerminalControlSequences(output))
 }
 
 export function isPasswordPromptLine(line: string): boolean {
-  return /(?:password|passphrase|verification code|one-time password|otp)\b.*:\s*$/i.test(line)
-}
-
-export function hasOutputBeyondEcho(output: string, echo: string): boolean {
-  const compactOutput = compactTerminalText(output)
-  const compactEcho = compactTerminalText(echo)
-  const echoIndex = compactOutput.indexOf(compactEcho)
-
-  if (echoIndex === -1) return compactOutput.length > 0
-
-  return compactOutput.slice(echoIndex + compactEcho.length).length > 0
+  return isSharedPasswordPromptLine(line)
 }
 
 export function hasInteractivePrompt(output: string): boolean {
@@ -157,9 +134,18 @@ export function hasInteractivePrompt(output: string): boolean {
 
   return lines.some((line) => {
     if (/(yes\/no|continue connecting)/i.test(line)) return true
-
-    return /(?:password|passphrase|verification code|one-time password|otp)\s*:\s*$/i.test(line)
+    return isSharedPasswordPromptLine(line)
   })
+}
+
+export function hasOutputBeyondEcho(output: string, echo: string): boolean {
+  const compactOutput = compactTerminalText(output)
+  const compactEcho = compactTerminalText(echo)
+  const echoIndex = compactOutput.indexOf(compactEcho)
+
+  if (echoIndex === -1) return compactOutput.length > 0
+
+  return compactOutput.slice(echoIndex + compactEcho.length).length > 0
 }
 
 export function compactTerminalText(value: string): string {

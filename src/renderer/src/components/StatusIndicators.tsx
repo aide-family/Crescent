@@ -66,9 +66,11 @@ export function SkillManageStatus({
 }
 
 export function StatusDot({
-  state
+  state,
+  title
 }: {
   state: 'ready' | 'pending' | 'not-ready'
+  title?: string
 }): React.JSX.Element {
   const className =
     state === 'ready'
@@ -77,7 +79,13 @@ export function StatusDot({
         ? 'bg-yellow-400 shadow-yellow-400/40'
         : 'bg-red-500 shadow-red-500/40'
 
-  return <span className={`size-2 rounded-full shadow-[0_0_8px] ${className}`} />
+  return (
+    <span
+      className={`inline-block size-2 shrink-0 rounded-full shadow-[0_0_8px] ${className}`}
+      title={title}
+      aria-label={title}
+    />
+  )
 }
 
 export function McpStatusDot({

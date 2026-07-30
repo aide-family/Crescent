@@ -67,6 +67,17 @@ describe('terminal ipc automation display helpers', () => {
     )
   })
 
+  it('streams Chinese sudo password prompts during automation', () => {
+    const state = createFilterState()
+
+    expect(filterAutomationControlOutputWithState('__CRESCENT_CMD_START_test__\r\n', state)).toBe(
+      ''
+    )
+    expect(filterAutomationControlOutputWithState('[sudo] aide 的密码：', state)).toBe(
+      '[sudo] aide 的密码：'
+    )
+  })
+
   it('allows sudo for concrete commands but blocks interactive sudo shells', () => {
     expect(isInteractiveCommand('sudo resolvectl status')).toBe(false)
     expect(isInteractiveCommand('sudo -i')).toBe(true)

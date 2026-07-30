@@ -139,6 +139,16 @@ export interface OperationRecord {
   output?: string
 }
 
+export interface AgentSessionTerminalRef {
+  tabId: string
+  title: string
+  connectionId?: string
+  connectionName?: string
+  isSsh: boolean
+  cwd?: string
+  isCurrent?: boolean
+}
+
 export interface AgentRunInput {
   runId?: string
   input: string
@@ -150,6 +160,8 @@ export interface AgentRunInput {
   allowTerminalTools?: boolean
   connectionId?: string
   tabId?: string
+  /** Peer terminals that belong to the same chat session; execution targets must be in this list. */
+  sessionTerminals?: AgentSessionTerminalRef[]
   locale?: string
 }
 
@@ -205,7 +217,10 @@ export interface TerminalCommandResult {
 }
 
 export interface TerminalCommandExecutor {
-  executeCommand(command: string, timeoutMs?: number): Promise<TerminalCommandResult>
+  executeCommand(
+    command: string,
+    timeoutMsOrOptions?: number | { timeoutMs?: number; targetTerminalId?: string }
+  ): Promise<TerminalCommandResult>
 }
 
 export interface SubterminalCommandExecutor {
@@ -259,6 +274,11 @@ export interface CommandApprovalDecision {
   approved: boolean
   note?: string
   rejectionReason?: string
+}
+
+export interface CommandApprovalDismiss {
+  requestId: string
+  runId: string
 }
 
 export interface AgentValidationResult {

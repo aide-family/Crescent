@@ -2,15 +2,41 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createTerminalTab,
+  createUniqueTerminalTabId,
   getSessionChatTab,
   getSessionDisplayTitle,
   getSessionGroupId,
   getSessionTerminals,
   getTerminalDisplayTitle,
   getTerminalSessionBaseName,
+  isReservedTerminalTabId,
   listSessionChatTabs,
-  resolveSessionChatTabId
+  resolveSessionChatTabId,
+  resolveTerminalTabId
 } from './terminal-tabs'
+
+describe('terminal tab ids', () => {
+  it('mints unique ids and rejects reserved defaults', () => {
+    const first = createTerminalTab()
+    const second = createTerminalTab()
+    expect(first.id).not.toBe(second.id)
+    expect(isReservedTerminalTabId(first.id)).toBe(false)
+    expect(isReservedTerminalTabId('default')).toBe(true)
+    expect(isReservedTerminalTabId('local')).toBe(true)
+    expect(isReservedTerminalTabId('Local')).toBe(true)
+    expect(resolveTerminalTabId('default')).not.toBe('default')
+    expect(resolveTerminalTabId('local')).not.toBe('local')
+    expect(createUniqueTerminalTabId()).toMatch(/^tab-/)
+  })
+
+  it('remints reserved ids when creating tabs', () => {
+    const tab = createTerminalTab({ id: 'default', title: 'Terminal', sessionGroupId: 'local' })
+    expect(tab.id).not.toBe('default')
+    expect(tab.id).not.toBe('local')
+    expect(isReservedTerminalTabId(tab.id)).toBe(false)
+    expect(tab.sessionGroupId).toBe(tab.id)
+  })
+})
 
 describe('getTerminalDisplayTitle', () => {
   it('shows the session base name when the name is unique', () => {

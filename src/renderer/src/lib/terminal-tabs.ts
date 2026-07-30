@@ -84,13 +84,38 @@ export interface TemporarySubterminal {
 }
 
 const BLOCKED_TERMINAL_TITLE_PATTERN = /zhangketopology/i
+/** Reserved ids historically collided across sessions; never mint or accept these. */
+const RESERVED_TERMINAL_TAB_IDS = new Set(['default', 'local'])
+
+export function createUniqueTerminalTabId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `tab-${crypto.randomUUID()}`
+  }
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+export function isReservedTerminalTabId(tabId: string | undefined): boolean {
+  const normalized = tabId?.trim().toLowerCase()
+  return !normalized || RESERVED_TERMINAL_TAB_IDS.has(normalized)
+}
+
+export function resolveTerminalTabId(requestedId?: string): string {
+  const trimmed = requestedId?.trim()
+  if (!trimmed || isReservedTerminalTabId(trimmed)) return createUniqueTerminalTabId()
+  return trimmed
+}
 
 export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTerminalTab {
-  const id = input?.id ?? `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const id = resolveTerminalTabId(input?.id)
+  const requestedGroupId = input?.sessionGroupId?.trim()
+  const sessionGroupId =
+    requestedGroupId && !isReservedTerminalTabId(requestedGroupId)
+      ? requestedGroupId
+      : id
   return {
     id,
-    title: input?.title ?? 'Local',
-    sessionGroupId: input?.sessionGroupId ?? id,
+    title: input?.title ?? 'Terminal',
+    sessionGroupId,
     providerId: input?.providerId,
     model: input?.model,
     connectionId: input?.connectionId,
@@ -205,8 +230,8 @@ export function getTerminalSessionBaseName(tab: AgentTerminalTab): string {
     return stripTrailingSessionIndex(raw) || 'SSH'
   }
 
-  const raw = sanitizeTerminalDisplayTitle(tab.title, 'Local')
-  return stripTrailingSessionIndex(raw) || 'Local'
+  const raw = sanitizeTerminalDisplayTitle(tab.title, 'Terminal')
+  return stripTrailingSessionIndex(raw) || 'Terminal'
 }
 
 /**

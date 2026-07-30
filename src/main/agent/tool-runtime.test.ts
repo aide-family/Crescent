@@ -76,11 +76,17 @@ describe('AgentToolRuntime', () => {
     expect(runtime.tools[0]?.function.parameters).toMatchObject({
       properties: {
         command: {
-          description: expect.stringContaining('For another host, use ssh')
+          description: expect.stringContaining('For another host without a peer terminal, use ssh')
+        },
+        targetTerminalId: {
+          description: expect.stringContaining('peer terminal')
         }
       }
     })
-    expect(terminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', undefined)
+    expect(terminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', {
+      timeoutMs: undefined,
+      targetTerminalId: undefined
+    })
     expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool', name: 'execute_terminal_command' })
@@ -141,12 +147,46 @@ describe('AgentToolRuntime', () => {
 
     expect(terminalExecutor.executeCommand).toHaveBeenCalledWith(
       "ssh 10.42.131.142 'df -hT /home'",
-      undefined
+      {
+        timeoutMs: undefined,
+        targetTerminalId: undefined
+      }
     )
     expect(result).toMatchObject({
       ok: true,
       command: "ssh 10.42.131.142 'df -hT /home'",
       output: 'ok'
+    })
+  })
+
+  it('passes targetTerminalId to the terminal executor', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const terminalExecutor: TerminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string) => ({
+        ok: true,
+        command,
+        mode: 'pty' as const,
+        cwd: '/tmp',
+        exitCode: 0,
+        output: 'ok'
+      }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'compare hosts',
+      terminalExecutor,
+      emit
+    })
+    await runtime.execute(
+      'execute_terminal_command',
+      JSON.stringify({ command: 'hostname', targetTerminalId: 'peer-tab' })
+    )
+
+    expect(terminalExecutor.executeCommand).toHaveBeenCalledWith('hostname', {
+      timeoutMs: undefined,
+      targetTerminalId: 'peer-tab'
     })
   })
 

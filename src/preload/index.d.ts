@@ -16,6 +16,7 @@ import type {
   AgentSkillSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
+  CommandApprovalDismiss,
   CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
@@ -126,10 +127,12 @@ interface TerminalAgentApi {
     ) => Promise<AgentConnectionIntentResult>
     run: (input: AgentRunInput) => Promise<{ ok: boolean; text?: string; error?: string }>
     cancel: (runId: string) => Promise<{ ok: boolean }>
+    rejectApprovalsForTab: (tabId: string) => Promise<{ ok: boolean }>
     supplement: (input: { runId: string; input: string }) => Promise<{ ok: boolean }>
     resolveCommandApproval: (input: CommandApprovalDecision) => Promise<{ ok: boolean }>
     onEvent: (callback: (event: AgentEvent) => void) => () => void
     onCommandApprovalRequest: (callback: (request: CommandApprovalRequest) => void) => () => void
+    onCommandApprovalDismiss: (callback: (payload: CommandApprovalDismiss) => void) => () => void
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
   }
   connections: {

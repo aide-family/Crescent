@@ -91,6 +91,12 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
+import {
   dictionaries,
   localeOptions,
   resolveInitialLocale,
@@ -199,6 +205,7 @@ import {
   getSessionGroupId,
   getSessionTerminals,
   getTerminalDisplayTitle,
+  isReservedTerminalTabId,
   listSessionChatTabs,
   resolveSessionChatTabId,
   resolveTabModelSelection,
@@ -249,6 +256,7 @@ import type {
   AgentValidationResult,
   AgentSkillOption,
   AgentWikiReference,
+  AgentSessionTerminalRef,
   CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
@@ -308,7 +316,8 @@ interface PostConnectionTask {
   startedAt: number
 }
 
-const emptyLocalTab = createTerminalTab({ id: 'default', title: 'Local' })
+const initialTerminalTab = createTerminalTab({ title: 'Terminal' })
+const emptyLocalTab = createTerminalTab({ title: 'Terminal' })
 
 function App(): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
@@ -321,6 +330,9 @@ function App(): React.JSX.Element {
   const activeRunCanceledRef = useRef(new Set<string>())
   const activeRunIdRef = useRef(new Map<string, string>())
   const activeRunInputRef = useRef(new Map<string, string>())
+  const activeExecutionTabIdRef = useRef(new Map<string, string>())
+  const pendingCommandApprovalsRef = useRef<CommandApprovalRequest[]>([])
+  const passwordPromptsByTabRef = useRef(new Map<string, PasswordPromptRequest>())
   const validationRequestRef = useRef(0)
   const pipeInputBufferRef = useRef('')
   const pipeCursorRef = useRef(0)
@@ -330,7 +342,7 @@ function App(): React.JSX.Element {
   const agentLogRef = useRef<HTMLDivElement | null>(null)
   const passwordPromptInputRef = useRef<HTMLInputElement | null>(null)
   const slashCommandListRef = useRef<HTMLDivElement | null>(null)
-  const activeTabIdRef = useRef('default')
+  const activeTabIdRef = useRef(initialTerminalTab.id)
   const tabsRef = useRef<AgentTerminalTab[]>([])
   const connectionsRef = useRef<ConnectionConfig[]>([])
   const subterminalResizeRef = useRef<{
@@ -499,10 +511,8 @@ function App(): React.JSX.Element {
   const [settingsMcpServerId, setSettingsMcpServerId] = useState('')
   const [mcpArgsText, setMcpArgsText] = useState('')
   const [mcpEnvText, setMcpEnvText] = useState('')
-  const [tabs, setTabs] = useState<AgentTerminalTab[]>([
-    createTerminalTab({ id: 'default', title: 'Local' })
-  ])
-  const [activeTabId, setActiveTabId] = useState('default')
+  const [tabs, setTabs] = useState<AgentTerminalTab[]>([initialTerminalTab])
+  const [activeTabId, setActiveTabId] = useState(initialTerminalTab.id)
   const [tabMenu, setTabMenu] = useState<{
     tabId: string
     x: number
@@ -532,7 +542,7 @@ function App(): React.JSX.Element {
     () =>
       tabs.filter(
         (tab) =>
-          tab.id !== 'default' || terminalPage === 'terminal' || tab.sessionId || tab.terminalOutput
+          terminalPage === 'terminal' || tab.sessionId || tab.terminalOutput || tab.terminalReady
       ),
     [tabs, terminalPage]
   )
@@ -603,15 +613,17 @@ function App(): React.JSX.Element {
   const selectedInstructionFile = instructionFiles.find(
     (file) => file.name === selectedInstructionName
   )
+  const modelValidationError =
+    validation?.modelOk === false ? (validation.error?.trim() || t.common.error) : undefined
   const aiState: 'ready' | 'pending' | 'not-ready' = validating
     ? 'pending'
-    : validation?.modelOk === false
+    : modelValidationError
       ? 'not-ready'
       : 'ready'
   const aiStatusText = validating
     ? t.app.aiPending
-    : validation?.modelOk === false
-      ? `${t.app.aiNotReady}: ${validation.error ?? t.common.error}`
+    : modelValidationError
+      ? `${t.app.aiNotReady}: ${modelValidationError}`
       : t.app.aiReady
   const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
     ? 'ready'
@@ -997,7 +1009,9 @@ function App(): React.JSX.Element {
       passwordPromptBuffersRef.current.set(tabId, '')
       return
     }
-    if (passwordPromptRequestRef.current || passwordPromptOpenTabsRef.current.has(tabId)) return
+    if (passwordPromptsByTabRef.current.has(tabId) || passwordPromptOpenTabsRef.current.has(tabId)) {
+      return
+    }
 
     const tab = tabsRef.current.find((current) => current.id === tabId)
     if (!tab) return
@@ -1008,10 +1022,27 @@ function App(): React.JSX.Element {
       title: tab.title,
       prompt: promptLine
     }
-    passwordPromptRequestRef.current = request
-    setPasswordPromptValue('')
-    setPasswordPromptError('')
-    setPasswordPromptRequest(request)
+    passwordPromptsByTabRef.current.set(tabId, request)
+    passwordPromptBuffersRef.current.set(tabId, '')
+
+    if (!passwordPromptRequestRef.current) {
+      passwordPromptRequestRef.current = request
+      setPasswordPromptValue('')
+      setPasswordPromptError('')
+      setPasswordPromptRequest(request)
+      return
+    }
+
+    const activeSession = resolveSessionChatTabId(
+      tabsRef.current,
+      passwordPromptRequestRef.current.tabId
+    )
+    const requestSession = resolveSessionChatTabId(tabsRef.current, tabId)
+    // Prefer keeping the currently shown prompt; queue others by tab until it closes.
+    if (activeSession === requestSession && passwordPromptRequestRef.current.tabId === tabId) {
+      passwordPromptRequestRef.current = request
+      setPasswordPromptRequest(request)
+    }
   }, [])
 
   useEffect(() => {
@@ -1316,7 +1347,21 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const unsubscribe = window.api.agent.onEvent((event) => {
       const eventTabId = event.tabId ?? activeTabIdRef.current
-      appendAgentEvent(event, resolveSessionChatTabId(tabsRef.current, eventTabId))
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
+      if (
+        event.type === 'command' &&
+        event.phase === 'started' &&
+        event.runId &&
+        event.tabId
+      ) {
+        for (const [ownerTabId, runId] of activeRunIdRef.current) {
+          if (runId === event.runId) {
+            activeExecutionTabIdRef.current.set(ownerTabId, event.tabId)
+            break
+          }
+        }
+      }
+      appendAgentEvent(event, chatTabId)
     })
 
     return unsubscribe
@@ -1324,7 +1369,65 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalRequest((request) => {
-      setCommandApproval(request)
+      if (!isApprovalTargetAlive(request.tabId, tabsRef.current)) {
+        void window.api.agent.resolveCommandApproval({
+          requestId: request.id,
+          approved: false,
+          rejectionReason: t.commandReview.sessionClosedRejection
+        })
+        return
+      }
+
+      setCommandApproval((current) => {
+        if (!current) {
+          setCommandRejectionReason('')
+          return request
+        }
+
+        const currentSessionId = resolveSessionChatTabId(
+          tabsRef.current,
+          current.tabId ?? activeTabIdRef.current
+        )
+        const requestSessionId = resolveSessionChatTabId(
+          tabsRef.current,
+          request.tabId ?? activeTabIdRef.current
+        )
+
+        if (currentSessionId === requestSessionId && current.runId === request.runId) {
+          setCommandRejectionReason('')
+          return request
+        }
+
+        pendingCommandApprovalsRef.current = [
+          ...pendingCommandApprovalsRef.current.filter((item) => item.id !== request.id),
+          request
+        ]
+        return current
+      })
+    })
+  }, [t.commandReview.sessionClosedRejection])
+
+  useEffect(() => {
+    return window.api.agent.onCommandApprovalDismiss((payload) => {
+      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
+        (item) => item.id !== payload.requestId && item.runId !== payload.runId
+      )
+      setCommandApproval((current) => {
+        if (
+          current &&
+          current.id !== payload.requestId &&
+          current.runId !== payload.runId
+        ) {
+          return current
+        }
+        const { next, remaining } = takeNextQueuedCommandApproval(
+          pendingCommandApprovalsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current
+        )
+        pendingCommandApprovalsRef.current = remaining
+        return next
+      })
       setCommandRejectionReason('')
     })
   }, [])
@@ -1883,9 +1986,13 @@ function App(): React.JSX.Element {
     const nextLogId = Math.max(0, ...restoredLogs.map((log) => log.id)) + 1
     nextLogIdRef.current = Math.max(nextLogIdRef.current, nextLogId)
     const existingTab = tabsRef.current.find((tab) => tab.id === detail.tabId)
+    const restoreTabId = isReservedTerminalTabId(detail.tabId) ? undefined : detail.tabId
+    const restoreGroupId = isReservedTerminalTabId(detail.sessionGroupId)
+      ? undefined
+      : detail.sessionGroupId
     const restoredTab = createTerminalTab({
-      id: detail.tabId,
-      sessionGroupId: detail.sessionGroupId ?? detail.tabId,
+      id: restoreTabId,
+      sessionGroupId: restoreGroupId ?? restoreTabId,
       title: detail.title,
       connectionId: detail.connectionId,
       connectionName: detail.connectionName,
@@ -1902,14 +2009,15 @@ function App(): React.JSX.Element {
         ? current.map((tab) => (tab.id === detail.tabId ? { ...tab, agentLog: restoredLogs } : tab))
         : [...current, restoredTab]
     )
-    setActiveTabId(detail.tabId)
+    setActiveTabId(existingTab?.id ?? restoredTab.id)
     setHistoryOpen(false)
     setHiddenPane(null)
 
     if (connection) {
-      const activeSession = tabsRef.current.find((tab) => tab.id === detail.tabId)?.sessionId
+      const liveTabId = existingTab?.id ?? restoredTab.id
+      const activeSession = tabsRef.current.find((tab) => tab.id === liveTabId)?.sessionId
       if (!activeSession) {
-        pendingSshRef.current.set(detail.tabId, connection)
+        pendingSshRef.current.set(liveTabId, connection)
       }
     }
   }
@@ -2243,13 +2351,112 @@ function App(): React.JSX.Element {
     void persistModelSelection(selectedModel.providerId, selectedModel.id)
   }
 
+  function cancelAgentRunForChatTab(chatTabId: string): void {
+    activeRunCanceledRef.current.add(chatTabId)
+    const runId = activeRunIdRef.current.get(chatTabId)
+    if (runId) {
+      void window.api.agent.cancel(runId)
+      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
+        (item) => item.runId !== runId
+      )
+      setCommandApproval((current) => {
+        if (current?.runId !== runId) return current
+        const { next, remaining } = takeNextQueuedCommandApproval(
+          pendingCommandApprovalsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current
+        )
+        pendingCommandApprovalsRef.current = remaining
+        return next
+      })
+      setCommandRejectionReason('')
+    }
+    activeAgentRunRef.current.delete(chatTabId)
+    activeRunIdRef.current.delete(chatTabId)
+    activeRunInputRef.current.delete(chatTabId)
+    activeExecutionTabIdRef.current.delete(chatTabId)
+    updateTab(chatTabId, (tab) => ({
+      ...tab,
+      agentBusy: false,
+      agentThinking: false,
+      thinkingMessage: undefined
+    }))
+  }
+
+  function cancelAgentRunsOutsideTabs(remainingTabs: AgentTerminalTab[]): void {
+    const aliveSessionIds = new Set(remainingTabs.map((tab) => getSessionGroupId(tab)))
+    for (const chatTabId of [...activeRunIdRef.current.keys()]) {
+      if (aliveSessionIds.has(chatTabId)) continue
+      cancelAgentRunForChatTab(chatTabId)
+    }
+  }
+
+  function rejectApprovalsForClosedTabs(closedTabIds: string[]): void {
+    for (const tabId of closedTabIds) {
+      void window.api.agent.rejectApprovalsForTab(tabId)
+      passwordPromptsByTabRef.current.delete(tabId)
+      passwordPromptOpenTabsRef.current.delete(tabId)
+    }
+
+    pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter((item) => {
+      if (!item.tabId) return true
+      if (closedTabIds.includes(item.tabId)) return false
+      const subterminal = parseSubterminalTabId(item.tabId)
+      if (subterminal && closedTabIds.includes(subterminal.parentTabId)) return false
+      return true
+    })
+
+    setCommandApproval((current) => {
+      if (!current?.tabId) return current
+      if (closedTabIds.includes(current.tabId)) {
+        const { next, remaining } = takeNextQueuedCommandApproval(
+          pendingCommandApprovalsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current
+        )
+        pendingCommandApprovalsRef.current = remaining
+        return next
+      }
+      const subterminal = parseSubterminalTabId(current.tabId)
+      if (subterminal && closedTabIds.includes(subterminal.parentTabId)) {
+        const { next, remaining } = takeNextQueuedCommandApproval(
+          pendingCommandApprovalsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current
+        )
+        pendingCommandApprovalsRef.current = remaining
+        return next
+      }
+      return current
+    })
+
+    if (
+      passwordPromptRequestRef.current &&
+      closedTabIds.includes(passwordPromptRequestRef.current.tabId)
+    ) {
+      showNextPasswordPrompt()
+    }
+  }
+
   function stopAgentRun(tabId = activeTabIdRef.current): void {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
     if (runId) void window.api.agent.cancel(runId)
     if (runId) {
-      setCommandApproval((current) => (current?.runId === runId ? null : current))
+      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
+        (item) => item.runId !== runId
+      )
+      setCommandApproval((current) => {
+        if (current?.runId !== runId) return current
+        const { next, remaining } = takeNextQueuedCommandApproval(
+          pendingCommandApprovalsRef.current,
+          tabsRef.current,
+          activeTabIdRef.current
+        )
+        pendingCommandApprovalsRef.current = remaining
+        return next
+      })
       setCommandRejectionReason('')
     }
     if (runId) {
@@ -2281,6 +2488,7 @@ function App(): React.JSX.Element {
         })
       })
     }
+    activeExecutionTabIdRef.current.delete(chatTabId)
     updateTab(chatTabId, (tab) => ({
       ...tab,
       agentBusy: false,
@@ -2304,21 +2512,21 @@ function App(): React.JSX.Element {
     sendTerminalInput(passwordPromptValue, passwordPromptRequest.tabId)
     passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
     passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
-    passwordPromptRequestRef.current = null
-    setPasswordPromptRequest(null)
+    passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
     setPasswordPromptValue('')
     setPasswordPromptError('')
+    showNextPasswordPrompt(passwordPromptRequest.tabId)
   }
 
   function cancelPasswordPrompt(): void {
     if (passwordPromptRequest) {
       passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
       passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
+      passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
     }
-    passwordPromptRequestRef.current = null
-    setPasswordPromptRequest(null)
     setPasswordPromptValue('')
     setPasswordPromptError('')
+    showNextPasswordPrompt(passwordPromptRequest?.tabId)
   }
 
   function resolveCommandApproval(approved: boolean): void {
@@ -2327,20 +2535,62 @@ function App(): React.JSX.Element {
     const requestId = commandApproval.id
     const note = commandRejectionReason.trim()
     const rejectionReason = approved ? '' : note
-    setCommandApproval(null)
+    const { next, remaining } = takeNextQueuedCommandApproval(
+      pendingCommandApprovalsRef.current,
+      tabsRef.current,
+      activeTabIdRef.current
+    )
+    pendingCommandApprovalsRef.current = remaining
+    setCommandApproval(next)
     setCommandRejectionReason('')
     void window.api.agent.resolveCommandApproval({ requestId, approved, note, rejectionReason })
+  }
+
+  function showNextPasswordPrompt(preferredTabId = activeTabIdRef.current): void {
+    const preferredSession = resolveSessionChatTabId(tabsRef.current, preferredTabId)
+    const prompts = [...passwordPromptsByTabRef.current.values()]
+    const preferred =
+      prompts.find(
+        (prompt) =>
+          resolveSessionChatTabId(tabsRef.current, prompt.tabId) === preferredSession
+      ) ?? prompts[0]
+    passwordPromptRequestRef.current = preferred ?? null
+    setPasswordPromptRequest(preferred ?? null)
+    if (!preferred) {
+      setPasswordPromptValue('')
+      setPasswordPromptError('')
+    }
   }
 
   async function getTerminalContextForAgent(tabId = activeTabIdRef.current): Promise<string> {
     const context = await window.api.terminal.getContext(tabId)
     const output = context.output.slice(-12000).trim()
+    const sessionTerminals = buildSessionTerminalRefs(tabsRef.current, tabId)
+    const sessionInventory =
+      sessionTerminals.length > 1
+        ? [
+            'session terminals (same chat session; use execute_terminal_command.targetTerminalId to choose):',
+            ...sessionTerminals.map((terminal) => {
+              const markers = [
+                terminal.isCurrent ? 'current' : '',
+                terminal.isSsh ? 'ssh' : 'local',
+                terminal.connectionName ? `connection=${terminal.connectionName}` : '',
+                terminal.cwd ? `cwd=${terminal.cwd}` : ''
+              ]
+                .filter(Boolean)
+                .join(', ')
+              return `- tabId=${terminal.tabId} title=${terminal.title}${markers ? ` (${markers})` : ''}`
+            })
+          ].join('\n')
+        : ''
 
     return [
       `mode: ${context.mode}`,
       context.pid ? `pid: ${context.pid}` : '',
       context.cwd ? `cwd: ${context.cwd}` : '',
       context.shell ? `shell: ${context.shell}` : '',
+      `currentTabId: ${tabId}`,
+      sessionInventory,
       output ? `recent output:\n${output}` : 'recent output: <empty>'
     ]
       .filter(Boolean)
@@ -3235,6 +3485,7 @@ function App(): React.JSX.Element {
     const runId = `run-${crypto.randomUUID()}`
     activeRunIdRef.current.set(chatTabId, runId)
     activeRunInputRef.current.set(chatTabId, displayInput)
+    activeExecutionTabIdRef.current.set(chatTabId, terminalTabId)
     void window.api.storage.saveAgentRun({
       runId,
       tabId: chatTabId,
@@ -3287,6 +3538,7 @@ function App(): React.JSX.Element {
         : ''
       const runTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
       const chatTab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
+      const sessionTerminals = buildSessionTerminalRefs(tabsRef.current, terminalTabId)
       const runModelSelection = resolveTabModelSelection(chatTab ?? runTab, config, visibleModels)
       const result = await window.api.agent.run({
         runId,
@@ -3301,6 +3553,7 @@ function App(): React.JSX.Element {
         allowTerminalTools,
         connectionId,
         tabId: terminalTabId,
+        sessionTerminals,
         locale
       })
 
@@ -3975,7 +4228,23 @@ function App(): React.JSX.Element {
       if (activeRunCanceledRef.current.delete(groupId)) {
         activeRunCanceledRef.current.add(nextRoot.id)
       }
+      const executionTabId = activeExecutionTabIdRef.current.get(groupId)
+      if (executionTabId) {
+        activeExecutionTabIdRef.current.delete(groupId)
+        activeExecutionTabIdRef.current.set(nextRoot.id, executionTabId)
+      }
+    } else if (peers.length === 0) {
+      // Last terminal in this session is closing — stop any orphaned agent run.
+      cancelAgentRunForChatTab(groupId)
+    } else if (activeExecutionTabIdRef.current.get(groupId) === tabId) {
+      // Closing the terminal currently executing agent commands — stop the run.
+      cancelAgentRunForChatTab(groupId)
     }
+
+    rejectApprovalsForClosedTabs([
+      tabId,
+      ...(closingTab?.subTerminals.map((subterminal) => subterminal.id) ?? [])
+    ])
 
     suppressTerminalReconnectRef.current.add(tabId)
     window.api.terminal.stop(tabId)
@@ -4016,12 +4285,12 @@ function App(): React.JSX.Element {
       next = next.filter((tab) => tab.id !== tabId)
       if (activeTabIdRef.current === tabId) {
         const sameSession = next.find((tab) => getSessionGroupId(tab) === (nextRoot?.id ?? groupId))
-        const fallback = sameSession ?? next.find((tab) => tab.id !== 'default') ?? next[0]
+        const fallback = sameSession ?? next[0]
         if (fallback) {
           setActiveTabId(fallback.id)
           setTerminalPage('terminal')
         } else {
-          setActiveTabId('default')
+          setActiveTabId('')
           setTerminalPage('connections')
         }
       }
@@ -4031,8 +4300,10 @@ function App(): React.JSX.Element {
   }
 
   function performCloseOtherTabs(tabId: string): void {
+    const closedTabIds: string[] = []
     for (const tab of tabsRef.current) {
       if (tab.id !== tabId) {
+        closedTabIds.push(tab.id, ...tab.subTerminals.map((subterminal) => subterminal.id))
         suppressTerminalReconnectRef.current.add(tab.id)
         window.api.terminal.stop(tab.id)
         tab.subTerminals.forEach((subterminal) => {
@@ -4043,16 +4314,20 @@ function App(): React.JSX.Element {
       }
     }
 
-    setTabs((current) => {
-      const keepTab = current.find((tab) => tab.id === tabId)
-      return keepTab ? [keepTab] : [createTerminalTab({ id: 'default', title: 'Local' })]
-    })
-    setActiveTabId(tabId)
+    const keepTab = tabsRef.current.find((tab) => tab.id === tabId)
+    const remaining = keepTab ? [keepTab] : [createTerminalTab({ title: 'Terminal' })]
+    cancelAgentRunsOutsideTabs(remaining)
+    rejectApprovalsForClosedTabs(closedTabIds)
+
+    setTabs(() => remaining)
+    setActiveTabId(remaining[0]?.id ?? '')
     setTabMenu(null)
   }
 
   function performCloseAllTabs(): void {
+    const closedTabIds: string[] = []
     for (const tab of tabsRef.current) {
+      closedTabIds.push(tab.id, ...tab.subTerminals.map((subterminal) => subterminal.id))
       suppressTerminalReconnectRef.current.add(tab.id)
       window.api.terminal.stop(tab.id)
       tab.subTerminals.forEach((subterminal) => {
@@ -4062,8 +4337,13 @@ function App(): React.JSX.Element {
       pendingSshRef.current.delete(tab.id)
     }
 
+    cancelAgentRunsOutsideTabs([])
+    rejectApprovalsForClosedTabs(closedTabIds)
+    setCommandApproval(null)
+    setCommandRejectionReason('')
+
     setTabs([])
-    setActiveTabId('default')
+    setActiveTabId('')
     setTerminalPage('connections')
     setTabMenu(null)
   }
@@ -5404,9 +5684,7 @@ function App(): React.JSX.Element {
                   >
                     <SelectTrigger className="h-8 min-w-0 flex-1" title={t.input.sessionLabel}>
                       <SelectValue aria-label={t.input.sessionLabel}>
-                        {sessionTerminals.length > 1
-                          ? `${getSessionDisplayTitle(sessionChatTab, tabs)} (${getTerminalDisplayTitle(activeTab, tabs)})`
-                          : getSessionDisplayTitle(sessionChatTab, tabs)}
+                        {getSessionDisplayTitle(sessionChatTab, tabs)}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
@@ -5420,6 +5698,31 @@ function App(): React.JSX.Element {
                       </SelectGroup>
                     </SelectContent>
                   </Select>
+                  {sessionTerminals.length > 1 && (
+                    <Select
+                      value={activeTab.id}
+                      onValueChange={(tabId) => selectSessionTab(tabId)}
+                    >
+                      <SelectTrigger
+                        className="h-8 min-w-0 flex-1"
+                        title={t.input.sessionTerminalLabel}
+                      >
+                        <SelectValue aria-label={t.input.sessionTerminalLabel}>
+                          {getTerminalDisplayTitle(activeTab, tabs)}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>{t.input.sessionTerminalLabel}</SelectLabel>
+                          {sessionTerminals.map((tab) => (
+                            <SelectItem key={tab.id} value={tab.id}>
+                              {getTerminalDisplayTitle(tab, tabs)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
                   <Select
                     value={activeModelSelectionValue}
                     onValueChange={applyConversationModel}
@@ -5430,17 +5733,32 @@ function App(): React.JSX.Element {
                         <SelectValue aria-label={t.app.model} />
                       </span>
                       <span className="flex min-w-0 items-center gap-2">
-                        <StatusDot state={aiState} />
+                        <StatusDot state={aiState} title={aiStatusText} />
                         <span className="truncate">
                           {activeModel
                             ? `${activeModel.name} · ${activeModel.providerName}`
                             : activeTabModelId}
                         </span>
-                        {validation?.modelOk === false && (
-                          <TriangleAlertIcon
-                            className="size-3.5 shrink-0 text-destructive"
-                            aria-hidden="true"
-                          />
+                        {modelValidationError && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span
+                                  className="pointer-events-auto inline-flex shrink-0"
+                                  aria-label={`${t.app.aiNotReady}: ${modelValidationError}`}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                >
+                                  <TriangleAlertIcon
+                                    className="size-3.5 text-destructive"
+                                    aria-hidden="true"
+                                  />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="max-w-xs break-words">
+                                {modelValidationError}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       </span>
                     </SelectTrigger>
@@ -5648,6 +5966,64 @@ function App(): React.JSX.Element {
       <AppFooter shellState={shellState} activeTab={activeTab} agentMode={config.agentMode} t={t} />
     </main>
   )
+}
+
+function isApprovalTargetAlive(
+  tabId: string | undefined,
+  tabs: AgentTerminalTab[]
+): boolean {
+  if (tabs.length === 0) return false
+  if (!tabId) return false
+
+  if (tabs.some((tab) => tab.id === tabId)) return true
+  if (tabs.some((tab) => tab.subTerminals.some((subterminal) => subterminal.id === tabId))) {
+    return true
+  }
+
+  const subterminal = parseSubterminalTabId(tabId)
+  if (subterminal) {
+    return tabs.some((tab) => tab.id === subterminal.parentTabId)
+  }
+
+  return false
+}
+
+function takeNextQueuedCommandApproval(
+  queue: CommandApprovalRequest[],
+  tabs: AgentTerminalTab[],
+  preferredTabId: string
+): { next: CommandApprovalRequest | null; remaining: CommandApprovalRequest[] } {
+  if (queue.length === 0) return { next: null, remaining: [] }
+
+  const preferredSession = resolveSessionChatTabId(tabs, preferredTabId)
+  const preferredIndex = queue.findIndex(
+    (item) =>
+      resolveSessionChatTabId(tabs, item.tabId ?? preferredTabId) === preferredSession &&
+      isApprovalTargetAlive(item.tabId, tabs)
+  )
+  const fallbackIndex = queue.findIndex((item) => isApprovalTargetAlive(item.tabId, tabs))
+  const index = preferredIndex >= 0 ? preferredIndex : fallbackIndex
+  if (index < 0) return { next: null, remaining: [] }
+
+  const next = queue[index]
+  const remaining = queue.filter((_, itemIndex) => itemIndex !== index)
+  return { next, remaining }
+}
+
+function buildSessionTerminalRefs(
+  tabs: AgentTerminalTab[],
+  currentTabId: string
+): AgentSessionTerminalRef[] {
+  const groupId = resolveSessionChatTabId(tabs, currentTabId)
+  return getSessionTerminals(tabs, groupId).map((tab) => ({
+    tabId: tab.id,
+    title: getTerminalDisplayTitle(tab, tabs),
+    connectionId: tab.connectionId,
+    connectionName: tab.connectionName,
+    isSsh: tab.isSsh,
+    cwd: tab.terminalCwd || undefined,
+    isCurrent: tab.id === currentTabId
+  }))
 }
 
 function summarizeHistoryMessage(value: string): string {

@@ -30,14 +30,19 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: TERMINAL_TOOL_NAME,
     description:
-      'Execute one shell command in the current visible terminal session, wait for completion, and return exit code plus output. For operations on a non-current host, use ssh with a concrete remote command. In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have watchdog timeouts and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection/reporting step.',
+      'Execute one shell command in a terminal that belongs to the current Crescent chat session, wait for completion, and return exit code plus output. Default target is the current/focused terminal. When session terminal inventory lists peer terminals, pass targetTerminalId to run on a specific peer in the same session. Do not invent terminal ids outside that inventory. For one-shot remote commands that should not use an interactive peer PTY, use ssh with a concrete remote command (preferably via execute_subterminal_command). In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have watchdog timeouts and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The exact single shell command to execute in the current terminal environment. For another host, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+            'The exact single shell command to execute in the selected terminal environment. For another host without a peer terminal, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+        },
+        targetTerminalId: {
+          type: 'string',
+          description:
+            'Optional tabId of a peer terminal from the session terminal inventory. Omit to use the current/focused terminal. Must match an id listed for this chat session.'
         },
         timeoutMs: {
           type: 'number',
@@ -252,10 +257,15 @@ export class AgentToolRuntime {
         emit({
           type: 'tool',
           name: TERMINAL_TOOL_NAME,
-          message: `Submitting command for review: ${args.command}`
+          message: args.targetTerminalId
+            ? `Submitting command for review on terminal ${args.targetTerminalId}: ${args.command}`
+            : `Submitting command for review: ${args.command}`
         })
 
-        const result = await terminalExecutor.executeCommand(args.command, args.timeoutMs)
+        const result = await terminalExecutor.executeCommand(args.command, {
+          timeoutMs: args.timeoutMs,
+          targetTerminalId: args.targetTerminalId
+        })
 
         return {
           ...result,
@@ -471,17 +481,24 @@ function isStateChangingHttpMethod(method: HttpMethod | undefined): boolean {
   return method === 'post' || method === 'put' || method === 'patch' || method === 'delete'
 }
 
-function parseTerminalCommandArgs(rawArguments: string): { command: string; timeoutMs?: number } {
+function parseTerminalCommandArgs(rawArguments: string): {
+  command: string
+  timeoutMs?: number
+  targetTerminalId?: string
+} {
   try {
     const parsed = JSON.parse(rawArguments || '{}') as unknown
 
     if (!isRecord(parsed)) return { command: '' }
 
     const timeoutMs = Number(parsed.timeoutMs)
+    const targetTerminalId =
+      typeof parsed.targetTerminalId === 'string' ? parsed.targetTerminalId.trim() : ''
 
     return {
       command: typeof parsed.command === 'string' ? parsed.command.trim() : '',
-      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined,
+      targetTerminalId: targetTerminalId || undefined
     }
   } catch {
     return { command: '' }

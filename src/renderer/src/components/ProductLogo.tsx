@@ -1,14 +1,14 @@
 import type { JSX } from 'react'
-import { TerminalIcon } from 'lucide-react'
+
+import crescentLogo from '@renderer/assets/crescent-logo.svg'
 
 export function ProductLogo(): JSX.Element {
   return (
     <div
-      className="relative flex size-9 items-center justify-center overflow-hidden rounded-md border border-white/15 bg-primary text-primary-foreground shadow-sm shadow-primary/25"
+      className="relative flex size-9 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-[#0D1117] shadow-sm shadow-cyan-500/10"
       aria-hidden="true"
     >
-      <span className="absolute inset-y-1 left-1 w-1 rounded-full bg-[var(--app-copper)]/90" />
-      <TerminalIcon className="relative size-[18px]" aria-hidden="true" />
+      <img src={crescentLogo} alt="" className="size-7" draggable={false} />
     </div>
   )
 }

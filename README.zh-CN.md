@@ -122,7 +122,7 @@ npm run dev
 ### 构建桌面端
 
 ```bash
-# Windows
+# Windows（可在 macOS/Linux 上交叉打包；依赖 node-pty 自带的 win32 prebuilds）
 npm run build:win
 
 # macOS
@@ -131,6 +131,12 @@ npm run build:mac
 # Linux
 npm run build:linux
 ```
+
+说明：
+
+- `node-pty` 使用官方 N-API prebuilds，打包时关闭 `npmRebuild`，避免在 macOS 上交叉编译 Windows/Linux 原生模块失败。
+- 正式发版由 GitHub Actions 在对应系统上构建（见 `.github/workflows/release.yml`）。
+- 若本机打 Windows NSIS 安装包时提示缺少 Wine，可改用 CI，或安装 Wine 后再打包。
 
 启动后，你可以配置 OpenAI 兼容模型供应商，选择模型，然后在终端旁边直接向 Crescent 提问，例如：
 

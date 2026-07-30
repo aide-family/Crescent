@@ -5,6 +5,7 @@ import { homedir, hostname, userInfo } from 'os'
 import { spawn as spawnPty } from 'node-pty'
 
 import { resolveShellLaunchConfig } from './shell'
+import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
 
 interface TerminalSession {
   id: number
@@ -48,7 +49,6 @@ export interface TerminalCommandExecutionResult {
 
 const sessions = new Map<string, TerminalSession>()
 let nextSessionId = 1
-const DEFAULT_TAB_ID = 'default'
 const PIPE_PROMPT_PREFIX = '__TERMINAL_AGENT_PROMPT__'
 const MAX_CONTEXT_BUFFER = 24_000
 const TERMINAL_COMMAND_TIMEOUT_MS = 120_000
@@ -57,6 +57,8 @@ const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const TERMINAL_COMMAND_INTERRUPT_GRACE_MS = 2_000
 const TERMINAL_COMMAND_START_TIMEOUT_MS = 8_000
 const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
+/** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
+const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
@@ -71,12 +73,28 @@ export function executeCommandInTerminal(
   senderId: number,
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
-  tabId = DEFAULT_TAB_ID
+  tabId?: string
 ): Promise<TerminalCommandExecutionResult> {
   const normalizedTabId = normalizeTabId(tabId)
+  const normalizedCommand = command.trim()
+  if (!normalizedTabId) {
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      error: 'Missing terminal tab id. Refusing to execute on a shared default terminal.'
+    })
+  }
+  if (!isUsableTerminalTabId(normalizedTabId)) {
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      error: `Reserved terminal tab id "${normalizedTabId}" is not allowed. Use a unique tabId.`
+    })
+  }
   const key = getSessionKey(senderId, normalizedTabId)
   const session = sessions.get(key)
-  const normalizedCommand = command.trim()
   const effectiveTimeoutMs = normalizeCommandTimeout(timeoutMs)
 
   if (!session) {
@@ -121,13 +139,16 @@ export function executeCommandInTerminal(
     let commandStarted = false
     let interruptGraceTimeout: NodeJS.Timeout | undefined
     let continuationPromptTimeout: NodeJS.Timeout | undefined
+    let timeout: NodeJS.Timeout | undefined
+    let startTimeout: NodeJS.Timeout | undefined
+    let waitingForSecretPrompt = false
 
     const settle = (result: TerminalCommandExecutionResult): void => {
       if (settled) return
 
       settled = true
-      clearTimeout(timeout)
-      clearTimeout(startTimeout)
+      if (timeout) clearTimeout(timeout)
+      if (startTimeout) clearTimeout(startTimeout)
       if (interruptGraceTimeout) clearTimeout(interruptGraceTimeout)
       if (continuationPromptTimeout) clearTimeout(continuationPromptTimeout)
       const waiters = terminalDataWaiters.get(key)
@@ -142,16 +163,80 @@ export function executeCommandInTerminal(
       resolve(result)
     }
 
+    const interruptForTimeout = (message: string, display: string): void => {
+      if (settled) return
+      timeoutTriggered = true
+      session.display(display)
+      interruptCommandSession(key, session)
+      interruptGraceTimeout = setTimeout(() => {
+        settle({
+          ok: false,
+          command: normalizedCommand,
+          mode: session.mode,
+          cwd: session.cwd,
+          output: extractPartialCommandOutput(buffer, startMarker),
+          error: message,
+          timedOut: true
+        })
+      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
+    }
+
+    const armCommandTimeout = (ms: number): void => {
+      if (timeout) clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        interruptForTimeout(
+          `Command exceeded ${ms}ms and did not finish after Ctrl+C.`,
+          formatReadableCommandInterrupt(ms)
+        )
+      }, ms)
+    }
+
+    const armStartTimeout = (): void => {
+      if (startTimeout) clearTimeout(startTimeout)
+      startTimeout = setTimeout(() => {
+        if (commandStarted || settled || waitingForSecretPrompt) return
+        interruptForTimeout(
+          'Command did not reach the execution start marker. The shell may be waiting for an unfinished quote or continuation prompt; Crescent sent Ctrl+C to recover.',
+          formatReadableCommandStartFailure(TERMINAL_COMMAND_START_TIMEOUT_MS)
+        )
+      }, TERMINAL_COMMAND_START_TIMEOUT_MS)
+    }
+
+    const interruptStalledContinuationPrompt = (): void => {
+      if (!commandStarted || settled || waitingForSecretPrompt) return
+
+      interruptForTimeout(
+        'Command appears stuck at a shell continuation prompt; Crescent sent Ctrl+C to recover.',
+        formatReadableContinuationPromptFailure(TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS)
+      )
+    }
+
     const onData = (data: string): void => {
       buffer += data
       if (buffer.includes(startMarker)) commandStarted = true
       const parsed = parseCommandBuffer(buffer, startMarker, endMarker)
 
       if (!parsed.done) {
+        const atSecretPrompt = hasUnterminatedSecretPrompt(buffer)
+        if (atSecretPrompt && !waitingForSecretPrompt) {
+          waitingForSecretPrompt = true
+          if (startTimeout) clearTimeout(startTimeout)
+          if (continuationPromptTimeout) {
+            clearTimeout(continuationPromptTimeout)
+            continuationPromptTimeout = undefined
+          }
+          armCommandTimeout(TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS)
+        } else if (!atSecretPrompt && waitingForSecretPrompt) {
+          waitingForSecretPrompt = false
+          armCommandTimeout(effectiveTimeoutMs)
+          if (!commandStarted) armStartTimeout()
+        }
+
         if (
           commandStarted &&
           !timeoutTriggered &&
           !continuationPromptTimeout &&
+          !waitingForSecretPrompt &&
           hasShellContinuationPrompt(buffer)
         ) {
           continuationPromptTimeout = setTimeout(
@@ -176,64 +261,8 @@ export function executeCommandInTerminal(
       })
     }
 
-    const interruptStalledContinuationPrompt = (): void => {
-      if (!commandStarted || settled) return
-
-      timeoutTriggered = true
-      session.display(
-        formatReadableContinuationPromptFailure(TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS)
-      )
-      interruptCommandSession(key, session)
-      interruptGraceTimeout = setTimeout(() => {
-        settle({
-          ok: false,
-          command: normalizedCommand,
-          mode: session.mode,
-          cwd: session.cwd,
-          output: extractPartialCommandOutput(buffer, startMarker),
-          error:
-            'Command appears stuck at a shell continuation prompt; Crescent sent Ctrl+C to recover.',
-          timedOut: true
-        })
-      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
-    }
-
-    const timeout = setTimeout(() => {
-      timeoutTriggered = true
-      session.display(formatReadableCommandInterrupt(effectiveTimeoutMs))
-      interruptCommandSession(key, session)
-      interruptGraceTimeout = setTimeout(() => {
-        settle({
-          ok: false,
-          command: normalizedCommand,
-          mode: session.mode,
-          cwd: session.cwd,
-          output: extractPartialCommandOutput(buffer, startMarker),
-          error: `Command exceeded ${effectiveTimeoutMs}ms and did not finish after Ctrl+C.`,
-          timedOut: true
-        })
-      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
-    }, effectiveTimeoutMs)
-
-    const startTimeout = setTimeout(() => {
-      if (commandStarted || settled) return
-
-      timeoutTriggered = true
-      session.display(formatReadableCommandStartFailure(TERMINAL_COMMAND_START_TIMEOUT_MS))
-      interruptCommandSession(key, session)
-      interruptGraceTimeout = setTimeout(() => {
-        settle({
-          ok: false,
-          command: normalizedCommand,
-          mode: session.mode,
-          cwd: session.cwd,
-          output: '',
-          error:
-            'Command did not reach the execution start marker. The shell may be waiting for an unfinished quote or continuation prompt; Crescent sent Ctrl+C to recover.',
-          timedOut: true
-        })
-      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
-    }, TERMINAL_COMMAND_START_TIMEOUT_MS)
+    armCommandTimeout(effectiveTimeoutMs)
+    armStartTimeout()
 
     const onExit = (event: TerminalExitNotification): void => {
       settle({
@@ -282,7 +311,7 @@ export async function executeCommandInTerminalWithPermissionRequest(
   webContents: WebContents,
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
-  tabId = DEFAULT_TAB_ID
+  tabId?: string
 ): Promise<TerminalCommandExecutionResult> {
   let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, tabId)
 
@@ -301,6 +330,14 @@ export async function executeCommandInTemporaryTerminal(
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS
 ): Promise<TerminalCommandExecutionResult> {
   const parent = normalizeTabId(parentTabId)
+  if (!parent) {
+    return {
+      ok: false,
+      command: command.trim(),
+      output: '',
+      error: 'Missing parent terminal tab id for temporary sub-terminal.'
+    }
+  }
   const name = normalizeTemporaryTerminalName(terminalName)
   const slot = ensureTemporarySubterminal(webContents, parent, name)
 
@@ -409,6 +446,11 @@ export function registerTerminalIpc(): void {
     ) => {
       const senderId = event.sender.id
       const tabId = normalizeTabId(options?.tabId)
+      if (!isUsableTerminalTabId(tabId)) {
+        throw new Error(
+          'Missing or reserved terminal tab id. Each terminal session requires a unique tabId.'
+        )
+      }
       const key = getSessionKey(senderId, tabId)
       stopSession(key)
 
@@ -448,6 +490,7 @@ export function registerTerminalIpc(): void {
     if (typeof data !== 'string') return
 
     const tabId = normalizeTabId(typeof payload === 'string' ? undefined : payload?.tabId)
+    if (!tabId) return
     const session = sessions.get(getSessionKey(event.sender.id, tabId))
     if (!session) {
       sendIfAlive(
@@ -481,6 +524,7 @@ export function registerTerminalIpc(): void {
       if (!command) return
 
       const tabId = normalizeTabId(payload?.tabId)
+      if (!tabId) return
       const key = getSessionKey(event.sender.id, tabId)
       const session = sessions.get(key)
       if (!session) {
@@ -522,6 +566,9 @@ export function registerTerminalIpc(): void {
 
   ipcMain.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
+    if (!tabId) {
+      return { mode: 'none', output: '', cwd: '', shell: '' }
+    }
     const key = getSessionKey(event.sender.id, tabId)
     const session = sessions.get(key)
     if (!session) {
@@ -541,6 +588,7 @@ export function registerTerminalIpc(): void {
     'terminal:resize',
     (event, dimensions: { cols?: number; rows?: number; tabId?: string }) => {
       const tabId = normalizeTabId(dimensions?.tabId)
+      if (!tabId) return
       const session = sessions.get(getSessionKey(event.sender.id, tabId))
       if (!session) return
 
@@ -552,11 +600,15 @@ export function registerTerminalIpc(): void {
   )
 
   ipcMain.on('terminal:stop', (event, payload?: { tabId?: string }) => {
-    stopSession(getSessionKey(event.sender.id, normalizeTabId(payload?.tabId)))
+    const tabId = normalizeTabId(payload?.tabId)
+    if (!tabId) return
+    stopSession(getSessionKey(event.sender.id, tabId))
   })
 
   ipcMain.on('terminal:clear', (event, payload?: { tabId?: string }) => {
-    sessions.get(getSessionKey(event.sender.id, normalizeTabId(payload?.tabId)))?.clear()
+    const tabId = normalizeTabId(payload?.tabId)
+    if (!tabId) return
+    sessions.get(getSessionKey(event.sender.id, tabId))?.clear()
   })
 }
 
@@ -1114,21 +1166,6 @@ export function filterAutomationControlOutputWithState(
   return stripAutomationDisplayNoise(output)
 }
 
-function hasUnterminatedSecretPrompt(value: string): boolean {
-  const lastLine = removeAutomationNoise(value)
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .pop()
-
-  if (!lastLine) return false
-
-  return /(?:\[sudo\]\s*)?(?:password|passphrase|verification code|one-time password|otp)\b.*:\s*$/i.test(
-    lastLine
-  )
-}
-
 function keepMarkerTail(value: string, marker: string): string {
   const maxLength = Math.max(marker.length - 1, 0)
   if (value.length <= maxLength) return value
@@ -1249,10 +1286,16 @@ function hasShellContinuationPrompt(value: string): boolean {
 }
 
 function normalizeTabId(tabId: string | undefined): string {
-  const trimmed = tabId?.trim()
-  return trimmed || DEFAULT_TAB_ID
+  return tabId?.trim() ?? ''
+}
+
+const RESERVED_TERMINAL_TAB_IDS = new Set(['default', 'local'])
+
+function isUsableTerminalTabId(tabId: string): boolean {
+  if (!tabId) return false
+  return !RESERVED_TERMINAL_TAB_IDS.has(tabId.toLowerCase())
 }
 
 function getSessionKey(senderId: number, tabId: string): string {
-  return `${senderId}:${normalizeTabId(tabId)}`
+  return `${senderId}:${tabId}`
 }

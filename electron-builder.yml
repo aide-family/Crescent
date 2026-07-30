@@ -10,14 +10,19 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!node_modules/@tailwindcss/**/*'
-  - '!node_modules/node-pty/prebuilds/**/*'
+  - '!design/**/*'
+  - '!build/icons/preview/**/*'
 asarUnpack:
   - resources/**
+  # node-pty loads native binaries from prebuilds/<platform>-<arch> at runtime.
+  - '**/node-pty/prebuilds/**'
+  - '**/node-pty/build/Release/**'
 extraResources:
   - from: system-skills
     to: system-skills
 win:
   executableName: crescent
+  icon: build/icon.ico
 nsis:
   artifactName: ${name}-${version}-${arch}-setup.${ext}
   shortcutName: ${productName}
@@ -25,6 +30,7 @@ nsis:
   createDesktopShortcut: always
 mac:
   category: public.app-category.developer-tools
+  icon: build/icon.icns
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -41,6 +47,7 @@ mac:
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
+  icon: build/icon.png
   target:
     - AppImage
     - snap
@@ -50,7 +57,9 @@ linux:
   artifactName: ${name}-${version}-${arch}.${ext}
 appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
-npmRebuild: true
+# node-pty ships N-API prebuilds for darwin/win32/linux. Do not force node-gyp rebuild
+# during packaging — that breaks cross-compiling Windows/Linux targets from macOS.
+npmRebuild: false
 publish:
   provider: generic
   url: https://example.com/auto-updates

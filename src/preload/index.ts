@@ -17,6 +17,7 @@ import type {
   AgentSkillSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
+  CommandApprovalDismiss,
   CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
@@ -190,6 +191,8 @@ const api = {
     run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>
       ipcRenderer.invoke('agent:run', input),
     cancel: (runId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:cancel', runId),
+    rejectApprovalsForTab: (tabId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:reject-approvals-for-tab', tabId),
     supplement: (input: { runId: string; input: string }): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:supplement', input),
     resolveCommandApproval: (input: CommandApprovalDecision): Promise<{ ok: boolean }> =>
@@ -208,6 +211,15 @@ const api = {
 
       ipcRenderer.on('agent:command-approval-request', listener)
       return () => ipcRenderer.removeListener('agent:command-approval-request', listener)
+    },
+    onCommandApprovalDismiss: (
+      callback: (payload: CommandApprovalDismiss) => void
+    ): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, payload: CommandApprovalDismiss): void =>
+        callback(payload)
+
+      ipcRenderer.on('agent:command-approval-dismiss', listener)
+      return () => ipcRenderer.removeListener('agent:command-approval-dismiss', listener)
     },
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentSkillInstallEvent): void =>
