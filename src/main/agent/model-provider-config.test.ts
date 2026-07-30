@@ -47,8 +47,13 @@ const baseConfig: AgentConfig = {
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
+  openApiProfiles: [],
+  openApiProfileId: undefined,
   openApiBaseUrl: 'https://api.example.test',
   openApiDocument: '{}',
+  openApiTimeoutMs: 30_000,
+  openApiMaxRetries: 2,
+  openApiRetryBackoffMs: 300,
   skillRoot: '~/.agents/skills',
   mcpServers: []
 }

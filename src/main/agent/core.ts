@@ -7,6 +7,7 @@ import { AgentPlanner } from './planner'
 import { AgentPromptBuilder } from './prompt-builder'
 import { AgentToolRuntime } from './tool-runtime'
 import { saveWikiDocument } from './wiki'
+import { redactSensitiveData, redactSensitiveText } from '../../shared/secret-redaction'
 import type {
   AgentConfig,
   AgentEvent,
@@ -57,6 +58,7 @@ export class TerminalAgentCore {
       terminalExecutor: this.terminalExecutor,
       subterminalExecutor: this.subterminalExecutor,
       localFileWriter: this.localFileWriter,
+      approveTool: this.controls?.approveTool,
       emit: this.emit
     })
 
@@ -543,7 +545,11 @@ function formatToolArgumentsForDisplay(
   args: Record<string, unknown>,
   rawArguments: string
 ): string {
-  const text = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : rawArguments.trim()
+  const safeArgs = redactSensitiveData(args)
+  const text =
+    Object.keys(safeArgs).length > 0
+      ? JSON.stringify(safeArgs, null, 2)
+      : redactSensitiveText(rawArguments.trim())
   if (!text) return '(none)'
 
   return text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text

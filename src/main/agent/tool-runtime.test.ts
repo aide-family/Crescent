@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentToolRuntime } from './tool-runtime'
+import type { ExternalToolApprover } from './external-tool-approval'
 import type {
   AgentConfig,
   AgentEvent,
@@ -26,8 +27,13 @@ const config: AgentConfig = {
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
+  openApiProfiles: [],
+  openApiProfileId: undefined,
   openApiBaseUrl: '',
   openApiDocument: '',
+  openApiTimeoutMs: 30_000,
+  openApiMaxRetries: 2,
+  openApiRetryBackoffMs: 300,
   skillRoot: '~/.agents/skills',
   mcpServers: []
 }
@@ -335,5 +341,73 @@ describe('AgentToolRuntime', () => {
       }
     })
     expect(runtime.catalog.map((tool) => tool.name)).toContain('save_wiki_document')
+  })
+
+  it('blocks OpenAPI/MCP tools until approveTool allows them', async () => {
+    const execute = vi.fn(async () => ({ ok: true }))
+    const approveTool = vi.fn<ExternalToolApprover>(async () => ({
+      approved: false,
+      rejectionReason: 'too risky'
+    }))
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'create an order',
+      approveTool,
+      emit: vi.fn<(event: AgentEvent) => void>()
+    })
+
+    ;(
+      runtime as unknown as {
+        handlers: Map<
+          string,
+          {
+            schema: { type: 'function'; function: { name: string } }
+            catalog: {
+              name: string
+              method: 'post'
+              path: string
+              description: string
+              source: 'openapi'
+              risk: 'high'
+              requiresApproval: true
+              external: true
+              stateChanging: true
+            }
+            execute: typeof execute
+          }
+        >
+      }
+    ).handlers.set('create_order', {
+      schema: {
+        type: 'function',
+        function: { name: 'create_order' }
+      },
+      catalog: {
+        name: 'create_order',
+        method: 'post',
+        path: '/orders',
+        description: 'Create order',
+        source: 'openapi',
+        risk: 'high',
+        requiresApproval: true,
+        external: true,
+        stateChanging: true
+      },
+      execute
+    })
+
+    const rejected = await runtime.execute('create_order', JSON.stringify({ body: { sku: 'a' } }))
+    expect(approveTool).toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('rejected by the user')
+    })
+
+    approveTool.mockResolvedValueOnce({ approved: true })
+    const approved = await runtime.execute('create_order', JSON.stringify({ body: { sku: 'a' } }))
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(approved).toEqual({ ok: true })
   })
 })

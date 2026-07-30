@@ -11,10 +11,25 @@ export interface AgentConfig {
   agentMode: AgentMode
   maxActiveTools: number
   commandWhitelist: string[]
+  openApiProfiles: AgentOpenApiProfile[]
+  openApiProfileId?: string
   openApiBaseUrl: string
   openApiDocument: string
+  openApiTimeoutMs: number
+  openApiMaxRetries: number
+  openApiRetryBackoffMs: number
   skillRoot: string
   mcpServers: AgentMcpServerConfig[]
+}
+
+export interface AgentOpenApiProfile {
+  id: string
+  name: string
+  baseUrl: string
+  document: string
+  timeoutMs: number
+  maxRetries: number
+  retryBackoffMs: number
 }
 
 export type AgentMcpTransport = 'stdio'
@@ -140,6 +155,10 @@ export interface AgentRunInput {
 
 export interface AgentConnectionIntentInput {
   input: string
+  conversationContext?: string
+  currentConnectionId?: string
+  currentConnectionName?: string
+  terminalSummary?: string
 }
 
 export interface AgentConnectionIntentResult {
@@ -150,6 +169,8 @@ export interface AgentConnectionIntentResult {
   executeAfterLogin?: boolean
   userGoal?: string
   matchBasis?: 'name' | 'host' | 'user' | 'description' | 'none'
+  needsClarification?: boolean
+  clarificationQuestion?: string
   reason?: string
   error?: string
 }
@@ -384,6 +405,7 @@ export interface ToolCatalogEntry {
 
 export interface StoredSessionTab {
   tabId: string
+  sessionGroupId?: string
   title: string
   connectionId?: string
   connectionName?: string
@@ -407,6 +429,30 @@ export interface StoredAgentRun {
   status: 'running' | 'success' | 'error' | 'canceled'
   connectionId?: string
   output?: string
+  error?: string
+  startedAt?: string
+  elapsedMs?: number
+  trace?: AgentRunTrace
+}
+
+export interface AgentRunTraceStep {
+  index: number
+  title: string
+  detail: string
+}
+
+export interface AgentRunTrace {
+  version: 1
+  runId: string
+  tabId: string
+  input: string
+  status: StoredAgentRun['status']
+  connectionId?: string
+  startedAt?: string
+  finishedAt?: string
+  elapsedMs?: number
+  steps: AgentRunTraceStep[]
+  resultSummary?: string
   error?: string
 }
 

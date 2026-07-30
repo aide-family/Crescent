@@ -15,6 +15,10 @@ import { generateTerminalCommand } from './command'
 import { CommandAuditor } from './command-auditor'
 import { matchCommandWhitelist } from './command-whitelist'
 import {
+  buildExternalToolApprovalCommand,
+  buildExternalToolAudit
+} from './external-tool-approval'
+import {
   buildLocalInstructionContext,
   listEditableInstructionFiles,
   saveEditableInstructionFile
@@ -24,6 +28,7 @@ import { getAgentProviders } from './model-provider-config'
 import { AgentBrain } from './brain'
 import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
+import { parseJsonFromModelContent } from '../../shared/json-parse'
 import {
   buildAgentSkillContext,
   deleteAgentSkill,
@@ -241,6 +246,10 @@ export function registerAgentIpc(): void {
     }
   )
 
+  ipcMain.handle('agent:import-openapi-document', async (event) => {
+    return importOpenApiDocument(event.sender)
+  })
+
   ipcMain.handle('agent:save-pasted-attachment', async (_, payload: PastedAttachmentInput) => {
     return savePastedAttachment(payload)
   })
@@ -433,15 +442,17 @@ export function registerAgentIpc(): void {
             {
               role: 'system',
               content: [
-                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, and whether work must continue after login.',
-                'Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","reason":"..."}.',
-                'Set shouldConnect=false for general chat, local-only work, or ambiguous requests that do not clearly require a configured connection.',
-                'Local-only work includes local paths such as /etc/hosts, ~, $HOME, /Users, pasted local shell prompts such as "➜  ~ cat /etc/hosts", and requests that say 本地/local/this machine.',
+                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, whether work must continue after login, or whether you must ask the user a clarifying question first.',
+                'Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","needsClarification":true|false,"clarificationQuestion":"..."|null,"reason":"..."}.',
+                'Interpret the user request with the provided conversation context, current terminal summary, and configured connections. Do not rely on fixed business rules for a specific cluster or site.',
+                'Set needsClarification=true and provide one short clarificationQuestion when the target connection, whether to login first, or whether to stay in the current terminal is ambiguous. In that case set shouldConnect=false and connectionId=null.',
+                'Set shouldConnect=false for general chat, local-only work, or when clarification is required.',
+                'Local-only work includes local paths such as /etc/hosts, ~, $HOME, pasted local shell prompts, and requests that explicitly say the work is local/this machine.',
                 'IP addresses inside pasted file contents are data to edit, not SSH targets.',
-                'Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection, including inspection, troubleshooting, file work, configuration changes, account/user/permission operations, service operations, or reporting.',
-                'Matching priority is strict: exact connection name or name-contained request wins first; then host/alias/user-visible identifier only when the user clearly requests a remote connection; description is only weak context and must never override a plausible name match.',
-                'If the request names a cluster/environment and a connection name contains that name, choose that connection even if another connection description mentions it.',
-                'If only descriptions match and names conflict or are ambiguous, lower confidence below 60. Do not invent ids.'
+                'Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection.',
+                'Matching priority: a clear unique connection-name match wins first; then host/alias/user when the user clearly asks for a remote connection; description is weak context only.',
+                'If multiple connections could match or confidence would be below 60, prefer needsClarification over guessing. Do not invent connection ids.',
+                'Write clarificationQuestion in the same language as the user request.'
               ].join('\n')
             },
             {
@@ -449,6 +460,10 @@ export function registerAgentIpc(): void {
               content: JSON.stringify(
                 {
                   request: input,
+                  conversationContext: payload.conversationContext ?? '',
+                  currentConnectionId: payload.currentConnectionId ?? null,
+                  currentConnectionName: payload.currentConnectionName ?? null,
+                  terminalSummary: payload.terminalSummary ?? '',
                   connections: connections.map(summarizeConnectionForAi)
                 },
                 null,
@@ -698,6 +713,60 @@ export function registerAgentIpc(): void {
             if (!run?.supplements.length) return []
 
             return run.supplements.splice(0)
+          },
+          approveTool: async ({ toolName, rawArguments, catalog, userInput }) => {
+            const command = buildExternalToolApprovalCommand({
+              toolName,
+              rawArguments,
+              catalog,
+              userInput
+            })
+            const audit = buildExternalToolAudit({
+              toolName,
+              rawArguments,
+              catalog,
+              userInput
+            })
+
+            event.sender.send('agent:event', {
+              type: 'command-review',
+              command,
+              audit,
+              runId,
+              tabId: payload?.tabId
+            })
+
+            const approval = await requestCommandApproval({
+              webContents: event.sender,
+              runId,
+              tabId: payload?.tabId,
+              command,
+              audit,
+              signal: controller.signal
+            })
+
+            if (approval.approved) {
+              event.sender.send('agent:event', {
+                type: 'status',
+                message: approval.note?.trim()
+                  ? `Tool ${toolName} approved by user.\nUser approval note: ${approval.note.trim()}`
+                  : `Tool ${toolName} approved by user.`,
+                runId,
+                tabId: payload?.tabId
+              })
+            } else {
+              const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
+              event.sender.send('agent:event', {
+                type: 'status',
+                message: rejectionReason
+                  ? `Tool ${toolName} rejected by user.\nUser rejection reason: ${rejectionReason}`
+                  : `Tool ${toolName} rejected by user.`,
+                runId,
+                tabId: payload?.tabId
+              })
+            }
+
+            return approval
           }
         }
       )
@@ -866,6 +935,29 @@ async function pickAgentPathReference(
     path,
     name: basename(path) || path
   }
+}
+
+async function importOpenApiDocument(
+  webContents: WebContents
+): Promise<{ ok: boolean; path?: string; canceled?: boolean }> {
+  const options: OpenDialogOptions = {
+    title: 'Import OpenAPI document',
+    properties: ['openFile'],
+    filters: [
+      { name: 'OpenAPI', extensions: ['json', 'yaml', 'yml'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  }
+  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
+  const selection = browserWindow
+    ? await dialog.showOpenDialog(browserWindow, options)
+    : await dialog.showOpenDialog(options)
+
+  if (selection.canceled || !selection.filePaths[0]) {
+    return { ok: false, canceled: true }
+  }
+
+  return { ok: true, path: resolve(selection.filePaths[0]) }
 }
 
 async function savePastedAttachment(input: PastedAttachmentInput): Promise<AgentPathReference> {
@@ -1167,22 +1259,47 @@ function parseConnectionIntentResponse(
   connections: ConnectionConfig[]
 ): AgentConnectionIntentResult {
   try {
-    const parsed = JSON.parse(content) as {
+    const parsed = parseJsonFromModelContent<{
       shouldConnect?: unknown
       connectionId?: unknown
       confidence?: unknown
       executeAfterLogin?: unknown
       userGoal?: unknown
       matchBasis?: unknown
+      needsClarification?: unknown
+      clarificationQuestion?: unknown
       reason?: unknown
-    }
-    const shouldConnect = parsed.shouldConnect === true
+    }>(content)
+    const needsClarification = parsed.needsClarification === true
+    const clarificationQuestion =
+      typeof parsed.clarificationQuestion === 'string' && parsed.clarificationQuestion.trim()
+        ? parsed.clarificationQuestion.trim()
+        : undefined
+    const shouldConnect = parsed.shouldConnect === true && !needsClarification
     const connectionId = typeof parsed.connectionId === 'string' ? parsed.connectionId : undefined
     const confidence = Number(parsed.confidence)
     const executeAfterLogin = parsed.executeAfterLogin === true
     const knownIds = new Set(connections.map((connection) => connection.id))
     const userGoal = typeof parsed.userGoal === 'string' ? parsed.userGoal : undefined
     const matchBasis = parseConnectionMatchBasis(parsed.matchBasis)
+    const reason = typeof parsed.reason === 'string' ? parsed.reason : undefined
+
+    if (needsClarification) {
+      return {
+        ok: false,
+        shouldConnect: false,
+        confidence: Number.isFinite(confidence) ? confidence : 0,
+        executeAfterLogin: false,
+        userGoal,
+        matchBasis,
+        needsClarification: true,
+        clarificationQuestion:
+          clarificationQuestion ||
+          reason ||
+          'Please clarify which connection or terminal context to use.',
+        reason: reason || 'clarification required'
+      }
+    }
 
     if (!shouldConnect) {
       return {
@@ -1192,34 +1309,62 @@ function parseConnectionIntentResponse(
         executeAfterLogin: false,
         userGoal,
         matchBasis,
-        reason: typeof parsed.reason === 'string' ? parsed.reason : 'no connection needed'
+        reason: reason || 'no connection needed'
       }
     }
 
     if (!connectionId || !knownIds.has(connectionId) || !Number.isFinite(confidence)) {
       return {
         ok: false,
-        shouldConnect: true,
+        shouldConnect: false,
         confidence: Number.isFinite(confidence) ? confidence : 0,
-        executeAfterLogin,
+        executeAfterLogin: false,
         userGoal,
         matchBasis,
-        reason: typeof parsed.reason === 'string' ? parsed.reason : 'no match'
+        needsClarification: true,
+        clarificationQuestion:
+          clarificationQuestion ||
+          'I could not uniquely match a configured SSH connection. Which connection should I use, or should I stay in the current terminal?',
+        reason: reason || 'no match'
+      }
+    }
+
+    if (confidence < 60) {
+      return {
+        ok: false,
+        shouldConnect: false,
+        confidence,
+        executeAfterLogin: false,
+        userGoal,
+        matchBasis,
+        needsClarification: true,
+        clarificationQuestion:
+          clarificationQuestion ||
+          `I am not sure whether to use connection "${connections.find((connection) => connection.id === connectionId)?.name ?? connectionId}". Should I connect to it, or stay in the current terminal?`,
+        reason: reason || 'low confidence'
       }
     }
 
     return {
-      ok: confidence >= 60,
+      ok: true,
       shouldConnect: true,
       connectionId,
       confidence,
       executeAfterLogin,
       userGoal,
       matchBasis,
-      reason: typeof parsed.reason === 'string' ? parsed.reason : undefined
+      reason
     }
   } catch {
-    return { ok: false, shouldConnect: false, confidence: 0, reason: 'invalid model response' }
+    return {
+      ok: false,
+      shouldConnect: false,
+      confidence: 0,
+      needsClarification: true,
+      clarificationQuestion:
+        'I could not determine the target connection from that request. Which configured SSH connection should I use, or should I continue in the current terminal?',
+      reason: 'invalid model response'
+    }
   }
 }
 

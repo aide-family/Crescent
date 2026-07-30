@@ -449,17 +449,35 @@ export function normalizeArtifactDestination(value: string): string {
 
 export function extractRequestedActions(input: string): string[] {
   const actions: string[] = []
-  if (/\b(ssh|login|connect)\b/i.test(input)) actions.push('login')
-  if (/\b(check|inspect|diagnose|troubleshoot|verify|list|get|status|health)\b/i.test(input)) {
+  if (/\b(ssh|login|connect)\b/i.test(input) || /(?:登录|登陆|登入|连接)/.test(input)) {
+    actions.push('login')
+  }
+  if (
+    /\b(check|inspect|diagnose|troubleshoot|verify|list|get|status|health)\b/i.test(input) ||
+    /(?:巡检|排查|检查|诊断|核实|健康检查)/.test(input)
+  ) {
     actions.push('inspect')
   }
   if (
-    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(input)
+    /\b(create|add|configure|modify|update|fix|repair|deploy|install|run|execute)\b/i.test(
+      input
+    ) ||
+    /(?:创建|添加|配置|修改|修复|部署|安装|执行)/.test(input)
   ) {
     actions.push('operate')
   }
-  if (/\b(summarize|report|document|record)\b/i.test(input)) actions.push('summarize')
-  if (/\b(save|write|output|export|store)\b/i.test(input)) actions.push('write-artifact')
+  if (
+    /\b(summarize|report|document|record)\b/i.test(input) ||
+    /(?:总结|汇总|报告|记录)/.test(input)
+  ) {
+    actions.push('summarize')
+  }
+  if (
+    /\b(save|write|output|export|store)\b/i.test(input) ||
+    /(?:保存|写入|导出|输出到)/.test(input)
+  ) {
+    actions.push('write-artifact')
+  }
 
   return actions.length ? actions : ['complete-request']
 }

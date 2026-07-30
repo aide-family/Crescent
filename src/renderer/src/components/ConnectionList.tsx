@@ -86,26 +86,26 @@ export function ConnectionList({
               }`}
               onClick={() => onSelectConnection?.(connection)}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{connection.name}</p>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                    {formatConnectionTarget(connection)}
+              <div className="min-w-0 space-y-1">
+                <p className="break-words text-sm font-semibold leading-snug">{connection.name}</p>
+                <p className="break-all font-mono text-[11px] text-muted-foreground">
+                  {formatConnectionTarget(connection)}
+                </p>
+                <p className="break-words text-muted-foreground">
+                  {connection.source === 'local'
+                    ? t.connections.defaultTerminal
+                    : connection.source === 'ssh-config'
+                      ? '~/.ssh/config'
+                      : connection.description || '~/.crescent/config.json'}
+                </p>
+                {showCustomMetadata && connection.source === 'custom' && (
+                  <p className="text-muted-foreground">
+                    {connection.sshOptions?.length || 0} {t.connections.sshOptionsCount} ·{' '}
+                    {connection.actions?.length || 0} {t.connections.actionsCount}
                   </p>
-                  <p className="truncate text-muted-foreground">
-                    {connection.source === 'local'
-                      ? t.connections.defaultTerminal
-                      : connection.source === 'ssh-config'
-                        ? '~/.ssh/config'
-                        : connection.description || '~/.crescent/config.json'}
-                  </p>
-                  {showCustomMetadata && connection.source === 'custom' && (
-                    <p className="truncate text-muted-foreground">
-                      {connection.sshOptions?.length || 0} {t.connections.sshOptionsCount} ·{' '}
-                      {connection.actions?.length || 0} {t.connections.actionsCount}
-                    </p>
-                  )}
-                </div>
+                )}
+              </div>
+              <div className="mt-3 border-t border-border/60 pt-2">
                 {renderConnectionActions(connection)}
               </div>
             </div>

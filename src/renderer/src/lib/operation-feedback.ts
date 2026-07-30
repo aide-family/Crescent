@@ -100,3 +100,9 @@ export async function downloadMarkdown(
     { name: 'Markdown', extensions: ['md', 'markdown'] }
   ])
 }
+
+export async function downloadJson(value: string, filename: string, t: Dictionary): Promise<void> {
+  await saveTextFile(value, filename, 'application/json;charset=utf-8', exportFeedback(t), [
+    { name: 'JSON', extensions: ['json'] }
+  ])
+}

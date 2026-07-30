@@ -161,6 +161,13 @@ export function replaceSlashCommandInput(value: string, replacement: string): st
 export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
   return [
     {
+      id: 'new',
+      title: t.input.slashNew,
+      description: t.input.slashNewDescription,
+      value: '/new',
+      keywords: ['new', 'session', 'chat', 'conversation', '新建', '会话', '新会话']
+    },
+    {
       id: 'mode',
       title: t.input.slashMode,
       description: t.input.slashModeDescription,

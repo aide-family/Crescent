@@ -3,6 +3,30 @@ import { describe, expect, it } from 'vitest'
 import { applyLocalCommandPolicy, parseAuditResult } from './command-auditor'
 
 describe('parseAuditResult', () => {
+  it('parses JSON wrapped in markdown fences', () => {
+    const audit = parseAuditResult(
+      [
+        'Here is the review:',
+        '```json',
+        JSON.stringify({
+          summary: 'Read-only hostname check.',
+          operationReason: 'Confirm local context before connecting.',
+          risk: 'low',
+          requiresApproval: false,
+          riskPoints: ['None'],
+          impactAnalysis: 'No state change.',
+          recommendation: 'Safe to run.'
+        }),
+        '```'
+      ].join('\n'),
+      'zh-CN'
+    )
+
+    expect(audit.risk).toBe('low')
+    expect(audit.requiresApproval).toBe(false)
+    expect(audit.summary).toContain('hostname')
+  })
+
   it('respects explicit no-approval decisions for bounded read-only inspections', () => {
     const audit = parseAuditResult(
       JSON.stringify({

@@ -16,20 +16,26 @@ export function AgentLogList({
   logRef,
   entries,
   copiedLogId,
+  thinking,
+  thinkingMessage,
   t,
   onCopyEntry,
   onCopyResult,
   onExportResult,
-  onExportFull
+  onExportFull,
+  onExportTrace
 }: {
   logRef: RefObject<HTMLDivElement | null>
   entries: AgentLogEntry[]
   copiedLogId?: number | null
+  thinking?: boolean
+  thinkingMessage?: string
   t: Dictionary
   onCopyEntry: (entry: AgentLogEntry) => void
   onCopyResult: (entry: AgentLogEntry) => void
   onExportResult: (entry: AgentLogEntry) => void
   onExportFull: (entry: AgentLogEntry) => void
+  onExportTrace: (entry: AgentLogEntry) => void
 }): React.JSX.Element {
   return (
     <div ref={logRef} className="min-h-0 min-w-0 flex-1 overflow-auto px-4 pb-4 text-sm">
@@ -76,6 +82,7 @@ export function AgentLogList({
                 onCopyResult={() => onCopyResult(entry)}
                 onExportResult={() => onExportResult(entry)}
                 onExportFull={() => onExportFull(entry)}
+                onExportTrace={() => onExportTrace(entry)}
               />
             </>
           ) : (
@@ -83,6 +90,15 @@ export function AgentLogList({
           )}
         </div>
       ))}
+      {thinking ? (
+        <div className="mt-3 rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 font-medium text-foreground">
+            <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
+            {t.input.thinking}
+          </div>
+          <p className="mt-1 leading-relaxed">{thinkingMessage || t.input.thinkingAnalyzingRequest}</p>
+        </div>
+      ) : null}
     </div>
   )
 }

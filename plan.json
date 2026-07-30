@@ -1,6 +1,28 @@
 {
-  "project": "TerminalAgent OpenAPI Agent",
-  "updatedAt": "2026-06-26T23:30:00+08:00",
+  "project": "Crescent",
+  "phase": "next — Reliability + OpenAPI deliverable + Observability",
+  "updatedAt": "2026-07-30T10:17:00+08:00",
+  "goal": "Make OpenAPI tools configurable, stable, auditable, and inspectable; leave distribution polish and full prompt workflows for later.",
+  "exitCriteria": [
+    "OpenAPI can be configured in UI and run at least one real/mock tool call",
+    "External write operations require approval; logs redact secrets",
+    "Structured run traces can be exported",
+    "npm run test / typecheck / build pass",
+    "ROADMAP Phase 2 items checkable; Phase 3 Profile + Import UI partially done"
+  ],
+  "outOfScope": [
+    "Signed builds / notarize CI",
+    "electron-updater channels",
+    "First-run onboarding",
+    "Packaging smoke tests",
+    "Prompt templates / pinned workflows",
+    "Full TerminalPane / AgentPanel extraction"
+  ],
+  "iterations": {
+    "A": ["n1-openapi-settings-ui", "n2-openapi-timeout-retry", "n3-log-redaction"],
+    "B": ["n4-external-tool-approval", "n5-structured-run-trace", "n6-openapi-mock-server-tests"],
+    "C": ["n7-openapi-profiles", "n8-extract-settings-panel", "n9-renderer-tests"]
+  },
   "tasks": [
     {
       "id": "plan",
@@ -36,6 +58,135 @@
       "id": "verification",
       "title": "Run automated verification before final handoff",
       "status": "completed",
+      "tests": ["npm run test", "npm run typecheck", "npm run build"]
+    },
+    {
+      "id": "n1-openapi-settings-ui",
+      "title": "OpenAPI settings UI: expose baseUrl/document; local file picker and remote URL import",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "tests": [
+        "manual: settings can edit, validate, and preview generated OpenAPI tools",
+        "typecheck: renderer API and UI compile",
+        "unit: openapi document source resolution and settings helpers"
+      ]
+    },
+    {
+      "id": "n2-openapi-timeout-retry",
+      "title": "OpenAPI executor timeout and per-host retry (count + backoff)",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "tests": [
+        "unit: hung requests abort on timeout",
+        "unit: retry/backoff behavior covered"
+      ]
+    },
+    {
+      "id": "n3-log-redaction",
+      "title": "Redact Authorization, Cookie, API keys, and sensitive headers/fields in event logs and UI",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "tests": [
+        "unit: secrets never appear in formatted tool/event logs",
+        "manual: authenticated OpenAPI tool call shows redacted headers"
+      ]
+    },
+    {
+      "id": "n4-external-tool-approval",
+      "title": "Enforce approval for OpenAPI write ops and requiresApproval MCP/tools via existing approval modal",
+      "priority": "P1",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": [],
+      "tests": [
+        "unit: POST/PUT/PATCH/DELETE require approval; read-only can auto-pass",
+        "unit: external tool approval command/audit redacts secrets",
+        "manual: write OpenAPI/MCP tool prompts confirmation"
+      ]
+    },
+    {
+      "id": "n5-structured-run-trace",
+      "title": "Structured run traces: readable agent_runs + JSON export (steps, tools, redacted args, timing, result summary)",
+      "priority": "P1",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": ["n3-log-redaction"],
+      "tests": [
+        "unit: trace export includes tool chain with redacted secrets",
+        "manual: export JSON from current/history run; Markdown export still works"
+      ]
+    },
+    {
+      "id": "n6-openapi-mock-server-tests",
+      "title": "OpenAPI mock-server integration tests (local HTTP server, mirror MCP test pattern)",
+      "priority": "P1",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": ["n2-openapi-timeout-retry"],
+      "tests": [
+        "integration: tool execution against local mock HTTP server without external network",
+        "npm run test"
+      ]
+    },
+    {
+      "id": "n7-openapi-profiles",
+      "title": "OpenAPI Profile v1: multiple named profiles (baseUrl, doc, timeout) with switchable active profile",
+      "priority": "P2",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": ["n1-openapi-settings-ui"],
+      "tests": [
+        "unit: profiles persist and active profile resolves correctly",
+        "manual: save at least two profiles and switch between them"
+      ]
+    },
+    {
+      "id": "n8-extract-settings-panel",
+      "title": "Extract SettingsPanel (including OpenAPI UI) from App.tsx without changing state ownership",
+      "priority": "P2",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": ["n1-openapi-settings-ui"],
+      "tests": [
+        "typecheck: renderer compiles after extraction",
+        "manual: settings sheet behavior unchanged"
+      ]
+    },
+    {
+      "id": "n9-renderer-tests",
+      "title": "Add renderer tests for approval dialog, OpenAPI settings validation, and profile switching",
+      "priority": "P2",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": ["n4-external-tool-approval", "n7-openapi-profiles", "n8-extract-settings-panel"],
+      "tests": [
+        "unit/component: approval, OpenAPI validation, profile switch paths covered",
+        "npm run test"
+      ]
+    },
+    {
+      "id": "n-phase-exit",
+      "title": "Phase exit verification: test + typecheck + build; update ROADMAP Phase 2 checkmarks",
+      "priority": "P2",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [
+        "n1-openapi-settings-ui",
+        "n2-openapi-timeout-retry",
+        "n3-log-redaction",
+        "n4-external-tool-approval",
+        "n5-structured-run-trace",
+        "n6-openapi-mock-server-tests",
+        "n7-openapi-profiles",
+        "n8-extract-settings-panel",
+        "n9-renderer-tests"
+      ],
       "tests": ["npm run test", "npm run typecheck", "npm run build"]
     }
   ]

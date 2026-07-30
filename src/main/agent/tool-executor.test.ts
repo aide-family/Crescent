@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { OpenApiToolExecutor } from './tool-executor'
 import type { AgentConfig, OpenApiOperationMeta } from './types'
@@ -11,6 +11,10 @@ vi.mock('axios', () => ({
 }))
 
 const request = vi.mocked(axios.request)
+
+beforeEach(() => {
+  request.mockReset()
+})
 
 const config: AgentConfig = {
   providers: [
@@ -27,8 +31,13 @@ const config: AgentConfig = {
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
+  openApiProfiles: [],
+  openApiProfileId: undefined,
   openApiBaseUrl: 'https://api.example.test/v1/',
   openApiDocument: '{}',
+  openApiTimeoutMs: 30_000,
+  openApiMaxRetries: 2,
+  openApiRetryBackoffMs: 0,
   skillRoot: '~/.agents/skills',
   mcpServers: []
 }
@@ -70,10 +79,42 @@ describe('OpenApiToolExecutor', () => {
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
         method: 'get',
-        url: 'https://api.example.test/orders/A%20100?includeTimeline=true'
+        url: 'https://api.example.test/orders/A%20100?includeTimeline=true',
+        timeout: 30_000
       })
     )
-    expect(result).toMatchObject({ ok: true, status: 200, data: { status: 'paid' } })
+    expect(result).toMatchObject({ ok: true, status: 200, data: { status: 'paid' }, attempts: 1 })
+  })
+
+  it('redacts sensitive response headers before returning tool results', async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      headers: {
+        authorization: 'Bearer leaked',
+        'set-cookie': 'session=abc',
+        'x-request-id': 'req-9'
+      },
+      data: { apiKey: 'sk-should-hide', ok: true }
+    })
+
+    const executor = new OpenApiToolExecutor(config, operations)
+    const result = await executor.execute(
+      'get_order',
+      JSON.stringify({ path: { orderId: 'A1' } })
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      headers: {
+        authorization: '[REDACTED]',
+        'set-cookie': '[REDACTED]',
+        'x-request-id': 'req-9'
+      },
+      data: {
+        apiKey: '[REDACTED]',
+        ok: true
+      }
+    })
   })
 
   it('sends JSON body with operation content type', async () => {
@@ -102,6 +143,45 @@ describe('OpenApiToolExecutor', () => {
     expect(result).toMatchObject({
       ok: false,
       error: 'Missing required path parameter: orderId'
+    })
+  })
+
+  it('retries retryable HTTP statuses then returns the final response', async () => {
+    request
+      .mockResolvedValueOnce({ status: 503, headers: {}, data: { error: 'unavailable' } })
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: { ok: true } })
+
+    const executor = new OpenApiToolExecutor(config, operations)
+    const result = await executor.execute(
+      'get_order',
+      JSON.stringify({ path: { orderId: 'A1' } })
+    )
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ ok: true, status: 200, attempts: 2 })
+  })
+
+  it('retries network failures and surfaces the final timeout error', async () => {
+    const timeoutError = Object.assign(new Error('timeout of 30000ms exceeded'), {
+      code: 'ECONNABORTED',
+      isAxiosError: true
+    })
+    request.mockRejectedValueOnce(timeoutError).mockRejectedValueOnce(timeoutError)
+
+    const executor = new OpenApiToolExecutor(
+      { ...config, openApiMaxRetries: 1, openApiRetryBackoffMs: 0 },
+      operations
+    )
+    const result = await executor.execute(
+      'get_order',
+      JSON.stringify({ path: { orderId: 'A1' } })
+    )
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'ECONNABORTED',
+      attempts: 2
     })
   })
 })

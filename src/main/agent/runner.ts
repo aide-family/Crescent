@@ -1,4 +1,5 @@
 import { TerminalAgentCore } from './core'
+import type { ExternalToolApprover } from './external-tool-approval'
 import type {
   AgentConfig,
   AgentEvent,
@@ -15,6 +16,7 @@ export interface AgentRunControls {
   wikiContext?: string
   conversationContext?: string
   consumeSupplementalInputs?: () => string[]
+  approveTool?: ExternalToolApprover
 }
 
 export async function runTerminalAgent(
