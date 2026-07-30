@@ -85,6 +85,9 @@ import type {
 interface ActiveAgentRun {
   controller: AbortController
   supplements: string[]
+  defaultTabId?: string
+  sessionTerminalIds: Set<string>
+  lastExecutionTabId?: string
 }
 
 const activeRuns = new Map<string, ActiveAgentRun>()
@@ -92,6 +95,9 @@ const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 const pendingCommandApprovals = new Map<
   string,
   {
+    runId: string
+    tabId?: string
+    webContents: WebContents
     resolve: (decision: CommandApprovalDecisionResult) => void
     timeout: NodeJS.Timeout
   }
@@ -101,6 +107,49 @@ interface CommandApprovalDecisionResult {
   approved: boolean
   note?: string
   rejectionReason?: string
+}
+
+function dismissCommandApprovalRequest(
+  webContents: WebContents,
+  requestId: string,
+  runId: string
+): void {
+  if (webContents.isDestroyed()) return
+  webContents.send('agent:command-approval-dismiss', { requestId, runId })
+}
+
+function settlePendingCommandApproval(
+  requestId: string,
+  decision: CommandApprovalDecisionResult,
+  options?: { dismiss?: boolean }
+): boolean {
+  const pending = pendingCommandApprovals.get(requestId)
+  if (!pending) return false
+
+  clearTimeout(pending.timeout)
+  pendingCommandApprovals.delete(requestId)
+  if (options?.dismiss !== false) {
+    dismissCommandApprovalRequest(pending.webContents, requestId, pending.runId)
+  }
+  pending.resolve(decision)
+  return true
+}
+
+function rejectPendingApprovalsForRun(runId: string, rejectionReason = 'Agent run was canceled.'): void {
+  for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
+    if (pending.runId !== runId) continue
+    settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
+  }
+}
+
+function rejectPendingApprovalsForTab(
+  tabId: string,
+  rejectionReason = 'Session was closed.'
+): void {
+  for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
+    if (pending.tabId !== tabId) continue
+    settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
+  }
 }
 
 function stripSkillContent<T extends { content?: unknown }>(skill: T): Omit<T, 'content'> {
@@ -363,7 +412,19 @@ export function registerAgentIpc(): void {
   })
 
   ipcMain.handle('agent:cancel', (_, runId: string) => {
-    activeRuns.get(runId)?.controller.abort()
+    const normalizedRunId = typeof runId === 'string' ? runId.trim() : ''
+    if (!normalizedRunId) return { ok: false }
+
+    activeRuns.get(normalizedRunId)?.controller.abort()
+    rejectPendingApprovalsForRun(normalizedRunId)
+    return { ok: true }
+  })
+
+  ipcMain.handle('agent:reject-approvals-for-tab', (_, tabId: string) => {
+    const normalizedTabId = typeof tabId === 'string' ? tabId.trim() : ''
+    if (!normalizedTabId) return { ok: false }
+
+    rejectPendingApprovalsForTab(normalizedTabId)
     return { ok: true }
   })
 
@@ -383,17 +444,17 @@ export function registerAgentIpc(): void {
     const requestId = payload?.requestId?.trim()
     if (!requestId) return { ok: false }
 
-    const pending = pendingCommandApprovals.get(requestId)
-    if (!pending) return { ok: false }
-
-    clearTimeout(pending.timeout)
-    pendingCommandApprovals.delete(requestId)
-    pending.resolve({
-      approved: Boolean(payload.approved),
-      note: typeof payload.note === 'string' ? payload.note : '',
-      rejectionReason: typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
-    })
-    return { ok: true }
+    return {
+      ok: settlePendingCommandApproval(
+        requestId,
+        {
+          approved: Boolean(payload.approved),
+          note: typeof payload.note === 'string' ? payload.note : '',
+          rejectionReason: typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
+        },
+        { dismiss: false }
+      )
+    }
   })
 
   ipcMain.handle('agent:generate-command', async (_, payload: AgentCommandInput) => {
@@ -510,7 +571,6 @@ export function registerAgentIpc(): void {
 
     try {
       const controller = new AbortController()
-      activeRuns.set(runId, { controller, supplements: [] })
       const connection = findConnection(payload?.connectionId)
       const instructionContext = buildLocalInstructionContext()
       const wikiContext = formatWikiContext(await searchWikiDocuments(input, 5))
@@ -532,12 +592,60 @@ export function registerAgentIpc(): void {
       }
       const commandAuditor = new CommandAuditor(agentConfig)
       const allowTerminalTools = payload?.allowTerminalTools !== false
+      const defaultTabId = payload?.tabId?.trim() || ''
+      if (defaultTabId === 'default' || defaultTabId.toLowerCase() === 'local') {
+        return {
+          ok: false,
+          error:
+            'Reserved terminal tab id is not allowed. Each terminal requires a unique tabId.'
+        }
+      }
+      const sessionTerminalIds = new Set(
+        (payload?.sessionTerminals ?? [])
+          .map((terminal) => terminal.tabId?.trim())
+          .filter((tabId): tabId is string => Boolean(tabId))
+      )
+      if (defaultTabId) sessionTerminalIds.add(defaultTabId)
+      activeRuns.set(runId, {
+        controller,
+        supplements: [],
+        defaultTabId: defaultTabId || undefined,
+        sessionTerminalIds,
+        lastExecutionTabId: defaultTabId || undefined
+      })
+
+      const resolveExecutionTabId = (
+        targetTerminalId?: string
+      ): { ok: true; tabId: string } | { ok: false; error: string } => {
+        const requested = targetTerminalId?.trim() || defaultTabId
+        if (!requested) {
+          return { ok: false, error: 'No terminal is bound to this agent run.' }
+        }
+        if (sessionTerminalIds.size > 0 && !sessionTerminalIds.has(requested)) {
+          return {
+            ok: false,
+            error: `Terminal "${requested}" is outside the current chat session. Use a tabId from the session terminal inventory.`
+          }
+        }
+        if (sessionTerminalIds.size === 0 && requested !== defaultTabId) {
+          return {
+            ok: false,
+            error: 'Peer terminal targeting requires a session terminal inventory.'
+          }
+        }
+        return { ok: true, tabId: requested }
+      }
+
       const executeReviewedCommand = async (
         command: string,
         timeoutMs: number | undefined,
-        execute: (command: string) => ReturnType<typeof executeCommandInTerminal>
+        execute: (command: string) => ReturnType<typeof executeCommandInTerminal>,
+        executionTabId: string
       ): ReturnType<typeof executeCommandInTerminal> => {
         const executableCommand = normalizeInteractivePrivilegeCommand(command)
+        const activeRun = activeRuns.get(runId)
+        if (activeRun) activeRun.lastExecutionTabId = executionTabId
+
         const executeWithProgress = async (): ReturnType<typeof executeCommandInTerminal> => {
           const startedAt = Date.now()
           event.sender.send('agent:event', {
@@ -545,7 +653,7 @@ export function registerAgentIpc(): void {
             phase: 'started',
             command: executableCommand,
             runId,
-            tabId: payload?.tabId
+            tabId: executionTabId
           })
           const result = await execute(executableCommand)
           event.sender.send('agent:event', {
@@ -555,7 +663,7 @@ export function registerAgentIpc(): void {
             result,
             elapsedMs: Date.now() - startedAt,
             runId,
-            tabId: payload?.tabId
+            tabId: executionTabId
           })
 
           return result
@@ -566,7 +674,7 @@ export function registerAgentIpc(): void {
             type: 'status',
             message: `Command matched whitelist: ${whitelistRule}`,
             runId,
-            tabId: payload?.tabId
+            tabId: executionTabId
           })
           return executeWithProgress()
         }
@@ -575,7 +683,7 @@ export function registerAgentIpc(): void {
           type: 'status',
           message: 'Command review subprocess is analyzing risk.',
           runId,
-          tabId: payload?.tabId
+          tabId: executionTabId
         })
         const audit = await commandAuditor.audit({
           command: executableCommand,
@@ -588,14 +696,14 @@ export function registerAgentIpc(): void {
           command: executableCommand,
           audit,
           runId,
-          tabId: payload?.tabId
+          tabId: executionTabId
         })
         if (!audit.requiresApproval) {
           event.sender.send('agent:event', {
             type: 'status',
             message: 'Command audit classified this as read-only inspection.',
             runId,
-            tabId: payload?.tabId
+            tabId: executionTabId
           })
           return executeWithProgress()
         }
@@ -603,7 +711,7 @@ export function registerAgentIpc(): void {
         const approval = await requestCommandApproval({
           webContents: event.sender,
           runId,
-          tabId: payload?.tabId,
+          tabId: executionTabId,
           command: executableCommand,
           timeoutMs,
           audit,
@@ -618,7 +726,7 @@ export function registerAgentIpc(): void {
               ? `Command rejected by user.\nUser rejection reason: ${rejectionReason}`
               : 'Command rejected by user.',
             runId,
-            tabId: payload?.tabId
+            tabId: executionTabId
           })
           return {
             ok: false,
@@ -639,7 +747,7 @@ export function registerAgentIpc(): void {
             ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
             : 'Command approved by user.',
           runId,
-          tabId: payload?.tabId
+          tabId: executionTabId
         })
         const approvalNote = approval.note?.trim()
         if (approvalNote) {
@@ -670,18 +778,39 @@ export function registerAgentIpc(): void {
         createIsolatedMemory(),
         payload?.terminalContext ?? '',
         (agentEvent) => {
-          event.sender.send('agent:event', { ...agentEvent, runId, tabId: payload?.tabId })
+          event.sender.send('agent:event', {
+            ...agentEvent,
+            runId,
+            tabId: activeRuns.get(runId)?.lastExecutionTabId ?? payload?.tabId
+          })
         },
         allowTerminalTools
           ? {
-              executeCommand: async (command, timeoutMs) => {
-                return executeReviewedCommand(command, timeoutMs, (executableCommand) =>
-                  executeCommandInTerminalWithPermissionRequest(
-                    event.sender,
-                    executableCommand,
-                    timeoutMs,
-                    payload?.tabId
-                  )
+              executeCommand: async (command, timeoutMsOrOptions) => {
+                const options =
+                  typeof timeoutMsOrOptions === 'number'
+                    ? { timeoutMs: timeoutMsOrOptions }
+                    : (timeoutMsOrOptions ?? {})
+                const resolved = resolveExecutionTabId(options.targetTerminalId)
+                if (!resolved.ok) {
+                  return {
+                    ok: false,
+                    command: command.trim(),
+                    output: '',
+                    error: resolved.error
+                  }
+                }
+                return executeReviewedCommand(
+                  command,
+                  options.timeoutMs,
+                  (executableCommand) =>
+                    executeCommandInTerminalWithPermissionRequest(
+                      event.sender,
+                      executableCommand,
+                      options.timeoutMs,
+                      resolved.tabId
+                    ),
+                  resolved.tabId
                 )
               }
             }
@@ -689,14 +818,20 @@ export function registerAgentIpc(): void {
         allowTerminalTools
           ? {
               executeCommand: async (command, options) => {
-                return executeReviewedCommand(command, options.timeoutMs, (executableCommand) =>
-                  executeCommandInTemporaryTerminal(
-                    event.sender,
-                    payload?.tabId,
-                    options.terminalName,
-                    executableCommand,
-                    options.timeoutMs
-                  )
+                const parentTabId =
+                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
+                return executeReviewedCommand(
+                  command,
+                  options.timeoutMs,
+                  (executableCommand) =>
+                    executeCommandInTemporaryTerminal(
+                      event.sender,
+                      parentTabId,
+                      options.terminalName,
+                      executableCommand,
+                      options.timeoutMs
+                    ),
+                  parentTabId || defaultTabId
                 )
               }
             }
@@ -1215,19 +1350,29 @@ function requestCommandApproval(input: {
     }
     const timeout = setTimeout(
       () => {
-        pendingCommandApprovals.delete(requestId)
-        finish({ approved: false })
+        settlePendingCommandApproval(requestId, { approved: false })
       },
       10 * 60 * 1000
     )
     const onAbort = (): void => {
-      clearTimeout(timeout)
-      pendingCommandApprovals.delete(requestId)
-      finish({ approved: false })
+      settlePendingCommandApproval(requestId, {
+        approved: false,
+        rejectionReason: 'Agent run was canceled.'
+      })
     }
 
-    pendingCommandApprovals.set(requestId, { resolve: finish, timeout })
+    pendingCommandApprovals.set(requestId, {
+      runId: input.runId,
+      tabId: input.tabId,
+      webContents: input.webContents,
+      resolve: finish,
+      timeout
+    })
     input.signal?.addEventListener('abort', onAbort, { once: true })
+    if (input.signal?.aborted) {
+      onAbort()
+      return
+    }
     input.webContents.send('agent:command-approval-request', request)
   })
 }

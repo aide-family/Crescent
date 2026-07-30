@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="Crescent Circuit">
+  <title>Crescent Circuit Brand</title>
+  <desc>Simplified circuit crescent with terminal window  brand/marketing variant; not used for small dock icons.</desc>
+
+  <defs>
+    <linearGradient id="circuitStroke" x1="180" y1="820" x2="780" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.5" stop-color="#818CF8"/>
+      <stop offset="1" stop-color="#E879F9"/>
+    </linearGradient>
+    <filter id="neon" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <mask id="circuitCrescentMask" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="black"/>
+      <circle cx="430" cy="512" r="300" fill="white"/>
+      <circle cx="560" cy="500" r="250" fill="black"/>
+    </mask>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#0D1117"/>
+
+  <g filter="url(#neon)" mask="url(#circuitCrescentMask)" stroke="url(#circuitStroke)" fill="none" stroke-linecap="round">
+    <circle cx="430" cy="512" r="268" stroke-width="10"/>
+    <circle cx="430" cy="512" r="210" stroke-width="6" opacity="0.85"/>
+    <circle cx="430" cy="512" r="150" stroke-width="5" opacity="0.7"/>
+    <path d="M220 380 H320 V300" stroke-width="6"/>
+    <path d="M250 640 H340 V720" stroke-width="6"/>
+    <path d="M360 240 V300" stroke-width="6"/>
+    <path d="M500 720 V780" stroke-width="6"/>
+    <circle cx="320" cy="300" r="10" fill="#E0F2FE" stroke="none"/>
+    <circle cx="340" cy="720" r="10" fill="#E0F2FE" stroke="none"/>
+    <circle cx="360" cy="240" r="10" fill="#E0F2FE" stroke="none"/>
+    <circle cx="500" cy="780" r="10" fill="#E0F2FE" stroke="none"/>
+    <circle cx="220" cy="380" r="8" fill="#E0F2FE" stroke="none"/>
+    <circle cx="250" cy="640" r="8" fill="#E0F2FE" stroke="none"/>
+  </g>
+
+  <g filter="url(#neon)" stroke="#E0F2FE" fill="none" stroke-width="10" stroke-linejoin="round">
+    <rect x="520" y="340" width="280" height="220" rx="28"/>
+    <circle cx="560" cy="380" r="8" fill="#E0F2FE" stroke="none"/>
+    <circle cx="592" cy="380" r="8" fill="#E0F2FE" stroke="none"/>
+    <circle cx="624" cy="380" r="8" fill="#E0F2FE" stroke="none"/>
+    <path d="M572 430 L620 470 L572 510" stroke-width="14" stroke-linecap="round"/>
+    <path d="M648 505 H730" stroke-width="14" stroke-linecap="round"/>
+  </g>
+</svg>
