@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -58,8 +58,11 @@ describe('runtime-env', () => {
     async () => {
       const home = mkdtempSync(join(tmpdir(), 'crescent-env-'))
       const previousHome = process.env.HOME
+      const previousShell = process.env.SHELL
       process.env.HOME = home
-      writeFileSync(join(home, '.zprofile'), 'export CRESCENT_TEST_PROFILE_ENV=from-zprofile\n')
+      // Prefer bash on Linux CI where zsh may be absent; .profile is sourced by bash and zsh.
+      process.env.SHELL = existsSync('/bin/bash') ? '/bin/bash' : previousShell
+      writeFileSync(join(home, '.profile'), 'export CRESCENT_TEST_PROFILE_ENV=from-zprofile\n')
 
       try {
         clearRuntimeEnvCache()
@@ -69,6 +72,8 @@ describe('runtime-env', () => {
       } finally {
         if (previousHome === undefined) delete process.env.HOME
         else process.env.HOME = previousHome
+        if (previousShell === undefined) delete process.env.SHELL
+        else process.env.SHELL = previousShell
         clearRuntimeEnvCache()
         rmSync(home, { recursive: true, force: true })
       }
@@ -80,7 +85,9 @@ describe('runtime-env', () => {
     async () => {
       const home = mkdtempSync(join(tmpdir(), 'crescent-env-miss-'))
       const previousHome = process.env.HOME
+      const previousShell = process.env.SHELL
       process.env.HOME = home
+      process.env.SHELL = existsSync('/bin/bash') ? '/bin/bash' : previousShell
 
       try {
         clearRuntimeEnvCache()
@@ -88,7 +95,7 @@ describe('runtime-env', () => {
           resolveRuntimeEnvValue('CRESCENT_TEST_MISSING_ENV', { forceRefresh: true })
         ).resolves.toBeUndefined()
 
-        writeFileSync(join(home, '.zprofile'), 'export CRESCENT_TEST_MISSING_ENV=now-present\n')
+        writeFileSync(join(home, '.profile'), 'export CRESCENT_TEST_MISSING_ENV=now-present\n')
         await expect(resolveRuntimeEnvValue('CRESCENT_TEST_MISSING_ENV')).resolves.toBeUndefined()
         await expect(
           resolveRuntimeEnvValue('CRESCENT_TEST_MISSING_ENV', { forceRefresh: true })
@@ -96,6 +103,8 @@ describe('runtime-env', () => {
       } finally {
         if (previousHome === undefined) delete process.env.HOME
         else process.env.HOME = previousHome
+        if (previousShell === undefined) delete process.env.SHELL
+        else process.env.SHELL = previousShell
         clearRuntimeEnvCache()
         rmSync(home, { recursive: true, force: true })
       }
