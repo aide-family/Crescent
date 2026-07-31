@@ -107,7 +107,35 @@ The core idea is simple: the Agent should not reason away from the worksite. It 
 
 ## Quick Start
 
-### Install
+### Install from GitHub Releases (recommended for end users)
+
+Download the package for your platform from [Releases](https://github.com/aide-family/Crescent/releases):
+
+| Platform | Recommended asset |
+| --- | --- |
+| macOS Apple Silicon | `crescent-*-arm64.dmg` or Universal |
+| macOS Intel | `crescent-*-x64.dmg` or Universal |
+| Windows | `crescent-*-x64-setup.exe` |
+| Linux | `.AppImage` or `.deb` |
+
+Verify downloads with `SHA256SUMS.txt` from the same release when possible.
+
+#### macOS: “is damaged and can’t be opened”
+
+Current release builds are not yet signed or notarized with an Apple Developer ID. After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt—clear the quarantine attribute, then open the app:
+
+1. Move `Crescent.app` into Applications.
+2. Run:
+
+```bash
+xattr -cr /Applications/Crescent.app
+```
+
+3. Open the app again.
+
+You can also check **System Settings → Privacy & Security** for an “Open Anyway” option; if that fails, prefer the `xattr` command above.
+
+### Install from source
 
 ```bash
 npm install

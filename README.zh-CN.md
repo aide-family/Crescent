@@ -107,7 +107,35 @@ flowchart TD
 
 ## 快速上手
 
-### 安装依赖
+### 从 GitHub Release 安装（推荐普通用户）
+
+从 [Releases](https://github.com/aide-family/Crescent/releases) 下载对应平台安装包：
+
+| 平台 | 推荐资产 |
+| --- | --- |
+| macOS Apple Silicon | `crescent-*-arm64.dmg` 或 Universal |
+| macOS Intel | `crescent-*-x64.dmg` 或 Universal |
+| Windows | `crescent-*-x64-setup.exe` |
+| Linux | `.AppImage` 或 `.deb` |
+
+建议先用 Release 中的 `SHA256SUMS.txt` 校验下载文件。
+
+#### macOS：「已损坏，无法打开」
+
+当前正式包尚未做 Apple Developer ID 签名与公证。从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏，可按下面步骤解除隔离后再打开：
+
+1. 将 `Crescent.app` 拖到「应用程序」。
+2. 在终端执行：
+
+```bash
+xattr -cr /Applications/Crescent.app
+```
+
+3. 再双击打开应用。
+
+也可在「系统设置 → 隐私与安全性」中查看是否有「仍要打开」选项；若仍无法启动，优先使用上面的 `xattr` 命令。
+
+### 从源码安装依赖
 
 ```bash
 npm install

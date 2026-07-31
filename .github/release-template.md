@@ -25,12 +25,27 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 - Skills and Wiki knowledge-base support for repeatable SOPs.
 - OpenAPI and MCP tool integrations.
 
-## Upgrade Notes
+## Install Notes
 
 - Close the running Crescent app before installing this version.
-- If your OS warns about an unsigned application, review the downloaded file source and checksum before continuing.
+- Verify downloads with `SHA256SUMS.txt` before installing.
 - Keep a copy of important local configuration before upgrading across major versions.
 - Review configured OpenAPI and MCP tools after upgrading, especially tools that can change remote state.
+
+### macOS: “is damaged and can’t be opened”
+
+Release builds are currently unsigned / not notarized. Gatekeeper may show **“Crescent” is damaged and can’t be opened** after a browser download. This is a quarantine warning, not a corrupt package.
+
+1. Move `Crescent.app` into Applications.
+2. Clear the quarantine attribute:
+
+```bash
+xattr -cr /Applications/Crescent.app
+```
+
+3. Open the app again.
+
+More detail: see the install section in the repository README.
 
 ## Verification
 
