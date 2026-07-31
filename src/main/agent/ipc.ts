@@ -23,6 +23,7 @@ import {
 import { AgentMemory } from './memory'
 import { getAgentProviders } from './model-provider-config'
 import { AgentBrain } from './brain'
+import { checkTranscriptionSupport } from './transcription-support'
 import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { parseJsonFromModelContent } from '../../shared/json-parse'
@@ -81,6 +82,9 @@ import type {
   LocalFileWriter,
   LocalFileWriteResult,
   PastedAttachmentInput,
+  TranscribeAudioInput,
+  TranscribeAudioResult,
+  TranscriptionSupportResult,
   WikiSaveInput
 } from './types'
 
@@ -300,6 +304,33 @@ export function registerAgentIpc(): void {
   ipcMain.handle('agent:save-pasted-attachment', async (_, payload: PastedAttachmentInput) => {
     return savePastedAttachment(payload)
   })
+
+  ipcMain.handle('agent:request-microphone-permission', async () => {
+    return requestMicrophonePermission()
+  })
+
+  ipcMain.handle('agent:transcribe-audio', async (_, payload: TranscribeAudioInput) => {
+    return transcribeAudioAttachment(payload)
+  })
+
+  ipcMain.handle(
+    'agent:check-transcription-support',
+    async (
+      _,
+      payload?: { forceRefresh?: boolean; providerId?: string; model?: string }
+    ): Promise<TranscriptionSupportResult> => {
+      const config = normalizeAgentConfig({
+        ...readAgentConfig(),
+        ...(payload?.providerId ? { providerId: payload.providerId } : {}),
+        ...(payload?.model ? { model: payload.model } : {})
+      })
+      return checkTranscriptionSupport(config, {
+        forceRefresh: payload?.forceRefresh,
+        providerId: payload?.providerId,
+        model: payload?.model
+      })
+    }
+  )
 
   ipcMain.handle(
     'agent:save-rendered-image',
@@ -1108,7 +1139,11 @@ async function savePastedAttachment(input: PastedAttachmentInput): Promise<Agent
   const attachmentDir = getCrescentAttachmentsDir()
   await fs.mkdir(attachmentDir, { recursive: true })
 
-  const fallbackName = input.mimeType?.startsWith('image/') ? 'pasted-image' : 'pasted-file'
+  const fallbackName = input.mimeType?.startsWith('image/')
+    ? 'pasted-image'
+    : input.mimeType?.startsWith('audio/')
+      ? 'voice-input'
+      : 'pasted-file'
   const safeName = sanitizeAttachmentName(input.name || fallbackName)
   const extension = extname(safeName) || extensionFromMimeType(input.mimeType)
   const baseName = sanitizeAttachmentName(
@@ -1125,6 +1160,65 @@ async function savePastedAttachment(input: PastedAttachmentInput): Promise<Agent
     path,
     name: basename(path) || path
   }
+}
+
+async function requestMicrophonePermission(): Promise<{ ok: boolean; granted: boolean }> {
+  if (process.platform !== 'darwin') return { ok: true, granted: true }
+
+  const { systemPreferences } = await import('electron')
+  const status = systemPreferences.getMediaAccessStatus('microphone')
+  if (status === 'granted') return { ok: true, granted: true }
+  if (status === 'denied' || status === 'restricted') return { ok: true, granted: false }
+
+  const granted = await systemPreferences.askForMediaAccess('microphone')
+  return { ok: true, granted }
+}
+
+async function transcribeAudioAttachment(
+  input: TranscribeAudioInput
+): Promise<TranscribeAudioResult> {
+  const base64 = input?.base64?.trim() ?? ''
+  if (!base64) return { ok: false, error: 'Audio data is empty.' }
+
+  try {
+    const saved = await savePastedAttachment({
+      name: input.name || 'voice-input.webm',
+      mimeType: input.mimeType || 'audio/webm',
+      base64
+    })
+    const text = (
+      await new AgentBrain(readAgentConfig()).transcribeAudio({
+        path: saved.path,
+        language: input.language
+      })
+    ).trim()
+    if (!text) return { ok: false, error: 'Transcription returned empty text.', path: saved.path }
+    return { ok: true, text, path: saved.path }
+  } catch (error) {
+    return {
+      ok: false,
+      error: formatTranscriptionError(error)
+    }
+  }
+}
+
+function formatTranscriptionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const status =
+    error && typeof error === 'object' && 'status' in error
+      ? Number((error as { status?: number }).status)
+      : undefined
+
+  if (status === 404 || /404|Not Found/i.test(message)) {
+    return 'Current model provider does not support audio transcription (/audio/transcriptions). Use an OpenAI-compatible provider that exposes Whisper, or rely on system speech recognition.'
+  }
+
+  // OpenAI SDK often includes "404 ... no body" / empty response text.
+  if (/no body/i.test(message)) {
+    return `${message} (provider likely missing /audio/transcriptions)`
+  }
+
+  return message
 }
 
 async function saveRenderedImage(
@@ -1309,6 +1403,23 @@ function extensionFromMimeType(mimeType?: string): string {
       return '.webp'
     case 'application/pdf':
       return '.pdf'
+    case 'audio/webm':
+      return '.webm'
+    case 'audio/wav':
+    case 'audio/wave':
+    case 'audio/x-wav':
+      return '.wav'
+    case 'audio/mpeg':
+    case 'audio/mp3':
+      return '.mp3'
+    case 'audio/mp4':
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+      return '.m4a'
+    case 'audio/ogg':
+      return '.ogg'
+    case 'audio/flac':
+      return '.flac'
     default:
       return ''
   }

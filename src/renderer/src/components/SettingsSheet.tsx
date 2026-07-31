@@ -3,6 +3,7 @@ import {
   CheckIcon,
   FileTextIcon,
   Loader2Icon,
+  PencilIcon,
   PlusIcon,
   SettingsIcon,
   TestTube2Icon,
@@ -94,6 +95,7 @@ export interface SettingsSheetProps {
   closeTerminalConfirmEnabled: boolean
   onCreateProvider: () => void
   onToggleProviderDetails: (providerId: string) => void
+  onDeleteProvider: (providerId: string) => void
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onMaxActiveToolsChange: (value: number) => void
@@ -105,7 +107,6 @@ export interface SettingsSheetProps {
   onPatchActiveOpenApiProfile: (patch: OpenApiProfilePatch) => void
   onImportOpenApiDocument: () => void | Promise<void>
   onToggleInstructionDetails: (name: string) => void
-  onDeleteSettingsProvider: () => void
   onProviderEditorOpenChange: (open: boolean) => void
   onUpdateSettingsProvider: <K extends keyof AgentProviderConfig>(
     key: K,
@@ -158,7 +159,7 @@ export function SettingsSheet({
   onPatchActiveOpenApiProfile,
   onImportOpenApiDocument,
   onToggleInstructionDetails,
-  onDeleteSettingsProvider,
+  onDeleteProvider,
   onProviderEditorOpenChange,
   onUpdateSettingsProvider,
   onUpdateSettingsProviderModels,
@@ -177,8 +178,10 @@ export function SettingsSheet({
   const defaultModelValue = defaultModelSelection
     ? buildModelSelectionValue(defaultModelSelection.providerId, defaultModelSelection.id)
     : buildModelSelectionValue(config.providerId, config.model)
+  const editingProvider =
+    config.providers.find((provider) => provider.id === settingsProviderId) ?? settingsProvider
   const detailEditorOpen =
-    (providerEditorOpen && Boolean(settingsProvider.id)) ||
+    (providerEditorOpen && Boolean(settingsProviderId)) ||
     (openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
     (instructionEditorOpen && Boolean(selectedInstructionFile))
 
@@ -222,6 +225,7 @@ export function SettingsSheet({
                   const isDefaultProvider = config.providerId === provider.id
                   const modelCount = provider.models.length
                   const hasApiKey = Boolean(provider.apiKey?.trim())
+                  const canDeleteProvider = config.providers.length > 1
 
                   return (
                     <div
@@ -240,8 +244,8 @@ export function SettingsSheet({
                       }}
                     >
                       <div className="min-w-0 text-left">
-                        <div className="flex min-w-0 items-start justify-between gap-3">
-                          <div className="min-w-0">
+                        <div className="flex min-w-0 items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 items-center gap-2">
                               <StatusDot
                                 state={
@@ -249,18 +253,52 @@ export function SettingsSheet({
                                 }
                               />
                               <span className="truncate text-sm font-medium">
-                                {provider.name || provider.id}
+                                {provider.name.trim() || provider.id || t.settings.newProvider}
                               </span>
                             </div>
                             <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {provider.id}
+                              {provider.id || '-'}
                             </div>
                           </div>
-                          {isDefaultProvider && (
-                            <Badge variant="secondary" className="shrink-0 text-[10px]">
-                              {t.settings.model}
-                            </Badge>
-                          )}
+                          <div className="flex shrink-0 items-center gap-1">
+                            {isDefaultProvider && (
+                              <Badge variant="secondary" className="text-[10px]">
+                                {t.settings.model}
+                              </Badge>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label={t.common.edit}
+                              title={t.common.edit}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                onToggleProviderDetails(provider.id)
+                              }}
+                            >
+                              <PencilIcon aria-hidden="true" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                              disabled={!canDeleteProvider}
+                              aria-label={t.settings.deleteProvider}
+                              title={
+                                canDeleteProvider
+                                  ? t.settings.deleteProvider
+                                  : t.settings.keepOneProvider
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                onDeleteProvider(provider.id)
+                              }}
+                            >
+                              <Trash2Icon aria-hidden="true" />
+                            </Button>
+                          </div>
                         </div>
                         <div className="mt-3 truncate font-mono text-[11px] text-muted-foreground">
                           {provider.baseUrl || '-'}
@@ -456,15 +494,19 @@ export function SettingsSheet({
               )}
             </FieldGroup>
           </div>
-          {providerEditorOpen && settingsProvider.id ? (
-            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
+          {providerEditorOpen && settingsProviderId ? (
+            <div
+              id="provider-editor-panel"
+              className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background"
+            >
               <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">
-                    {t.settings.providerList}: {settingsProvider.name || settingsProvider.id}
+                    {t.settings.providerList}:{' '}
+                    {editingProvider.name.trim() || editingProvider.id || t.settings.newProvider}
                   </div>
                   <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
-                    {settingsProvider.id}
+                    {editingProvider.id || settingsProviderId}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -476,7 +518,7 @@ export function SettingsSheet({
                     disabled={config.providers.length <= 1}
                     aria-label={t.settings.deleteProvider}
                     title={t.settings.deleteProvider}
-                    onClick={onDeleteSettingsProvider}
+                    onClick={() => onDeleteProvider(settingsProviderId)}
                   >
                     <Trash2Icon aria-hidden="true" />
                   </Button>
@@ -499,7 +541,7 @@ export function SettingsSheet({
                       <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
                       <Input
                         id="provider-id"
-                        value={settingsProvider.id}
+                        value={editingProvider.id}
                         onChange={(event) => onUpdateSettingsProvider('id', event.target.value)}
                         placeholder="provider-id"
                       />
@@ -508,7 +550,7 @@ export function SettingsSheet({
                       <FieldLabel htmlFor="provider-name">{t.settings.providerName}</FieldLabel>
                       <Input
                         id="provider-name"
-                        value={settingsProvider.name}
+                        value={editingProvider.name}
                         onChange={(event) => onUpdateSettingsProvider('name', event.target.value)}
                         placeholder={t.settings.providerName}
                       />
@@ -518,7 +560,7 @@ export function SettingsSheet({
                     <FieldLabel htmlFor="provider-base-url">{t.settings.baseUrl}</FieldLabel>
                     <Input
                       id="provider-base-url"
-                      value={settingsProvider.baseUrl}
+                      value={editingProvider.baseUrl}
                       onChange={(event) => onUpdateSettingsProvider('baseUrl', event.target.value)}
                       placeholder="https://api.deepseek.com"
                     />
@@ -529,7 +571,7 @@ export function SettingsSheet({
                     <Input
                       id="provider-api-key"
                       type="password"
-                      value={settingsProvider.apiKey ?? ''}
+                      value={editingProvider.apiKey ?? ''}
                       onChange={(event) => onUpdateSettingsProvider('apiKey', event.target.value)}
                       placeholder="sk-... or leave blank when env key is available"
                     />

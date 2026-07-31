@@ -29,6 +29,9 @@ import type {
   SubmitOpsFeedbackResult,
   UpdateOpsFeedbackInput,
   UpdateOpsFeedbackResult,
+  TranscribeAudioInput,
+  TranscribeAudioResult,
+  TranscriptionSupportResult,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionSummaryUpdate,
@@ -156,6 +159,16 @@ const api = {
       ipcRenderer.invoke('agent:import-openapi-document'),
     savePastedAttachment: (input: PastedAttachmentInput): Promise<AgentPathReference> =>
       ipcRenderer.invoke('agent:save-pasted-attachment', input),
+    requestMicrophonePermission: (): Promise<{ ok: boolean; granted: boolean }> =>
+      ipcRenderer.invoke('agent:request-microphone-permission'),
+    transcribeAudio: (input: TranscribeAudioInput): Promise<TranscribeAudioResult> =>
+      ipcRenderer.invoke('agent:transcribe-audio', input),
+    checkTranscriptionSupport: (input?: {
+      forceRefresh?: boolean
+      providerId?: string
+      model?: string
+    }): Promise<TranscriptionSupportResult> =>
+      ipcRenderer.invoke('agent:check-transcription-support', input),
     saveRenderedImage: (input: {
       dataUrl: string
       defaultPath: string
