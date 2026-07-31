@@ -10,13 +10,14 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!node_modules/@tailwindcss/**/*'
+  # Host-compiled node-pty binaries collide in universal merges; ship prebuilds only.
+  - '!node_modules/node-pty/build/**'
   - '!design/**/*'
   - '!build/icons/preview/**/*'
 asarUnpack:
   - resources/**
   # node-pty loads native binaries from prebuilds/<platform>-<arch> at runtime.
   - '**/node-pty/prebuilds/**'
-  - '**/node-pty/build/Release/**'
 extraResources:
   - from: system-skills
     to: system-skills
@@ -35,6 +36,9 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Prebuilds are identical in the x64/arm64 temp apps; allow the universal merger
+  # to keep one copy instead of attempting lipo on same-arch Mach-O files.
+  x64ArchFiles: '**/node-pty/prebuilds/**'
   target:
     - dmg
     - zip
