@@ -24,6 +24,11 @@ import type {
   LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  OpsHistoryRecord,
+  SubmitOpsFeedbackInput,
+  SubmitOpsFeedbackResult,
+  UpdateOpsFeedbackInput,
+  UpdateOpsFeedbackResult,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionSummaryUpdate,
@@ -231,6 +236,8 @@ const api = {
   },
   connections: {
     list: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('connections:list'),
+    resolve: (id: string): Promise<ConnectionConfig | undefined> =>
+      ipcRenderer.invoke('connections:resolve', id),
     save: (input: ConnectionInput): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('connections:save', input),
     delete: (id: string): Promise<ConnectionConfig[]> =>
@@ -258,6 +265,18 @@ const api = {
       ipcRenderer.invoke('storage:rename-session-history', input),
     deleteSessionHistory: (tabId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('storage:delete-session-history', tabId),
+    submitOpsFeedback: (input: SubmitOpsFeedbackInput): Promise<SubmitOpsFeedbackResult> =>
+      ipcRenderer.invoke('storage:submit-ops-feedback', input),
+    getOpsFeedback: (runId: string): Promise<OpsHistoryRecord | undefined> =>
+      ipcRenderer.invoke('storage:get-ops-feedback', runId),
+    listOpsFeedback: (input: {
+      connectionId?: string
+      limit?: number
+    }): Promise<OpsHistoryRecord[]> => ipcRenderer.invoke('storage:list-ops-feedback', input),
+    updateOpsFeedback: (input: UpdateOpsFeedbackInput): Promise<UpdateOpsFeedbackResult> =>
+      ipcRenderer.invoke('storage:update-ops-feedback', input),
+    deleteOpsFeedback: (id: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('storage:delete-ops-feedback', id),
     onSessionSummaryUpdated: (
       callback: (event: StoredSessionSummaryUpdate) => void
     ): (() => void) => {

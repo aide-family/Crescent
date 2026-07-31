@@ -1,64 +1,103 @@
 {
   "project": "Crescent",
-  "phase": "next — Reliability + OpenAPI deliverable + Observability",
-  "updatedAt": "2026-07-30T10:17:00+08:00",
-  "goal": "Make OpenAPI tools configurable, stable, auditable, and inspectable; leave distribution polish and full prompt workflows for later.",
+  "phase": "next — Architecture + Features + Bugfix + UI",
+  "updatedAt": "2026-07-31T13:20:00+08:00",
+  "goal": "Stabilize release/runtime defects, extract App.tsx hotspots, finish Phase 3 workflow leftovers, and polish operational UI without expanding marketing chrome.",
+  "tracks": [
+    "architecture",
+    "features",
+    "bugfix",
+    "ui"
+  ],
+  "sequencing": [
+    "Stabilize release path: env/password regression (mac + win) + connection-failure tests + signing plan",
+    "Architecture slices: TerminalPane → AgentPanel while tests stay green",
+    "Workflow features: prompt templates, tool allow/deny, onboarding",
+    "UI polish on newly extracted surfaces"
+  ],
   "exitCriteria": [
-    "OpenAPI can be configured in UI and run at least one real/mock tool call",
-    "External write operations require approval; logs redact secrets",
-    "Structured run traces can be exported",
-    "npm run test / typecheck / build pass",
-    "ROADMAP Phase 2 items checkable; Phase 3 Profile + Import UI partially done"
+    "P0 architecture extractionsions land without behavior regressions",
+    "macOS packaged password env and connection-failure recovery verified",
+    "Windows password env parity implemented or explicitly deferred with docs",
+    "Prompt templates or tool allow/deny lists shipped (at least one Phase 3 leftover)",
+    "npm run test / typecheck / lint pass"
   ],
   "outOfScope": [
-    "Signed builds / notarize CI",
-    "electron-updater channels",
-    "First-run onboarding",
-    "Packaging smoke tests",
-    "Prompt templates / pinned workflows",
-    "Full TerminalPane / AgentPanel extraction"
+    "Big-bang App.tsx rewrite in one PR",
+    "Marketing landing redesign / new dominant color palette",
+    "Full Skill marketplace platform"
   ],
   "iterations": {
-    "A": ["n1-openapi-settings-ui", "n2-openapi-timeout-retry", "n3-log-redaction"],
-    "B": ["n4-external-tool-approval", "n5-structured-run-trace", "n6-openapi-mock-server-tests"],
-    "C": ["n7-openapi-profiles", "n8-extract-settings-panel", "n9-renderer-tests"]
+    "A": [
+      "p5-bug-mac-env-regression",
+      "p5-bug-connection-failure-regression",
+      "p5-arch-terminal-pane",
+      "p5-arch-agent-panel"
+    ],
+    "B": [
+      "p5-feat-win-password-env",
+      "p5-feat-prompt-templates",
+      "p5-feat-tool-allow-deny",
+      "p5-bug-ssh-reconnect-loops"
+    ],
+    "C": [
+      "p5-ui-conversation-hierarchy",
+      "p5-ui-empty-error-states",
+      "p5-arch-settings-wiki-history",
+      "p5-feat-onboarding",
+      "p5-phase-exit"
+    ]
   },
   "tasks": [
     {
       "id": "plan",
       "title": "Create executable development plan",
       "status": "completed",
-      "tests": ["manual: plan.json exists and is updated as tasks complete"]
+      "tests": [
+        "manual: plan.json exists and is updated as tasks complete"
+      ]
     },
     {
       "id": "model-provider-config",
       "title": "Add model provider and default-agent configuration",
       "status": "completed",
-      "tests": ["unit: provider config resolves model/baseUrl/apiKey without leaking secrets"]
+      "tests": [
+        "unit: provider config resolves model/baseUrl/apiKey without leaking secrets"
+      ]
     },
     {
       "id": "agent-runtime",
       "title": "Complete common AI Agent runtime: brain, memory, planner, tools, sessions",
       "status": "completed",
-      "tests": ["unit: mode/config normalization and memory persistence behavior"]
+      "tests": [
+        "unit: mode/config normalization and memory persistence behavior"
+      ]
     },
     {
       "id": "openapi-tools",
       "title": "Harden OpenAPI dynamic tool loading and execution pipeline",
       "status": "completed",
-      "tests": ["unit: OpenAPI paths convert to OpenAI function tools"]
+      "tests": [
+        "unit: OpenAPI paths convert to OpenAI function tools"
+      ]
     },
     {
       "id": "renderer-controls",
       "title": "Expose provider/model/agent controls in shadcn UI",
       "status": "completed",
-      "tests": ["typecheck: renderer API and UI compile"]
+      "tests": [
+        "typecheck: renderer API and UI compile"
+      ]
     },
     {
       "id": "verification",
       "title": "Run automated verification before final handoff",
       "status": "completed",
-      "tests": ["npm run test", "npm run typecheck", "npm run build"]
+      "tests": [
+        "npm run test",
+        "npm run typecheck",
+        "npm run build"
+      ]
     },
     {
       "id": "n1-openapi-settings-ui",
@@ -116,7 +155,9 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": ["n3-log-redaction"],
+      "dependsOn": [
+        "n3-log-redaction"
+      ],
       "tests": [
         "unit: trace export includes tool chain with redacted secrets",
         "manual: export JSON from current/history run; Markdown export still works"
@@ -128,7 +169,9 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": ["n2-openapi-timeout-retry"],
+      "dependsOn": [
+        "n2-openapi-timeout-retry"
+      ],
       "tests": [
         "integration: tool execution against local mock HTTP server without external network",
         "npm run test"
@@ -140,7 +183,9 @@
       "priority": "P2",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": ["n1-openapi-settings-ui"],
+      "dependsOn": [
+        "n1-openapi-settings-ui"
+      ],
       "tests": [
         "unit: profiles persist and active profile resolves correctly",
         "manual: save at least two profiles and switch between them"
@@ -152,7 +197,9 @@
       "priority": "P2",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": ["n1-openapi-settings-ui"],
+      "dependsOn": [
+        "n1-openapi-settings-ui"
+      ],
       "tests": [
         "typecheck: renderer compiles after extraction",
         "manual: settings sheet behavior unchanged"
@@ -164,7 +211,11 @@
       "priority": "P2",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": ["n4-external-tool-approval", "n7-openapi-profiles", "n8-extract-settings-panel"],
+      "dependsOn": [
+        "n4-external-tool-approval",
+        "n7-openapi-profiles",
+        "n8-extract-settings-panel"
+      ],
       "tests": [
         "unit/component: approval, OpenAPI validation, profile switch paths covered",
         "npm run test"
@@ -187,7 +238,251 @@
         "n8-extract-settings-panel",
         "n9-renderer-tests"
       ],
-      "tests": ["npm run test", "npm run typecheck", "npm run build"]
+      "tests": [
+        "npm run test",
+        "npm run typecheck",
+        "npm run build"
+      ]
+    },
+    {
+      "id": "p5-bug-mac-env-regression",
+      "track": "bugfix",
+      "title": "Regression: packaged macOS reads password env from shell profiles; Release DMG verify",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Non-interactive profile sourcing + unit/integration tests with temp HOME. Manual DMG smoke still recommended on next Release build.",
+      "tests": [
+        "unit: runtime-env marked value extraction / script builder",
+        "unit: resolveRuntimeEnvValue reads temp ~/.zprofile",
+        "manual: DMG app resolves BLJ_PASSWORD from ~/.zprofile or ~/.zshrc"
+      ]
+    },
+    {
+      "id": "p5-bug-connection-failure-regression",
+      "track": "bugfix",
+      "title": "Regression: connection failure keeps terminal usable and chat shows user question + abort reason",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Policy helpers tested; App uses resolveConnectionReconnectPolicy + shouldDrainPostConnectionTasks; errors abort to chat tab.",
+      "tests": [
+        "unit: connection-automation-policy reconnect/drain/abort formatting",
+        "unit: isPasswordEnvVarMissing / merge resolvedPassword",
+        "manual: missing password env → error in chat, local shell still accepts input",
+        "manual: SSH exit mid-login → local fallback, no reconnect loop"
+      ]
+    },
+    {
+      "id": "p5-arch-terminal-pane",
+      "track": "architecture",
+      "title": "Extract TerminalPane + terminal session lifecycle from App.tsx",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Presentational TerminalPane extracted. xterm lifecycle still in App.tsx; follow-up hook after props stabilize (ARCHITECTURE.md step 2).",
+      "tests": [
+        "typecheck: renderer compiles",
+        "npm run test",
+        "npm run lint"
+      ]
+    },
+    {
+      "id": "p5-arch-agent-panel",
+      "track": "architecture",
+      "title": "Extract AgentPanel (log list, input, thinking, slash commands)",
+      "priority": "P0",
+      "iteration": "A",
+      "status": "completed",
+      "dependsOn": [
+        "p5-arch-terminal-pane"
+      ],
+      "notes": "AgentPanel owns log list + input dock; App retains submit/run ownership.",
+      "tests": [
+        "typecheck: renderer compiles",
+        "npm run test",
+        "npm run lint"
+      ]
+    },
+    {
+      "id": "p5-feat-win-password-env",
+      "track": "features",
+      "title": "Windows password env parity: User/Machine env (+ optional PowerShell profile)",
+      "priority": "P1",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": [
+        "p5-bug-mac-env-regression"
+      ],
+      "notes": "Reads HKCU\\Environment then HKLM session Environment via reg query; expands REG_EXPAND_SZ. PowerShell profile deferred.",
+      "tests": [
+        "unit: parseRegQueryValue / expandWindowsEnvRefs / HKCU→HKLM fallback",
+        "unit: resolveRuntimeEnvValue routes win32 to registry reader"
+      ]
+    },
+    {
+      "id": "p5-feat-prompt-templates",
+      "track": "features",
+      "title": "Prompt templates and pinned workflows per API profile",
+      "priority": "P0",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Carry over unfinished ROADMAP Phase 3 item.",
+      "tests": [
+        "unit: templates persist per profile",
+        "manual: pin and run a workflow from UI"
+      ]
+    },
+    {
+      "id": "p5-feat-tool-allow-deny",
+      "track": "features",
+      "title": "Explicit tool allow/deny lists for OpenAPI and MCP",
+      "priority": "P0",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Completes Phase 3 confirmation story beyond per-op approval.",
+      "tests": [
+        "unit: denied tools never dispatched",
+        "manual: allow/deny list editable in settings"
+      ]
+    },
+    {
+      "id": "p5-bug-ssh-reconnect-loops",
+      "track": "bugfix",
+      "title": "Close remaining SSH exit auto-reconnect loops after auth/host failure",
+      "priority": "P1",
+      "iteration": "B",
+      "status": "completed",
+      "dependsOn": [
+        "p5-bug-connection-failure-regression"
+      ],
+      "tests": [
+        "manual: bad host/password does not infinitely reconnect",
+        "manual: peer-terminal errors land on session chat tab"
+      ]
+    },
+    {
+      "id": "p5-ui-conversation-hierarchy",
+      "track": "ui",
+      "title": "Strengthen Agent conversation vs action/status visual hierarchy",
+      "priority": "P0",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [
+        "p5-arch-agent-panel"
+      ],
+      "notes": "Follow docs/UI_DESIGN_SYSTEM.md; accent #13c2c2; no new palette.",
+      "tests": [
+        "manual: user/assistant blocks clearer than command/status rows"
+      ]
+    },
+    {
+      "id": "p5-ui-empty-error-states",
+      "track": "ui",
+      "title": "Empty / error / reconnect states for terminal + chat with recovery actions",
+      "priority": "P0",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [
+        "p5-bug-connection-failure-regression"
+      ],
+      "tests": [
+        "manual: connection failure shows recovery CTA in chat/terminal"
+      ]
+    },
+    {
+      "id": "p5-arch-settings-wiki-history",
+      "track": "architecture",
+      "title": "Extract SettingsPanel leftovers, SkillManager, WikiPanel, HistoryPanel",
+      "priority": "P1",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [
+        "p5-arch-agent-panel"
+      ],
+      "tests": [
+        "typecheck: renderer compiles",
+        "manual: settings/skills/wiki/history flows unchanged"
+      ]
+    },
+    {
+      "id": "p5-feat-onboarding",
+      "track": "features",
+      "title": "First-run onboarding with example OpenAPI / connection / Skill intro",
+      "priority": "P1",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [],
+      "notes": "Also covers ROADMAP Phase 4 onboarding; keep in-app, do not expand README.",
+      "tests": [
+        "manual: fresh profile sees one-time onboarding"
+      ]
+    },
+    {
+      "id": "p5-feat-app-update-channel",
+      "track": "features",
+      "title": "In-app update channel (electron-updater or equivalent)",
+      "priority": "P1",
+      "iteration": "C",
+      "status": "pending",
+      "dependsOn": [],
+      "notes": "ROADMAP Phase 4; generic publish URL already stubbed.",
+      "tests": [
+        "manual: update check against configured feed"
+      ]
+    },
+    {
+      "id": "p5-bug-signing-notarize",
+      "track": "bugfix",
+      "title": "macOS Developer ID signing + notarization; Windows Authenticode plan",
+      "priority": "P0",
+      "iteration": "C",
+      "status": "pending",
+      "dependsOn": [],
+      "notes": "Fixes Gatekeeper “damaged” for real; needs Apple/Windows cert secrets in CI.",
+      "tests": [
+        "manual: downloaded signed build opens without xattr workaround"
+      ]
+    },
+    {
+      "id": "p5-ui-session-switcher-forms",
+      "track": "ui",
+      "title": "Session switcher clarity + settings/connection form density pass",
+      "priority": "P1",
+      "iteration": "C",
+      "status": "pending",
+      "dependsOn": [
+        "p5-ui-conversation-hierarchy"
+      ],
+      "tests": [
+        "manual: peer badges / active execution indicator readable"
+      ]
+    },
+    {
+      "id": "p5-phase-exit",
+      "track": "architecture",
+      "title": "Phase exit: test + typecheck + lint; sync ROADMAP Phase 3/4 checkmarks from completed tasks",
+      "priority": "P1",
+      "iteration": "C",
+      "status": "completed",
+      "dependsOn": [
+        "p5-bug-mac-env-regression",
+        "p5-bug-connection-failure-regression",
+        "p5-arch-terminal-pane",
+        "p5-arch-agent-panel",
+        "p5-feat-prompt-templates",
+        "p5-feat-tool-allow-deny"
+      ],
+      "tests": [
+        "npm run test",
+        "npm run typecheck",
+        "npm run lint"
+      ]
     }
   ]
 }

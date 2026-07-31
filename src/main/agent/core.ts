@@ -134,6 +134,8 @@ export class TerminalAgentCore {
               skillContext: this.controls?.skillContext,
               wikiContext: this.controls?.wikiContext,
               conversationContext: this.controls?.conversationContext,
+              profileContext: this.controls?.profileContext,
+              opsHistoryContext: this.controls?.opsHistoryContext,
               terminalToolsEnabled: Boolean(this.terminalExecutor),
               terminalContext: input.terminalContext
             })
@@ -172,6 +174,8 @@ export class TerminalAgentCore {
           skillContext: this.controls?.skillContext,
           wikiContext: this.controls?.wikiContext,
           conversationContext: this.controls?.conversationContext,
+          profileContext: this.controls?.profileContext,
+          opsHistoryContext: this.controls?.opsHistoryContext,
           planSteps: input.planSteps,
           terminalToolsEnabled: Boolean(this.terminalExecutor),
           terminalContext: input.terminalContext

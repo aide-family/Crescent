@@ -30,6 +30,21 @@ export interface AgentOpenApiProfile {
   timeoutMs: number
   maxRetries: number
   retryBackoffMs: number
+  /** Optional guidance injected into the agent system prompt for this profile. */
+  promptTemplate?: string
+  /** Saved prompts the user can insert/run from the UI. */
+  pinnedWorkflows?: AgentPinnedWorkflow[]
+  /** Empty = no allow restriction. Exact OpenAPI tool function names. */
+  toolAllowList?: string[]
+  /** Exact OpenAPI tool function names that must never be registered. */
+  toolDenyList?: string[]
+}
+
+export interface AgentPinnedWorkflow {
+  id: string
+  name: string
+  prompt: string
+  pinned?: boolean
 }
 
 export type AgentMcpTransport = 'stdio'
@@ -42,6 +57,8 @@ export interface AgentMcpServerConfig {
   args: string[]
   env: Record<string, string>
   enabled: boolean
+  toolAllowList?: string[]
+  toolDenyList?: string[]
 }
 
 export interface AgentProviderConfig {
@@ -453,6 +470,50 @@ export interface StoredAgentRun {
   startedAt?: string
   elapsedMs?: number
   trace?: AgentRunTrace
+}
+
+export type OpsHistoryRating = 'like' | 'dislike'
+
+export interface OpsHistoryRecord {
+  id: string
+  tabId: string
+  /** Connection this feedback belongs to (SSH id, or builtin local terminal). */
+  connectionId: string
+  runId: string
+  rating: OpsHistoryRating
+  userGoal: string
+  pathSummary: string
+  lesson: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SubmitOpsFeedbackInput {
+  tabId: string
+  runId: string
+  rating: OpsHistoryRating
+  /** Prefer explicit connection; falls back to the stored agent run. */
+  connectionId?: string
+}
+
+export interface SubmitOpsFeedbackResult {
+  ok: boolean
+  record?: OpsHistoryRecord
+  error?: string
+}
+
+export interface UpdateOpsFeedbackInput {
+  id: string
+  rating?: OpsHistoryRating
+  userGoal?: string
+  pathSummary?: string
+  lesson?: string
+}
+
+export interface UpdateOpsFeedbackResult {
+  ok: boolean
+  record?: OpsHistoryRecord
+  error?: string
 }
 
 export interface AgentRunTraceStep {

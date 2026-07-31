@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent
 } from 'react'
+import { createPortal } from 'react-dom'
 import mermaid from 'mermaid'
 import {
   CheckIcon,
@@ -285,7 +286,7 @@ function renderMarkdownBlocks(
           className="min-w-0 rounded-md border bg-muted/15 shadow-xs"
           open={detailsOpen ? true : undefined}
         >
-          <summary className="sticky top-0 z-30 -mt-px cursor-pointer rounded-t-md border-t border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
+          <summary className="app-sticky-nested cursor-pointer rounded-t-md border-b bg-card px-3 py-2 text-xs font-medium text-muted-foreground">
             {summary}
           </summary>
           <div className="min-w-0 space-y-2 p-3">
@@ -449,7 +450,7 @@ function MarkdownCodeBlock({
 
   return (
     <div className="app-code-panel min-w-0 rounded-md border bg-[var(--app-terminal)] text-zinc-100">
-      <div className="sticky top-0 z-30 flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[var(--app-terminal-rail)] px-3 py-1.5 backdrop-blur">
+      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[var(--app-terminal-rail)] px-3 py-1.5">
         <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">{label}</span>
         <Button
           type="button"
@@ -721,7 +722,7 @@ function MermaidBlock({
 
   return (
     <div className="app-mermaid-panel min-w-0 rounded-md border bg-background">
-      <div className="sticky top-0 z-10 flex min-w-0 items-center justify-between gap-2 border-b bg-background/95 px-3 py-1.5 backdrop-blur">
+      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b bg-background px-3 py-1.5">
         <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           mermaid
         </span>
@@ -788,130 +789,135 @@ function MermaidBlock({
           mermaid
         </div>
       )}
-      {expanded && svg ? (
-        <div
-          className="app-mermaid-expanded fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t.common.enlarge}
-        >
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
-            <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">mermaid</div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.zoomOut}
-                title={t.common.zoomOut}
-                disabled={zoom <= MERMAID_MIN_ZOOM + MERMAID_ZOOM_EPSILON}
-                onClick={() => updateZoom(zoom - MERMAID_ZOOM_STEP)}
-              >
-                <ZoomOutIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="min-w-16 font-mono"
-                aria-label={t.common.reset}
-                title={t.common.reset}
-                onClick={() => updateZoom(1)}
-              >
-                {zoomPercent}%
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={t.common.fitToScreen}
-                title={t.common.fitToScreen}
-                onClick={fitExpandedMermaidToViewport}
-              >
-                {t.common.fitToScreen}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.zoomIn}
-                title={t.common.zoomIn}
-                disabled={zoom >= MERMAID_MAX_ZOOM - MERMAID_ZOOM_EPSILON}
-                onClick={() => updateZoom(zoom + MERMAID_ZOOM_STEP)}
-              >
-                <ZoomInIcon aria-hidden="true" />
-              </Button>
-              <Select
-                key={`expanded-export-${exportSelectKey}`}
-                onValueChange={handleMermaidExportFormat}
-              >
-                <SelectTrigger
-                  className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
-                  aria-label={t.common.exportDiagram}
-                  title={t.common.exportDiagram}
-                >
-                  <DownloadIcon className="size-3.5" aria-hidden="true" />
-                  <SelectValue placeholder={t.common.exportDiagram} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-                  <SelectItem value="png">{t.common.exportPng}</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                aria-label={copied ? t.common.copied : t.common.copy}
-                title={copied ? t.common.copied : t.common.copy}
-                onClick={() => void onCopy()}
-              >
-                {copied ? (
-                  <CheckIcon data-icon="inline-start" />
-                ) : (
-                  <CopyIcon data-icon="inline-start" />
-                )}
-                {copied ? t.common.copied : t.common.copy}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={t.common.close}
-                title={t.common.close}
-                onClick={() => {
-                  setExpanded(false)
-                  setZoom(1)
-                  setPanning(false)
-                  expandedPanRef.current = null
-                }}
-              >
-                <XIcon aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <div
-            ref={expandedScrollRef}
-            className={`min-h-0 flex-1 touch-none overflow-auto bg-[var(--app-terminal)] select-none ${
-              panning ? 'cursor-grabbing' : 'cursor-grab'
-            }`}
-            onWheel={handleExpandedWheel}
-            onPointerDown={handleExpandedPointerDown}
-            onPointerMove={handleExpandedPointerMove}
-            onPointerUp={stopExpandedPan}
-            onPointerCancel={stopExpandedPan}
-          >
-            <div className="relative" style={expandedCanvasStyle}>
+      {expanded && svg
+        ? createPortal(
+            <div
+              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur"
+              role="dialog"
+              aria-modal="true"
+              aria-label={t.common.enlarge}
+            >
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
+                <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  mermaid
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t.common.zoomOut}
+                    title={t.common.zoomOut}
+                    disabled={zoom <= MERMAID_MIN_ZOOM + MERMAID_ZOOM_EPSILON}
+                    onClick={() => updateZoom(zoom - MERMAID_ZOOM_STEP)}
+                  >
+                    <ZoomOutIcon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="min-w-16 font-mono"
+                    aria-label={t.common.reset}
+                    title={t.common.reset}
+                    onClick={() => updateZoom(1)}
+                  >
+                    {zoomPercent}%
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t.common.fitToScreen}
+                    title={t.common.fitToScreen}
+                    onClick={fitExpandedMermaidToViewport}
+                  >
+                    {t.common.fitToScreen}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t.common.zoomIn}
+                    title={t.common.zoomIn}
+                    disabled={zoom >= MERMAID_MAX_ZOOM - MERMAID_ZOOM_EPSILON}
+                    onClick={() => updateZoom(zoom + MERMAID_ZOOM_STEP)}
+                  >
+                    <ZoomInIcon aria-hidden="true" />
+                  </Button>
+                  <Select
+                    key={`expanded-export-${exportSelectKey}`}
+                    onValueChange={handleMermaidExportFormat}
+                  >
+                    <SelectTrigger
+                      className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+                      aria-label={t.common.exportDiagram}
+                      title={t.common.exportDiagram}
+                    >
+                      <DownloadIcon className="size-3.5" aria-hidden="true" />
+                      <SelectValue placeholder={t.common.exportDiagram} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
+                      <SelectItem value="png">{t.common.exportPng}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-label={copied ? t.common.copied : t.common.copy}
+                    title={copied ? t.common.copied : t.common.copy}
+                    onClick={() => void onCopy()}
+                  >
+                    {copied ? (
+                      <CheckIcon data-icon="inline-start" />
+                    ) : (
+                      <CopyIcon data-icon="inline-start" />
+                    )}
+                    {copied ? t.common.copied : t.common.copy}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t.common.close}
+                    title={t.common.close}
+                    onClick={() => {
+                      setExpanded(false)
+                      setZoom(1)
+                      setPanning(false)
+                      expandedPanRef.current = null
+                    }}
+                  >
+                    <XIcon aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
               <div
-                ref={expandedContentRef}
-                className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
-                style={expandedContentStyle}
-                dangerouslySetInnerHTML={{ __html: svg }}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
+                ref={expandedScrollRef}
+                className={`min-h-0 flex-1 touch-none overflow-auto bg-[var(--app-terminal)] select-none ${
+                  panning ? 'cursor-grabbing' : 'cursor-grab'
+                }`}
+                onWheel={handleExpandedWheel}
+                onPointerDown={handleExpandedPointerDown}
+                onPointerMove={handleExpandedPointerMove}
+                onPointerUp={stopExpandedPan}
+                onPointerCancel={stopExpandedPan}
+              >
+                <div className="relative" style={expandedCanvasStyle}>
+                  <div
+                    ref={expandedContentRef}
+                    className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
+                    style={expandedContentStyle}
+                    dangerouslySetInnerHTML={{ __html: svg }}
+                  />
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   )
 }

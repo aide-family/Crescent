@@ -5,6 +5,8 @@ export interface AgentPromptInput {
   skillContext?: string
   wikiContext?: string
   conversationContext?: string
+  profileContext?: string
+  opsHistoryContext?: string
   terminalContext: string
   terminalToolsEnabled?: boolean
   planSteps?: string[]
@@ -102,6 +104,12 @@ export class AgentPromptBuilder {
       input.skillContext ? `Agent skills:\n${input.skillContext}` : '',
       input.wikiContext
         ? `Knowledge base SOPs and best practices:\n${input.wikiContext}\n\nUse these as reference material when relevant. Treat them as stored operational knowledge, but verify current terminal state before making risky changes.`
+        : '',
+      input.profileContext
+        ? `Active OpenAPI profile guidance:\n${input.profileContext}\n\nTreat this as profile-specific workflow guidance. Prefer it when the user request matches the active API profile.`
+        : '',
+      input.opsHistoryContext
+        ? `Connection/terminal ops feedback (user like/dislike path references — not SOP/wiki docs):\n${input.opsHistoryContext}`
         : '',
       input.conversationContext
         ? `Recent conversation context:\n${input.conversationContext}\n\nIf the latest user request asks to write, copy, save, move, or format the previous result, preserve this prior assistant content instead of redoing the investigation.`

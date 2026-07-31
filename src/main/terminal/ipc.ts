@@ -4,6 +4,7 @@ import { dirname, resolve } from 'path'
 import { homedir, hostname, userInfo } from 'os'
 import { spawn as spawnPty } from 'node-pty'
 
+import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
 
@@ -1055,10 +1056,10 @@ function sendVisibleTerminalData(
   key: string,
   data: string
 ): void {
-  if (webContents.isDestroyed() || !data) return
+  if (!data) return
 
   appendTerminalContext(key, data)
-  webContents.send('terminal:data', { tabId, data })
+  safeWebContentsSend(webContents, 'terminal:data', { tabId, data })
 }
 
 function sendIfAlive(
@@ -1068,8 +1069,6 @@ function sendIfAlive(
   channel: string,
   payload: unknown
 ): void {
-  if (webContents.isDestroyed()) return
-
   if (channel === 'terminal:data' && typeof payload === 'string') {
     const visiblePayload = filterAutomationControlOutput(key, payload)
     if (visiblePayload) sendVisibleTerminalData(webContents, tabId, key, visiblePayload)
@@ -1078,7 +1077,7 @@ function sendIfAlive(
     return
   }
 
-  webContents.send(channel, payload)
+  safeWebContentsSend(webContents, channel, payload)
 }
 
 function filterAutomationControlOutput(key: string, data: string): string {

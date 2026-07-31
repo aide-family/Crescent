@@ -59,8 +59,17 @@ function installNativeLogFilter(): void {
       text.includes('TSM AdjustCapsLockLEDForKeyTransitionHandling') ||
       text.includes('error messaging the mach port for IMKCFRunLoopWakeUpReliable')
     const isKnownChromiumTileMemoryNoise = text.includes('tile memory limits exceeded')
+    const isDisposedRenderFrameNoise =
+      text.includes('Error sending from webFrameMain') ||
+      text.includes('Render frame was disposed before WebFrameMain could be accessed')
 
-    if (isKnownMacInputMethodNoise || isKnownChromiumTileMemoryNoise) return true
+    if (
+      isKnownMacInputMethodNoise ||
+      isKnownChromiumTileMemoryNoise ||
+      isDisposedRenderFrameNoise
+    ) {
+      return true
+    }
     return (originalWrite as (...parameters: unknown[]) => boolean)(chunk, ...args)
   }) as typeof process.stderr.write
 }

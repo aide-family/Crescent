@@ -152,6 +152,20 @@
   );
 }
 
+.app-tabbar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 18%) transparent;
+}
+
+.app-tabbar-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.app-tabbar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(255 255 255 / 18%);
+}
+
 .terminal-canvas {
   background:
     linear-gradient(90deg, rgb(91 213 255 / 3%) 0 1px, transparent 1px 100%),
@@ -184,6 +198,26 @@
       color-mix(in oklch, var(--app-panel-strong) 82%, transparent) 18%
     ),
     color-mix(in oklch, var(--app-panel) 92%, transparent);
+}
+
+/*
+  Nested sticky pinning (top offset only — no z-index):
+  - .app-sticky-scope sets the offset for nested bars under a section title
+  - .app-sticky-section sticks to the scroll top (结果 / 操作摘要)
+  - .app-sticky-nested sticks below that title (code / mermaid toolbars)
+*/
+.app-sticky-scope {
+  --app-sticky-nested-top: 2.75rem;
+}
+
+.app-sticky-section {
+  position: sticky;
+  top: 0;
+}
+
+.app-sticky-nested {
+  position: sticky;
+  top: var(--app-sticky-nested-top, 0px);
 }
 
 .app-footer {
