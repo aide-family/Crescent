@@ -21,7 +21,7 @@ export function SlashCommandMenu({
   if (!visible) return null
 
   return (
-    <div className="absolute right-2 bottom-full left-2 z-30 mb-2 overflow-hidden rounded-md border bg-popover text-xs text-popover-foreground shadow-lg">
+    <div className="absolute right-2 bottom-full left-2 z-50 mb-2 overflow-hidden rounded-md border bg-popover text-xs text-popover-foreground shadow-lg">
       <div className="border-b px-3 py-2 text-muted-foreground">{t.input.slashCommandHint}</div>
       <div ref={listRef} className="max-h-56 overflow-auto p-1">
         {options.map((command, index) => (

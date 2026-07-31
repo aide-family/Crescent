@@ -21,18 +21,18 @@ export function ActionLogRow({
 
   return (
     <details
-      className={`group rounded-md border text-xs shadow-xs ${actionLogClassName(entry.kind)}`}
+      className={`group rounded-md border text-[11px] text-muted-foreground shadow-none ${actionLogClassName(entry.kind)}`}
     >
-      <summary className="grid cursor-pointer select-none grid-cols-[5.5rem_4.75rem_minmax(0,1fr)] items-center gap-2 px-3 py-1.5 marker:text-muted-foreground">
-        <span className="truncate font-medium uppercase tracking-wide">
+      <summary className="grid cursor-pointer select-none grid-cols-[4.5rem_4.25rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-1 marker:text-muted-foreground/70">
+        <span className="truncate font-medium tracking-wide text-muted-foreground">
           {logRoleLabel(entry.kind, t)}
         </span>
-        <time className="text-muted-foreground" dateTime={entry.createdAt}>
+        <time className="text-muted-foreground/80" dateTime={entry.createdAt}>
           {formatLogTime(entry.createdAt)}
         </time>
-        <span className="truncate text-foreground/90">{summary}</span>
+        <span className="truncate text-muted-foreground">{summary}</span>
       </summary>
-      <pre className="select-text max-h-72 min-w-0 overflow-auto border-t bg-background/80 p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+      <pre className="select-text max-h-56 min-w-0 overflow-auto border-t border-border/50 bg-background/60 p-2.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
         {entry.text}
       </pre>
     </details>
@@ -43,18 +43,24 @@ export function AgentLogContent({
   entry,
   t,
   copied,
+  feedbackRating,
+  feedbackBusy,
   onCopyResult,
   onExportResult,
   onExportFull,
-  onExportTrace
+  onExportTrace,
+  onOpsFeedback
 }: {
   entry: AgentLogEntry
   t: Dictionary
   copied?: boolean
+  feedbackRating?: 'like' | 'dislike' | null
+  feedbackBusy?: boolean
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
   onExportTrace?: () => void
+  onOpsFeedback?: (rating: 'like' | 'dislike') => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -72,10 +78,13 @@ export function AgentLogContent({
           parsed={parsedRun}
           t={t}
           copied={Boolean(copied)}
+          feedbackRating={feedbackRating}
+          feedbackBusy={feedbackBusy}
           onCopyResult={onCopyResult}
           onExportResult={onExportResult}
           onExportFull={onExportFull}
           onExportTrace={onExportTrace}
+          onOpsFeedback={onOpsFeedback}
         />
       )
     }
@@ -86,8 +95,8 @@ export function AgentLogContent({
   const summary = summarizeBehaviorLog(entry.text, entry.kind, t)
 
   return (
-    <details className="group rounded-md border bg-card/80 shadow-xs">
-      <summary className="sticky top-0 z-10 cursor-pointer border-b bg-card/95 px-3 py-2 text-sm font-medium backdrop-blur marker:text-muted-foreground">
+    <details className="group rounded-md border bg-card shadow-xs">
+      <summary className="app-sticky-section cursor-pointer border-b bg-card px-3 py-2 text-sm font-medium marker:text-muted-foreground">
         {summary}
       </summary>
       <pre className="select-text max-h-80 min-w-0 overflow-auto p-3 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">

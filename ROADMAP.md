@@ -30,14 +30,12 @@ npm run build
 
 - [x] Multiple saved API profiles.
 - [x] Import OpenAPI from local files and remote URLs.
-- [ ] Prompt templates and pinned workflows per API profile.
-- [~] Tool allow/deny list and per-operation confirmation rules.
-  - Done: per-operation confirmation for OpenAPI write ops and MCP tools.
-  - Remaining: explicit tool allow/deny lists.
+- [x] Prompt templates and pinned workflows per API profile.
+- [x] Tool allow/deny list and per-operation confirmation rules.
 
 ## Phase 4 — Distribution Polish
 
 - App update channel configuration.
 - Signed builds per platform.
-- First-run onboarding and example OpenAPI spec.
+- [x] First-run onboarding and example OpenAPI spec.
 - Packaging smoke tests for macOS, Windows, and Linux.

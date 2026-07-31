@@ -26,6 +26,8 @@ import { AgentBrain } from './brain'
 import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { parseJsonFromModelContent } from '../../shared/json-parse'
+import { resolveOpsConnectionId } from '../../shared/local-connection'
+import { resolveActiveOpenApiProfile } from '../../shared/openapi-profiles'
 import {
   buildAgentSkillContext,
   deleteAgentSkill,
@@ -35,8 +37,10 @@ import {
   searchAgentSkills,
   startAgentSkillInstall
 } from './skills'
+import { formatOpsHistoryContext } from './ops-history'
 import { runTerminalAgent } from './runner'
 import { loadOpenApiToolRegistry } from './tool-registry'
+import { safeWebContentsSend } from '../safe-ipc-send'
 import { loadMcpToolRegistry } from './mcp-runtime'
 import {
   formatWikiContext,
@@ -60,6 +64,7 @@ import {
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
+import { listOpsHistoryForConnection } from '../crescent-sqlite'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import type {
@@ -111,8 +116,7 @@ function dismissCommandApprovalRequest(
   requestId: string,
   runId: string
 ): void {
-  if (webContents.isDestroyed()) return
-  webContents.send('agent:command-approval-dismiss', { requestId, runId })
+  safeWebContentsSend(webContents, 'agent:command-approval-dismiss', { requestId, runId })
 }
 
 function settlePendingCommandApproval(
@@ -206,37 +210,31 @@ export function registerAgentIpc(): void {
           skillRoot: readAgentConfig().skillRoot
         },
         (data) => {
-          if (!webContents.isDestroyed()) {
-            webContents.send('agent:skill-install-event', {
-              installId,
-              type: 'log',
-              data
-            })
-          }
+          safeWebContentsSend(webContents, 'agent:skill-install-event', {
+            installId,
+            type: 'log',
+            data
+          })
         }
       )
 
       activeSkillInstalls.set(installId, { cancel: session.cancel })
       session.promise
         .then((result) => {
-          if (!webContents.isDestroyed()) {
-            webContents.send('agent:skill-install-event', {
-              installId,
-              type: 'done',
-              result
-            })
-          }
+          safeWebContentsSend(webContents, 'agent:skill-install-event', {
+            installId,
+            type: 'done',
+            result
+          })
         })
         .catch((error) => {
           const message = error instanceof Error ? error.message : String(error)
-          if (!webContents.isDestroyed()) {
-            webContents.send('agent:skill-install-event', {
-              installId,
-              type: 'error',
-              error: message,
-              canceled: /canceled/i.test(message)
-            })
-          }
+          safeWebContentsSend(webContents, 'agent:skill-install-event', {
+            installId,
+            type: 'error',
+            error: message,
+            canceled: /canceled/i.test(message)
+          })
         })
         .finally(() => {
           activeSkillInstalls.delete(installId)
@@ -561,7 +559,7 @@ export function registerAgentIpc(): void {
     if (input.startsWith('/remember ')) {
       const memory = createMemory()
       memory.addLongTermNote(input.slice('/remember '.length))
-      event.sender.send('agent:event', {
+      safeWebContentsSend(event.sender, 'agent:event', {
         type: 'done',
         message: 'Saved to long-term memory.',
         runId,
@@ -580,10 +578,12 @@ export function registerAgentIpc(): void {
         providerId: payload?.providerId,
         model: payload?.model
       })
+      const profileContext =
+        resolveActiveOpenApiProfile(agentConfig)?.promptTemplate?.trim() || undefined
       const skillInput = getSkillMatchingInput(payload, input)
       const skillContext = buildAgentSkillContext(skillInput, agentConfig.skillRoot)
       if (skillContext.matched.length > 0) {
-        event.sender.send('agent:event', {
+        safeWebContentsSend(event.sender, 'agent:event', {
           type: 'skills',
           message: `Loaded ${skillContext.matched.length} skills for this request.`,
           skills: skillContext.matched.map(stripSkillContent),
@@ -648,7 +648,7 @@ export function registerAgentIpc(): void {
 
         const executeWithProgress = async (): ReturnType<typeof executeCommandInTerminal> => {
           const startedAt = Date.now()
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             type: 'command',
             phase: 'started',
             command: executableCommand,
@@ -656,7 +656,7 @@ export function registerAgentIpc(): void {
             tabId: executionTabId
           })
           const result = await execute(executableCommand)
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             type: 'command',
             phase: 'finished',
             command: executableCommand,
@@ -670,7 +670,7 @@ export function registerAgentIpc(): void {
         }
         const whitelistRule = matchCommandWhitelist(executableCommand, agentConfig.commandWhitelist)
         if (whitelistRule) {
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             type: 'status',
             message: `Command matched whitelist: ${whitelistRule}`,
             runId,
@@ -679,7 +679,7 @@ export function registerAgentIpc(): void {
           return executeWithProgress()
         }
 
-        event.sender.send('agent:event', {
+        safeWebContentsSend(event.sender, 'agent:event', {
           type: 'status',
           message: 'Command review subprocess is analyzing risk.',
           runId,
@@ -691,7 +691,7 @@ export function registerAgentIpc(): void {
           terminalContext: payload?.terminalContext ?? '',
           locale: payload?.locale
         })
-        event.sender.send('agent:event', {
+        safeWebContentsSend(event.sender, 'agent:event', {
           type: 'command-review',
           command: executableCommand,
           audit,
@@ -699,7 +699,7 @@ export function registerAgentIpc(): void {
           tabId: executionTabId
         })
         if (!audit.requiresApproval) {
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             type: 'status',
             message: 'Command audit classified this as read-only inspection.',
             runId,
@@ -720,7 +720,7 @@ export function registerAgentIpc(): void {
 
         if (!approval.approved) {
           const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             type: 'status',
             message: rejectionReason
               ? `Command rejected by user.\nUser rejection reason: ${rejectionReason}`
@@ -741,7 +741,7 @@ export function registerAgentIpc(): void {
           }
         }
 
-        event.sender.send('agent:event', {
+        safeWebContentsSend(event.sender, 'agent:event', {
           type: 'status',
           message: approval.note?.trim()
             ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
@@ -778,7 +778,7 @@ export function registerAgentIpc(): void {
         createIsolatedMemory(),
         payload?.terminalContext ?? '',
         (agentEvent) => {
-          event.sender.send('agent:event', {
+          safeWebContentsSend(event.sender, 'agent:event', {
             ...agentEvent,
             runId,
             tabId: activeRuns.get(runId)?.lastExecutionTabId ?? payload?.tabId
@@ -843,6 +843,10 @@ export function registerAgentIpc(): void {
           skillContext: skillContext.promptBlock,
           wikiContext,
           conversationContext: payload?.conversationContext?.trim(),
+          profileContext,
+          opsHistoryContext: formatOpsHistoryContext(
+            listOpsHistoryForConnection(resolveOpsConnectionId(payload?.connectionId), 16)
+          ),
           consumeSupplementalInputs: () => {
             const run = activeRuns.get(runId)
             if (!run?.supplements.length) return []
@@ -863,7 +867,7 @@ export function registerAgentIpc(): void {
               userInput
             })
 
-            event.sender.send('agent:event', {
+            safeWebContentsSend(event.sender, 'agent:event', {
               type: 'command-review',
               command,
               audit,
@@ -881,7 +885,7 @@ export function registerAgentIpc(): void {
             })
 
             if (approval.approved) {
-              event.sender.send('agent:event', {
+              safeWebContentsSend(event.sender, 'agent:event', {
                 type: 'status',
                 message: approval.note?.trim()
                   ? `Tool ${toolName} approved by user.\nUser approval note: ${approval.note.trim()}`
@@ -891,7 +895,7 @@ export function registerAgentIpc(): void {
               })
             } else {
               const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
-              event.sender.send('agent:event', {
+              safeWebContentsSend(event.sender, 'agent:event', {
                 type: 'status',
                 message: rejectionReason
                   ? `Tool ${toolName} rejected by user.\nUser rejection reason: ${rejectionReason}`
@@ -924,7 +928,12 @@ export function registerAgentIpc(): void {
         summary: input,
         output: message
       })
-      event.sender.send('agent:event', { type: 'error', message, runId, tabId: payload?.tabId })
+      safeWebContentsSend(event.sender, 'agent:event', {
+        type: 'error',
+        message,
+        runId,
+        tabId: payload?.tabId
+      })
       return { ok: false, error: message }
     } finally {
       activeRuns.delete(runId)
@@ -1373,7 +1382,7 @@ function requestCommandApproval(input: {
       onAbort()
       return
     }
-    input.webContents.send('agent:command-approval-request', request)
+    safeWebContentsSend(input.webContents, 'agent:command-approval-request', request)
   })
 }
 

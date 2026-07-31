@@ -23,6 +23,11 @@ import type {
   LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  OpsHistoryRecord,
+  SubmitOpsFeedbackInput,
+  SubmitOpsFeedbackResult,
+  UpdateOpsFeedbackInput,
+  UpdateOpsFeedbackResult,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionSummaryUpdate,
@@ -137,6 +142,7 @@ interface TerminalAgentApi {
   }
   connections: {
     list: () => Promise<ConnectionConfig[]>
+    resolve: (id: string) => Promise<ConnectionConfig | undefined>
     save: (input: ConnectionInput) => Promise<ConnectionConfig[]>
     delete: (id: string) => Promise<ConnectionConfig[]>
   }
@@ -153,6 +159,14 @@ interface TerminalAgentApi {
     getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
     renameSessionHistory: (input: { tabId: string; title: string }) => Promise<{ ok: boolean }>
     deleteSessionHistory: (tabId: string) => Promise<{ ok: boolean }>
+    submitOpsFeedback: (input: SubmitOpsFeedbackInput) => Promise<SubmitOpsFeedbackResult>
+    getOpsFeedback: (runId: string) => Promise<OpsHistoryRecord | undefined>
+    listOpsFeedback: (input: {
+      connectionId?: string
+      limit?: number
+    }) => Promise<OpsHistoryRecord[]>
+    updateOpsFeedback: (input: UpdateOpsFeedbackInput) => Promise<UpdateOpsFeedbackResult>
+    deleteOpsFeedback: (id: string) => Promise<{ ok: boolean }>
     onSessionSummaryUpdated: (callback: (event: StoredSessionSummaryUpdate) => void) => () => void
   }
 }

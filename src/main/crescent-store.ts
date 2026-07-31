@@ -17,6 +17,7 @@ import {
   projectOpenApiProfileFields,
   resolveActiveOpenApiProfile
 } from '../shared/openapi-profiles'
+import { normalizeToolNameList } from '../shared/tool-policy'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -248,7 +249,13 @@ function normalizeMcpServer(value: unknown): AgentMcpServerConfig {
     command: String(record.command || '').trim(),
     args: normalizeStringList(record.args),
     env: normalizeStringMap(record.env),
-    enabled: record.enabled !== false
+    enabled: record.enabled !== false,
+    ...(normalizeToolNameList(record.toolAllowList).length
+      ? { toolAllowList: normalizeToolNameList(record.toolAllowList) }
+      : {}),
+    ...(normalizeToolNameList(record.toolDenyList).length
+      ? { toolDenyList: normalizeToolNameList(record.toolDenyList) }
+      : {})
   }
 }
 

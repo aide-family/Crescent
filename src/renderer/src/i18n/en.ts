@@ -18,6 +18,27 @@ const en = {
     titleDescription: 'Terminal + SSH + AI command workbench',
     workingDirectory: 'cwd'
   },
+  onboarding: {
+    title: 'Welcome to Crescent',
+    description:
+      'A short first-run tour: load an example API, connect a host, and open Skills when you need reusable playbooks.',
+    stepOpenApiTitle: 'OpenAPI tools',
+    stepOpenApiBody:
+      'Add an example profile so the agent can call REST endpoints as tools. You can replace it later in Settings.',
+    stepConnectionTitle: 'Terminal connections',
+    stepConnectionBody:
+      'Connect to a local shell or SSH host. Agent commands run in the active terminal session.',
+    stepSkillsTitle: 'Skills',
+    stepSkillsBody:
+      'Skills are reusable Markdown playbooks. Browse local skills or install from a registry when ready.',
+    addExampleOpenApi: 'Add example API profile',
+    openSettings: 'Open settings',
+    openConnections: 'Open connections',
+    openSkills: 'Open skills',
+    hint: 'You can reopen Settings, Connections, History, Wiki, and Skills anytime from the top bar.',
+    skip: 'Skip for now',
+    done: 'Got it'
+  },
   common: {
     cancel: 'Cancel',
     close: 'Close',
@@ -43,6 +64,16 @@ const en = {
     exportTraceJson: 'Export trace JSON',
     exportTraceJsonTooltip:
       'Export a structured Agent run trace with redacted tool details for debugging',
+    likeResult: 'Like',
+    likeResultTooltip:
+      'Approve this ops path for the current SSH connection, or the local terminal when offline (not an SOP)',
+    dislikeResult: 'Dislike',
+    dislikeResultTooltip:
+      'Reject this ops path for the current SSH connection, or the local terminal when offline (not an SOP)',
+    opsFeedbackSavedLike: 'Linked to this connection/local terminal for future similar ops',
+    opsFeedbackSavedDislike: 'Linked to this connection/local terminal as a caution for future ops',
+    opsFeedbackFailed: 'Failed to save ops feedback',
+    opsFeedbackSaving: 'Distilling ops path…',
     exportDiagram: 'Export diagram',
     exportCanceled: 'Export canceled',
     exportFailed: 'Export failed',
@@ -149,9 +180,9 @@ const en = {
     password: 'Password',
     passwordEnvVar: 'Password environment variable',
     passwordEnvVarDescription:
-      'When password is empty, login reads the password from this system environment variable; only the variable name is stored.',
+      'When password is empty, login reads this variable from the process environment or user shell profile (~/.zprofile / ~/.zshrc on macOS/Linux; User/Machine env on Windows). Only the variable name is stored.',
     passwordEnvVarMissing:
-      'Password environment variable was not found in the app startup environment',
+      'Could not read the password environment variable. Packaged apps do not inherit terminal exports — on macOS/Linux define it in ~/.zprofile or ~/.zshrc; on Windows set a User environment variable, then relaunch Crescent',
     passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD',
     passwordPlaceholder: 'Optional; leave empty to skip automatic password input',
     port: 'Port',
@@ -167,7 +198,22 @@ const en = {
     sshOptionsCount: 'SSH options',
     sshOptionsDescription:
       'One SSH argument per line. Crescent appends these to the generated ssh command before the host.',
-    user: 'User'
+    user: 'User',
+    opsFeedbackTitle: 'Like/dislike ops feedback',
+    opsFeedbackDescription:
+      'User-rated ops paths for this connection, used as later guidance (not SOPs). Edit or delete them here.',
+    opsFeedbackLoading: 'Loading like/dislike feedback…',
+    opsFeedbackEmpty: 'No like/dislike feedback yet. Rate an Agent result to see it here.',
+    opsFeedbackUserGoal: 'User goal',
+    opsFeedbackPathSummary: 'Ops path',
+    opsFeedbackLesson: 'Lesson',
+    opsFeedbackLoadFailed: 'Failed to load like/dislike feedback',
+    opsFeedbackInvalid: 'User goal and ops path are required',
+    opsFeedbackSaveSucceeded: 'Like/dislike feedback updated',
+    opsFeedbackSaveFailed: 'Failed to update like/dislike feedback',
+    opsFeedbackDeleteConfirm: 'Delete this like/dislike ops feedback?',
+    opsFeedbackDeleteSucceeded: 'Like/dislike feedback deleted',
+    opsFeedbackDeleteFailed: 'Failed to delete like/dislike feedback'
   },
   terminal: {
     connectionAction: 'Typed login action',
@@ -213,6 +259,9 @@ const en = {
     terminalReconnecting: 'Terminal connection disconnected. Restoring it automatically.',
     terminalReconnectUnavailable:
       'Terminal is abnormal and this session cannot be restored automatically. Automatic command execution stopped.',
+    connectionRecoveryTitle: 'Terminal connection needs attention',
+    connectionRecoveryHint:
+      'The session is not ready. Retry the connection or choose another host.',
     postLoginAgentInstruction:
       'The current terminal has already completed the Crescent target connection login. Do not rematch a Crescent connection; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
     requirementBreakdown: 'User requirement breakdown (must complete accordingly)',
@@ -239,6 +288,8 @@ const en = {
     expandSubterminals: 'Expand temporary sub-terminals',
     postLoginNotReady:
       'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
+    postLoginTaskAborted:
+      'Connection did not finish, so the post-login follow-up task was cancelled.',
     postLoginOriginalTask: 'Original user task',
     postLoginSkillHint: 'Skill matching runs after login when the follow-up agent task starts.',
     postLoginTaskStarting: 'Login completed; starting the follow-up task.',
@@ -296,6 +347,16 @@ const en = {
     contextSupplementDetail: 'User added during the running session:',
     currentTerminal: 'Commands run through the agent in the current terminal.',
     sessionTerminalLabel: 'Session terminal',
+    pinnedWorkflows: 'Pinned workflows',
+    insertPinnedWorkflow: 'Insert workflow prompt',
+    emptyConversationTitle: 'No conversation yet',
+    emptyConversationHint:
+      'Ask Crescent about the current terminal, or connect to a host and continue from there.',
+    connectionRecoveryTitle: 'Connection did not finish',
+    connectionRecoveryHint:
+      'Retry the same host, or open the connection list to pick another target.',
+    retryConnection: 'Retry connection',
+    openConnections: 'Open connections',
     createdPlan: 'Created execution plan',
     done: 'Done.',
     error: 'Error',
@@ -485,6 +546,25 @@ const en = {
     openApiMaxRetriesHint: 'Retry network failures and 5xx/429 responses.',
     openApiRetryBackoffMs: 'Retry backoff (ms)',
     openApiRetryBackoffMsHint: 'Base delay between retries; multiplied by attempt number.',
+    openApiPromptTemplate: 'Profile prompt template',
+    openApiPromptTemplateHint:
+      'Optional guidance injected into the agent system prompt whenever this profile is active.',
+    openApiPromptTemplatePlaceholder:
+      'Prefer read-only OpenAPI tools first. Confirm write operations with the operator.',
+    openApiPinnedWorkflows: 'Pinned workflows',
+    openApiPinnedWorkflowsHint:
+      'One workflow per line as Name | prompt. Insert from the agent input bar.',
+    openApiPinnedWorkflowsPlaceholder:
+      'List incidents | List open incidents via the API and summarize severity.\nCreate ticket | Create a follow-up ticket from the latest finding.',
+    openApiToolAllowList: 'OpenAPI tool allow list',
+    openApiToolAllowListHint: 'Empty = all generated tools. One exact function name per line.',
+    openApiToolDenyList: 'OpenAPI tool deny list',
+    openApiToolDenyListHint: 'Denied tools are never registered. Deny wins over allow.',
+    toolNameListPlaceholder: 'getPets\ncreatePet',
+    mcpToolAllowList: 'MCP tool allow list',
+    mcpToolAllowListHint: 'Empty = all tools from this server. One exact tool name per line.',
+    mcpToolDenyList: 'MCP tool deny list',
+    mcpToolDenyListHint: 'Denied MCP tools are never exposed to the agent.',
     instructionFileExists: 'Created',
     instructionFileNew: 'Not created; saving will create it',
     instructionFilePlaceholder:

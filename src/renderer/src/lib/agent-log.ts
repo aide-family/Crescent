@@ -4,23 +4,21 @@ import { trimMarkdownLines } from './agent-run-markdown'
 import type { AgentLogEntry, AgentRunAction, AgentRunViewState } from './terminal-tabs'
 
 export function logClassName(kind: AgentLogEntry['kind']): string {
-  const base = 'rounded-lg border p-3 shadow-sm'
-
   switch (kind) {
     case 'user':
-      return `${base} ml-8 border-primary/20 bg-primary/10 shadow-primary/5`
+      return 'rounded-lg border border-primary/25 border-l-[3px] border-l-primary bg-primary/10 px-3.5 py-3 shadow-sm ml-6'
     case 'assistant':
-      return `${base} mr-8 border-border/80 bg-card/85 shadow-black/5`
+      return 'rounded-lg border border-border/80 border-l-[3px] border-l-muted-foreground/45 bg-card px-3.5 py-3 shadow-sm mr-6'
     case 'error':
-      return `${base} border-destructive/40 bg-destructive/10 text-destructive`
+      return 'rounded-lg border border-destructive/35 border-l-[3px] border-l-destructive bg-destructive/10 px-3.5 py-3 text-destructive shadow-sm'
     case 'tool':
-      return `${base} border-amber-500/30 bg-amber-500/10`
     case 'command':
-      return `${base} border-sky-400/30 bg-sky-400/10`
     case 'plan':
-      return `${base} border-purple-500/30 bg-purple-500/10`
+    case 'thought':
+    case 'status':
+      return ''
     default:
-      return `${base} bg-muted/40 text-muted-foreground`
+      return 'rounded-lg border bg-muted/40 p-3 text-muted-foreground'
   }
 }
 
@@ -28,19 +26,54 @@ export function isConversationLog(kind: AgentLogEntry['kind']): boolean {
   return kind === 'user' || kind === 'assistant' || kind === 'error'
 }
 
+/** Quieter treatment for tool/command/status rows so conversation stays primary. */
 export function actionLogClassName(kind: AgentLogEntry['kind']): string {
   switch (kind) {
     case 'tool':
-      return 'border-amber-500/25 bg-amber-500/5'
+      return 'border-border/55 border-l-[2px] border-l-amber-500/45 bg-muted/10'
     case 'command':
-      return 'border-sky-400/25 bg-sky-400/5'
+      return 'border-border/55 border-l-[2px] border-l-sky-500/40 bg-muted/10'
     case 'plan':
-      return 'border-purple-500/25 bg-purple-500/5'
+      return 'border-border/55 border-l-[2px] border-l-primary/40 bg-muted/10'
     case 'thought':
-      return 'border-blue-500/25 bg-blue-500/5'
+      return 'border-border/50 border-l-[2px] border-l-muted-foreground/35 bg-transparent'
     default:
-      return 'border-border bg-muted/20'
+      return 'border-border/45 border-l-[2px] border-l-border/80 bg-transparent text-muted-foreground'
   }
+}
+
+export function logListItemSpacingClass(
+  kind: AgentLogEntry['kind'],
+  previousKind: AgentLogEntry['kind'] | undefined,
+  isFirst: boolean
+): string {
+  if (isFirst) return 'mt-4'
+
+  const conversation = isConversationLog(kind)
+  const previousConversation = previousKind ? isConversationLog(previousKind) : false
+
+  if (conversation) return previousConversation ? 'mt-3' : 'mt-4'
+  return previousConversation ? 'mt-2' : 'mt-1'
+}
+
+export function isConnectionFailureLog(text: string, markers: string[]): boolean {
+  const normalized = text.trim()
+  if (!normalized) return false
+  return markers.some((marker) => {
+    const needle = marker.trim()
+    return Boolean(needle) && normalized.includes(needle)
+  })
+}
+
+export function connectionFailureMarkers(t: Dictionary): string[] {
+  return [
+    t.terminal.postLoginTaskAborted,
+    t.terminal.terminalReconnectFailed,
+    t.terminal.terminalReconnectUnavailable,
+    t.terminal.shellExited,
+    t.connections.passwordEnvVarMissing,
+    'SSH requires PTY'
+  ]
 }
 
 export function summarizeBehaviorLog(

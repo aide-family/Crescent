@@ -7,6 +7,8 @@ import SwaggerParser from '@apidevtools/swagger-parser'
 
 import { parseOpenApiToToolBundle } from './openapi-tools'
 import type { AgentConfig, OpenAiTool, OpenApiOperationMeta, ToolCatalogEntry } from './types'
+import { applyToolNamePolicy } from '../../shared/tool-policy'
+import { resolveActiveOpenApiProfile } from '../../shared/openapi-profiles'
 
 export interface ToolRegistrySnapshot {
   cacheKey: string
@@ -24,9 +26,13 @@ const memoryCache = new Map<string, ToolRegistrySnapshot>()
 
 export async function loadOpenApiToolRegistry(config: AgentConfig): Promise<ToolRegistrySnapshot> {
   const openApiSpec = await loadOpenApiDocument(config.openApiDocument)
+  const profile = resolveActiveOpenApiProfile(config)
+  const allowList = profile?.toolAllowList ?? []
+  const denyList = profile?.toolDenyList ?? []
   const cacheKey = createHash('sha256')
     .update(config.openApiBaseUrl)
     .update(typeof openApiSpec === 'string' ? openApiSpec : JSON.stringify(openApiSpec))
+    .update(JSON.stringify({ allowList, denyList }))
     .digest('hex')
   const cached = memoryCache.get(cacheKey)
 
@@ -48,7 +54,18 @@ export async function loadOpenApiToolRegistry(config: AgentConfig): Promise<Tool
       stateChanging: isStateChangingHttpMethod(operation?.method)
     }
   })
-  const snapshot = { cacheKey, tools, operations, catalog }
+  const filteredCatalog = applyToolNamePolicy(catalog, { allowList, denyList })
+  const allowedNames = new Set(filteredCatalog.map((entry) => entry.name))
+  const filteredTools = tools.filter((tool) => allowedNames.has(tool.function.name))
+  const filteredOperations = new Map(
+    [...operations.entries()].filter(([name]) => allowedNames.has(name))
+  )
+  const snapshot = {
+    cacheKey,
+    tools: filteredTools,
+    operations: filteredOperations,
+    catalog: filteredCatalog
+  }
 
   memoryCache.set(cacheKey, snapshot)
   return snapshot

@@ -15,6 +15,8 @@ export interface AgentRunControls {
   skillContext?: string
   wikiContext?: string
   conversationContext?: string
+  profileContext?: string
+  opsHistoryContext?: string
   consumeSupplementalInputs?: () => string[]
   approveTool?: ExternalToolApprover
 }

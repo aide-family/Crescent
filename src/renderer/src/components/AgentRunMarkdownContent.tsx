@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -7,6 +8,8 @@ import {
   FileJsonIcon,
   FileTextIcon,
   Maximize2Icon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
   XIcon
 } from 'lucide-react'
 
@@ -14,23 +17,30 @@ import { buildMarkdownHeadingId, MarkdownContent } from '@renderer/components/Ma
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import type { ParsedAgentRunMarkdown } from '@renderer/lib/agent-run-markdown'
+import type { OpsHistoryRating } from '../../../shared/agent-types'
 
 export function AgentRunMarkdownContent({
   parsed,
   t,
   copied,
+  feedbackRating,
+  feedbackBusy,
   onCopyResult,
   onExportResult,
   onExportFull,
-  onExportTrace
+  onExportTrace,
+  onOpsFeedback
 }: {
   parsed: ParsedAgentRunMarkdown
   t: Dictionary
   copied: boolean
+  feedbackRating?: OpsHistoryRating | null
+  feedbackBusy?: boolean
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
   onExportTrace?: () => void
+  onOpsFeedback?: (rating: OpsHistoryRating) => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
   const hasResult = Boolean(parsed.resultMarkdown || parsed.errorMarkdown)
@@ -44,8 +54,8 @@ export function AgentRunMarkdownContent({
   return (
     <div className="min-w-0 space-y-3">
       {hasResult && (
-        <section className="min-w-0 rounded-md border bg-card/90 shadow-sm">
-          <div className="sticky top-0 z-40 -mt-px flex min-w-0 items-center justify-between gap-3 rounded-t-md border-t border-b bg-card/95 px-3 py-2 backdrop-blur">
+        <section className="app-sticky-scope min-w-0 rounded-md border bg-card shadow-sm">
+          <div className="app-sticky-section flex min-w-0 items-center justify-between gap-3 rounded-t-md border-b bg-card px-3 py-2">
             <div className="min-w-0 text-xs font-semibold text-foreground">
               {parsed.errorMarkdown ? t.input.error : t.input.result}
             </div>
@@ -60,6 +70,42 @@ export function AgentRunMarkdownContent({
               >
                 {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
               </Button>
+              {onOpsFeedback ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={feedbackBusy}
+                    aria-label={t.common.likeResultTooltip}
+                    title={t.common.likeResultTooltip}
+                    className={
+                      feedbackRating === 'like'
+                        ? 'text-emerald-400 hover:text-emerald-300'
+                        : undefined
+                    }
+                    onClick={() => onOpsFeedback('like')}
+                  >
+                    <ThumbsUpIcon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={feedbackBusy}
+                    aria-label={t.common.dislikeResultTooltip}
+                    title={t.common.dislikeResultTooltip}
+                    className={
+                      feedbackRating === 'dislike'
+                        ? 'text-destructive hover:text-destructive'
+                        : undefined
+                    }
+                    onClick={() => onOpsFeedback('dislike')}
+                  >
+                    <ThumbsDownIcon aria-hidden="true" />
+                  </Button>
+                </>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
@@ -115,10 +161,10 @@ export function AgentRunMarkdownContent({
 
       {parsed.actionsMarkdown && (
         <details
-          className="group min-w-0 rounded-md border bg-muted/10 shadow-xs"
+          className="app-sticky-scope group min-w-0 rounded-md border bg-muted/10 shadow-xs"
           open={hasResult ? undefined : true}
         >
-          <summary className="sticky top-0 z-40 -mt-px flex cursor-pointer select-none items-center justify-between gap-3 rounded-t-md border-t border-b bg-card/95 px-3 py-2 text-xs font-medium text-muted-foreground backdrop-blur marker:content-none">
+          <summary className="app-sticky-section flex cursor-pointer select-none items-center justify-between gap-3 rounded-t-md border-b bg-card px-3 py-2 text-xs font-medium text-muted-foreground marker:content-none">
             <span>{hasResult ? t.input.actionSummaryCompleted : t.input.actionSummary}</span>
             <ChevronDownIcon
               className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
@@ -170,9 +216,9 @@ function ResultFullscreenPreview({
   t: Dictionary
   onClose: () => void
 }): React.JSX.Element {
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur"
+      className="app-fullscreen-overlay fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -223,7 +269,8 @@ function ResultFullscreenPreview({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

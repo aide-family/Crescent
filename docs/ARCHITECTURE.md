@@ -41,19 +41,21 @@ Completed renderer boundaries:
 - `components/ConnectionManagerModal` owns SSH connection management UI.
 - `components/StatusIndicators` owns visual status dots and operation messages.
 - `components/AgentLogContent`, `components/AgentRunMarkdownContent`, `components/MarkdownContent`, and `components/ConnectionList` own repeated renderer presentation.
-- `lib/app-shell`, `lib/agent-input`, `lib/connection-commands`, `lib/slash-commands`, `lib/terminal-text`, and `lib/design-system` own pure renderer utilities.
+- `components/TerminalPane` owns the terminal tab bar, empty connection list, xterm host, and subterminal panel chrome.
+- `components/AgentPanel` owns the conversation log list and agent input dock.
+- `components/SettingsSheet` owns provider/OpenAPI/instruction settings chrome.
+- `components/SkillManager` owns Skills directory, search/install, and install-log chrome.
+- `components/WikiSheet` owns Wiki browse/edit/preview chrome.
+- `components/HistoryPanel` owns session history list chrome.
+- `components/OnboardingModal` owns the one-time first-run tour.
+- `lib/app-shell`, `lib/agent-input`, `lib/connection-commands`, `lib/connection-automation-policy`, `lib/slash-commands`, `lib/terminal-text`, `lib/onboarding`, and `lib/design-system` own pure renderer utilities.
 
 Recommended renderer targets:
 
-- `components/TerminalPane`
-- `components/AgentPanel`
-- `components/SettingsPanel`
-- `components/SkillManager`
-- `components/WikiPanel`
-- `components/HistoryPanel`
 - `hooks/useTerminalTabs`
-- `hooks/useAgentRun`
+- `hooks/useAgentRun` (extend `useAgentRuns`)
 - `hooks/useConnections`
+- Move xterm session lifecycle out of `App.tsx` into a dedicated hook after TerminalPane props stabilize.
 
 ## Review Rules
 

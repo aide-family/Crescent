@@ -1,6 +1,7 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
+import { LOCAL_CONNECTION_ID } from '../../../shared/local-connection'
 
-export const LOCAL_CONNECTION_ID = 'builtin-local-terminal'
+export { LOCAL_CONNECTION_ID, resolveOpsConnectionId } from '../../../shared/local-connection'
 
 export const WIKI_TARGET_PREVIEW_SHEET_RATIO = 0.8
 export const WIKI_DOCUMENT_LIST_WIDTH = 280

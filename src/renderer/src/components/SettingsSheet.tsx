@@ -41,6 +41,11 @@ import {
 } from '@renderer/components/ui/select'
 import type { Dictionary } from '@renderer/i18n'
 import { buildModelSelectionValue, parseModelSelectionValue } from '@renderer/lib/app-runtime'
+import {
+  formatPinnedWorkflowsText,
+  parsePinnedWorkflowsText
+} from '../../../shared/openapi-profiles'
+import { formatToolNameListText, parseToolNameListText } from '../../../shared/tool-policy'
 import type {
   AgentConfig,
   AgentModelOption,
@@ -57,6 +62,10 @@ export type OpenApiProfilePatch = Partial<{
   timeoutMs: number
   maxRetries: number
   retryBackoffMs: number
+  promptTemplate: string
+  pinnedWorkflows: AgentOpenApiProfile['pinnedWorkflows']
+  toolAllowList: string[]
+  toolDenyList: string[]
 }>
 
 export interface SettingsSheetProps {
@@ -593,6 +602,12 @@ export function SettingsSheet({
                   openApiTimeoutMs={config.openApiTimeoutMs}
                   openApiMaxRetries={config.openApiMaxRetries}
                   openApiRetryBackoffMs={config.openApiRetryBackoffMs}
+                  promptTemplate={settingsOpenApiProfile.promptTemplate ?? ''}
+                  pinnedWorkflowsText={formatPinnedWorkflowsText(
+                    settingsOpenApiProfile.pinnedWorkflows
+                  )}
+                  toolAllowListText={formatToolNameListText(settingsOpenApiProfile.toolAllowList)}
+                  toolDenyListText={formatToolNameListText(settingsOpenApiProfile.toolDenyList)}
                   validation={validation}
                   importing={importingOpenApi}
                   t={t}
@@ -603,6 +618,24 @@ export function SettingsSheet({
                   onMaxRetriesChange={(value) => onPatchActiveOpenApiProfile({ maxRetries: value })}
                   onRetryBackoffMsChange={(value) =>
                     onPatchActiveOpenApiProfile({ retryBackoffMs: value })
+                  }
+                  onPromptTemplateChange={(value) =>
+                    onPatchActiveOpenApiProfile({ promptTemplate: value })
+                  }
+                  onPinnedWorkflowsTextChange={(value) =>
+                    onPatchActiveOpenApiProfile({
+                      pinnedWorkflows: parsePinnedWorkflowsText(value)
+                    })
+                  }
+                  onToolAllowListTextChange={(value) =>
+                    onPatchActiveOpenApiProfile({
+                      toolAllowList: parseToolNameListText(value)
+                    })
+                  }
+                  onToolDenyListTextChange={(value) =>
+                    onPatchActiveOpenApiProfile({
+                      toolDenyList: parseToolNameListText(value)
+                    })
                   }
                   onImportFile={() => void onImportOpenApiDocument()}
                   onClearDocument={() => onPatchActiveOpenApiProfile({ document: '' })}
