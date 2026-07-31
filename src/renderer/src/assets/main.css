@@ -439,7 +439,8 @@
 
 @media (max-width: 980px) {
   .app-sheet-split {
-    flex-direction: column;
+    /* Keep detail editor above the list when stacked (DOM: main then detail). */
+    flex-direction: column-reverse;
     overflow: auto;
   }
 

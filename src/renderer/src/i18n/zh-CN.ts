@@ -339,6 +339,22 @@ const zhCN = {
     result: '结果',
     referenceDirectory: '引用目录',
     referenceFile: '引用文件',
+    voiceStart: '语音输入',
+    voiceStartSpeechOnly:
+      '语音输入（系统识别）：当前供应商无 Whisper /audio/transcriptions；识图等多模态能力不能代替语音转写',
+    voiceStop: '停止并提交',
+    voiceListening: '正在语音输入，文字会实时出现在输入框；说完后点击停止提交',
+    voiceTranscribing: '正在完成最终识别…',
+    voiceEmpty:
+      '未识别到有效语音。若供应商不支持 Whisper，需依赖系统语音识别；请检查麦克风权限与网络后重试',
+    voicePermissionDenied: '无法使用麦克风，请在系统设置中允许 Crescent 访问麦克风',
+    voiceFailed: '语音识别失败',
+    voiceProviderUnsupported:
+      '当前供应商不支持语音转写接口（/audio/transcriptions）。聊天模型支持识图/多模态，并不等于支持麦克风转写',
+    voiceProviderUnsupportedFallback:
+      '当前供应商不支持 Whisper 转写，已改为系统实时语音识别（需网络）',
+    voiceSupportChecking: '正在检测当前供应商是否提供 Whisper 转写接口…',
+    voiceUnsupported: '当前无法语音输入：供应商无 /audio/transcriptions，且系统语音识别不可用',
     referencedDirectory: '目录',
     referencedFile: '文件',
     referencedPaths: '引用的文件/目录',
@@ -569,6 +585,7 @@ const zhCN = {
     providerModels: '模型列表',
     providerName: '供应商名称',
     deleteProvider: '删除供应商',
+    keepOneProvider: '至少保留一个供应商',
     deleteMcpServer: '删除 MCP 服务',
     deleteSkillInstallLog: '删除安装日志',
     saveInstructionFile: '保存指令文件',

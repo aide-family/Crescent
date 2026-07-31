@@ -120,6 +120,27 @@ export interface PastedAttachmentInput {
   base64: string
 }
 
+export interface TranscribeAudioInput {
+  base64: string
+  mimeType?: string
+  name?: string
+  language?: string
+}
+
+export interface TranscribeAudioResult {
+  ok: boolean
+  text?: string
+  path?: string
+  error?: string
+}
+
+export interface TranscriptionSupportResult {
+  supported: boolean
+  providerId: string
+  baseUrl: string
+  reason?: string
+}
+
 export interface AgentWikiReference {
   id: string
   title: string

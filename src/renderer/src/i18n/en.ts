@@ -367,6 +367,25 @@ const en = {
     result: 'Result',
     referenceDirectory: 'Reference directory',
     referenceFile: 'Reference file',
+    voiceStart: 'Voice input',
+    voiceStartSpeechOnly:
+      'Voice input (system speech): provider has no Whisper /audio/transcriptions; vision/multimodal chat is not speech-to-text',
+    voiceStop: 'Stop and submit',
+    voiceListening:
+      'Listening — text appears live in the input; click stop to submit when finished',
+    voiceTranscribing: 'Finishing final transcription…',
+    voiceEmpty:
+      'No usable speech recognized. If your provider lacks Whisper, system speech recognition is required — check mic permission and network.',
+    voicePermissionDenied:
+      'Microphone access denied. Allow Crescent to use the microphone in system settings.',
+    voiceFailed: 'Speech recognition failed',
+    voiceProviderUnsupported:
+      'Provider does not expose /audio/transcriptions. A multimodal chat model (vision, etc.) is not the same as microphone transcription.',
+    voiceProviderUnsupportedFallback:
+      'Provider has no Whisper endpoint; falling back to system live speech recognition (network required)',
+    voiceSupportChecking: 'Checking whether the provider exposes Whisper transcription…',
+    voiceUnsupported:
+      'Voice input unavailable: no /audio/transcriptions on the provider and system speech recognition is unavailable',
     referencedDirectory: 'Directory',
     referencedFile: 'File',
     referencedPaths: 'Referenced files/directories',
@@ -610,6 +629,7 @@ const en = {
     providerModels: 'Model list',
     providerName: 'Provider name',
     deleteProvider: 'Delete provider',
+    keepOneProvider: 'Keep at least one provider',
     deleteMcpServer: 'Delete MCP server',
     deleteSkillInstallLog: 'Delete install log',
     saveInstructionFile: 'Save instruction file',

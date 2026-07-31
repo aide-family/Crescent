@@ -4,6 +4,8 @@ import {
   FileIcon,
   FolderOpenIcon,
   Loader2Icon,
+  MicIcon,
+  MicOffIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PanelRightCloseIcon,
@@ -93,6 +95,11 @@ export function AgentPanel({
   onRemoveTool,
   onRemoveWiki,
   onPickPathReference,
+  onToggleVoiceInput,
+  voiceInputState = 'idle',
+  voiceInputSupported = true,
+  voiceInputSupportChecking = false,
+  voiceWhisperSupported = true,
   onStopAgent,
   onRetryConnection,
   onOpenConnections
@@ -147,6 +154,11 @@ export function AgentPanel({
   onRemoveTool: (id: string) => void
   onRemoveWiki: (id: string) => void
   onPickPathReference: (kind: 'file' | 'directory') => void
+  onToggleVoiceInput?: () => void
+  voiceInputState?: 'idle' | 'recording' | 'transcribing'
+  voiceInputSupported?: boolean
+  voiceInputSupportChecking?: boolean
+  voiceWhisperSupported?: boolean
   onStopAgent: () => void
   onRetryConnection?: () => void
   onOpenConnections?: () => void
@@ -340,13 +352,17 @@ export function AgentPanel({
             />
             <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
               <span>
-                {sessionChatTab.agentThinking
-                  ? sessionChatTab.thinkingMessage || t.input.thinking
-                  : sessionChatTab.agentBusy
-                    ? t.input.contextHint
-                    : sessionTerminals.length > 1
-                      ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
-                      : t.input.currentTerminal}
+                {voiceInputState === 'recording'
+                  ? t.input.voiceListening
+                  : voiceInputState === 'transcribing'
+                    ? t.input.voiceTranscribing
+                    : sessionChatTab.agentThinking
+                      ? sessionChatTab.thinkingMessage || t.input.thinking
+                      : sessionChatTab.agentBusy
+                        ? t.input.contextHint
+                        : sessionTerminals.length > 1
+                          ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
+                          : t.input.currentTerminal}
               </span>
               <div className="flex items-center gap-2">
                 <Button
@@ -368,6 +384,56 @@ export function AgentPanel({
                   onClick={() => onPickPathReference('directory')}
                 >
                   <FolderOpenIcon aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant={voiceInputState === 'recording' ? 'destructive' : 'ghost'}
+                  size="icon-xs"
+                  aria-label={
+                    voiceInputSupportChecking
+                      ? t.input.voiceSupportChecking
+                      : !voiceInputSupported
+                        ? t.input.voiceUnsupported
+                        : voiceInputState === 'recording'
+                          ? t.input.voiceStop
+                          : voiceInputState === 'transcribing'
+                            ? t.input.voiceTranscribing
+                            : !voiceWhisperSupported
+                              ? t.input.voiceStartSpeechOnly
+                              : t.input.voiceStart
+                  }
+                  title={
+                    voiceInputSupportChecking
+                      ? t.input.voiceSupportChecking
+                      : !voiceInputSupported
+                        ? t.input.voiceUnsupported
+                        : voiceInputState === 'recording'
+                          ? t.input.voiceStop
+                          : voiceInputState === 'transcribing'
+                            ? t.input.voiceTranscribing
+                            : !voiceWhisperSupported
+                              ? t.input.voiceStartSpeechOnly
+                              : t.input.voiceStart
+                  }
+                  disabled={
+                    !onToggleVoiceInput ||
+                    voiceInputSupportChecking ||
+                    !voiceInputSupported ||
+                    voiceInputState === 'transcribing' ||
+                    sessionChatTab.agentThinking
+                  }
+                  onClick={() => onToggleVoiceInput?.()}
+                >
+                  {voiceInputSupportChecking || voiceInputState === 'transcribing' ? (
+                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                  ) : voiceInputState === 'recording' ? (
+                    <MicOffIcon aria-hidden="true" />
+                  ) : (
+                    <MicIcon
+                      aria-hidden="true"
+                      className={!voiceInputSupported ? 'opacity-40' : undefined}
+                    />
+                  )}
                 </Button>
                 <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
                 {sessionChatTab.agentBusy && (

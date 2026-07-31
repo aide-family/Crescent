@@ -28,6 +28,9 @@ import type {
   SubmitOpsFeedbackResult,
   UpdateOpsFeedbackInput,
   UpdateOpsFeedbackResult,
+  TranscribeAudioInput,
+  TranscribeAudioResult,
+  TranscriptionSupportResult,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionSummaryUpdate,
@@ -102,6 +105,13 @@ interface TerminalAgentApi {
     pickPathReference: (kind: AgentPathReference['kind']) => Promise<AgentPathReference | undefined>
     importOpenApiDocument: () => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
     savePastedAttachment: (input: PastedAttachmentInput) => Promise<AgentPathReference>
+    requestMicrophonePermission: () => Promise<{ ok: boolean; granted: boolean }>
+    transcribeAudio: (input: TranscribeAudioInput) => Promise<TranscribeAudioResult>
+    checkTranscriptionSupport: (input?: {
+      forceRefresh?: boolean
+      providerId?: string
+      model?: string
+    }) => Promise<TranscriptionSupportResult>
     saveRenderedImage: (input: {
       dataUrl: string
       defaultPath: string
