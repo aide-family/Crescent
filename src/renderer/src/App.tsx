@@ -118,6 +118,12 @@ import {
   type PaneOrder
 } from '@renderer/lib/app-shell'
 import {
+  isBrowserSpeechAvailable,
+  isWhisperUnavailableError,
+  startVoiceInputSession,
+  type VoiceLiveSession
+} from '@renderer/lib/voice-input'
+import {
   WIKI_MIN_PREVIEW_WIDTH,
   WIKI_REFRESH_MIN_LOADING_MS,
   WIKI_SHEET_SELECTED_FIXED_WIDTH,
@@ -442,6 +448,14 @@ function App(): React.JSX.Element {
     {}
   )
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
+  const [voiceInputState, setVoiceInputState] = useState<'idle' | 'recording' | 'transcribing'>(
+    'idle'
+  )
+  const [voiceWhisperSupported, setVoiceWhisperSupported] = useState(false)
+  const [voiceBrowserSpeechAvailable] = useState(() => isBrowserSpeechAvailable())
+  const [voiceInputSupportChecking, setVoiceInputSupportChecking] = useState(true)
+  const voiceLiveSessionRef = useRef<VoiceLiveSession | null>(null)
+  const voiceInputSupported = voiceWhisperSupported || voiceBrowserSpeechAvailable
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
   const [historyTitleDraft, setHistoryTitleDraft] = useState('')
@@ -1056,6 +1070,59 @@ function App(): React.JSX.Element {
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
   }, [locale])
+
+  useEffect(() => {
+    return () => {
+      voiceLiveSessionRef.current?.cancel()
+      voiceLiveSessionRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const providerId = activeProviderId
+    const model = activeTabModelId
+
+    void (async () => {
+      // Voice needs Whisper (/audio/transcriptions) and/or Chromium speech recognition.
+      // Chat multimodal (e.g. Ark Responses input_image) is unrelated to mic input.
+      if (!providerId || !model) {
+        if (cancelled) return
+        setVoiceWhisperSupported(false)
+        setVoiceInputSupportChecking(false)
+        return
+      }
+
+      setVoiceInputSupportChecking(true)
+      try {
+        const result = await window.api.agent.checkTranscriptionSupport({
+          providerId,
+          model
+        })
+        if (cancelled) return
+        setVoiceWhisperSupported(result.supported)
+        setVoiceInputSupportChecking(false)
+        if (!result.supported && !voiceBrowserSpeechAvailable) {
+          voiceLiveSessionRef.current?.cancel()
+          voiceLiveSessionRef.current = null
+          setVoiceInputState('idle')
+        }
+      } catch {
+        if (cancelled) return
+        setVoiceWhisperSupported(false)
+        setVoiceInputSupportChecking(false)
+        if (!voiceBrowserSpeechAvailable) {
+          voiceLiveSessionRef.current?.cancel()
+          voiceLiveSessionRef.current = null
+          setVoiceInputState('idle')
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProviderId, activeTabModelId, config.providers, voiceBrowserSpeechAvailable])
 
   useEffect(() => {
     localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
@@ -3332,12 +3399,15 @@ function App(): React.JSX.Element {
 
   async function submitAgent(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
+    await submitAgentMessage()
+  }
 
+  async function submitAgentMessage(overrideInput?: string): Promise<void> {
     const terminalTabId = activeTabIdRef.current
     const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
     const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
     const terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId) ?? tab
-    const displayInput = tab?.agentInput.trim() ?? ''
+    const displayInput = (overrideInput ?? tab?.agentInput ?? '').trim()
     if (!displayInput) return
 
     if (/^\/new$/i.test(displayInput)) {
@@ -4067,6 +4137,125 @@ function App(): React.JSX.Element {
     }))
   }
 
+  async function toggleVoiceInput(): Promise<void> {
+    if (voiceInputState === 'transcribing') return
+    // Allow recording while Whisper is still probing if browser speech works.
+    if (!voiceInputSupported || (voiceInputSupportChecking && !voiceBrowserSpeechAvailable)) {
+      toast.error(t.input.voiceUnsupported)
+      return
+    }
+
+    if (voiceInputState === 'recording') {
+      const liveSession = voiceLiveSessionRef.current
+      voiceLiveSessionRef.current = null
+      if (!liveSession) {
+        setVoiceInputState('idle')
+        return
+      }
+
+      setVoiceInputState('transcribing')
+      try {
+        const transcript = (await liveSession.stop()).trim()
+        if (!transcript) {
+          toast.error(t.input.voiceEmpty)
+          setVoiceInputState('idle')
+          return
+        }
+        const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+        flushSync(() => {
+          updateTab(chatTabId, (tab) => ({
+            ...tab,
+            agentInput: transcript
+          }))
+        })
+        setVoiceInputState('idle')
+        await submitAgentMessage(transcript)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t.input.voiceFailed
+        toast.error(isWhisperUnavailableError(message) ? t.input.voiceProviderUnsupported : message)
+        setVoiceInputState('idle')
+      }
+      return
+    }
+
+    try {
+      const permission = await window.api.agent.requestMicrophonePermission()
+      if (!permission.granted) {
+        toast.error(t.input.voicePermissionDenied)
+        return
+      }
+
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+      let whisperUnavailableNotified = false
+      const useWhisper = voiceWhisperSupported
+      if (!useWhisper && voiceBrowserSpeechAvailable) {
+        toast.message(t.input.voiceProviderUnsupportedFallback)
+      }
+      const session = await startVoiceInputSession({
+        speechLanguage: locale.startsWith('zh')
+          ? 'zh-CN'
+          : locale.startsWith('en')
+            ? 'en-US'
+            : locale,
+        whisperLanguage: locale.startsWith('zh')
+          ? 'zh'
+          : locale.startsWith('en')
+            ? 'en'
+            : undefined,
+        intervalMs: 2800,
+        transcribe: useWhisper
+          ? async ({ base64, mimeType, language: lang }) => {
+              const result = await window.api.agent.transcribeAudio({
+                base64,
+                mimeType,
+                name: `voice-input${extensionForAudioMime(mimeType)}`,
+                language: lang
+              })
+              if (!result.ok) {
+                throw new Error(result.error || t.input.voiceFailed)
+              }
+              return result.text?.trim() || ''
+            }
+          : undefined,
+        onTranscript: (text) => {
+          updateTab(chatTabId, (tab) => ({
+            ...tab,
+            agentInput: text
+          }))
+        },
+        onError: (error) => {
+          if (isWhisperUnavailableError(error.message)) {
+            if (!whisperUnavailableNotified) {
+              whisperUnavailableNotified = true
+              toast.message(t.input.voiceProviderUnsupportedFallback)
+            }
+            return
+          }
+          if (/permission|denied|NotAllowed/i.test(error.message)) {
+            toast.error(t.input.voicePermissionDenied)
+            voiceLiveSessionRef.current?.cancel()
+            voiceLiveSessionRef.current = null
+            setVoiceInputState('idle')
+            return
+          }
+          toast.error(error.message || t.input.voiceFailed)
+        }
+      })
+      voiceLiveSessionRef.current = session
+      setVoiceInputState('recording')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.input.voiceFailed
+      toast.error(
+        /permission|denied|NotAllowed/i.test(message)
+          ? t.input.voicePermissionDenied
+          : isWhisperUnavailableError(message)
+            ? t.input.voiceProviderUnsupported
+            : message
+      )
+      setVoiceInputState('idle')
+    }
+  }
+
   function removePathRef(pathRefId: string): void {
     updateTab(sessionChatTab.id, (tab) => ({
       ...tab,
@@ -4083,28 +4272,42 @@ function App(): React.JSX.Element {
     key: K,
     value: AgentProviderConfig[K]
   ): void {
-    const nextProviderId = key === 'id' ? String(value) : settingsProviderId
-    if (
-      key === 'id' &&
-      config.providers.some(
-        (provider) => provider.id !== settingsProvider.id && provider.id === nextProviderId
-      )
-    ) {
+    const currentProviderId = settingsProviderId || settingsProvider.id
+    if (!currentProviderId) return
+
+    if (key === 'id') {
+      const nextProviderId = String(value).trim()
+      if (!nextProviderId) return
+      if (
+        config.providers.some(
+          (provider) => provider.id !== currentProviderId && provider.id === nextProviderId
+        )
+      ) {
+        return
+      }
+
+      setConfig((current) => {
+        const providers = current.providers.map((provider) =>
+          provider.id === currentProviderId ? { ...provider, id: nextProviderId } : provider
+        )
+
+        return {
+          ...current,
+          providers,
+          providerId: current.providerId === currentProviderId ? nextProviderId : current.providerId
+        }
+      })
+      setSettingsProviderId(nextProviderId)
+      setValidation(undefined)
       return
     }
 
-    setConfig((current) => {
-      const providers = current.providers.map((provider) =>
-        provider.id === settingsProvider.id ? { ...provider, [key]: value } : provider
+    setConfig((current) => ({
+      ...current,
+      providers: current.providers.map((provider) =>
+        provider.id === currentProviderId ? { ...provider, [key]: value } : provider
       )
-
-      return {
-        ...current,
-        providers,
-        providerId: current.providerId === settingsProvider.id ? nextProviderId : current.providerId
-      }
-    })
-    if (key === 'id') setSettingsProviderId(nextProviderId)
+    }))
     setValidation(undefined)
   }
 
@@ -4120,22 +4323,23 @@ function App(): React.JSX.Element {
   }
 
   function toggleProviderDetails(providerId: string): void {
-    if (providerEditorOpen && settingsProviderId === providerId) {
-      setProviderEditorOpen(false)
-      return
-    }
-
     selectSettingsProvider(providerId)
     setOpenApiEditorOpen(false)
     setInstructionEditorOpen(false)
     setProviderEditorOpen(true)
+    window.requestAnimationFrame(() => {
+      document.getElementById('provider-editor-panel')?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth'
+      })
+    })
   }
 
   function createProvider(): void {
     const id = `provider-${Date.now()}`
     const provider: AgentProviderConfig = {
       id,
-      name: id,
+      name: '',
       baseUrl: '',
       apiKey: '',
       models: []
@@ -4148,20 +4352,30 @@ function App(): React.JSX.Element {
     setInstructionEditorOpen(false)
     setProviderEditorOpen(true)
     setValidation(undefined)
+    window.requestAnimationFrame(() => {
+      document.getElementById('provider-editor-panel')?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth'
+      })
+    })
   }
 
-  function deleteSettingsProvider(): void {
+  function deleteSettingsProvider(providerId = settingsProviderId): void {
+    const targetId = providerId.trim()
+    if (!targetId) return
     if (config.providers.length <= 1) return
-    if (!window.confirm(`${t.confirm.deleteProvider}\n\n${settingsProvider.name}`)) return
 
-    const remainingProviders = config.providers.filter(
-      (provider) => provider.id !== settingsProvider.id
-    )
+    const target = config.providers.find((provider) => provider.id === targetId) ?? settingsProvider
+    const label = target.name.trim() || target.id || targetId
+    if (!window.confirm(`${t.confirm.deleteProvider}\n\n${label}`)) return
+
+    const remainingProviders = config.providers.filter((provider) => provider.id !== targetId)
     const nextProvider = remainingProviders[0]
     const modelProvider = remainingProviders.find((provider) =>
       provider.models.some((model) => model.id === config.model)
     )
     const modelStillAvailable = Boolean(modelProvider)
+    const wasEditingTarget = targetId === settingsProviderId
 
     setConfig({
       ...config,
@@ -4169,9 +4383,13 @@ function App(): React.JSX.Element {
       providerId: modelStillAvailable ? modelProvider?.id : nextProvider?.id,
       model: modelStillAvailable ? config.model : (nextProvider?.models[0]?.id ?? '')
     })
-    setSettingsProviderId(nextProvider?.id ?? '')
-    setProviderModelsText(formatProviderModels(nextProvider?.models ?? []))
-    if (!nextProvider) setProviderEditorOpen(false)
+    setSettingsProviderId(wasEditingTarget ? (nextProvider?.id ?? '') : settingsProviderId)
+    setProviderModelsText(
+      formatProviderModels(
+        (wasEditingTarget ? nextProvider?.models : settingsProvider.models) ?? []
+      )
+    )
+    if (wasEditingTarget) setProviderEditorOpen(false)
     setValidation(undefined)
   }
 
@@ -5287,6 +5505,7 @@ function App(): React.JSX.Element {
             closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
             onCreateProvider={createProvider}
             onToggleProviderDetails={toggleProviderDetails}
+            onDeleteProvider={deleteSettingsProvider}
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
             onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
@@ -5301,7 +5520,6 @@ function App(): React.JSX.Element {
             onPatchActiveOpenApiProfile={patchActiveOpenApiProfile}
             onImportOpenApiDocument={importOpenApiDocument}
             onToggleInstructionDetails={toggleInstructionDetails}
-            onDeleteSettingsProvider={deleteSettingsProvider}
             onProviderEditorOpenChange={setProviderEditorOpen}
             onUpdateSettingsProvider={updateSettingsProvider}
             onUpdateSettingsProviderModels={updateSettingsProviderModels}
@@ -5460,6 +5678,11 @@ function App(): React.JSX.Element {
             onRemoveTool={removeToolRef}
             onRemoveWiki={removeWikiRef}
             onPickPathReference={(kind) => void pickPathReference(kind)}
+            onToggleVoiceInput={() => void toggleVoiceInput()}
+            voiceInputState={voiceInputState}
+            voiceInputSupported={voiceInputSupported}
+            voiceInputSupportChecking={voiceInputSupportChecking && !voiceBrowserSpeechAvailable}
+            voiceWhisperSupported={voiceWhisperSupported}
             onStopAgent={() => stopAgentRun()}
             onRetryConnection={() => void retryActiveConnection()}
             onOpenConnections={showConnectionList}
@@ -5883,6 +6106,15 @@ function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): strin
 function buildLogTraceFilename(entry: AgentLogEntry): string {
   const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
   return `crescent-agent-trace-${timestamp}.json`
+}
+
+function extensionForAudioMime(mimeType: string): string {
+  const normalized = mimeType.toLowerCase()
+  if (normalized.includes('wav')) return '.wav'
+  if (normalized.includes('mpeg') || normalized.includes('mp3')) return '.mp3'
+  if (normalized.includes('mp4') || normalized.includes('m4a')) return '.m4a'
+  if (normalized.includes('ogg')) return '.ogg'
+  return '.webm'
 }
 
 export default App
