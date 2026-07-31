@@ -13,36 +13,22 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import {
   ArrowLeftRightIcon,
-  ArrowUpIcon,
   BookOpenIcon,
   BotIcon,
   CheckIcon,
-  CopyIcon,
-  DownloadIcon,
-  FileIcon,
-  FileTextIcon,
-  FolderOpenIcon,
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  PanelRightCloseIcon,
-  PanelRightOpenIcon,
-  PencilIcon,
   PlugIcon,
   PlusIcon,
   ServerIcon,
-  SearchIcon,
   TestTube2Icon,
   TriangleAlertIcon,
-  Trash2Icon,
   XIcon
 } from 'lucide-react'
-import { Toaster } from 'sonner'
+import { toast, Toaster } from 'sonner'
 
-import { AgentLogList } from '@renderer/components/AgentLogList'
-import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
+import { AgentPanel } from '@renderer/components/AgentPanel'
 import { AppFooter } from '@renderer/components/AppFooter'
 import {
   CloseTabsConfirmModal,
@@ -51,22 +37,19 @@ import {
   type CloseTabsConfirmRequest,
   type PasswordPromptRequest
 } from '@renderer/components/AppModals'
-import { ConnectionList } from '@renderer/components/ConnectionList'
 import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
-import { MarkdownContent, extractResultMarkdown } from '@renderer/components/MarkdownContent'
+import { extractResultMarkdown } from '@renderer/components/MarkdownContent'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
 import {
   McpStatusDot,
-  SkillInstallStatusDot,
-  SkillManageStatus,
-  StatusDot,
   type SkillInstallLogStatus,
   type SkillManageMessage
 } from '@renderer/components/StatusIndicators'
-import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
-import { SubterminalPanel } from '@renderer/components/SubterminalPanel'
-import { TerminalTabBar } from '@renderer/components/TerminalTabBar'
+import { TerminalPane } from '@renderer/components/TerminalPane'
+import { HistoryPanel } from '@renderer/components/HistoryPanel'
+import { OnboardingModal } from '@renderer/components/OnboardingModal'
+import { SkillManager } from '@renderer/components/SkillManager'
 import { WikiSheet } from '@renderer/components/WikiSheet'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -91,12 +74,6 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@renderer/components/ui/tooltip'
-import {
   dictionaries,
   localeOptions,
   resolveInitialLocale,
@@ -109,9 +86,10 @@ import { useSettings } from '@renderer/hooks/useSettings'
 import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import {
   appendElapsedFooter,
+  connectionFailureMarkers,
   formatAgentRunMarkdown,
-  formatHistoryTime,
-  hydrateStoredAgentLog
+  hydrateStoredAgentLog,
+  isConnectionFailureLog
 } from '@renderer/lib/agent-log'
 import {
   buildTraceFromAgentLogEntry,
@@ -147,6 +125,7 @@ import {
   getDefaultWikiPreviewWidth,
   isLocalConnection,
   parseModelSelectionValue,
+  resolveOpsConnectionId,
   wait
 } from '@renderer/lib/app-runtime'
 import {
@@ -171,7 +150,6 @@ import {
 import {
   buildConnectionCommands,
   buildConnectionLoginActions,
-  buildSshCommand,
   createCustomConnectionId,
   formatConnectionActionLog,
   isPasswordEnvVarMissing,
@@ -179,6 +157,11 @@ import {
   parseLoginActions,
   parseSshOptions
 } from '@renderer/lib/connection-commands'
+import {
+  formatConnectionAutomationFailure,
+  resolveConnectionReconnectPolicy,
+  shouldDrainPostConnectionTasks
+} from '@renderer/lib/connection-automation-policy'
 import { formatConnectionTarget } from '@renderer/lib/connections'
 import { appTerminalTheme } from '@renderer/lib/design-system'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
@@ -186,14 +169,13 @@ import {
   copyFeedback,
   copyText,
   downloadJson,
-  downloadMarkdown
+  downloadMarkdown,
+  notifyOperationError
 } from '@renderer/lib/operation-feedback'
 import {
   buildInstalledSkillNameSet,
   buildSkillInstallCommand,
-  filterLocalSkills,
-  formatInstallCount,
-  isSkillSearchResultInstalled
+  filterLocalSkills
 } from '@renderer/lib/skill-management'
 import {
   extractPasswordPromptLine,
@@ -206,7 +188,6 @@ import {
   createTerminalTab,
   getNextTerminalTitle,
   getSessionChatTab,
-  getSessionDisplayTitle,
   getSessionGroupId,
   getSessionTerminals,
   getTerminalDisplayTitle,
@@ -254,6 +235,7 @@ import type {
   AgentConnectionIntentResult,
   AgentMcpServerConfig,
   AgentModelOption,
+  AgentOpenApiProfile,
   AgentPathReference,
   AgentProviderConfig,
   AgentSkillInstallEvent,
@@ -275,8 +257,15 @@ import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-in
 import {
   createEmptyOpenApiProfile,
   updateOpenApiProfileInConfig,
+  resolveActiveOpenApiProfile,
   withActiveOpenApiProfile
 } from '../../shared/openapi-profiles'
+import {
+  createExampleOpenApiProfile,
+  dismissOnboarding,
+  shouldShowOnboarding
+} from '@renderer/lib/onboarding'
+import { formatToolNameListText, parseToolNameListText } from '../../shared/tool-policy'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -371,6 +360,7 @@ function App(): React.JSX.Element {
   const reconnectingTabsRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
+  const skipConnectionReconnectRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
@@ -440,6 +430,7 @@ function App(): React.JSX.Element {
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [skillOpen, setSkillOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
   const [mcpOpen, setMcpOpen] = useState(false)
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
   const [openApiEditorOpen, setOpenApiEditorOpen] = useState(false)
@@ -447,6 +438,10 @@ function App(): React.JSX.Element {
   const [mcpEditorOpen, setMcpEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [opsFeedbackByLogId, setOpsFeedbackByLogId] = useState<Record<number, 'like' | 'dislike'>>(
+    {}
+  )
+  const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
   const [historyTitleDraft, setHistoryTitleDraft] = useState('')
@@ -552,6 +547,77 @@ function App(): React.JSX.Element {
     [tabs, terminalPage]
   )
   const t = dictionaries[locale]
+
+  useEffect(() => {
+    const connectionId = resolveOpsConnectionId(
+      activeTab.connectionId ||
+        sessionChatTab.connectionId ||
+        sessionTerminals.find((tab) => tab.connectionId)?.connectionId
+    )
+    const assistantEntries = sessionChatTab.agentLog.filter((entry) => entry.kind === 'assistant')
+    if (assistantEntries.length === 0) return
+
+    let cancelled = false
+    void (async () => {
+      const [records, runs] = await Promise.all([
+        window.api.storage.listOpsFeedback({ connectionId, limit: 40 }),
+        window.api.storage.listAgentRuns({ tabId: sessionChatTab.id, limit: 40 })
+      ])
+      if (cancelled || records.length === 0) return
+
+      const ratingByRunId = new Map(records.map((record) => [record.runId, record.rating]))
+      const next: Record<number, 'like' | 'dislike'> = {}
+      for (const entry of assistantEntries) {
+        const activeRun = [...activeAgentRunRef.current.values()].find(
+          (run) => run.logId === entry.id && run.runId
+        )
+        const resultText = extractResultMarkdown(entry.text, t)
+        const matchedRun =
+          (activeRun?.runId ? runs.find((run) => run.runId === activeRun.runId) : undefined) ??
+          runs.find((run) => run.output && resultText && run.output.trim() === resultText.trim()) ??
+          runs.find(
+            (run) =>
+              Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000
+          )
+        const rating = matchedRun ? ratingByRunId.get(matchedRun.runId) : undefined
+        if (rating) next[entry.id] = rating
+      }
+      if (!cancelled && Object.keys(next).length > 0) {
+        setOpsFeedbackByLogId((current) => ({ ...current, ...next }))
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeTab.connectionId,
+    sessionChatTab.agentLog,
+    sessionChatTab.connectionId,
+    sessionChatTab.id,
+    sessionTerminals,
+    t
+  ])
+
+  const connectionRecovery = useMemo(() => {
+    const markers = connectionFailureMarkers(t)
+    const latestError = [...sessionChatTab.agentLog]
+      .reverse()
+      .find((entry) => entry.kind === 'error')
+    const visible = Boolean(latestError && isConnectionFailureLog(latestError.text, markers))
+    const canRetry = Boolean(
+      activeTab.connectionId ||
+      sessionChatTab.connectionId ||
+      sessionTerminals.some((tab) => Boolean(tab.connectionId))
+    )
+    return { visible, canRetry }
+  }, [
+    activeTab.connectionId,
+    sessionChatTab.agentLog,
+    sessionChatTab.connectionId,
+    sessionTerminals,
+    t
+  ])
   const { appendLog, updateAgentRun, appendAgentEvent } = useAgentRuns({
     activeTabIdRef,
     nextLogIdRef,
@@ -762,6 +828,34 @@ function App(): React.JSX.Element {
 
   runAgentConversationRef.current = runAgentConversation
 
+  const abortPostConnectionTasks = useCallback(
+    (targetTabId: string, reason: string): void => {
+      const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
+      postConnectionTasksRef.current.delete(targetTabId)
+      if (tasks.length === 0) return
+
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      for (const task of tasks) {
+        appendLog(
+          {
+            kind: 'error',
+            text: appendElapsedFooter(
+              formatConnectionAutomationFailure({
+                abortLabel: reason,
+                originalTaskLabel: t.terminal.postLoginOriginalTask,
+                originalTask: task.displayInput
+              }),
+              Date.now() - task.startedAt,
+              t
+            )
+          },
+          chatTabId
+        )
+      }
+    },
+    [appendLog, t]
+  )
+
   const drainPostConnectionTasks = useCallback(
     (targetTabId: string): void => {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
@@ -817,82 +911,90 @@ function App(): React.JSX.Element {
       connection: ConnectionConfig,
       targetTabId: string,
       includeSshCommand: boolean
-    ): Promise<void> => {
-      const commands = includeSshCommand
-        ? buildConnectionCommands(connection)
-        : buildConnectionLoginActions(connection)
-
-      if (isPasswordEnvVarMissing(connection)) {
-        appendLog(
-          {
-            kind: 'error',
-            text: `${t.connections.passwordEnvVarMissing}: ${connection.passwordEnvVar}`
-          },
-          targetTabId
-        )
-        return
+    ): Promise<boolean> => {
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      let resolvedConnection = connection
+      try {
+        const refreshed = await window.api.connections.resolve(connection.id)
+        if (refreshed) {
+          resolvedConnection = mergeConnectionInput(refreshed, connection)
+          setConnections((current) =>
+            current.map((item) => (item.id === refreshed.id ? refreshed : item))
+          )
+        }
+      } catch {
+        resolvedConnection = connection
       }
 
-      if (commands.length === 0) return
+      const commands = includeSshCommand
+        ? buildConnectionCommands(resolvedConnection)
+        : buildConnectionLoginActions(resolvedConnection)
+
+      if (isPasswordEnvVarMissing(resolvedConnection)) {
+        const message = `${t.connections.passwordEnvVarMissing}: ${resolvedConnection.passwordEnvVar}`
+        appendLog({ kind: 'error', text: message }, chatTabId)
+        abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
+        return false
+      }
+
+      if (commands.length === 0) return true
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
       if (targetTab?.terminalMode !== 'pty') {
-        appendLog(
-          {
-            kind: 'error',
-            text: 'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
-          },
-          targetTabId
-        )
-        return
+        const message =
+          'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
+        appendLog({ kind: 'error', text: message }, chatTabId)
+        abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
+        return false
       }
 
       updateTab(targetTabId, (tab) => ({
         ...tab,
-        title: tab.connectionId || tab.isSsh ? tab.title : connection.name,
-        connectionId: connection.id,
-        connectionName: connection.name,
+        title: tab.connectionId || tab.isSsh ? tab.title : resolvedConnection.name,
+        connectionId: resolvedConnection.id,
+        connectionName: resolvedConnection.name,
         isSsh: true
       }))
       appendLog(
         {
           kind: 'status',
-          text: connection.actions?.length
-            ? `${t.terminal.connectionStarting}: ${connection.actions.length}`
+          text: resolvedConnection.actions?.length
+            ? `${t.terminal.connectionStarting}: ${resolvedConnection.actions.length}`
             : t.terminal.connectionNoActions
         },
-        targetTabId
+        chatTabId
       )
 
       automatedLoginTabsRef.current.add(targetTabId)
       passwordPromptBuffersRef.current.set(targetTabId, '')
       try {
-        if (includeSshCommand) {
-          await runConnectionCommandSequence(commands, targetTabId, appendLog, t)
-          return
+        const ok = includeSshCommand
+          ? await runConnectionCommandSequence(commands, targetTabId, appendLog, t, chatTabId)
+          : await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t, chatTabId)
+        if (!ok) {
+          // Failed auth/host/login must not auto-retry the same SSH connection on exit.
+          skipConnectionReconnectRef.current.add(targetTabId)
+          abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
         }
-
-        await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t)
+        return ok
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        skipConnectionReconnectRef.current.add(targetTabId)
+        appendLog({ kind: 'error', text: message }, chatTabId)
+        abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
+        return false
       } finally {
         automatedLoginTabsRef.current.delete(targetTabId)
         passwordPromptBuffersRef.current.set(targetTabId, '')
       }
     },
-    [appendLog, t, updateTab]
+    [abortPostConnectionTasks, appendLog, t, updateTab]
   )
 
   const executeConnectionCommands = useCallback(
     async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
-      await executeConnectionAutomation(connection, targetTabId, true)
-      drainPostConnectionTasks(targetTabId)
-    },
-    [drainPostConnectionTasks, executeConnectionAutomation]
-  )
-
-  const executeConnectionLoginActions = useCallback(
-    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
-      await executeConnectionAutomation(connection, targetTabId, false)
-      drainPostConnectionTasks(targetTabId)
+      const ok = await executeConnectionAutomation(connection, targetTabId, true)
+      if (shouldDrainPostConnectionTasks(ok)) drainPostConnectionTasks(targetTabId)
     },
     [drainPostConnectionTasks, executeConnectionAutomation]
   )
@@ -1554,7 +1656,31 @@ function App(): React.JSX.Element {
       if (event.tabId === activeTabIdRef.current) {
         terminal.writeln(`\r\n\x1b[31m${t.terminal.shellExited} ${event.exitCode}.\x1b[0m`)
       }
-      if (suppressTerminalReconnectRef.current.delete(event.tabId)) {
+      const reconnectPolicy = resolveConnectionReconnectPolicy({
+        suppressReconnect: suppressTerminalReconnectRef.current.has(event.tabId),
+        automatedLoginInProgress: automatedLoginTabsRef.current.has(event.tabId)
+      })
+      if (reconnectPolicy === 'suppress') {
+        suppressTerminalReconnectRef.current.delete(event.tabId)
+        return
+      }
+
+      // SSH/login died mid-automation — fall back to a local shell instead of
+      // immediately re-running the failed connection (which leaves input dead).
+      if (reconnectPolicy === 'local-fallback') {
+        automatedLoginTabsRef.current.delete(event.tabId)
+        passwordPromptBuffersRef.current.set(event.tabId, '')
+        const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+        abortPostConnectionTasks(event.tabId, t.terminal.postLoginTaskAborted)
+        appendLog(
+          {
+            kind: 'error',
+            text: `${t.terminal.shellExited} ${event.exitCode}.`
+          },
+          chatTabId
+        )
+        skipConnectionReconnectRef.current.add(event.tabId)
+        void restoreTerminalSessionRef.current?.(event.tabId)
         return
       }
 
@@ -1575,8 +1701,7 @@ function App(): React.JSX.Element {
       const session = await window.api.terminal.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
-        tabId: tab.id,
-        initialCommand: pendingConnection ? buildSshCommand(pendingConnection) : undefined
+        tabId: tab.id
       })
 
       terminalSessionIdRef.current = session.sessionId
@@ -1592,7 +1717,8 @@ function App(): React.JSX.Element {
       }))
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
-        void executeConnectionLoginActions(pendingConnection, tab.id)
+        // Start a local shell first, then run SSH only after password/env checks pass.
+        void executeConnectionCommands(pendingConnection, tab.id)
       }
     }
 
@@ -1624,15 +1750,15 @@ function App(): React.JSX.Element {
       fitAddonRef.current = null
     }
   }, [
+    abortPostConnectionTasks,
+    activeTabExists,
     activeTabId,
     appendLog,
     executeConnectionCommands,
-    executeConnectionLoginActions,
     handlePipeTerminalInput,
     maybeRequestTerminalPassword,
     t,
     terminalVisible,
-    activeTabExists,
     updateSubterminalCwd,
     updateSubterminalOutput,
     updateSubterminalStatus,
@@ -1899,7 +2025,7 @@ function App(): React.JSX.Element {
     if (!skillInstallLogResultId) return
 
     const selectedText = window.getSelection()?.toString().trim()
-    const text = selectedText || selectedSkillInstallLog
+    const text = selectedText || skillInstallLogs[skillInstallLogResultId] || ''
     if (!text) return
 
     await copyText(text, copyFeedback(t))
@@ -2276,6 +2402,10 @@ function App(): React.JSX.Element {
       timeoutMs: number
       maxRetries: number
       retryBackoffMs: number
+      promptTemplate: string
+      pinnedWorkflows: AgentOpenApiProfile['pinnedWorkflows']
+      toolAllowList: string[]
+      toolDenyList: string[]
     }>
   ): void {
     setConfig((current) => {
@@ -2608,6 +2738,10 @@ function App(): React.JSX.Element {
     const tab = tabsRef.current.find((current) => current.id === tabId)
     if (!tab) return false
 
+    if (skipConnectionReconnectRef.current.delete(tabId)) {
+      return restoreLocalTerminal(tabId)
+    }
+
     return tab.connectionId ? restoreTerminalConnection(tabId) : restoreLocalTerminal(tabId)
   }
 
@@ -2615,7 +2749,8 @@ function App(): React.JSX.Element {
     if (reconnectingTabsRef.current.has(tabId)) return waitForTerminalRestore(tabId)
 
     reconnectingTabsRef.current.add(tabId)
-    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, tabId)
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, chatTabId)
 
     try {
       const dimensions =
@@ -2641,7 +2776,10 @@ function App(): React.JSX.Element {
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      appendLog({ kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` }, tabId)
+      appendLog(
+        { kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` },
+        chatTabId
+      )
       updateTab(tabId, (current) => ({
         ...current,
         sessionId: undefined,
@@ -2660,7 +2798,8 @@ function App(): React.JSX.Element {
     if (!tab?.connectionId) return false
 
     reconnectingTabsRef.current.add(tabId)
-    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, tabId)
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, chatTabId)
 
     try {
       const connection = await findConnectionById(tab.connectionId)
@@ -2688,11 +2827,20 @@ function App(): React.JSX.Element {
         terminalCwdRef.current = session.cwd
         pipePromptRef.current = formatPipePrompt(session.cwd)
       }
-      await executeConnectionCommands(connection, tabId)
-      return true
+      const ok = await executeConnectionAutomation(connection, tabId, true)
+      if (shouldDrainPostConnectionTasks(ok)) drainPostConnectionTasks(tabId)
+      if (!ok) {
+        // Keep local shell; do not schedule another SSH reconnect cycle.
+        skipConnectionReconnectRef.current.add(tabId)
+      }
+      return ok
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      appendLog({ kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` }, tabId)
+      skipConnectionReconnectRef.current.add(tabId)
+      appendLog(
+        { kind: 'error', text: `${t.terminal.terminalReconnectFailed}: ${message}` },
+        chatTabId
+      )
       updateTab(tabId, (current) => ({
         ...current,
         sessionId: undefined,
@@ -2826,6 +2974,31 @@ function App(): React.JSX.Element {
     return targetTabId
   }
 
+  async function retryActiveConnection(): Promise<void> {
+    const targetTab =
+      tabsRef.current.find((tab) => tab.id === activeTabIdRef.current) ??
+      tabsRef.current.find((tab) => tab.id === sessionChatTab.id)
+    const connectionId =
+      targetTab?.connectionId ||
+      sessionTerminals.find((tab) => tab.connectionId)?.connectionId ||
+      sessionChatTab.connectionId
+    if (!connectionId) {
+      showConnectionList()
+      return
+    }
+
+    const connection = await findConnectionById(connectionId)
+    if (!connection) {
+      showConnectionList()
+      return
+    }
+
+    if (targetTab?.id) {
+      skipConnectionReconnectRef.current.delete(targetTab.id)
+    }
+    connectToConnection(connection)
+  }
+
   function showConnectionList(): void {
     setConnectionModalOpen(true)
     void window.api.connections
@@ -2834,6 +3007,28 @@ function App(): React.JSX.Element {
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
       })
+  }
+
+  function closeOnboarding(): void {
+    dismissOnboarding()
+    setOnboardingOpen(false)
+  }
+
+  function addExampleOpenApiFromOnboarding(): void {
+    const profile = createExampleOpenApiProfile()
+    setConfig((current) =>
+      withActiveOpenApiProfile(
+        {
+          ...current,
+          openApiProfiles: [...current.openApiProfiles, profile]
+        },
+        profile.id
+      )
+    )
+    setValidation(undefined)
+    setOpenApiEditorOpen(true)
+    setSheetOpen(true)
+    closeOnboarding()
   }
 
   function openLocalTerminal(): void {
@@ -2872,16 +3067,34 @@ function App(): React.JSX.Element {
   }
 
   function startNewSession(): void {
+    const previousChatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     const nextTab = createTerminalTab({
       title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
       providerId: config.providerId,
       isSsh: false
     })
-    const nextTabs = [...tabsRef.current, nextTab]
+    // Clear slash residue (e.g. "/") from the previous session before switching away.
+    const nextTabs = [
+      ...tabsRef.current.map((tab) =>
+        tab.id === previousChatTabId
+          ? {
+              ...tab,
+              agentInput: '',
+              skillRefs: [],
+              pathRefs: [],
+              toolRefs: [],
+              wikiRefs: []
+            }
+          : tab
+      ),
+      nextTab
+    ]
 
     // Keep refs and React state aligned in one commit so chat + terminal switch together.
     tabsRef.current = nextTabs
     activeTabIdRef.current = nextTab.id
+    setSlashCommandOpen(false)
+    setSlashCommandIndex(0)
     flushSync(() => {
       setHiddenPane(null)
       setTerminalPage('terminal')
@@ -4439,423 +4652,112 @@ function App(): React.JSX.Element {
     await downloadJson(formatTraceExport(trace), buildLogTraceFilename(entry), t)
   }
 
-  const skillInstallLogResultIds = Object.keys(skillInstallLogs)
-  const skillInstallLogCount = skillInstallLogResultIds.length
-  const selectedSkillInstallName = skillInstallLogResultId
-    ? (skillInstallLogNames[skillInstallLogResultId] ?? skillInstallLogResultId)
-    : ''
-  const selectedSkillInstallRunning = Boolean(
-    skillInstallLogResultId && skillInstallIds[skillInstallLogResultId]
-  )
-  const selectedSkillInstallStatus: SkillInstallLogStatus = selectedSkillInstallRunning
-    ? 'running'
-    : skillInstallLogResultId
-      ? (skillInstallLogStatuses[skillInstallLogResultId] ?? 'success')
-      : 'success'
-  const selectedSkillInstallLog = skillInstallLogResultId
-    ? (skillInstallLogs[skillInstallLogResultId] ?? '')
-    : ''
-  const skillSidePanelOpen = Boolean(skillInstallLogResultId || selectedSkillPreview)
+  async function resolveRunIdForLogEntry(entry: AgentLogEntry): Promise<string | undefined> {
+    for (const run of activeAgentRunRef.current.values()) {
+      if (run.logId === entry.id && run.runId) return run.runId
+    }
+
+    const tabId =
+      getSessionChatTab(tabsRef.current, getSessionGroupId(activeTab))?.id ?? activeTabIdRef.current
+    const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
+    const resultText = extractResultMarkdown(entry.text, t)
+    const matched =
+      runs.find((run) => run.output && resultText && run.output.trim() === resultText.trim()) ??
+      runs.find(
+        (run) =>
+          Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000
+      )
+    return matched?.runId
+  }
+
+  async function submitOpsFeedbackForEntry(
+    entry: AgentLogEntry,
+    rating: 'like' | 'dislike'
+  ): Promise<void> {
+    if (opsFeedbackBusyLogId === entry.id) return
+
+    const chatTab = getSessionChatTab(tabsRef.current, getSessionGroupId(activeTab)) ?? activeTab
+    const connectionId = resolveOpsConnectionId(
+      activeTab.connectionId ||
+        chatTab.connectionId ||
+        getSessionTerminals(tabsRef.current, getSessionGroupId(activeTab)).find(
+          (tab) => tab.connectionId
+        )?.connectionId
+    )
+
+    const runId = await resolveRunIdForLogEntry(entry)
+    if (!runId) {
+      toast.error(t.common.opsFeedbackFailed)
+      return
+    }
+
+    setOpsFeedbackBusyLogId(entry.id)
+    const savingToast = toast.loading(t.common.opsFeedbackSaving)
+    try {
+      const result = await window.api.storage.submitOpsFeedback({
+        tabId: chatTab.id,
+        runId,
+        rating,
+        connectionId
+      })
+      toast.dismiss(savingToast)
+      if (!result.ok || !result.record) {
+        toast.error(result.error || t.common.opsFeedbackFailed)
+        return
+      }
+      setOpsFeedbackByLogId((current) => ({ ...current, [entry.id]: rating }))
+      toast.success(
+        rating === 'like' ? t.common.opsFeedbackSavedLike : t.common.opsFeedbackSavedDislike
+      )
+    } catch (error) {
+      toast.dismiss(savingToast)
+      notifyOperationError(t.common.opsFeedbackFailed, error)
+    } finally {
+      setOpsFeedbackBusyLogId(null)
+    }
+  }
 
   const skillSheet = (
-    <Sheet open={skillOpen} onOpenChange={setSkillOpen}>
-      <SheetContent
-        side="right"
-        className={`w-full ${skillSidePanelOpen ? 'sm:max-w-6xl' : 'sm:max-w-2xl'}`}
-      >
-        <SheetHeader>
-          <SheetTitle>{t.settings.skillsManagement}</SheetTitle>
-          <SheetDescription>{t.settings.skillsManagementHint}</SheetDescription>
-        </SheetHeader>
-        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-              <Field>
-                <FieldLabel htmlFor="skill-root">{t.settings.skillDirectory}</FieldLabel>
-                <div className="flex gap-2">
-                  <Input
-                    id="skill-root"
-                    value={config.skillRoot}
-                    onChange={(event) => updateConfig('skillRoot', event.target.value)}
-                    placeholder="~/.agents/skills"
-                  />
-                  <Button type="button" variant="outline" onClick={() => void saveSkillRoot()}>
-                    {t.settings.saveSkillDirectory}
-                  </Button>
-                </div>
-                <FieldDescription>{t.settings.skillDirectoryHint}</FieldDescription>
-              </Field>
-            </div>
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-medium text-muted-foreground">
-                  {t.settings.localSkills} · {filteredLocalSkills.length}/{skills.length}
-                </div>
-                <Button type="button" variant="outline" size="sm" onClick={refreshSkills}>
-                  <SearchIcon data-icon="inline-start" />
-                  {t.settings.refreshSkills}
-                </Button>
-              </div>
-              <Input
-                value={localSkillSearchQuery}
-                onChange={(event) => setLocalSkillSearchQuery(event.target.value)}
-                placeholder={t.settings.localSkillsSearchPlaceholder}
-              />
-              <div className="max-h-72 space-y-2 overflow-auto">
-                {skills.length === 0 ? (
-                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-                    {t.settings.noLocalSkills}
-                  </div>
-                ) : filteredLocalSkills.length === 0 ? (
-                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
-                    {t.settings.noMatchedLocalSkills}
-                  </div>
-                ) : (
-                  filteredLocalSkills.map((skill) => (
-                    <div
-                      key={skill.path}
-                      className={`flex cursor-pointer items-start justify-between gap-3 rounded-md border p-3 text-xs transition ${
-                        selectedSkillPreview?.skill.path === skill.path
-                          ? 'border-primary/50 bg-primary/5'
-                          : 'bg-background hover:bg-muted/40'
-                      }`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => void previewSkill(skill)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          void previewSkill(skill)
-                        }
-                      }}
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate font-medium">{skill.name}</span>
-                          {!skill.removable && (
-                            <Badge variant="outline">{t.settings.protectedSkill}</Badge>
-                          )}
-                          {skillPreviewLoadingPath === skill.path && (
-                            <Loader2Icon
-                              className="size-3 shrink-0 animate-spin text-muted-foreground"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </div>
-                        {skill.description && (
-                          <div className="line-clamp-2 text-muted-foreground">
-                            {skill.description}
-                          </div>
-                        )}
-                        <div className="truncate font-mono text-[11px] text-muted-foreground">
-                          {skill.path}
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        disabled={!skill.removable || skillDeletingPath === skill.path}
-                        aria-label={t.settings.deleteSkill}
-                        title={t.settings.deleteSkill}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void deleteSkill(skill)
-                        }}
-                      >
-                        {skillDeletingPath === skill.path ? (
-                          <Loader2Icon className="animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Trash2Icon aria-hidden="true" />
-                        )}
-                      </Button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-              <div className="flex gap-2">
-                <Input
-                  value={skillSearchQuery}
-                  onChange={(event) => setSkillSearchQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      void searchSkills()
-                    }
-                  }}
-                  placeholder={t.settings.skillsSearchPlaceholder}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={searchSkills}
-                  disabled={skillSearchLoading}
-                >
-                  {skillSearchLoading ? (
-                    <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                  ) : (
-                    <SearchIcon data-icon="inline-start" />
-                  )}
-                  {t.settings.searchSkills}
-                </Button>
-              </div>
-              <FieldDescription>{t.settings.skillsSearchHint}</FieldDescription>
-              {skillSearchResults.length > 0 && (
-                <div className="max-h-80 space-y-2 overflow-auto">
-                  {skillSearchResults.map((result) => {
-                    const installed = isSkillSearchResultInstalled(result, installedSkillNames)
-                    const installing = Boolean(skillInstallIds[result.id])
-
-                    return (
-                      <div
-                        key={result.id}
-                        className="flex items-start justify-between gap-3 rounded-md border bg-background p-3 text-xs"
-                      >
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <div className="flex min-w-0 items-center justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span className="truncate font-medium">{result.name}</span>
-                              {installed && (
-                                <Badge variant="secondary" className="shrink-0">
-                                  {t.settings.skillInstalledStatus}
-                                </Badge>
-                              )}
-                            </div>
-                            <Badge variant="outline" className="shrink-0">
-                              {t.settings.skillInstalls}: {formatInstallCount(result.installs)}
-                            </Badge>
-                          </div>
-                          {result.description && (
-                            <div className="line-clamp-2 text-muted-foreground">
-                              {result.description}
-                            </div>
-                          )}
-                          <div className="truncate font-mono text-[11px] text-muted-foreground">
-                            {buildSkillInstallCommand(result)}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={t.settings.copySkillInstallCommand}
-                            title={t.settings.copySkillInstallCommand}
-                            onClick={() => void copySkillInstallCommand(result)}
-                          >
-                            {copiedSkillCommandId === result.id ? (
-                              <CheckIcon aria-hidden="true" />
-                            ) : (
-                              <CopyIcon aria-hidden="true" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={installing ? 'outline' : 'default'}
-                            onClick={() => void installSkill(result)}
-                          >
-                            {installing ? (
-                              <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                            ) : (
-                              <DownloadIcon data-icon="inline-start" />
-                            )}
-                            {installing
-                              ? t.settings.skillInstalling
-                              : installed
-                                ? t.settings.updateSkill
-                                : t.settings.installSkill}
-                          </Button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              <SkillManageStatus message={skillManageMessage} />
-            </div>
-          </div>
-          {skillInstallLogResultId ? (
-            <div className="app-sheet-detail flex w-[680px] shrink-0 overflow-hidden rounded-md border bg-background">
-              <div className="w-44 shrink-0 overflow-auto border-r bg-muted/20 p-1">
-                {skillInstallLogResultIds.map((resultId) => {
-                  const running = Boolean(skillInstallIds[resultId])
-                  const status: SkillInstallLogStatus = running
-                    ? 'running'
-                    : (skillInstallLogStatuses[resultId] ?? 'success')
-                  const selected = resultId === skillInstallLogResultId
-
-                  return (
-                    <div
-                      key={resultId}
-                      className={`mb-1 block w-full rounded px-2 py-2 text-left text-[11px] transition ${
-                        selected
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'
-                      }`}
-                      title={skillInstallLogNames[resultId] ?? resultId}
-                    >
-                      <button
-                        type="button"
-                        className="flex w-full min-w-0 items-start gap-2 text-left"
-                        onClick={() => setSkillInstallLogResultId(resultId)}
-                      >
-                        <SkillInstallStatusDot status={status} />
-                        <span className="min-w-0 flex-1 break-words leading-snug">
-                          {skillInstallLogNames[resultId] ?? resultId}
-                        </span>
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div className="flex items-start justify-between gap-3 border-b px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-start gap-2 text-sm font-semibold">
-                      <SkillInstallStatusDot status={selectedSkillInstallStatus} />
-                      <span className="min-w-0 break-words">
-                        {t.settings.skillInstallLog}: {selectedSkillInstallName}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {selectedSkillInstallRunning
-                        ? t.settings.skillInstallRunningHint
-                        : t.settings.skillInstallFinishedHint}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={t.settings.copySkillInstallLog}
-                      title={t.settings.copySkillInstallLog}
-                      disabled={!selectedSkillInstallLog}
-                      onClick={() => void copySelectedSkillInstallLog()}
-                    >
-                      {copiedSkillInstallLogId === skillInstallLogResultId ? (
-                        <CheckIcon aria-hidden="true" />
-                      ) : (
-                        <CopyIcon aria-hidden="true" />
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={t.settings.deleteSkillInstallLog}
-                      title={t.settings.deleteSkillInstallLog}
-                      onClick={() =>
-                        skillInstallLogResultId && deleteSkillInstallLog(skillInstallLogResultId)
-                      }
-                    >
-                      <Trash2Icon aria-hidden="true" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={t.common.close}
-                      title={t.common.close}
-                      onClick={() => setSkillInstallLogResultId(null)}
-                    >
-                      <XIcon aria-hidden="true" />
-                    </Button>
-                  </div>
-                </div>
-                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
-                  {selectedSkillInstallLog || t.settings.skillInstallWaitingLog}
-                </pre>
-                <div className="flex items-center justify-end gap-2 border-t px-3 py-2">
-                  {selectedSkillInstallRunning && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={Boolean(
-                        skillInstallLogResultId && skillInstallCancelingIds[skillInstallLogResultId]
-                      )}
-                      onClick={() =>
-                        skillInstallLogResultId && void cancelSkillInstall(skillInstallLogResultId)
-                      }
-                    >
-                      {skillInstallLogResultId &&
-                        skillInstallCancelingIds[skillInstallLogResultId] && (
-                          <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                        )}
-                      {t.settings.cancelSkillInstall}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : selectedSkillPreview ? (
-            <div className="app-sheet-detail flex w-[680px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
-              <div className="flex items-start justify-between gap-3 border-b px-3 py-2">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-                    <BookOpenIcon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">
-                      {t.settings.skillPreview}: {selectedSkillPreview.skill.name}
-                    </span>
-                    {!selectedSkillPreview.skill.removable && (
-                      <Badge variant="outline">{t.settings.protectedSkill}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
-                    {selectedSkillPreview.skill.path}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.common.close}
-                  title={t.common.close}
-                  onClick={() => setSelectedSkillPreview(null)}
-                >
-                  <XIcon aria-hidden="true" />
-                </Button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3 text-sm">
-                {selectedSkillPreview.content ? (
-                  <MarkdownContent value={selectedSkillPreview.content} t={t} />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                    <Loader2Icon className="mr-2 size-4 animate-spin" aria-hidden="true" />
-                    {t.settings.skillPreviewLoading}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <SheetFooter>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={skillInstallLogCount === 0}
-            onClick={() =>
-              setSkillInstallLogResultId(
-                (current) => current ?? skillInstallLogResultIds[0] ?? null
-              )
-            }
-          >
-            <FileTextIcon data-icon="inline-start" />
-            {t.settings.skillInstallLogs}
-            {skillInstallLogCount > 0 ? ` (${skillInstallLogCount})` : ''}
-          </Button>
-          <Button type="button" variant="outline" onClick={() => void refreshSkills()}>
-            <SearchIcon data-icon="inline-start" />
-            {t.settings.refreshSkills}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+    <SkillManager
+      open={skillOpen}
+      onOpenChange={setSkillOpen}
+      t={t}
+      skillRoot={config.skillRoot}
+      skills={skills}
+      filteredLocalSkills={filteredLocalSkills}
+      localSkillSearchQuery={localSkillSearchQuery}
+      skillSearchQuery={skillSearchQuery}
+      skillSearchResults={skillSearchResults}
+      skillSearchLoading={skillSearchLoading}
+      skillDeletingPath={skillDeletingPath}
+      copiedSkillCommandId={copiedSkillCommandId}
+      skillManageMessage={skillManageMessage}
+      selectedSkillPreview={selectedSkillPreview}
+      skillPreviewLoadingPath={skillPreviewLoadingPath}
+      copiedSkillInstallLogId={copiedSkillInstallLogId}
+      skillInstallCancelingIds={skillInstallCancelingIds}
+      skillInstallIds={skillInstallIds}
+      skillInstallLogs={skillInstallLogs}
+      skillInstallLogNames={skillInstallLogNames}
+      skillInstallLogStatuses={skillInstallLogStatuses}
+      skillInstallLogResultId={skillInstallLogResultId}
+      installedSkillNames={installedSkillNames}
+      onSkillRootChange={(value) => updateConfig('skillRoot', value)}
+      onSaveSkillRoot={() => void saveSkillRoot()}
+      onLocalSkillSearchQueryChange={setLocalSkillSearchQuery}
+      onSkillSearchQueryChange={setSkillSearchQuery}
+      onRefreshSkills={() => void refreshSkills()}
+      onSearchSkills={() => void searchSkills()}
+      onInstallSkill={(result) => void installSkill(result)}
+      onCancelSkillInstall={(resultId) => void cancelSkillInstall(resultId)}
+      onCopySkillInstallCommand={(result) => void copySkillInstallCommand(result)}
+      onCopySelectedSkillInstallLog={() => void copySelectedSkillInstallLog()}
+      onDeleteSkill={(skill) => void deleteSkill(skill)}
+      onPreviewSkill={(skill) => void previewSkill(skill)}
+      onDeleteSkillInstallLog={deleteSkillInstallLog}
+      onSelectedSkillPreviewChange={setSelectedSkillPreview}
+      onSkillInstallLogResultIdChange={setSkillInstallLogResultId}
+    />
   )
 
   const mcpSheet = (
@@ -5063,6 +4965,42 @@ function App(): React.JSX.Element {
                     />
                     <FieldDescription>{t.settings.mcpEnvHint}</FieldDescription>
                   </Field>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="mcp-tool-allow">
+                        {t.settings.mcpToolAllowList}
+                      </FieldLabel>
+                      <Textarea
+                        id="mcp-tool-allow"
+                        className="min-h-20 resize-y font-mono text-xs"
+                        value={formatToolNameListText(settingsMcpServer.toolAllowList)}
+                        onChange={(event) =>
+                          updateSettingsMcpServer(
+                            'toolAllowList',
+                            parseToolNameListText(event.target.value)
+                          )
+                        }
+                        placeholder={t.settings.toolNameListPlaceholder}
+                      />
+                      <FieldDescription>{t.settings.mcpToolAllowListHint}</FieldDescription>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-tool-deny">{t.settings.mcpToolDenyList}</FieldLabel>
+                      <Textarea
+                        id="mcp-tool-deny"
+                        className="min-h-20 resize-y font-mono text-xs"
+                        value={formatToolNameListText(settingsMcpServer.toolDenyList)}
+                        onChange={(event) =>
+                          updateSettingsMcpServer(
+                            'toolDenyList',
+                            parseToolNameListText(event.target.value)
+                          )
+                        }
+                        placeholder={t.settings.toolNameListPlaceholder}
+                      />
+                      <FieldDescription>{t.settings.mcpToolDenyListHint}</FieldDescription>
+                    </Field>
+                  </div>
                   <Field>
                     <div className="flex items-center justify-between gap-2">
                       <FieldLabel>{t.settings.mcpTools}</FieldLabel>
@@ -5145,173 +5083,25 @@ function App(): React.JSX.Element {
   )
 
   const historySheet = (
-    <Sheet open={historyOpen} onOpenChange={setHistorySheetOpen}>
-      <SheetContent side="left" className="w-[560px] sm:max-w-[560px]">
-        <SheetHeader>
-          <SheetTitle>{t.history.title}</SheetTitle>
-          <SheetDescription>{t.history.description}</SheetDescription>
-        </SheetHeader>
-        <div className="app-sheet-list min-h-0 flex-1 space-y-2 overflow-auto px-4">
-          {historyLoading && (
-            <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
-              {t.history.loading}
-            </div>
-          )}
-          {!historyLoading && historyItems.length === 0 && (
-            <div className="rounded-md border p-3 text-sm text-muted-foreground">
-              {t.history.empty}
-            </div>
-          )}
-          {!historyLoading &&
-            historyItems.map((item) => {
-              const editing = historyTitleEditingId === item.tabId
-
-              return (
-                <div
-                  key={item.tabId}
-                  className="rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
-                >
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1 overflow-hidden">
-                      {editing ? (
-                        <div className="space-y-2">
-                          <Input
-                            value={historyTitleDraft}
-                            onChange={(event) => setHistoryTitleDraft(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                void saveHistorySessionTitle(item)
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault()
-                                cancelRenameHistorySession()
-                              }
-                            }}
-                            aria-label={t.history.renameTitle}
-                            autoFocus
-                          />
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={cancelRenameHistorySession}
-                            >
-                              {t.common.cancel}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={
-                                !historyTitleDraft.trim() || historyTitleSavingId === item.tabId
-                              }
-                              onClick={() => void saveHistorySessionTitle(item)}
-                            >
-                              {historyTitleSavingId === item.tabId && (
-                                <Loader2Icon className="animate-spin" data-icon="inline-start" />
-                              )}
-                              {t.common.save}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="block w-full min-w-0 overflow-hidden text-left"
-                          onClick={() => void openHistorySession(item)}
-                          title={item.title}
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate font-medium">
-                              {item.title}
-                            </span>
-                            {item.isSsh && (
-                              <Badge variant="secondary" className="shrink-0">
-                                SSH
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                            <time
-                              className="shrink-0"
-                              dateTime={item.lastMessageAt ?? item.updatedAt}
-                            >
-                              {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
-                            </time>
-                            {item.connectionName && (
-                              <span className="min-w-0 truncate">· {item.connectionName}</span>
-                            )}
-                            <span className="shrink-0">
-                              · {item.runCount} {t.history.runs}
-                            </span>
-                          </div>
-                          {(item.summary || item.lastMessage) && (
-                            <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                              {item.summary ?? summarizeHistoryMessage(item.lastMessage ?? '')}
-                            </p>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                    {!editing && (
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`${t.history.renameTitle}: ${item.title}`}
-                          title={`${t.history.renameTitle}: ${item.title}`}
-                          onClick={() => startRenameHistorySession(item)}
-                        >
-                          <PencilIcon aria-hidden="true" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
-                          title={`${t.wiki.saveFromHistory}: ${item.title}`}
-                          disabled={savingHistoryWikiTabId === item.tabId}
-                          onClick={() => void saveHistorySessionToWiki(item)}
-                        >
-                          {savingHistoryWikiTabId === item.tabId ? (
-                            <Loader2Icon className="animate-spin" aria-hidden="true" />
-                          ) : (
-                            <FileTextIcon aria-hidden="true" />
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`${t.common.delete}: ${item.title}`}
-                          title={`${t.common.delete}: ${item.title}`}
-                          onClick={() => void deleteHistorySession(item)}
-                        >
-                          <Trash2Icon aria-hidden="true" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-        </div>
-        <SheetFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void refreshSessionHistory()}
-            disabled={historyLoading}
-          >
-            {historyLoading && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
-            {t.history.refresh}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+    <HistoryPanel
+      open={historyOpen}
+      onOpenChange={setHistorySheetOpen}
+      t={t}
+      loading={historyLoading}
+      items={historyItems}
+      titleEditingId={historyTitleEditingId}
+      titleDraft={historyTitleDraft}
+      titleSavingId={historyTitleSavingId}
+      savingWikiTabId={savingHistoryWikiTabId}
+      onTitleDraftChange={setHistoryTitleDraft}
+      onRefresh={() => void refreshSessionHistory()}
+      onOpenSession={(item) => void openHistorySession(item)}
+      onStartRename={startRenameHistorySession}
+      onCancelRename={cancelRenameHistorySession}
+      onSaveTitle={(item) => void saveHistorySessionTitle(item)}
+      onSaveToWiki={(item) => void saveHistorySessionToWiki(item)}
+      onDeleteSession={(item) => void deleteHistorySession(item)}
+    />
   )
 
   const wikiSheet = (
@@ -5542,79 +5332,44 @@ function App(): React.JSX.Element {
         className={`app-frame flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
       >
         {hiddenPane !== 'terminal' && (
-          <div
-            className="app-terminal-pane flex min-h-0 flex-col"
-            style={{ width: hiddenPane === 'chat' ? '100%' : `${terminalPanePercent}%` }}
-          >
-            <TerminalTabBar
-              tabs={terminalTabs}
-              labelTabs={tabs}
-              terminalPage={terminalPage}
-              activeTabId={activeTabId}
-              tabMenu={tabMenu}
-              t={t}
-              onNewConnection={openNewConnectionForm}
-              onSelectTab={(tabId) => {
-                activeTabIdRef.current = tabId
-                setActiveTabId(tabId)
-                setTerminalPage('terminal')
-              }}
-              onOpenTabMenu={setTabMenu}
-              onCloseTab={closeTab}
-              onCloseOtherTabs={closeOtherTabs}
-              onCloseAllTabs={closeAllTabs}
-            />
-            <div className="flex min-h-0 flex-1 flex-col">
-              {terminalTabs.length === 0 ? (
-                <div className="min-h-0 flex-1 bg-background/80 p-4">
-                  <ConnectionList
-                    className="mx-auto h-full max-w-3xl"
-                    connections={displayConnections}
-                    filteredConnections={filteredDisplayConnections}
-                    query={connectionSearchQuery}
-                    t={t}
-                    formatConnectionTarget={formatConnectionTarget}
-                    onQueryChange={setConnectionSearchQuery}
-                    headerAction={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={showConnectionList}
-                      >
-                        <ServerIcon data-icon="inline-start" />
-                        {t.connections.manageConnections}
-                      </Button>
-                    }
-                    renderConnectionActions={(connection) => (
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        aria-label={t.connections.connect}
-                        title={t.connections.connect}
-                        onClick={() => connectFromConnectionManager(connection)}
-                      >
-                        <ServerIcon aria-hidden="true" />
-                      </Button>
-                    )}
-                  />
-                </div>
-              ) : (
-                <div ref={terminalHostRef} className="terminal-canvas min-h-0 flex-1" />
-              )}
-              <SubterminalPanel
-                activeTab={activeTab}
-                collapsed={subterminalCollapsed}
-                panelHeight={subterminalPanelHeight}
-                resizeRef={subterminalResizeRef}
-                heightResizeRef={subterminalHeightResizeRef}
-                t={t}
-                onCollapsedChange={setSubterminalCollapsed}
-                onCloseSubterminal={closeSubterminal}
-                onCloseAllSubterminals={closeAllSubterminals}
-              />
-            </div>
-          </div>
+          <TerminalPane
+            widthPercent={terminalPanePercent}
+            fillWidth={hiddenPane === 'chat'}
+            terminalTabs={terminalTabs}
+            labelTabs={tabs}
+            terminalPage={terminalPage}
+            activeTabId={activeTabId}
+            activeTab={activeTab}
+            tabMenu={tabMenu}
+            displayConnections={displayConnections}
+            filteredDisplayConnections={filteredDisplayConnections}
+            connectionSearchQuery={connectionSearchQuery}
+            terminalHostRef={terminalHostRef}
+            subterminalCollapsed={subterminalCollapsed}
+            subterminalPanelHeight={subterminalPanelHeight}
+            subterminalResizeRef={subterminalResizeRef}
+            subterminalHeightResizeRef={subterminalHeightResizeRef}
+            connectionRecovery={connectionRecovery}
+            t={t}
+            formatConnectionTarget={formatConnectionTarget}
+            onNewConnection={openNewConnectionForm}
+            onSelectTab={(tabId) => {
+              activeTabIdRef.current = tabId
+              setActiveTabId(tabId)
+              setTerminalPage('terminal')
+            }}
+            onOpenTabMenu={setTabMenu}
+            onCloseTab={closeTab}
+            onCloseOtherTabs={closeOtherTabs}
+            onCloseAllTabs={closeAllTabs}
+            onConnectionQueryChange={setConnectionSearchQuery}
+            onShowConnectionList={showConnectionList}
+            onConnect={connectFromConnectionManager}
+            onSubterminalCollapsedChange={setSubterminalCollapsed}
+            onCloseSubterminal={closeSubterminal}
+            onCloseAllSubterminals={closeAllSubterminals}
+            onRetryConnection={() => void retryActiveConnection()}
+          />
         )}
         {!hiddenPane && (
           <div
@@ -5631,259 +5386,84 @@ function App(): React.JSX.Element {
           />
         )}
         {hiddenPane !== 'chat' && (
-          <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
-            <AgentLogList
-              logRef={agentLogRef}
-              entries={sessionChatTab.agentLog}
-              copiedLogId={sessionChatTab.copiedLogId}
-              thinking={sessionChatTab.agentThinking}
-              thinkingMessage={sessionChatTab.thinkingMessage}
-              t={t}
-              onCopyEntry={(entry) => void copyLogEntry(entry)}
-              onCopyResult={(entry) => void copyLogEntryResult(entry)}
-              onExportResult={(entry) => void exportLogEntryResultMarkdown(entry)}
-              onExportFull={(entry) => void exportLogEntryFullMarkdown(entry)}
-              onExportTrace={(entry) => void exportLogEntryTrace(entry)}
-            />
-            <div className="app-input-dock space-y-3 p-4">
-              <form onSubmit={submitAgent} className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    aria-label={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
-                    title={hiddenPane === 'terminal' ? t.app.showTerminal : t.app.hideTerminal}
-                    onClick={() => {
-                      setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
-                    }}
-                  >
-                    {hiddenPane === 'terminal' ? (
-                      terminalPaneFirst ? (
-                        <PanelLeftOpenIcon aria-hidden="true" />
-                      ) : (
-                        <PanelRightOpenIcon aria-hidden="true" />
-                      )
-                    ) : terminalPaneFirst ? (
-                      <PanelLeftCloseIcon aria-hidden="true" />
-                    ) : (
-                      <PanelRightCloseIcon aria-hidden="true" />
-                    )}
-                  </Button>
-                  <Select
-                    key={getSessionGroupId(sessionChatTab)}
-                    value={getSessionGroupId(sessionChatTab)}
-                    onValueChange={(groupId) => {
-                      const focusTab =
-                        getSessionTerminals(tabsRef.current, groupId).find(
-                          (tab) => tab.id === activeTabIdRef.current
-                        ) ??
-                        getSessionChatTab(tabsRef.current, groupId) ??
-                        tabsRef.current.find((tab) => getSessionGroupId(tab) === groupId)
-                      if (focusTab) selectSessionTab(focusTab.id)
-                    }}
-                    disabled={sessionChatTabs.length === 0}
-                  >
-                    <SelectTrigger className="h-8 min-w-0 flex-1" title={t.input.sessionLabel}>
-                      <SelectValue aria-label={t.input.sessionLabel}>
-                        {getSessionDisplayTitle(sessionChatTab, tabs)}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>{t.input.sessionLabel}</SelectLabel>
-                        {sessionChatTabs.map((tab) => (
-                          <SelectItem key={getSessionGroupId(tab)} value={getSessionGroupId(tab)}>
-                            {getSessionDisplayTitle(tab, tabs)}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  {sessionTerminals.length > 1 && (
-                    <Select value={activeTab.id} onValueChange={(tabId) => selectSessionTab(tabId)}>
-                      <SelectTrigger
-                        className="h-8 min-w-0 flex-1"
-                        title={t.input.sessionTerminalLabel}
-                      >
-                        <SelectValue aria-label={t.input.sessionTerminalLabel}>
-                          {getTerminalDisplayTitle(activeTab, tabs)}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>{t.input.sessionTerminalLabel}</SelectLabel>
-                          {sessionTerminals.map((tab) => (
-                            <SelectItem key={tab.id} value={tab.id}>
-                              {getTerminalDisplayTitle(tab, tabs)}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  )}
-                  <Select
-                    value={activeModelSelectionValue}
-                    onValueChange={applyConversationModel}
-                    disabled={visibleModels.length === 0}
-                  >
-                    <SelectTrigger className="h-8 min-w-0 flex-1" title={aiStatusText}>
-                      <span className="sr-only">
-                        <SelectValue aria-label={t.app.model} />
-                      </span>
-                      <span className="flex min-w-0 items-center gap-2">
-                        <StatusDot state={aiState} title={aiStatusText} />
-                        <span className="truncate">
-                          {activeModel
-                            ? `${activeModel.name} · ${activeModel.providerName}`
-                            : activeTabModelId}
-                        </span>
-                        {modelValidationError && (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  className="pointer-events-auto inline-flex shrink-0"
-                                  aria-label={`${t.app.aiNotReady}: ${modelValidationError}`}
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                >
-                                  <TriangleAlertIcon
-                                    className="size-3.5 text-destructive"
-                                    aria-hidden="true"
-                                  />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom" className="max-w-xs break-words">
-                                {modelValidationError}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        )}
-                      </span>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>{t.app.model}</SelectLabel>
-                        {visibleModels.map((model) => (
-                          <SelectItem
-                            key={`${model.providerId}:${model.id}`}
-                            value={buildModelSelectionValue(model.providerId, model.id)}
-                          >
-                            {model.name} · {model.providerName}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="relative rounded-lg border bg-background/95 p-2 shadow-sm">
-                  <SlashCommandMenu
-                    visible={slashMenuVisible}
-                    listRef={slashCommandListRef}
-                    options={slashCommandOptions}
-                    selectedIndex={selectedSlashCommandIndex}
-                    t={t}
-                    onSelect={insertSlashCommand}
-                  />
-                  <AgentReferenceBadges
-                    skillRefs={sessionChatTab.skillRefs}
-                    pathRefs={sessionChatTab.pathRefs}
-                    toolRefs={sessionChatTab.toolRefs}
-                    wikiRefs={sessionChatTab.wikiRefs}
-                    t={t}
-                    onRemoveSkill={removeSkillRef}
-                    onRemovePath={removePathRef}
-                    onRemoveTool={removeToolRef}
-                    onRemoveWiki={removeWikiRef}
-                  />
-                  <Textarea
-                    value={sessionChatTab.agentInput}
-                    onChange={(event) => {
-                      setSlashCommandOpen(true)
-                      setSlashCommandIndex(0)
-                      updateTab(sessionChatTab.id, (tab) => ({
-                        ...tab,
-                        agentInput: event.target.value
-                      }))
-                    }}
-                    onKeyDown={handleAgentInputKeyDown}
-                    onPaste={(event) => void handleAgentInputPaste(event)}
-                    placeholder={t.input.askPlaceholder}
-                    className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
-                  />
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
-                    <span>
-                      {sessionChatTab.agentThinking
-                        ? sessionChatTab.thinkingMessage || t.input.thinking
-                        : sessionChatTab.agentBusy
-                          ? t.input.contextHint
-                          : sessionTerminals.length > 1
-                            ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
-                            : t.input.currentTerminal}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.input.referenceFile}
-                        title={t.input.referenceFile}
-                        onClick={() => void pickPathReference('file')}
-                      >
-                        <FileIcon aria-hidden="true" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.input.referenceDirectory}
-                        title={t.input.referenceDirectory}
-                        onClick={() => void pickPathReference('directory')}
-                      >
-                        <FolderOpenIcon aria-hidden="true" />
-                      </Button>
-                      <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
-                      {sessionChatTab.agentBusy && (
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="xs"
-                          className="h-5 px-2 text-[11px]"
-                          onClick={() => stopAgentRun()}
-                        >
-                          {t.common.stop}
-                        </Button>
-                      )}
-                      {(activeAgentPending || sessionChatTab.agentInput.trim()) && (
-                        <Button
-                          type="submit"
-                          size={activeAgentPending ? 'icon-xs' : 'icon'}
-                          aria-label={
-                            sessionChatTab.agentThinking
-                              ? t.input.thinking
-                              : sessionChatTab.agentBusy
-                                ? t.input.contextAdd
-                                : t.common.send
-                          }
-                          disabled={sessionChatTab.agentThinking}
-                        >
-                          {sessionChatTab.agentThinking ||
-                          (sessionChatTab.agentBusy && !sessionChatTab.agentInput.trim()) ? (
-                            <Loader2Icon className="animate-spin" aria-hidden="true" />
-                          ) : sessionChatTab.agentBusy ? (
-                            <PlusIcon aria-hidden="true" />
-                          ) : (
-                            <ArrowUpIcon aria-hidden="true" />
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </aside>
+          <AgentPanel
+            sessionChatTab={sessionChatTab}
+            sessionChatTabs={sessionChatTabs}
+            sessionTerminals={sessionTerminals}
+            activeTab={activeTab}
+            tabs={tabs}
+            agentLogRef={agentLogRef}
+            slashCommandListRef={slashCommandListRef}
+            slashMenuVisible={slashMenuVisible}
+            slashCommandOptions={slashCommandOptions}
+            selectedSlashCommandIndex={selectedSlashCommandIndex}
+            terminalPaneFirst={terminalPaneFirst}
+            terminalHidden={hiddenPane === 'terminal'}
+            activeModel={activeModel}
+            activeModelSelectionValue={activeModelSelectionValue}
+            activeTabModelId={activeTabModelId}
+            visibleModels={visibleModels}
+            aiState={aiState}
+            aiStatusText={aiStatusText}
+            modelValidationError={modelValidationError}
+            configured={configured}
+            activeAgentPending={activeAgentPending}
+            pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
+              (workflow) => workflow.pinned !== false
+            )}
+            connectionRecovery={connectionRecovery}
+            t={t}
+            onCopyEntry={(entry) => void copyLogEntry(entry)}
+            onCopyResult={(entry) => void copyLogEntryResult(entry)}
+            onExportResult={(entry) => void exportLogEntryResultMarkdown(entry)}
+            onExportFull={(entry) => void exportLogEntryFullMarkdown(entry)}
+            onExportTrace={(entry) => void exportLogEntryTrace(entry)}
+            onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
+            feedbackByLogId={opsFeedbackByLogId}
+            feedbackBusyLogId={opsFeedbackBusyLogId}
+            onToggleTerminalPane={() => {
+              setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
+            }}
+            onSelectSession={(groupId) => {
+              const focusTab =
+                getSessionTerminals(tabsRef.current, groupId).find(
+                  (tab) => tab.id === activeTabIdRef.current
+                ) ??
+                getSessionChatTab(tabsRef.current, groupId) ??
+                tabsRef.current.find((tab) => getSessionGroupId(tab) === groupId)
+              if (focusTab) selectSessionTab(focusTab.id)
+            }}
+            onSelectTerminal={(tabId) => selectSessionTab(tabId)}
+            onModelChange={applyConversationModel}
+            onSubmit={(event) => void submitAgent(event)}
+            onInsertSlashCommand={insertSlashCommand}
+            onInsertPinnedWorkflow={(workflow) => {
+              updateTab(sessionChatTab.id, (tab) => ({
+                ...tab,
+                agentInput: tab.agentInput.trim()
+                  ? `${tab.agentInput.trim()}\n${workflow.prompt}`
+                  : workflow.prompt
+              }))
+            }}
+            onAgentInputChange={(value) => {
+              setSlashCommandOpen(true)
+              setSlashCommandIndex(0)
+              updateTab(sessionChatTab.id, (tab) => ({
+                ...tab,
+                agentInput: value
+              }))
+            }}
+            onAgentInputKeyDown={handleAgentInputKeyDown}
+            onAgentInputPaste={(event) => void handleAgentInputPaste(event)}
+            onRemoveSkill={removeSkillRef}
+            onRemovePath={removePathRef}
+            onRemoveTool={removeToolRef}
+            onRemoveWiki={removeWikiRef}
+            onPickPathReference={(kind) => void pickPathReference(kind)}
+            onStopAgent={() => stopAgentRun()}
+            onRetryConnection={() => void retryActiveConnection()}
+            onOpenConnections={showConnectionList}
+          />
         )}
       </section>
       <ConnectionManagerModal
@@ -5933,6 +5513,24 @@ function App(): React.JSX.Element {
             current ? { ...current, dontAskAgain: checked } : current
           )
         }
+      />
+      <OnboardingModal
+        open={onboardingOpen}
+        t={t}
+        onDismiss={closeOnboarding}
+        onOpenSettings={() => {
+          closeOnboarding()
+          setSheetOpen(true)
+        }}
+        onOpenConnections={() => {
+          closeOnboarding()
+          showConnectionList()
+        }}
+        onOpenSkills={() => {
+          closeOnboarding()
+          setSkillOpen(true)
+        }}
+        onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
       />
       <PasswordPromptModal
         request={passwordPromptRequest}
@@ -6018,17 +5616,6 @@ function buildSessionTerminalRefs(
   }))
 }
 
-function summarizeHistoryMessage(value: string): string {
-  const compact = value
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[#>*_`[\]()]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (compact.length <= 120) return compact
-  return `${compact.slice(0, 120)}...`
-}
-
 function resolveCommandApprovalSessionLabel(
   request: CommandApprovalRequest | null,
   tabs: AgentTerminalTab[],
@@ -6107,15 +5694,16 @@ async function runConnectionCommandSequence(
   commands: string[],
   tabId: string,
   appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
-  t: Dictionary
-): Promise<void> {
+  t: Dictionary,
+  logTabId = tabId
+): Promise<boolean> {
   const [sshCommand, ...loginActions] = commands
-  if (!sshCommand) return
+  if (!sshCommand) return true
 
   const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
 
-  if (loginActions.length === 0) return
+  if (loginActions.length === 0) return true
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
@@ -6129,9 +5717,9 @@ async function runConnectionCommandSequence(
           kind: 'error',
           text: `${t.terminal.outputSettleTimeout} (${index + 1})`
         },
-        tabId
+        logTabId
       )
-      return
+      return false
     }
 
     sendTerminalInput(action, tabId)
@@ -6140,20 +5728,21 @@ async function runConnectionCommandSequence(
         kind: 'command',
         text: formatConnectionActionLog(action, index + 1, t)
       },
-      tabId
+      logTabId
     )
   }
 
-  return
+  return true
 }
 
 async function runConnectionLoginActionSequence(
   loginActions: string[],
   tabId: string,
   appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
-  t: Dictionary
-): Promise<void> {
-  if (loginActions.length === 0) return
+  t: Dictionary,
+  logTabId = tabId
+): Promise<boolean> {
+  if (loginActions.length === 0) return true
 
   const firstActionReady = waitForTerminalActionPrompt(tabId)
   for (let index = 0; index < loginActions.length; index += 1) {
@@ -6168,9 +5757,9 @@ async function runConnectionLoginActionSequence(
           kind: 'error',
           text: `${t.terminal.outputSettleTimeout} (${index + 1})`
         },
-        tabId
+        logTabId
       )
-      return
+      return false
     }
 
     sendTerminalInput(action, tabId)
@@ -6179,9 +5768,11 @@ async function runConnectionLoginActionSequence(
         kind: 'command',
         text: formatConnectionActionLog(action, index + 1, t)
       },
-      tabId
+      logTabId
     )
   }
+
+  return true
 }
 
 function waitForTerminalIdle(

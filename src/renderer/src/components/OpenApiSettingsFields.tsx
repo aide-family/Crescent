@@ -1,4 +1,5 @@
 import { FolderOpenIcon, LinkIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { useState } from 'react'
 
 import { StatusDot } from '@renderer/components/StatusIndicators'
 import { Badge } from '@renderer/components/ui/badge'
@@ -124,6 +125,10 @@ interface OpenApiProfileEditorFieldsProps {
   openApiTimeoutMs: number
   openApiMaxRetries: number
   openApiRetryBackoffMs: number
+  promptTemplate: string
+  pinnedWorkflowsText: string
+  toolAllowListText: string
+  toolDenyListText: string
   validation: AgentValidationResult | undefined
   importing: boolean
   t: Dictionary
@@ -133,6 +138,10 @@ interface OpenApiProfileEditorFieldsProps {
   onTimeoutMsChange: (value: number) => void
   onMaxRetriesChange: (value: number) => void
   onRetryBackoffMsChange: (value: number) => void
+  onPromptTemplateChange: (value: string) => void
+  onPinnedWorkflowsTextChange: (value: string) => void
+  onToolAllowListTextChange: (value: string) => void
+  onToolDenyListTextChange: (value: string) => void
   onImportFile: () => void
   onClearDocument: () => void
 }
@@ -144,6 +153,10 @@ export function OpenApiProfileEditorFields({
   openApiTimeoutMs,
   openApiMaxRetries,
   openApiRetryBackoffMs,
+  promptTemplate,
+  pinnedWorkflowsText,
+  toolAllowListText,
+  toolDenyListText,
   validation,
   importing,
   t,
@@ -153,6 +166,10 @@ export function OpenApiProfileEditorFields({
   onTimeoutMsChange,
   onMaxRetriesChange,
   onRetryBackoffMsChange,
+  onPromptTemplateChange,
+  onPinnedWorkflowsTextChange,
+  onToolAllowListTextChange,
+  onToolDenyListTextChange,
   onImportFile,
   onClearDocument
 }: OpenApiProfileEditorFieldsProps): React.JSX.Element {
@@ -269,6 +286,29 @@ export function OpenApiProfileEditorFields({
           <FieldDescription>{t.settings.openApiRetryBackoffMsHint}</FieldDescription>
         </Field>
       </div>
+      <Field>
+        <FieldLabel htmlFor="openapi-prompt-template">
+          {t.settings.openApiPromptTemplate}
+        </FieldLabel>
+        <Textarea
+          id="openapi-prompt-template"
+          className="min-h-20 resize-y text-xs"
+          value={promptTemplate}
+          onChange={(event) => onPromptTemplateChange(event.target.value)}
+          placeholder={t.settings.openApiPromptTemplatePlaceholder}
+        />
+        <FieldDescription>{t.settings.openApiPromptTemplateHint}</FieldDescription>
+      </Field>
+      <OpenApiPolicyTextFields
+        key={profile.id}
+        pinnedWorkflowsText={pinnedWorkflowsText}
+        toolAllowListText={toolAllowListText}
+        toolDenyListText={toolDenyListText}
+        t={t}
+        onPinnedWorkflowsTextChange={onPinnedWorkflowsTextChange}
+        onToolAllowListTextChange={onToolAllowListTextChange}
+        onToolDenyListTextChange={onToolDenyListTextChange}
+      />
       {openApiTools.length > 0 ? (
         <Field>
           <div className="flex items-center justify-between gap-2">
@@ -301,5 +341,78 @@ export function OpenApiProfileEditorFields({
         </Field>
       ) : null}
     </FieldGroup>
+  )
+}
+
+function OpenApiPolicyTextFields({
+  pinnedWorkflowsText,
+  toolAllowListText,
+  toolDenyListText,
+  t,
+  onPinnedWorkflowsTextChange,
+  onToolAllowListTextChange,
+  onToolDenyListTextChange
+}: {
+  pinnedWorkflowsText: string
+  toolAllowListText: string
+  toolDenyListText: string
+  t: Dictionary
+  onPinnedWorkflowsTextChange: (value: string) => void
+  onToolAllowListTextChange: (value: string) => void
+  onToolDenyListTextChange: (value: string) => void
+}): React.JSX.Element {
+  const [pinnedDraft, setPinnedDraft] = useState(pinnedWorkflowsText)
+  const [allowDraft, setAllowDraft] = useState(toolAllowListText)
+  const [denyDraft, setDenyDraft] = useState(toolDenyListText)
+
+  return (
+    <>
+      <Field>
+        <FieldLabel htmlFor="openapi-pinned-workflows">
+          {t.settings.openApiPinnedWorkflows}
+        </FieldLabel>
+        <Textarea
+          id="openapi-pinned-workflows"
+          className="min-h-20 resize-y font-mono text-xs"
+          value={pinnedDraft}
+          onChange={(event) => {
+            setPinnedDraft(event.target.value)
+            onPinnedWorkflowsTextChange(event.target.value)
+          }}
+          placeholder={t.settings.openApiPinnedWorkflowsPlaceholder}
+        />
+        <FieldDescription>{t.settings.openApiPinnedWorkflowsHint}</FieldDescription>
+      </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="openapi-tool-allow">{t.settings.openApiToolAllowList}</FieldLabel>
+          <Textarea
+            id="openapi-tool-allow"
+            className="min-h-20 resize-y font-mono text-xs"
+            value={allowDraft}
+            onChange={(event) => {
+              setAllowDraft(event.target.value)
+              onToolAllowListTextChange(event.target.value)
+            }}
+            placeholder={t.settings.toolNameListPlaceholder}
+          />
+          <FieldDescription>{t.settings.openApiToolAllowListHint}</FieldDescription>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="openapi-tool-deny">{t.settings.openApiToolDenyList}</FieldLabel>
+          <Textarea
+            id="openapi-tool-deny"
+            className="min-h-20 resize-y font-mono text-xs"
+            value={denyDraft}
+            onChange={(event) => {
+              setDenyDraft(event.target.value)
+              onToolDenyListTextChange(event.target.value)
+            }}
+            placeholder={t.settings.toolNameListPlaceholder}
+          />
+          <FieldDescription>{t.settings.openApiToolDenyListHint}</FieldDescription>
+        </Field>
+      </div>
+    </>
   )
 }

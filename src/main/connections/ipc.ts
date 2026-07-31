@@ -5,6 +5,7 @@ import {
   readCustomConnections,
   upsertCustomConnection
 } from '../crescent-store'
+import { deleteOpsHistoryForConnection } from '../crescent-sqlite'
 import type { ConnectionConfig, ConnectionInput } from '../agent/types'
 import { loadSshConfigConnections } from './ssh-config'
 import { resolveRuntimeEnvValue } from './runtime-env'
@@ -14,6 +15,11 @@ export function registerConnectionIpc(): void {
     return listConnections()
   })
 
+  ipcMain.handle('connections:resolve', async (_, id: string) => {
+    const connections = await listConnections({ forceRefreshSecrets: true })
+    return connections.find((connection) => connection.id === id)
+  })
+
   ipcMain.handle('connections:save', async (_, input: ConnectionInput) => {
     upsertCustomConnection(input)
     return listConnections()
@@ -21,11 +27,14 @@ export function registerConnectionIpc(): void {
 
   ipcMain.handle('connections:delete', async (_, id: string) => {
     deleteCustomConnection(id)
+    deleteOpsHistoryForConnection(id ?? '')
     return listConnections()
   })
 }
 
-async function listConnections(): Promise<ConnectionConfig[]> {
+async function listConnections(options?: {
+  forceRefreshSecrets?: boolean
+}): Promise<ConnectionConfig[]> {
   const sshConfigConnections = loadSshConfigConnections()
   const customConnections = readCustomConnections()
   const seen = new Set<string>()
@@ -37,7 +46,11 @@ async function listConnections(): Promise<ConnectionConfig[]> {
     candidates.push(connection)
   }
 
-  const merged = await Promise.all(candidates.map(resolveConnectionRuntimeSecrets))
+  const merged = await Promise.all(
+    candidates.map((connection) =>
+      resolveConnectionRuntimeSecrets(connection, options?.forceRefreshSecrets)
+    )
+  )
 
   return merged.sort((left, right) => {
     if (left.source !== right.source) return left.source === 'custom' ? -1 : 1
@@ -46,11 +59,12 @@ async function listConnections(): Promise<ConnectionConfig[]> {
 }
 
 async function resolveConnectionRuntimeSecrets(
-  connection: ConnectionConfig
+  connection: ConnectionConfig,
+  forceRefresh = false
 ): Promise<ConnectionConfig> {
   const envName = connection.passwordEnvVar?.trim()
   if (!envName || connection.password) return connection
 
-  const resolvedPassword = await resolveRuntimeEnvValue(envName)
+  const resolvedPassword = await resolveRuntimeEnvValue(envName, { forceRefresh })
   return resolvedPassword ? { ...connection, resolvedPassword } : connection
 }

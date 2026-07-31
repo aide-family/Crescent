@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 
 import type { AgentConfig, AgentMcpServerConfig, OpenAiTool, ToolCatalogEntry } from './types'
+import { isToolNameAllowed } from '../../shared/tool-policy'
 
 const MCP_PROTOCOL_VERSION = '2025-11-25'
 const MCP_REQUEST_TIMEOUT_MS = 12_000
@@ -53,6 +54,14 @@ export async function loadMcpToolRegistry(config: AgentConfig): Promise<McpToolR
       for (const tool of tools) {
         const functionName = buildMcpFunctionName(server, tool.name)
         if (entries.has(functionName)) continue
+        if (
+          !isToolNameAllowed(functionName, {
+            allowList: server.toolAllowList,
+            denyList: server.toolDenyList
+          })
+        ) {
+          continue
+        }
 
         const schema: OpenAiTool = {
           type: 'function',

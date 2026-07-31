@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { PlusIcon } from 'lucide-react'
 
 import { TerminalActivityDot } from '@renderer/components/StatusIndicators'
@@ -39,6 +40,16 @@ export function TerminalTabBar({
   onCloseAllTabs: (tabId: string) => void
 }): React.JSX.Element {
   const titleSource = labelTabs ?? tabs
+  const activeTabRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'nearest'
+    })
+  }, [activeTabId, tabs.length, terminalPage])
+
   return (
     <div className="app-tabbar flex h-10 shrink-0 items-center gap-1 px-2">
       {tabs.length === 0 ? (
@@ -52,30 +63,50 @@ export function TerminalTabBar({
           </Button>
         </div>
       ) : (
-        tabs.map((tab) => {
-          const selected = terminalPage === 'terminal' && tab.id === activeTabId
+        <>
+          <div
+            className="app-tabbar-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden"
+            role="tablist"
+            aria-label={t.connections.sshConnections}
+          >
+            {tabs.map((tab) => {
+              const selected = terminalPage === 'terminal' && tab.id === activeTabId
 
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              aria-selected={selected}
-              className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
-                selected
-                  ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
-                  : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
-              }`}
-              onClick={() => onSelectTab(tab.id)}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                onOpenTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
-              }}
-            >
-              <TerminalActivityDot active={tab.terminalReady} />
-              <span className="truncate">{getTerminalDisplayTitle(tab, titleSource)}</span>
-            </button>
-          )
-        })
+              return (
+                <button
+                  key={tab.id}
+                  ref={selected ? activeTabRef : undefined}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className={`inline-flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
+                    selected
+                      ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
+                      : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
+                  }`}
+                  onClick={() => onSelectTab(tab.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    onOpenTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+                  }}
+                >
+                  <TerminalActivityDot active={tab.terminalReady} />
+                  <span className="truncate">{getTerminalDisplayTitle(tab, titleSource)}</span>
+                </button>
+              )
+            })}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0"
+            aria-label={t.common.new}
+            onClick={onNewConnection}
+          >
+            <PlusIcon />
+          </Button>
+        </>
       )}
       {tabMenu && (
         <div

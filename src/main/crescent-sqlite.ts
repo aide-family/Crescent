@@ -5,6 +5,8 @@ import { getCrescentDatabasePath, getCrescentDir } from './crescent-paths'
 import type {
   AgentMemoryRecord,
   OperationRecord,
+  OpsHistoryRating,
+  OpsHistoryRecord,
   StoredAgentLogEntry,
   StoredAgentRun,
   StoredSessionHistoryDetail,
@@ -104,6 +106,19 @@ export function initializeCrescentDatabase(): void {
       output TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS ops_history_records (
+      id TEXT PRIMARY KEY,
+      tab_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL DEFAULT '',
+      run_id TEXT NOT NULL UNIQUE,
+      rating TEXT NOT NULL,
+      user_goal TEXT NOT NULL,
+      path_summary TEXT NOT NULL,
+      lesson TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS app_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -116,6 +131,8 @@ export function initializeCrescentDatabase(): void {
       ON agent_runs (tab_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_operation_records_created_at
       ON operation_records (created_at);
+    CREATE INDEX IF NOT EXISTS idx_ops_history_tab_created_at
+      ON ops_history_records (tab_id, created_at);
   `)
 
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
@@ -123,6 +140,11 @@ export function initializeCrescentDatabase(): void {
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
   ensureColumn(db, 'agent_runs', 'trace_json', 'TEXT')
+  ensureColumn(db, 'ops_history_records', 'connection_id', "TEXT NOT NULL DEFAULT ''")
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ops_history_connection_updated_at
+      ON ops_history_records (connection_id, updated_at);
+  `)
 }
 
 export function saveSessionTabs(tabs: StoredSessionTab[]): void {
@@ -329,6 +351,225 @@ export function listAgentRunsForTab(tabId: string, limit = 50): StoredAgentRun[]
   }))
 }
 
+export function upsertOpsHistoryRecord(
+  input: Omit<OpsHistoryRecord, 'createdAt' | 'updatedAt'> & {
+    createdAt?: string
+    updatedAt?: string
+  }
+): OpsHistoryRecord | undefined {
+  const tabId = input.tabId.trim()
+  const connectionId = input.connectionId.trim()
+  const runId = input.runId.trim()
+  const rating = input.rating
+  const userGoal = input.userGoal.trim()
+  const pathSummary = input.pathSummary.trim()
+  const lesson = input.lesson.trim()
+  if (!tabId || !connectionId || !runId || !userGoal || !pathSummary) return undefined
+  if (rating !== 'like' && rating !== 'dislike') return undefined
+
+  const now = new Date().toISOString()
+  const id = input.id.trim() || `ops-${crypto.randomUUID()}`
+  const existing = getOpsHistoryByRunId(runId)
+  const createdAt = existing?.createdAt ?? input.createdAt ?? now
+  const updatedAt = input.updatedAt ?? now
+
+  getDatabase()
+    .prepare(
+      `
+      INSERT INTO ops_history_records (
+        id, tab_id, connection_id, run_id, rating, user_goal, path_summary, lesson, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET
+        tab_id = excluded.tab_id,
+        connection_id = excluded.connection_id,
+        rating = excluded.rating,
+        user_goal = excluded.user_goal,
+        path_summary = excluded.path_summary,
+        lesson = excluded.lesson,
+        updated_at = excluded.updated_at
+    `
+    )
+    .run(
+      id,
+      tabId,
+      connectionId,
+      runId,
+      rating,
+      userGoal,
+      pathSummary,
+      lesson,
+      createdAt,
+      updatedAt
+    )
+
+  return getOpsHistoryByRunId(runId)
+}
+
+const OPS_HISTORY_SELECT = `
+  id,
+  tab_id AS tabId,
+  connection_id AS connectionId,
+  run_id AS runId,
+  rating,
+  user_goal AS userGoal,
+  path_summary AS pathSummary,
+  lesson,
+  created_at AS createdAt,
+  updated_at AS updatedAt
+`
+
+export function getOpsHistoryByRunId(runId: string): OpsHistoryRecord | undefined {
+  const normalizedRunId = runId.trim()
+  if (!normalizedRunId) return undefined
+
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT ${OPS_HISTORY_SELECT}
+      FROM ops_history_records
+      WHERE run_id = ?
+    `
+    )
+    .get(normalizedRunId) as OpsHistoryRow | undefined
+
+  return row ? mapOpsHistoryRow(row) : undefined
+}
+
+/** @deprecated Prefer listOpsHistoryForConnection — feedback is scoped to SSH connections. */
+export function listOpsHistoryForTab(tabId: string, limit = 20): OpsHistoryRecord[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT ${OPS_HISTORY_SELECT}
+      FROM ops_history_records
+      WHERE tab_id = ?
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `
+    )
+    .all(normalizedTabId, Math.max(1, Math.min(limit, 50))) as unknown as OpsHistoryRow[]
+
+  return rows.map(mapOpsHistoryRow)
+}
+
+export function listOpsHistoryForConnection(connectionId: string, limit = 20): OpsHistoryRecord[] {
+  const normalizedConnectionId = connectionId.trim()
+  if (!normalizedConnectionId) return []
+
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT ${OPS_HISTORY_SELECT}
+      FROM ops_history_records
+      WHERE connection_id = ?
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `
+    )
+    .all(normalizedConnectionId, Math.max(1, Math.min(limit, 100))) as unknown as OpsHistoryRow[]
+
+  return rows.map(mapOpsHistoryRow)
+}
+
+export function getOpsHistoryById(id: string): OpsHistoryRecord | undefined {
+  const normalizedId = id.trim()
+  if (!normalizedId) return undefined
+
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT ${OPS_HISTORY_SELECT}
+      FROM ops_history_records
+      WHERE id = ?
+    `
+    )
+    .get(normalizedId) as OpsHistoryRow | undefined
+
+  return row ? mapOpsHistoryRow(row) : undefined
+}
+
+export function updateOpsHistoryRecord(input: {
+  id: string
+  rating?: OpsHistoryRating
+  userGoal?: string
+  pathSummary?: string
+  lesson?: string
+}): OpsHistoryRecord | undefined {
+  const existing = getOpsHistoryById(input.id)
+  if (!existing) return undefined
+
+  const rating = input.rating ?? existing.rating
+  const userGoal = (input.userGoal ?? existing.userGoal).trim()
+  const pathSummary = (input.pathSummary ?? existing.pathSummary).trim()
+  const lesson = (input.lesson ?? existing.lesson).trim()
+  if (!userGoal || !pathSummary) return undefined
+  if (rating !== 'like' && rating !== 'dislike') return undefined
+
+  const updatedAt = new Date().toISOString()
+  getDatabase()
+    .prepare(
+      `
+      UPDATE ops_history_records
+      SET rating = ?, user_goal = ?, path_summary = ?, lesson = ?, updated_at = ?
+      WHERE id = ?
+    `
+    )
+    .run(rating, userGoal, pathSummary, lesson, updatedAt, existing.id)
+
+  return getOpsHistoryById(existing.id)
+}
+
+export function deleteOpsHistoryRecord(id: string): boolean {
+  const normalizedId = id.trim()
+  if (!normalizedId) return false
+
+  const result = getDatabase()
+    .prepare('DELETE FROM ops_history_records WHERE id = ?')
+    .run(normalizedId)
+  return Number(result.changes) > 0
+}
+
+export function deleteOpsHistoryForConnection(connectionId: string): number {
+  const normalizedConnectionId = connectionId.trim()
+  if (!normalizedConnectionId) return 0
+
+  const result = getDatabase()
+    .prepare('DELETE FROM ops_history_records WHERE connection_id = ?')
+    .run(normalizedConnectionId)
+  return Number(result.changes)
+}
+
+interface OpsHistoryRow {
+  id: string
+  tabId: string
+  connectionId: string
+  runId: string
+  rating: OpsHistoryRating
+  userGoal: string
+  pathSummary: string
+  lesson: string
+  createdAt: string
+  updatedAt: string
+}
+
+function mapOpsHistoryRow(row: OpsHistoryRow): OpsHistoryRecord {
+  return {
+    id: row.id,
+    tabId: row.tabId,
+    connectionId: row.connectionId ?? '',
+    runId: row.runId,
+    rating: row.rating,
+    userGoal: row.userGoal,
+    pathSummary: row.pathSummary,
+    lesson: row.lesson ?? '',
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  }
+}
+
 export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
   const rows = getDatabase()
     .prepare(
@@ -463,6 +704,8 @@ export function deleteSessionHistory(tabId: string): boolean {
     changed += Number(
       db.prepare('DELETE FROM agent_logs WHERE tab_id = ?').run(normalizedTabId).changes
     )
+    // Keep ops_history_records: they are keyed by SSH connection and guide later ops
+    // on the same connection across chat/session lifecycles.
     changed += Number(
       db.prepare('DELETE FROM session_tabs WHERE tab_id = ?').run(normalizedTabId).changes
     )

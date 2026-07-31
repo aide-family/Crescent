@@ -89,6 +89,31 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('instead of redoing the investigation')
   })
 
+  it('injects active OpenAPI profile guidance into the system prompt', () => {
+    const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
+      mode: 'react',
+      memoryBlock: '',
+      profileContext: 'Prefer GET tools and confirm writes.',
+      terminalContext: ''
+    })
+
+    expect(prompt).toContain('Active OpenAPI profile guidance')
+    expect(prompt).toContain('Prefer GET tools and confirm writes.')
+    expect(prompt).toContain('profile-specific workflow guidance')
+  })
+
+  it('injects terminal ops history feedback into context', () => {
+    const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
+      mode: 'react',
+      memoryBlock: '',
+      terminalContext: '',
+      opsHistoryContext: '## Positive examples\n- User goal: check kubelet'
+    })
+
+    expect(prompt).toContain('Connection/terminal ops feedback')
+    expect(prompt).toContain('check kubelet')
+  })
+
   it('does not advertise terminal commands when terminal tools are disabled', () => {
     const prompt = new AgentPromptBuilder().buildToolLoopPrompt({
       mode: 'react',

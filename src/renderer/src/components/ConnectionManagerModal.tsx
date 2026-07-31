@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 
 import { ConnectionList } from '@renderer/components/ConnectionList'
+import { ConnectionOpsFeedbackPanel } from '@renderer/components/ConnectionOpsFeedbackPanel'
 import { SkillManageStatus, type SkillManageMessage } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
@@ -91,9 +92,15 @@ export function ConnectionManagerModal({
 }): React.JSX.Element | null {
   if (!open) return null
 
+  const selectedConnection = connections.find(
+    (connection) => connection.id === selectedConnectionId
+  )
+  const canEditConnection = !selectedConnection || selectedConnection.source === 'custom'
+  const canSaveConnection = connectionEditing && connectionFormReady && canEditConnection
+
   return (
     <div
-      className="app-modal-overlay fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="connection-modal-title"
@@ -134,98 +141,94 @@ export function ConnectionManagerModal({
             formatConnectionTarget={formatConnectionTarget}
             onQueryChange={onQueryChange}
             onSelectConnection={(connection) => {
-              if (connection.source === 'custom') onSelectConnection(connection)
+              onSelectConnection(connection)
             }}
             renderConnectionActions={(connection) => (
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="icon-xs"
-                    aria-label={t.connections.connect}
-                    title={t.connections.connect}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onConnect(connection)
-                      onClose()
-                    }}
-                  >
-                    <ServerIcon aria-hidden="true" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-xs"
-                    aria-label={t.connections.connectInSession}
-                    title={t.connections.connectInSessionDescription}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onConnectInSession(connection)
-                      onClose()
-                    }}
-                  >
-                    <Layers2Icon aria-hidden="true" />
-                  </Button>
-                  {connection.source === 'custom' && (
-                    <>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.connections.copyAsJson}
-                        title={t.connections.copyAsJson}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onCopyConnection(connection)
-                        }}
-                      >
-                        <CopyIcon aria-hidden="true" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.connections.duplicateAsNew}
-                        title={t.connections.duplicateAsNew}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onDuplicateConnection(connection)
-                        }}
-                      >
-                        <CopyPlusIcon aria-hidden="true" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t.common.edit}
-                        title={t.common.edit}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onEditConnection(connection)
-                        }}
-                      >
-                        <PencilIcon aria-hidden="true" />
-                      </Button>
-                    </>
-                  )}
-                </div>
+              <div className="flex flex-wrap items-center justify-end gap-1">
                 {connection.source === 'custom' && (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="icon-xs"
-                    aria-label={t.common.delete}
-                    title={t.common.delete}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onDeleteConnection(connection.id)
-                    }}
-                  >
-                    <Trash2Icon aria-hidden="true" />
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.copyAsJson}
+                      title={t.connections.copyAsJson}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onCopyConnection(connection)
+                      }}
+                    >
+                      <CopyIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.duplicateAsNew}
+                      title={t.connections.duplicateAsNew}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDuplicateConnection(connection)
+                      }}
+                    >
+                      <CopyPlusIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.common.edit}
+                      title={t.common.edit}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onEditConnection(connection)
+                      }}
+                    >
+                      <PencilIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon-xs"
+                      aria-label={t.common.delete}
+                      title={t.common.delete}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDeleteConnection(connection.id)
+                      }}
+                    >
+                      <Trash2Icon aria-hidden="true" />
+                    </Button>
+                  </>
                 )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-xs"
+                  aria-label={t.connections.connectInSession}
+                  title={t.connections.connectInSessionDescription}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onConnectInSession(connection)
+                    onClose()
+                  }}
+                >
+                  <Layers2Icon aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="icon-xs"
+                  aria-label={t.connections.connect}
+                  title={t.connections.connect}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onConnect(connection)
+                    onClose()
+                  }}
+                >
+                  <ServerIcon aria-hidden="true" />
+                </Button>
               </div>
             )}
           />
@@ -361,6 +364,13 @@ export function ConnectionManagerModal({
                 </FieldDescription>
               </Field>
             </FieldGroup>
+            {selectedConnectionId ? (
+              <ConnectionOpsFeedbackPanel
+                key={selectedConnectionId}
+                connectionId={selectedConnectionId}
+                t={t}
+              />
+            ) : null}
           </div>
         </div>
         <div className="shrink-0 border-t px-4 py-3">
@@ -370,7 +380,7 @@ export function ConnectionManagerModal({
               {t.common.new}
             </Button>
             <div className="flex items-center gap-2">
-              {!connectionEditing && connectionForm.id && (
+              {!connectionEditing && connectionForm.id && canEditConnection && (
                 <Button type="button" variant="outline" onClick={onStartEditing}>
                   {t.common.edit}
                 </Button>
@@ -379,15 +389,11 @@ export function ConnectionManagerModal({
                 type="button"
                 variant="outline"
                 onClick={() => onSave(false)}
-                disabled={!connectionEditing || !connectionFormReady}
+                disabled={!canSaveConnection}
               >
                 {t.common.save}
               </Button>
-              <Button
-                type="button"
-                onClick={() => onSave(true)}
-                disabled={!connectionEditing || !connectionFormReady}
-              >
+              <Button type="button" onClick={() => onSave(true)} disabled={!canSaveConnection}>
                 <ServerIcon data-icon="inline-start" />
                 {t.common.saveAndConnect}
               </Button>

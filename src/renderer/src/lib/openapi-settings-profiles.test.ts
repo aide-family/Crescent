@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type { AgentConfig } from '../../../shared/agent-types'
 import {
   createEmptyOpenApiProfile,
+  formatPinnedWorkflowsText,
+  parsePinnedWorkflowsText,
   updateOpenApiProfileInConfig,
   withActiveOpenApiProfile
 } from '../../../shared/openapi-profiles'
@@ -96,5 +98,47 @@ describe('openapi settings profile switching', () => {
       '/Users/demo/openapi.yaml'
     )
     expect(next.openApiDocument).toBe('/Users/demo/openapi.yaml')
+  })
+
+  it('patches prompt templates, pinned workflows, and tool policies on a profile', () => {
+    const next = updateOpenApiProfileInConfig(configWithProfiles(), 'prod', {
+      promptTemplate: 'Prefer GET tools first.',
+      pinnedWorkflows: [{ id: 'wf-1', name: 'List pets', prompt: 'List all pets via the API.' }],
+      toolAllowList: ['listPets'],
+      toolDenyList: ['deletePet']
+    })
+
+    const prod = next.openApiProfiles.find((profile) => profile.id === 'prod')
+    expect(prod?.promptTemplate).toBe('Prefer GET tools first.')
+    expect(prod?.pinnedWorkflows).toEqual([
+      { id: 'wf-1', name: 'List pets', prompt: 'List all pets via the API.', pinned: true }
+    ])
+    expect(prod?.toolAllowList).toEqual(['listPets'])
+    expect(prod?.toolDenyList).toEqual(['deletePet'])
+  })
+})
+
+describe('pinned workflow text codec', () => {
+  it('round-trips Name | prompt lines', () => {
+    const workflows = parsePinnedWorkflowsText(
+      'List pets | List all pets via the API.\nCreate pet | Create a pet named Fluffy'
+    )
+    expect(workflows).toEqual([
+      {
+        id: 'workflow-1',
+        name: 'List pets',
+        prompt: 'List all pets via the API.',
+        pinned: true
+      },
+      {
+        id: 'workflow-2',
+        name: 'Create pet',
+        prompt: 'Create a pet named Fluffy',
+        pinned: true
+      }
+    ])
+    expect(formatPinnedWorkflowsText(workflows)).toBe(
+      'List pets | List all pets via the API.\nCreate pet | Create a pet named Fluffy'
+    )
   })
 })
