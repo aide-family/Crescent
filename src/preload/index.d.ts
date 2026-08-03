@@ -39,6 +39,11 @@ import type {
   WikiDocumentSummary,
   WikiSaveInput
 } from '../shared/agent-types'
+import type {
+  AppUpdateActionResult,
+  AppUpdateStatusEvent,
+  AppUpdateVersionResult
+} from '../shared/update-types'
 
 interface TerminalAgentApi {
   terminal: {
@@ -178,6 +183,13 @@ interface TerminalAgentApi {
     updateOpsFeedback: (input: UpdateOpsFeedbackInput) => Promise<UpdateOpsFeedbackResult>
     deleteOpsFeedback: (id: string) => Promise<{ ok: boolean }>
     onSessionSummaryUpdated: (callback: (event: StoredSessionSummaryUpdate) => void) => () => void
+  }
+  update: {
+    getVersion: () => Promise<AppUpdateVersionResult>
+    check: () => Promise<AppUpdateActionResult>
+    download: () => Promise<AppUpdateActionResult>
+    install: () => Promise<AppUpdateActionResult>
+    onStatus: (callback: (event: AppUpdateStatusEvent) => void) => () => void
   }
 }
 

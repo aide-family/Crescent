@@ -81,9 +81,20 @@ import {
   type Locale
 } from '@renderer/i18n'
 import { useAgentRuns } from '@renderer/hooks/useAgentRuns'
-import { useConnections } from '@renderer/hooks/useConnections'
+import {
+  connectionToForm,
+  createEmptyConnectionForm,
+  normalizeConnectionInputForSave,
+  useConnections
+} from '@renderer/hooks/useConnections'
 import { useSettings } from '@renderer/hooks/useSettings'
+import {
+  planCloseTabPromotion,
+  reassignSessionRootOnClose,
+  useTerminalTabs
+} from '@renderer/hooks/useTerminalTabs'
 import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
+import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
 import {
   appendElapsedFooter,
   connectionFailureMarkers,
@@ -112,7 +123,6 @@ import {
   CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
   PANE_ORDER_STORAGE_KEY,
   formatPipePrompt,
-  getPipePrompt,
   hasConfiguredModelSelection,
   resolveInitialPaneOrder,
   type PaneOrder
@@ -159,17 +169,13 @@ import {
   createCustomConnectionId,
   formatConnectionActionLog,
   isPasswordEnvVarMissing,
-  mergeConnectionInput,
-  parseLoginActions,
-  parseSshOptions
+  mergeConnectionInput
 } from '@renderer/lib/connection-commands'
 import {
   formatConnectionAutomationFailure,
-  resolveConnectionReconnectPolicy,
   shouldDrainPostConnectionTasks
 } from '@renderer/lib/connection-automation-policy'
 import { formatConnectionTarget } from '@renderer/lib/connections'
-import { appTerminalTheme } from '@renderer/lib/design-system'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import {
   copyFeedback,
@@ -198,10 +204,8 @@ import {
   getSessionTerminals,
   getTerminalDisplayTitle,
   isReservedTerminalTabId,
-  listSessionChatTabs,
   resolveSessionChatTabId,
   resolveTabModelSelection,
-  toStoredSessionTabs,
   type AgentLogEntry,
   type AgentRunViewState,
   type AgentTerminalTab,
@@ -255,7 +259,6 @@ import type {
   ConnectionInput,
   LocalInstructionDocument,
   StoredSessionHistoryItem,
-  StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary
 } from '../../shared/agent-types'
@@ -331,13 +334,12 @@ function App(): React.JSX.Element {
   const activeRunIdRef = useRef(new Map<string, string>())
   const activeRunInputRef = useRef(new Map<string, string>())
   const activeExecutionTabIdRef = useRef(new Map<string, string>())
+  const [executionTerminalByChatId, setExecutionTerminalByChatId] = useState<
+    Record<string, string>
+  >({})
   const pendingCommandApprovalsRef = useRef<CommandApprovalRequest[]>([])
   const passwordPromptsByTabRef = useRef(new Map<string, PasswordPromptRequest>())
   const validationRequestRef = useRef(0)
-  const pipeInputBufferRef = useRef('')
-  const pipeCursorRef = useRef(0)
-  const pipeHistoryRef = useRef<string[]>([])
-  const pipeHistoryIndexRef = useRef<number | null>(null)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
   const passwordPromptInputRef = useRef<HTMLInputElement | null>(null)
@@ -390,12 +392,6 @@ function App(): React.JSX.Element {
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
   const skillInstallResultIdsRef = useRef(new Map<string, string>())
   const skillInstallNamesRef = useRef(new Map<string, string>())
-  const pendingTabsSaveRef = useRef<{
-    key: string
-    timer: number
-    tabs: StoredSessionTab[]
-  } | null>(null)
-  const lastSavedTabsKeyRef = useRef('')
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
@@ -487,18 +483,7 @@ function App(): React.JSX.Element {
   const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
   const [connectionEditing, setConnectionEditing] = useState(true)
-  const [connectionForm, setConnectionForm] = useState<ConnectionInput>({
-    name: '',
-    host: '',
-    user: '',
-    password: '',
-    passwordEnvVar: '',
-    port: 22,
-    identityFile: '',
-    sshOptions: [],
-    description: '',
-    actions: []
-  })
+  const [connectionForm, setConnectionForm] = useState<ConnectionInput>(createEmptyConnectionForm)
   const [connectionSshOptionsText, setConnectionSshOptionsText] = useState('')
   const [connectionActionsText, setConnectionActionsText] = useState('')
   const [connectionImportText, setConnectionImportText] = useState('')
@@ -541,26 +526,31 @@ function App(): React.JSX.Element {
     closeAllSubterminals,
     resizeSubterminalPair
   } = useTerminalSessions({ tabsRef, setTabs })
-  tabsRef.current = tabs
-  const activeTab =
-    tabs.find((tab) => tab.id === activeTabId) ??
-    (activeTabIdRef.current === activeTabId
-      ? tabsRef.current.find((tab) => tab.id === activeTabId)
-      : undefined) ??
-    emptyLocalTab
-  const sessionChatTab = getSessionChatTab(tabs, activeTab.id) ?? activeTab
-  const sessionTerminals = getSessionTerminals(tabs, getSessionGroupId(activeTab))
-  const sessionChatTabs = useMemo(() => listSessionChatTabs(tabs), [tabs])
-  const activeAgentPending = sessionChatTab.agentBusy || sessionChatTab.agentThinking
-  const terminalTabs = useMemo(
-    () =>
-      tabs.filter(
-        (tab) =>
-          terminalPage === 'terminal' || tab.sessionId || tab.terminalOutput || tab.terminalReady
-      ),
-    [tabs, terminalPage]
-  )
   const t = dictionaries[locale]
+  const {
+    activeTab,
+    sessionChatTab,
+    sessionTerminals,
+    sessionChatTabs,
+    terminalTabs,
+    activeAgentPending,
+    selectSessionTab,
+    openLocalTerminal
+  } = useTerminalTabs({
+    tabs,
+    setTabs,
+    activeTabId,
+    setActiveTabId,
+    activeTabIdRef,
+    tabsRef,
+    terminalPage,
+    setTerminalPage,
+    setHiddenPane,
+    emptyLocalTab,
+    updateTab,
+    localTerminalTitle: t.connections.localTerminal,
+    providerId: config.providerId
+  })
 
   useEffect(() => {
     const connectionId = resolveOpsConnectionId(
@@ -1014,14 +1004,6 @@ function App(): React.JSX.Element {
   )
 
   useEffect(() => {
-    activeTabIdRef.current = activeTabId
-  }, [activeTabId])
-
-  useEffect(() => {
-    tabsRef.current = tabs
-  }, [tabs])
-
-  useEffect(() => {
     connectionsRef.current = connections
   }, [connections])
 
@@ -1035,37 +1017,6 @@ function App(): React.JSX.Element {
     passwordPromptRequestRef.current = passwordPromptRequest
     window.requestAnimationFrame(() => passwordPromptInputRef.current?.focus())
   }, [passwordPromptRequest])
-
-  useEffect(() => {
-    const storedTabs = toStoredSessionTabs(tabs)
-    const key = JSON.stringify(storedTabs)
-    const pending = pendingTabsSaveRef.current
-
-    if (key === lastSavedTabsKeyRef.current || key === pending?.key) return
-    if (pending) window.clearTimeout(pending.timer)
-
-    const timer = window.setTimeout(() => {
-      const current = pendingTabsSaveRef.current
-      if (!current || current.key !== key) return
-
-      pendingTabsSaveRef.current = null
-      lastSavedTabsKeyRef.current = key
-      void window.api.storage.saveTabs(current.tabs)
-    }, 350)
-
-    pendingTabsSaveRef.current = { key, timer, tabs: storedTabs }
-  }, [tabs])
-
-  useEffect(() => {
-    return () => {
-      const pending = pendingTabsSaveRef.current
-      if (!pending) return
-
-      window.clearTimeout(pending.timer)
-      void window.api.storage.saveTabs(pending.tabs)
-      pendingTabsSaveRef.current = null
-    }
-  }, [])
 
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
@@ -1307,126 +1258,6 @@ function App(): React.JSX.Element {
     }
   }, [paneOrder, resizeSubterminalPair])
 
-  const redrawPipeInput = useCallback((terminal: Terminal): void => {
-    const buffer = pipeInputBufferRef.current
-    const cursor = pipeCursorRef.current
-
-    terminal.write(
-      `\r\x1b[2K${getPipePrompt(pipePromptRef.current, terminalCwdRef.current)}${buffer}`
-    )
-    const left = buffer.length - cursor
-    if (left > 0) terminal.write(`\x1b[${left}D`)
-  }, [])
-
-  const setPipeBuffer = useCallback(
-    (terminal: Terminal, value: string, cursor = value.length): void => {
-      pipeInputBufferRef.current = value
-      pipeCursorRef.current = Math.max(0, Math.min(cursor, value.length))
-      redrawPipeInput(terminal)
-    },
-    [redrawPipeInput]
-  )
-
-  const commitPipeCommand = useCallback((terminal: Terminal): void => {
-    const command = pipeInputBufferRef.current
-    pipeInputBufferRef.current = ''
-    pipeCursorRef.current = 0
-    pipeHistoryIndexRef.current = null
-
-    if (command.trim()) pipeHistoryRef.current = [...pipeHistoryRef.current, command].slice(-200)
-
-    terminal.write('\r\n')
-    window.api.terminal.write(`${command}\n`, activeTabIdRef.current)
-  }, [])
-
-  const handlePipeEscape = useCallback(
-    (terminal: Terminal, sequence: string): void => {
-      if (sequence === '\x1b[D') {
-        if (pipeCursorRef.current > 0) {
-          pipeCursorRef.current -= 1
-          terminal.write('\x1b[D')
-        }
-        return
-      }
-
-      if (sequence === '\x1b[C') {
-        if (pipeCursorRef.current < pipeInputBufferRef.current.length) {
-          pipeCursorRef.current += 1
-          terminal.write('\x1b[C')
-        }
-        return
-      }
-
-      if (sequence === '\x1b[A') {
-        const history = pipeHistoryRef.current
-        if (history.length === 0) return
-        const current = pipeHistoryIndexRef.current
-        const next = current === null ? history.length - 1 : Math.max(0, current - 1)
-        pipeHistoryIndexRef.current = next
-        setPipeBuffer(terminal, history[next])
-        return
-      }
-
-      if (sequence === '\x1b[B') {
-        const history = pipeHistoryRef.current
-        const current = pipeHistoryIndexRef.current
-        if (current === null) return
-        const next = current + 1
-        if (next >= history.length) {
-          pipeHistoryIndexRef.current = null
-          setPipeBuffer(terminal, '')
-        } else {
-          pipeHistoryIndexRef.current = next
-          setPipeBuffer(terminal, history[next])
-        }
-      }
-    },
-    [setPipeBuffer]
-  )
-
-  const handlePipeTerminalInput = useCallback(
-    (terminal: Terminal, data: string): void => {
-      for (let index = 0; index < data.length; index += 1) {
-        const char = data[index]
-
-        if (char === '\x1b') {
-          const sequence = data.slice(index, index + 3)
-          if (sequence[0] === '\x1b' && sequence[1] === '[' && 'ABCD'.includes(sequence[2])) {
-            handlePipeEscape(terminal, sequence)
-            index += 2
-          }
-          continue
-        }
-
-        if (char === '\r') {
-          commitPipeCommand(terminal)
-          continue
-        }
-
-        if (char === '\t') {
-          terminal.write('\x07')
-          continue
-        }
-
-        if (char === '\u007f') {
-          const cursor = pipeCursorRef.current
-          if (cursor > 0) {
-            const buffer = pipeInputBufferRef.current
-            setPipeBuffer(terminal, buffer.slice(0, cursor - 1) + buffer.slice(cursor), cursor - 1)
-          }
-          continue
-        }
-
-        if (char >= ' ') {
-          const cursor = pipeCursorRef.current
-          const buffer = pipeInputBufferRef.current
-          setPipeBuffer(terminal, buffer.slice(0, cursor) + char + buffer.slice(cursor), cursor + 1)
-        }
-      }
-    },
-    [commitPipeCommand, handlePipeEscape, setPipeBuffer]
-  )
-
   const writeLine = useCallback((text: string): void => {
     terminalRef.current?.writeln(text.replace(/\n/g, '\r\n'))
   }, [])
@@ -1528,7 +1359,7 @@ function App(): React.JSX.Element {
       if (event.type === 'command' && event.phase === 'started' && event.runId && event.tabId) {
         for (const [ownerTabId, runId] of activeRunIdRef.current) {
           if (runId === event.runId) {
-            activeExecutionTabIdRef.current.set(ownerTabId, event.tabId)
+            setActiveExecutionTerminal(ownerTabId, event.tabId)
             break
           }
         }
@@ -1646,191 +1477,36 @@ function App(): React.JSX.Element {
 
   const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
 
-  useEffect(() => {
-    if (!terminalVisible) return
-
-    const host = terminalHostRef.current
-    if (!host) return
-    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabId)
-    if (!tab) {
-      // Tab list may still be catching up after /new; retry on next tabs sync.
-      return
-    }
-
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      theme: appTerminalTheme
-    })
-    const fitAddon = new FitAddon()
-
-    terminal.loadAddon(fitAddon)
-    terminal.open(host)
-    fitAddon.fit()
-
-    if (tab.terminalOutput) terminal.write(tab.terminalOutput)
-
-    const terminalDataDisposable = terminal.onData((data) => {
-      if (terminalModeRef.current === 'pipe') {
-        handlePipeTerminalInput(terminal, data)
-        return
-      }
-
-      window.api.terminal.write(data, activeTabIdRef.current)
-    })
-    const stopTerminalData = window.api.terminal.onData((event) => {
-      const subterminal = parseSubterminalTabId(event.tabId)
-      if (subterminal) {
-        updateSubterminalOutput(subterminal.parentTabId, subterminal.name, event.tabId, event.data)
-        return
-      }
-
-      updateTab(event.tabId, (current) => ({
-        ...current,
-        terminalOutput: `${current.terminalOutput}${event.data}`.slice(-200_000)
-      }))
-      if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
-    })
-    const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
-      const subterminal = parseSubterminalTabId(tabId)
-      if (subterminal) {
-        updateSubterminalCwd(subterminal.parentTabId, subterminal.name, tabId, cwd)
-        return
-      }
-
-      updateTab(tabId, (current) => ({ ...current, terminalCwd: cwd }))
-      if (tabId === activeTabIdRef.current) {
-        terminalCwdRef.current = cwd
-        pipePromptRef.current = prompt || formatPipePrompt(cwd)
-        terminal.write(`\r\n${pipePromptRef.current}`)
-      }
-    })
-    const stopTerminalExit = window.api.terminal.onExit((event) => {
-      const subterminal = parseSubterminalTabId(event.tabId)
-      if (subterminal) {
-        updateSubterminalStatus(subterminal.parentTabId, subterminal.name, event.tabId, 'exited')
-        return
-      }
-
-      updateTab(event.tabId, (current) => ({
-        ...current,
-        sessionId: undefined,
-        terminalReady: false
-      }))
-      if (event.tabId === activeTabIdRef.current) {
-        terminal.writeln(`\r\n\x1b[31m${t.terminal.shellExited} ${event.exitCode}.\x1b[0m`)
-      }
-      const reconnectPolicy = resolveConnectionReconnectPolicy({
-        suppressReconnect: suppressTerminalReconnectRef.current.has(event.tabId),
-        automatedLoginInProgress: automatedLoginTabsRef.current.has(event.tabId)
-      })
-      if (reconnectPolicy === 'suppress') {
-        suppressTerminalReconnectRef.current.delete(event.tabId)
-        return
-      }
-
-      // SSH/login died mid-automation — fall back to a local shell instead of
-      // immediately re-running the failed connection (which leaves input dead).
-      if (reconnectPolicy === 'local-fallback') {
-        automatedLoginTabsRef.current.delete(event.tabId)
-        passwordPromptBuffersRef.current.set(event.tabId, '')
-        const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
-        abortPostConnectionTasks(event.tabId, t.terminal.postLoginTaskAborted)
-        appendLog(
-          {
-            kind: 'error',
-            text: `${t.terminal.shellExited} ${event.exitCode}.`
-          },
-          chatTabId
-        )
-        skipConnectionReconnectRef.current.add(event.tabId)
-        void restoreTerminalSessionRef.current?.(event.tabId)
-        return
-      }
-
-      void restoreTerminalSessionRef.current?.(event.tabId)
-    })
-
-    const startShell = async (): Promise<void> => {
-      if (tab.sessionId) {
-        terminalSessionIdRef.current = tab.sessionId
-        terminalModeRef.current = tab.terminalMode
-        terminalCwdRef.current = tab.terminalCwd
-        pipePromptRef.current = formatPipePrompt(tab.terminalCwd)
-        return
-      }
-
-      const dimensions = fitAddon.proposeDimensions()
-      const pendingConnection = pendingSshRef.current.get(tab.id)
-      const session = await window.api.terminal.start({
-        cols: dimensions?.cols ?? 80,
-        rows: dimensions?.rows ?? 24,
-        tabId: tab.id
-      })
-
-      terminalSessionIdRef.current = session.sessionId
-      terminalModeRef.current = session.mode
-      terminalCwdRef.current = session.cwd
-      pipePromptRef.current = formatPipePrompt(session.cwd)
-      updateTab(tab.id, (current) => ({
-        ...current,
-        sessionId: session.sessionId,
-        terminalMode: session.mode,
-        terminalCwd: session.cwd,
-        terminalReady: true
-      }))
-      if (pendingConnection) {
-        pendingSshRef.current.delete(tab.id)
-        // Start a local shell first, then run SSH only after password/env checks pass.
-        void executeConnectionCommands(pendingConnection, tab.id)
-      }
-    }
-
-    void startShell().catch((error) => {
-      terminal.writeln(`\r\n\x1b[31m${t.terminal.failedToStartShell}: ${String(error)}\x1b[0m`)
-    })
-
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit()
-      const dimensions = fitAddon.proposeDimensions()
-      if (dimensions) {
-        window.api.terminal.resize({ cols: dimensions.cols, rows: dimensions.rows, tabId: tab.id })
-      }
-    })
-    resizeObserver.observe(host)
-
-    terminalRef.current = terminal
-    fitAddonRef.current = fitAddon
-
-    return () => {
-      resizeObserver.disconnect()
-      terminalDataDisposable.dispose()
-      stopTerminalData()
-      stopTerminalPrompt()
-      stopTerminalExit()
-      terminalSessionIdRef.current = null
-      terminal.dispose()
-      terminalRef.current = null
-      fitAddonRef.current = null
-    }
-  }, [
-    abortPostConnectionTasks,
-    activeTabExists,
-    activeTabId,
-    appendLog,
-    executeConnectionCommands,
-    handlePipeTerminalInput,
-    maybeRequestTerminalPassword,
-    t,
+  useXtermLifecycle({
     terminalVisible,
-    updateSubterminalCwd,
+    activeTabId,
+    activeTabExists,
+    activeTabIdRef,
+    tabsRef,
+    terminalHostRef,
+    terminalRef,
+    fitAddonRef,
+    terminalSessionIdRef,
+    terminalModeRef,
+    terminalCwdRef,
+    pipePromptRef,
+    pendingSshRef,
+    suppressTerminalReconnectRef,
+    automatedLoginTabsRef,
+    passwordPromptBuffersRef,
+    skipConnectionReconnectRef,
+    restoreTerminalSessionRef,
+    updateTab,
     updateSubterminalOutput,
+    updateSubterminalCwd,
     updateSubterminalStatus,
-    updateTab
-  ])
+    executeConnectionCommands,
+    abortPostConnectionTasks,
+    appendLog,
+    shellExitedText: t.terminal.shellExited,
+    failedToStartShellText: t.terminal.failedToStartShell,
+    postLoginTaskAbortedText: t.terminal.postLoginTaskAborted
+  })
 
   async function saveConfig(): Promise<void> {
     await saveAgentConfig({
@@ -2546,6 +2222,36 @@ function App(): React.JSX.Element {
     void persistModelSelection(selectedModel.providerId, selectedModel.id)
   }
 
+  function setActiveExecutionTerminal(chatTabId: string, terminalTabId: string | null): void {
+    if (terminalTabId) {
+      activeExecutionTabIdRef.current.set(chatTabId, terminalTabId)
+      setExecutionTerminalByChatId((current) =>
+        current[chatTabId] === terminalTabId ? current : { ...current, [chatTabId]: terminalTabId }
+      )
+      return
+    }
+    activeExecutionTabIdRef.current.delete(chatTabId)
+    setExecutionTerminalByChatId((current) => {
+      if (!(chatTabId in current)) return current
+      const next = { ...current }
+      delete next[chatTabId]
+      return next
+    })
+  }
+
+  function remapActiveExecutionTerminal(fromChatTabId: string, toChatTabId: string): void {
+    const executionTabId = activeExecutionTabIdRef.current.get(fromChatTabId)
+    if (!executionTabId) return
+    activeExecutionTabIdRef.current.delete(fromChatTabId)
+    activeExecutionTabIdRef.current.set(toChatTabId, executionTabId)
+    setExecutionTerminalByChatId((current) => {
+      const next = { ...current }
+      delete next[fromChatTabId]
+      next[toChatTabId] = executionTabId
+      return next
+    })
+  }
+
   function cancelAgentRunForChatTab(chatTabId: string): void {
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
@@ -2569,7 +2275,7 @@ function App(): React.JSX.Element {
     activeAgentRunRef.current.delete(chatTabId)
     activeRunIdRef.current.delete(chatTabId)
     activeRunInputRef.current.delete(chatTabId)
-    activeExecutionTabIdRef.current.delete(chatTabId)
+    setActiveExecutionTerminal(chatTabId, null)
     updateTab(chatTabId, (tab) => ({
       ...tab,
       agentBusy: false,
@@ -2683,7 +2389,7 @@ function App(): React.JSX.Element {
         })
       })
     }
-    activeExecutionTabIdRef.current.delete(chatTabId)
+    setActiveExecutionTerminal(chatTabId, null)
     updateTab(chatTabId, (tab) => ({
       ...tab,
       agentBusy: false,
@@ -3098,41 +2804,6 @@ function App(): React.JSX.Element {
     closeOnboarding()
   }
 
-  function openLocalTerminal(): void {
-    setHiddenPane(null)
-    setTerminalPage('terminal')
-
-    const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
-    const canReuseCurrentTab =
-      currentTab &&
-      !currentTab.isSsh &&
-      !currentTab.connectionId &&
-      !currentTab.sessionId &&
-      !currentTab.terminalOutput
-
-    const targetTabId = canReuseCurrentTab ? currentTab.id : createTerminalTab().id
-
-    if (canReuseCurrentTab) {
-      updateTab(currentTab.id, (tab) => ({
-        ...tab,
-        title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
-        connectionId: undefined,
-        connectionName: undefined,
-        isSsh: false
-      }))
-    } else {
-      const nextTab = createTerminalTab({
-        id: targetTabId,
-        title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
-        providerId: config.providerId,
-        isSsh: false
-      })
-      setTabs((current) => [...current, nextTab])
-    }
-
-    setActiveTabId(targetTabId)
-  }
-
   function startNewSession(): void {
     const previousChatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     const nextTab = createTerminalTab({
@@ -3167,15 +2838,6 @@ function App(): React.JSX.Element {
       setTerminalPage('terminal')
       setTabs(nextTabs)
       setActiveTabId(nextTab.id)
-    })
-  }
-
-  function selectSessionTab(tabId: string): void {
-    activeTabIdRef.current = tabId
-    flushSync(() => {
-      setActiveTabId(tabId)
-      setTerminalPage('terminal')
-      setHiddenPane(null)
     })
   }
 
@@ -3344,7 +3006,11 @@ function App(): React.JSX.Element {
   }
 
   async function saveConnection(connectAfterSave = false): Promise<void> {
-    const normalizedInput = normalizeConnectionInputForSave()
+    const normalizedInput = normalizeConnectionInputForSave(
+      connectionForm,
+      connectionActionsText,
+      connectionSshOptionsText
+    )
     if (!normalizedInput) return
 
     const input = normalizedInput.id
@@ -3764,7 +3430,7 @@ function App(): React.JSX.Element {
     const runId = `run-${crypto.randomUUID()}`
     activeRunIdRef.current.set(chatTabId, runId)
     activeRunInputRef.current.set(chatTabId, displayInput)
-    activeExecutionTabIdRef.current.set(chatTabId, terminalTabId)
+    setActiveExecutionTerminal(chatTabId, terminalTabId)
     void window.api.storage.saveAgentRun({
       runId,
       tabId: chatTabId,
@@ -4494,42 +4160,8 @@ function App(): React.JSX.Element {
     setConnectionForm((current) => ({ ...current, [key]: value }))
   }
 
-  function normalizeConnectionInputForSave(): ConnectionInput | null {
-    const actions = parseLoginActions(connectionActionsText)
-    const sshOptions = parseSshOptions(connectionSshOptionsText)
-    const name = connectionForm.name.trim()
-    const host = connectionForm.host.trim()
-
-    if (!name || !host) return null
-
-    return {
-      id: connectionForm.id,
-      name,
-      host,
-      user: connectionForm.user?.trim() || undefined,
-      password: connectionForm.password?.trim() || undefined,
-      passwordEnvVar: connectionForm.passwordEnvVar?.trim() || undefined,
-      port: connectionForm.port || undefined,
-      identityFile: connectionForm.identityFile?.trim() || undefined,
-      sshOptions,
-      description: connectionForm.description?.trim() || undefined,
-      actions
-    }
-  }
-
   function resetConnectionForm(): void {
-    setConnectionForm({
-      name: '',
-      host: '',
-      user: '',
-      password: '',
-      passwordEnvVar: '',
-      port: 22,
-      identityFile: '',
-      sshOptions: [],
-      description: '',
-      actions: []
-    })
+    setConnectionForm(createEmptyConnectionForm())
     setConnectionSshOptionsText('')
     setConnectionActionsText('')
     setConnectionImportText('')
@@ -4539,19 +4171,7 @@ function App(): React.JSX.Element {
   }
 
   function loadConnectionIntoForm(connection: ConnectionConfig, editing: boolean): void {
-    setConnectionForm({
-      id: connection.id,
-      name: connection.name,
-      host: connection.host,
-      user: connection.user,
-      password: connection.password,
-      passwordEnvVar: connection.passwordEnvVar,
-      port: connection.port ?? 22,
-      identityFile: connection.identityFile,
-      sshOptions: connection.sshOptions,
-      description: connection.description,
-      actions: connection.actions
-    })
+    setConnectionForm(connectionToForm(connection))
     setConnectionSshOptionsText(connection.sshOptions?.join('\n') ?? '')
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
     setSelectedConnectionId(connection.id)
@@ -4567,18 +4187,11 @@ function App(): React.JSX.Element {
   }
 
   function duplicateConnection(connection: ConnectionConfig): void {
-    const name = `${connection.name} copy`
+    const form = connectionToForm(connection)
     setConnectionForm({
-      name,
-      host: connection.host,
-      user: connection.user,
-      password: connection.password,
-      passwordEnvVar: connection.passwordEnvVar,
-      port: connection.port ?? 22,
-      identityFile: connection.identityFile,
-      sshOptions: connection.sshOptions,
-      description: connection.description,
-      actions: connection.actions
+      ...form,
+      id: undefined,
+      name: `${connection.name} copy`
     })
     setConnectionSshOptionsText(connection.sshOptions?.join('\n') ?? '')
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
@@ -4629,11 +4242,10 @@ function App(): React.JSX.Element {
   }
 
   function performCloseTab(tabId: string): void {
-    const closingTab = tabsRef.current.find((tab) => tab.id === tabId)
-    const groupId = closingTab ? getSessionGroupId(closingTab) : tabId
-    const peers = getSessionTerminals(tabsRef.current, groupId).filter((tab) => tab.id !== tabId)
-    const shouldPromote = Boolean(closingTab && closingTab.id === groupId && peers.length > 0)
-    const nextRoot = shouldPromote ? peers[0] : undefined
+    const { closingTab, groupId, peers, shouldPromote, nextRoot } = planCloseTabPromotion(
+      tabsRef.current,
+      tabId
+    )
 
     if (shouldPromote && nextRoot && closingTab) {
       const run = activeAgentRunRef.current.get(groupId)
@@ -4654,11 +4266,7 @@ function App(): React.JSX.Element {
       if (activeRunCanceledRef.current.delete(groupId)) {
         activeRunCanceledRef.current.add(nextRoot.id)
       }
-      const executionTabId = activeExecutionTabIdRef.current.get(groupId)
-      if (executionTabId) {
-        activeExecutionTabIdRef.current.delete(groupId)
-        activeExecutionTabIdRef.current.set(nextRoot.id, executionTabId)
-      }
+      remapActiveExecutionTerminal(groupId, nextRoot.id)
     } else if (peers.length === 0) {
       // Last terminal in this session is closing — stop any orphaned agent run.
       cancelAgentRunForChatTab(groupId)
@@ -4682,31 +4290,7 @@ function App(): React.JSX.Element {
     setTabs((current) => {
       let next = current
       if (shouldPromote && nextRoot && closingTab) {
-        next = current.map((tab) => {
-          if (tab.id === nextRoot.id) {
-            return {
-              ...tab,
-              sessionGroupId: nextRoot.id,
-              agentInput: closingTab.agentInput,
-              skillRefs: closingTab.skillRefs,
-              pathRefs: closingTab.pathRefs,
-              toolRefs: closingTab.toolRefs,
-              wikiRefs: closingTab.wikiRefs,
-              agentBusy: closingTab.agentBusy,
-              agentThinking: closingTab.agentThinking,
-              thinkingMessage: closingTab.thinkingMessage,
-              copiedLogId: closingTab.copiedLogId,
-              agentLog: closingTab.agentLog,
-              pendingClarification: closingTab.pendingClarification,
-              providerId: closingTab.providerId ?? tab.providerId,
-              model: closingTab.model ?? tab.model
-            }
-          }
-          if (getSessionGroupId(tab) === groupId && tab.id !== tabId) {
-            return { ...tab, sessionGroupId: nextRoot.id }
-          }
-          return tab
-        })
+        next = reassignSessionRootOnClose(current, closingTab, nextRoot, groupId, tabId)
       }
       next = next.filter((tab) => tab.id !== tabId)
       if (activeTabIdRef.current === tabId) {
@@ -5557,6 +5141,8 @@ function App(): React.JSX.Element {
             labelTabs={tabs}
             terminalPage={terminalPage}
             activeTabId={activeTabId}
+            executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
+            agentPending={activeAgentPending}
             activeTab={activeTab}
             tabMenu={tabMenu}
             displayConnections={displayConnections}
@@ -5626,6 +5212,7 @@ function App(): React.JSX.Element {
             modelValidationError={modelValidationError}
             configured={configured}
             activeAgentPending={activeAgentPending}
+            executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
               (workflow) => workflow.pinned !== false
             )}

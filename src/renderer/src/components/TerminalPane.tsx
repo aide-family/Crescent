@@ -20,6 +20,8 @@ export function TerminalPane({
   labelTabs,
   terminalPage,
   activeTabId,
+  executionTerminalId,
+  agentPending,
   activeTab,
   tabMenu,
   displayConnections,
@@ -53,6 +55,8 @@ export function TerminalPane({
   labelTabs: AgentTerminalTab[]
   terminalPage: 'connections' | 'terminal'
   activeTabId: string
+  executionTerminalId?: string
+  agentPending?: boolean
   activeTab: AgentTerminalTab
   tabMenu: TerminalTabMenuState | null
   displayConnections: ConnectionConfig[]
@@ -97,6 +101,8 @@ export function TerminalPane({
         labelTabs={labelTabs}
         terminalPage={terminalPage}
         activeTabId={activeTabId}
+        executionTerminalId={executionTerminalId}
+        agentPending={agentPending}
         tabMenu={tabMenu}
         t={t}
         onNewConnection={onNewConnection}

@@ -122,7 +122,7 @@ flowchart TD
 
 #### macOS：「已损坏，无法打开」
 
-当前正式包尚未做 Apple Developer ID 签名与公证。从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏，可按下面步骤解除隔离后再打开：
+在仓库配置签名密钥之前，部分正式包可能仍未签名。详见 [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)。从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏，可按下面步骤解除隔离后再打开：
 
 1. 将 `Crescent.app` 拖到「应用程序」。
 2. 在终端执行：
@@ -192,14 +192,7 @@ Crescent 特别适合这些人：
 
 Crescent 目前已经具备可用 MVP 的核心能力：本地终端、模型配置、OpenAPI 工具、ReAct / Plan-and-Execute、Agent 运行面板、命令审核、Skills 和知识库等。
 
-后续规划包括：
-
-- 请求超时、重试和日志脱敏。
-- 可导出的 Agent 运行 Trace。
-- 多 API Profile。
-- OpenAPI 本地/远程导入。
-- Prompt 模板和固定工作流。
-- 跨平台签名构建和首屏引导体验。
+Phase 1–4 产品与分发基础设施已就绪：基于 GitHub Releases 的应用内更新、打包冒烟检查，以及在配置证书密钥后由 CI 执行签名/公证（见 [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)）。
 
 更多细节见 [ROADMAP.md](./ROADMAP.md)。
 

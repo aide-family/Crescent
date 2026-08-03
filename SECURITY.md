@@ -29,6 +29,10 @@ Crescent intentionally works near powerful local and remote capabilities:
 
 Changes in these areas should include tests or a clear manual verification note.
 
+## Code signing
+
+Release signing and notarization requirements are documented in [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md). Unsigned public builds remain available until certificate secrets are configured in CI.
+
 ## Maintainer Triage
 
 - Confirm whether the report crosses a command, filesystem, network, credential, or remote-state boundary.
