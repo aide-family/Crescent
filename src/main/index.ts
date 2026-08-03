@@ -156,6 +156,8 @@ app.whenReady().then(async () => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   initializeCrescentDatabase()
+  const { ensureDefaultInstructionFiles } = await import('./agent/instruction-files')
+  ensureDefaultInstructionFiles()
   registerAgentIpc()
   registerConnectionIpc()
   registerStorageIpc()

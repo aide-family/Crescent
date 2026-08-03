@@ -2,9 +2,79 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join, resolve } from 'path'
 
-const INSTRUCTION_FILE_NAMES = ['IDENTITY.md', 'SOUL.md', 'USER.md', 'AGENTS.md', 'TOOLS.md']
+const INSTRUCTION_FILE_NAMES = [
+  'IDENTITY.md',
+  'SOUL.md',
+  'USER.md',
+  'AGENTS.md',
+  'TOOLS.md'
+] as const
+type InstructionFileName = (typeof INSTRUCTION_FILE_NAMES)[number]
+
 const MAX_INSTRUCTION_FILE_CHARS = 12_000
 const MAX_INSTRUCTION_CONTEXT_CHARS = 48_000
+
+const DEFAULT_INSTRUCTION_TEMPLATES: Record<InstructionFileName, string> = {
+  'IDENTITY.md': `# IDENTITY.md
+
+# Crescent local identity
+
+- Name: Crescent
+- Role: AI operations assistant embedded beside an interactive terminal
+- Focus: Linux, SSH, shell, debugging, and day-to-day ops work
+- Voice: concise, terminal-friendly, same language as the user
+
+Edit this file to customize how Crescent introduces itself.
+`,
+  'SOUL.md': `# SOUL.md
+
+# Operating principles
+
+- Prefer evidence from the live terminal over speculation.
+- Prefer safe, reversible checks before state-changing actions.
+- Ask one concise clarifying question when the target host or scope is ambiguous.
+- Keep final answers short and actionable.
+- Never invent hosts, credentials, or tool results.
+
+Edit this file to shape Crescent's judgment and tone.
+`,
+  'USER.md': `# USER.md
+
+# About the operator
+
+- Preferred language:
+- Timezone / working hours:
+- Common environments (local / bastion / prod):
+- Risk tolerance for destructive commands:
+- Things Crescent should always confirm first:
+
+Fill this in so Crescent can adapt to your workflow.
+`,
+  'AGENTS.md': `# AGENTS.md
+
+# Agent workflow defaults
+
+- Default mode preference: ReAct unless planning is clearly needed.
+- Prefer the current/focused terminal; use peer terminals or sub-terminals when the task would disturb the active session.
+- For inventory/report requests, gather normalized evidence first, then summarize.
+- Stop and ask when blocked by missing access, credentials, or ambiguous targets.
+- After enough evidence, summarize instead of repeating checks.
+
+Edit this file to encode team or personal agent conventions.
+`,
+  'TOOLS.md': `# TOOLS.md
+
+# Tool usage preferences
+
+- Prefer built-in terminal tools for shell work.
+- Prefer OpenAPI / MCP tools when they match the request better than ad-hoc shell.
+- Keep command allow/deny and approval rules in Settings; do not bypass them here.
+- Prefer read-only discovery before write/update/delete operations.
+- When writing local files or Wiki docs, use clear paths and confirm destinations when unsure.
+
+Edit this file to record preferred tools and constraints.
+`
+}
 
 export interface LocalInstructionFile {
   name: string
@@ -14,6 +84,12 @@ export interface LocalInstructionFile {
 
 export interface EditableInstructionFile extends LocalInstructionFile {
   exists: boolean
+}
+
+export interface EnsureDefaultInstructionFilesResult {
+  root: string
+  created: string[]
+  skipped: string[]
 }
 
 export function buildLocalInstructionContext(startDir = process.cwd()): string {
@@ -57,6 +133,32 @@ export function listEditableInstructionFiles(
       content: exists ? readInstructionFile(path) : ''
     }
   })
+}
+
+/**
+ * Create missing default instruction files under ~/.crescent (or the given root).
+ * Existing files are never overwritten.
+ */
+export function ensureDefaultInstructionFiles(
+  root = join(homedir(), '.crescent')
+): EnsureDefaultInstructionFilesResult {
+  mkdirSync(root, { recursive: true })
+
+  const created: string[] = []
+  const skipped: string[] = []
+
+  for (const name of INSTRUCTION_FILE_NAMES) {
+    const path = join(root, name)
+    if (existsSync(path)) {
+      skipped.push(name)
+      continue
+    }
+
+    writeFileSync(path, DEFAULT_INSTRUCTION_TEMPLATES[name], 'utf8')
+    created.push(name)
+  }
+
+  return { root, created, skipped }
 }
 
 export function saveEditableInstructionFile(input: {
@@ -114,13 +216,13 @@ function getInstructionRoots(startDir: string): string[] {
   return roots
 }
 
-function normalizeInstructionFileName(value: string): string {
+function normalizeInstructionFileName(value: string): InstructionFileName {
   const name = value.trim()
-  if (!INSTRUCTION_FILE_NAMES.includes(name)) {
+  if (!(INSTRUCTION_FILE_NAMES as readonly string[]).includes(name)) {
     throw new Error(`Unsupported instruction file: ${value}`)
   }
 
-  return name
+  return name as InstructionFileName
 }
 
 function readInstructionFile(path: string): string {

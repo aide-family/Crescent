@@ -60,9 +60,12 @@ const zhCN = {
     likeResult: '赞',
     likeResultTooltip:
       '认可该运维路径；有 SSH 则关联该连接，否则关联本地终端，作为后续同类运维参考（不是写 SOP）',
+    likeResultLockedTooltip: '已踩过该结果，无法再赞。',
     dislikeResult: '踩',
     dislikeResultTooltip:
       '不认可该运维路径；有 SSH 则关联该连接，否则关联本地终端，作为后续反面提醒（不是写 SOP）',
+    dislikeResultLockedTooltip: '已赞过该结果，无法再踩。',
+    opsFeedbackAlreadyRated: '该结果已有反馈，不能再更改。',
     opsFeedbackSavedLike: '已关联到当前连接/本地终端，后续同类运维可参考',
     opsFeedbackSavedDislike: '已关联到当前连接/本地终端，后续将提醒避免类似操作',
     opsFeedbackFailed: '保存运维反馈失败',
