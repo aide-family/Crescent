@@ -4478,6 +4478,12 @@ function App(): React.JSX.Element {
   ): Promise<void> {
     if (opsFeedbackBusyLogId === entry.id) return
 
+    const existingRating = opsFeedbackByLogId[entry.id]
+    if (existingRating) {
+      toast.error(t.common.opsFeedbackAlreadyRated)
+      return
+    }
+
     const chatTab = getSessionChatTab(tabsRef.current, getSessionGroupId(activeTab)) ?? activeTab
     const connectionId = resolveOpsConnectionId(
       activeTab.connectionId ||
@@ -4507,9 +4513,11 @@ function App(): React.JSX.Element {
         toast.error(result.error || t.common.opsFeedbackFailed)
         return
       }
-      setOpsFeedbackByLogId((current) => ({ ...current, [entry.id]: rating }))
+      setOpsFeedbackByLogId((current) => ({ ...current, [entry.id]: result.record!.rating }))
       toast.success(
-        rating === 'like' ? t.common.opsFeedbackSavedLike : t.common.opsFeedbackSavedDislike
+        result.record.rating === 'like'
+          ? t.common.opsFeedbackSavedLike
+          : t.common.opsFeedbackSavedDislike
       )
     } catch (error) {
       toast.dismiss(savingToast)

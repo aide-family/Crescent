@@ -76,15 +76,32 @@ export function AgentRunMarkdownContent({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    disabled={feedbackBusy}
-                    aria-label={t.common.likeResultTooltip}
-                    title={t.common.likeResultTooltip}
+                    disabled={
+                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                    }
+                    aria-label={
+                      feedbackRating === 'dislike'
+                        ? t.common.likeResultLockedTooltip
+                        : t.common.likeResultTooltip
+                    }
+                    title={
+                      feedbackRating === 'dislike'
+                        ? t.common.likeResultLockedTooltip
+                        : feedbackRating === 'like'
+                          ? t.common.opsFeedbackAlreadyRated
+                          : t.common.likeResultTooltip
+                    }
                     className={
                       feedbackRating === 'like'
                         ? 'text-emerald-400 hover:text-emerald-300'
-                        : undefined
+                        : feedbackRating === 'dislike'
+                          ? 'opacity-40'
+                          : undefined
                     }
-                    onClick={() => onOpsFeedback('like')}
+                    onClick={() => {
+                      if (feedbackBusy || feedbackRating) return
+                      onOpsFeedback('like')
+                    }}
                   >
                     <ThumbsUpIcon aria-hidden="true" />
                   </Button>
@@ -92,15 +109,32 @@ export function AgentRunMarkdownContent({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    disabled={feedbackBusy}
-                    aria-label={t.common.dislikeResultTooltip}
-                    title={t.common.dislikeResultTooltip}
+                    disabled={
+                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                    }
+                    aria-label={
+                      feedbackRating === 'like'
+                        ? t.common.dislikeResultLockedTooltip
+                        : t.common.dislikeResultTooltip
+                    }
+                    title={
+                      feedbackRating === 'like'
+                        ? t.common.dislikeResultLockedTooltip
+                        : feedbackRating === 'dislike'
+                          ? t.common.opsFeedbackAlreadyRated
+                          : t.common.dislikeResultTooltip
+                    }
                     className={
                       feedbackRating === 'dislike'
                         ? 'text-destructive hover:text-destructive'
-                        : undefined
+                        : feedbackRating === 'like'
+                          ? 'opacity-40'
+                          : undefined
                     }
-                    onClick={() => onOpsFeedback('dislike')}
+                    onClick={() => {
+                      if (feedbackBusy || feedbackRating) return
+                      onOpsFeedback('dislike')
+                    }}
                   >
                     <ThumbsDownIcon aria-hidden="true" />
                   </Button>
