@@ -127,13 +127,27 @@ export function McpStatusDot({
   )
 }
 
-export function TerminalActivityDot({ active }: { active: boolean }): React.JSX.Element {
+export function TerminalActivityDot({
+  active,
+  executing = false,
+  title
+}: {
+  active: boolean
+  executing?: boolean
+  title?: string
+}): React.JSX.Element {
+  const className = executing
+    ? 'bg-primary shadow-[0_0_8px] shadow-primary/50 ring-1 ring-primary/60'
+    : active
+      ? 'bg-green-500 shadow-[0_0_8px] shadow-green-500/50'
+      : 'bg-muted-foreground/30'
+
   return (
     <span
-      className={`size-1.5 shrink-0 rounded-full ${
-        active ? 'bg-green-500 shadow-[0_0_8px] shadow-green-500/50' : 'bg-muted-foreground/30'
-      }`}
-      aria-hidden="true"
+      className={`size-1.5 shrink-0 rounded-full ${className}`}
+      title={title}
+      aria-label={title}
+      aria-hidden={title ? undefined : true}
     />
   )
 }

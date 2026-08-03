@@ -65,5 +65,6 @@ appImage:
 # during packaging — that breaks cross-compiling Windows/Linux targets from macOS.
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: aide-family
+  repo: Crescent

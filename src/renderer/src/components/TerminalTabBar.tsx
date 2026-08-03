@@ -17,6 +17,8 @@ export function TerminalTabBar({
   labelTabs,
   terminalPage,
   activeTabId,
+  executionTerminalId,
+  agentPending,
   tabMenu,
   t,
   onNewConnection,
@@ -30,6 +32,8 @@ export function TerminalTabBar({
   labelTabs?: AgentTerminalTab[]
   terminalPage: 'connections' | 'terminal'
   activeTabId: string
+  executionTerminalId?: string
+  agentPending?: boolean
   tabMenu: TerminalTabMenuState | null
   t: Dictionary
   onNewConnection: () => void
@@ -71,6 +75,10 @@ export function TerminalTabBar({
           >
             {tabs.map((tab) => {
               const selected = terminalPage === 'terminal' && tab.id === activeTabId
+              const executing =
+                Boolean(agentPending) &&
+                Boolean(executionTerminalId) &&
+                tab.id === executionTerminalId
 
               return (
                 <button
@@ -79,10 +87,12 @@ export function TerminalTabBar({
                   type="button"
                   role="tab"
                   aria-selected={selected}
-                  className={`inline-flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
+                  className={`inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
                     selected
                       ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
-                      : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
+                      : executing
+                        ? 'border-primary/40 bg-primary/10 text-foreground'
+                        : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
                   }`}
                   onClick={() => onSelectTab(tab.id)}
                   onContextMenu={(event) => {
@@ -90,8 +100,17 @@ export function TerminalTabBar({
                     onOpenTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
                   }}
                 >
-                  <TerminalActivityDot active={tab.terminalReady} />
+                  <TerminalActivityDot
+                    active={tab.terminalReady}
+                    executing={executing}
+                    title={executing ? t.input.sessionTerminalExecuting : undefined}
+                  />
                   <span className="truncate">{getTerminalDisplayTitle(tab, titleSource)}</span>
+                  {executing && (
+                    <span className="shrink-0 text-[10px] font-medium text-primary">
+                      {t.app.running}
+                    </span>
+                  )}
                 </button>
               )
             })}

@@ -48,14 +48,15 @@ Completed renderer boundaries:
 - `components/WikiSheet` owns Wiki browse/edit/preview chrome.
 - `components/HistoryPanel` owns session history list chrome.
 - `components/OnboardingModal` owns the one-time first-run tour.
-- `lib/app-shell`, `lib/agent-input`, `lib/connection-commands`, `lib/connection-automation-policy`, `lib/slash-commands`, `lib/terminal-text`, `lib/onboarding`, and `lib/design-system` own pure renderer utilities.
+- `lib/app-shell`, `lib/agent-input`, `lib/connection-commands`, `lib/connection-automation-policy`, `lib/slash-commands`, `lib/terminal-text`, `lib/onboarding`, `lib/design-system`, and `lib/pipe-terminal` own pure renderer utilities.
+- `hooks/useTerminalTabs`, `hooks/useXtermLifecycle`, and `hooks/useConnections` own extracted App state machines for tabs, xterm/pipe lifecycle, and connection form helpers.
 
 Recommended renderer targets:
 
-- `hooks/useTerminalTabs`
+- `hooks/useTerminalTabs` — done (derived session tabs, saveTabs debounce, `selectSessionTab` / `openLocalTerminal`, close-tab promotion helpers)
+- `hooks/useXtermLifecycle` + `lib/pipe-terminal` — done (pipe input helpers, FitAddon resize observer, xterm mount/lifecycle effect)
+- `hooks/useConnections` — done (preview API plus `createEmptyConnectionForm` / `connectionToForm` / `normalizeConnectionInputForSave`)
 - `hooks/useAgentRun` (extend `useAgentRuns`)
-- `hooks/useConnections`
-- Move xterm session lifecycle out of `App.tsx` into a dedicated hook after TerminalPane props stabilize.
 
 ## Review Rules
 

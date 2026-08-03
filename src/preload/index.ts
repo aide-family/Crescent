@@ -40,6 +40,11 @@ import type {
   WikiDocumentSummary,
   WikiSaveInput
 } from '../shared/agent-types'
+import type {
+  AppUpdateActionResult,
+  AppUpdateStatusEvent,
+  AppUpdateVersionResult
+} from '../shared/update-types'
 
 // Custom APIs for renderer
 const api = {
@@ -298,6 +303,18 @@ const api = {
 
       ipcRenderer.on('storage:session-summary-updated', listener)
       return () => ipcRenderer.removeListener('storage:session-summary-updated', listener)
+    }
+  },
+  update: {
+    getVersion: (): Promise<AppUpdateVersionResult> => ipcRenderer.invoke('update:get-version'),
+    check: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:check'),
+    download: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:download'),
+    install: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:install'),
+    onStatus: (callback: (event: AppUpdateStatusEvent) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: AppUpdateStatusEvent): void =>
+        callback(event)
+      ipcRenderer.on('update:status', listener)
+      return () => ipcRenderer.removeListener('update:status', listener)
     }
   }
 }
