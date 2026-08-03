@@ -67,9 +67,12 @@ const en = {
     likeResult: 'Like',
     likeResultTooltip:
       'Approve this ops path for the current SSH connection, or the local terminal when offline (not an SOP)',
+    likeResultLockedTooltip: 'This result was disliked; like is unavailable.',
     dislikeResult: 'Dislike',
     dislikeResultTooltip:
       'Reject this ops path for the current SSH connection, or the local terminal when offline (not an SOP)',
+    dislikeResultLockedTooltip: 'This result was liked; dislike is unavailable.',
+    opsFeedbackAlreadyRated: 'This result already has feedback and cannot be changed.',
     opsFeedbackSavedLike: 'Linked to this connection/local terminal for future similar ops',
     opsFeedbackSavedDislike: 'Linked to this connection/local terminal as a caution for future ops',
     opsFeedbackFailed: 'Failed to save ops feedback',

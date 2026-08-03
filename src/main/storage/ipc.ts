@@ -152,13 +152,16 @@ async function submitOpsFeedback(
   const connectionId = resolveOpsConnectionId(payload.connectionId || run.connectionId)
 
   const existing = getOpsHistoryByRunId(runId)
-  if (
-    existing &&
-    existing.rating === rating &&
-    existing.connectionId === connectionId &&
-    existing.pathSummary.trim()
-  ) {
-    return { ok: true, record: existing }
+  if (existing) {
+    if (existing.rating !== rating) {
+      return {
+        ok: false,
+        error: 'Ops feedback already rated; like and dislike are mutually exclusive.'
+      }
+    }
+    if (existing.connectionId === connectionId && existing.pathSummary.trim()) {
+      return { ok: true, record: existing }
+    }
   }
 
   try {
