@@ -17,7 +17,7 @@ import {
 import { AgentLogList } from '@renderer/components/AgentLogList'
 import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
-import { StatusDot } from '@renderer/components/StatusIndicators'
+import { StatusDot, TerminalActivityDot } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
 import {
   Select,
@@ -69,6 +69,7 @@ export function AgentPanel({
   modelValidationError,
   configured,
   activeAgentPending,
+  executionTerminalId,
   pinnedWorkflows,
   connectionRecovery,
   t,
@@ -125,6 +126,7 @@ export function AgentPanel({
   modelValidationError?: string
   configured: boolean
   activeAgentPending: boolean
+  executionTerminalId?: string
   pinnedWorkflows: AgentPinnedWorkflow[]
   connectionRecovery?: {
     visible: boolean
@@ -214,9 +216,20 @@ export function AgentPanel({
               onValueChange={onSelectSession}
               disabled={sessionChatTabs.length === 0}
             >
-              <SelectTrigger className="h-8 min-w-0 flex-1" title={t.input.sessionLabel}>
+              <SelectTrigger className="h-8 min-w-0 flex-1 gap-1.5" title={t.input.sessionLabel}>
                 <SelectValue aria-label={t.input.sessionLabel}>
-                  {getSessionDisplayTitle(sessionChatTab, tabs)}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate">{getSessionDisplayTitle(sessionChatTab, tabs)}</span>
+                    {sessionTerminals.length > 1 && (
+                      <span className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
+                        {t.input.sessionPeerCount.replace(
+                          '{count}',
+                          String(sessionTerminals.length)
+                        )}
+                      </span>
+                    )}
+                    {activeAgentPending && <StatusDot state="pending" title={t.app.running} />}
+                  </span>
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -232,19 +245,46 @@ export function AgentPanel({
             </Select>
             {sessionTerminals.length > 1 && (
               <Select value={activeTab.id} onValueChange={onSelectTerminal}>
-                <SelectTrigger className="h-8 min-w-0 flex-1" title={t.input.sessionTerminalLabel}>
+                <SelectTrigger
+                  className="h-8 min-w-0 flex-1 gap-1.5"
+                  title={t.input.sessionTerminalLabel}
+                >
                   <SelectValue aria-label={t.input.sessionTerminalLabel}>
-                    {getTerminalDisplayTitle(activeTab, tabs)}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <TerminalActivityDot
+                        active={activeTab.terminalReady}
+                        executing={
+                          Boolean(executionTerminalId) &&
+                          activeTab.id === executionTerminalId &&
+                          activeAgentPending
+                        }
+                      />
+                      <span className="truncate">{getTerminalDisplayTitle(activeTab, tabs)}</span>
+                    </span>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
                     <SelectLabel>{t.input.sessionTerminalLabel}</SelectLabel>
-                    {sessionTerminals.map((tab) => (
-                      <SelectItem key={tab.id} value={tab.id}>
-                        {getTerminalDisplayTitle(tab, tabs)}
-                      </SelectItem>
-                    ))}
+                    {sessionTerminals.map((tab) => {
+                      const executing =
+                        Boolean(executionTerminalId) &&
+                        tab.id === executionTerminalId &&
+                        activeAgentPending
+                      return (
+                        <SelectItem key={tab.id} value={tab.id}>
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <TerminalActivityDot active={tab.terminalReady} executing={executing} />
+                            <span className="truncate">{getTerminalDisplayTitle(tab, tabs)}</span>
+                            {executing && (
+                              <span className="shrink-0 text-[10px] text-primary">
+                                {t.app.running}
+                              </span>
+                            )}
+                          </span>
+                        </SelectItem>
+                      )
+                    })}
                   </SelectGroup>
                 </SelectContent>
               </Select>

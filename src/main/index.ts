@@ -124,13 +124,15 @@ app.whenReady().then(async () => {
     { registerConnectionIpc },
     { startAttachmentCleanupScheduler },
     { initializeCrescentDatabase },
-    { registerStorageIpc }
+    { registerStorageIpc },
+    { registerUpdateIpc }
   ] = await Promise.all([
     import('./agent/ipc'),
     import('./connections/ipc'),
     import('./attachment-cleanup'),
     import('./crescent-sqlite'),
-    import('./storage/ipc')
+    import('./storage/ipc'),
+    import('./update/ipc')
   ])
 
   app.setName('Crescent')
@@ -158,6 +160,7 @@ app.whenReady().then(async () => {
   registerConnectionIpc()
   registerStorageIpc()
   registerTerminalIpc()
+  registerUpdateIpc()
   stopAttachmentCleanup = startAttachmentCleanupScheduler()
 
   createWindow()

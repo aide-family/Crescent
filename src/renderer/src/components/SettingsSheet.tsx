@@ -15,6 +15,7 @@ import {
   OpenApiProfileEditorFields,
   OpenApiProfileList
 } from '@renderer/components/OpenApiSettingsFields'
+import { AppUpdateCard } from '@renderer/components/AppUpdateCard'
 import { StatusDot } from '@renderer/components/StatusIndicators'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -203,7 +204,7 @@ export function SettingsSheet({
           <SheetDescription>{t.settings.titleDescription}</SheetDescription>
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">
                 {t.settings.providerList} · {config.providers.length}
@@ -372,6 +373,7 @@ export function SettingsSheet({
                   />
                 </label>
               </Field>
+              <AppUpdateCard t={t} />
               <Field>
                 <FieldLabel htmlFor="max-active-tools">{t.settings.dynamicToolLimit}</FieldLabel>
                 <Input

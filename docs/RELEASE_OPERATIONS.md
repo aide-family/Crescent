@@ -37,8 +37,34 @@ Crescent releases are tag-driven product releases, not ad-hoc CI artifacts.
 - Linux: `AppImage` and `deb` artifacts from the release workflow.
 - `SHA256SUMS.txt` must be attached to the release.
 
+## Code signing
+
+Signed / notarized builds are optional until certificate secrets are configured. See [CODE_SIGNING.md](./CODE_SIGNING.md) for macOS Developer ID, notarization, and Windows Authenticode setup.
+
+When secrets are present, the release workflow signs macOS (with notarization) and Windows installers automatically. Without secrets, unsigned artifacts are still published; macOS users may need the quarantine workaround documented in the README.
+
+## Auto-update feed
+
+Release assets must include electron-builder update metadata (`latest*.yml`, `.blockmap`) so the in-app updater can discover versions from GitHub Releases (`provider: github` in `electron-builder.yml`).
+
+## Packaging smoke tests
+
+After a local or CI package build, verify artifact layout:
+
+```bash
+npm run smoke:packaging
+```
+
+Optionally point at a directory of downloaded release assets:
+
+```bash
+npm run smoke:packaging -- ./release-assets
+```
+
 ## Follow-up
 
 - Check the GitHub Release assets are present and named by platform/architecture.
+- Confirm `latest-mac.yml` / `latest.yml` / `latest-linux.yml` (as applicable) and `SHA256SUMS.txt` are attached.
+- Run `npm run smoke:packaging` against the downloaded assets or `dist/`.
 - Download at least one artifact for the target platform and confirm it starts.
 - If publishing a prerelease, include a hyphen in the tag, for example `v1.2.0-beta.1`.

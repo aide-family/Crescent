@@ -347,6 +347,8 @@ const en = {
     contextSupplementDetail: 'User added during the running session:',
     currentTerminal: 'Commands run through the agent in the current terminal.',
     sessionTerminalLabel: 'Session terminal',
+    sessionTerminalExecuting: 'Agent executing on this terminal',
+    sessionPeerCount: '{count} peers',
     pinnedWorkflows: 'Pinned workflows',
     insertPinnedWorkflow: 'Insert workflow prompt',
     emptyConversationTitle: 'No conversation yet',
@@ -687,6 +689,23 @@ const en = {
     title: 'Agent settings',
     titleDescription:
       'Configure model providers, OpenAPI tools, command review, and local instruction files.',
+    updateSection: 'App updates',
+    updateSectionHint:
+      'Check GitHub Releases for a newer Crescent build. Download and install when an update is available.',
+    updateStatus: 'Status',
+    updateStatusIdle: 'No update check yet.',
+    updateStatusChecking: 'Checking for updates…',
+    updateStatusAvailable: 'Update {version} is available.',
+    updateStatusNotAvailable: 'You are on the latest version ({version}).',
+    updateStatusDownloading: 'Downloading update… {percent}%',
+    updateStatusDownloaded: 'Update {version} downloaded. Restart to install.',
+    updateStatusError: 'Update error: {message}',
+    updateCheck: 'Check for updates',
+    updateDownload: 'Download',
+    updateInstall: 'Restart and install',
+    updateCheckFailed: 'Update check failed',
+    updateDownloadFailed: 'Update download failed',
+    updateInstallFailed: 'Update install failed',
     validateTools: 'Validate tools',
     validating: 'Validating'
   }

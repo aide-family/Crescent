@@ -429,9 +429,9 @@
       "title": "In-app update channel (electron-updater or equivalent)",
       "priority": "P1",
       "iteration": "C",
-      "status": "pending",
+      "status": "completed",
       "dependsOn": [],
-      "notes": "ROADMAP Phase 4; generic publish URL already stubbed.",
+      "notes": "GitHub Releases provider; Settings AppUpdateCard; IPC update:* channels.",
       "tests": [
         "manual: update check against configured feed"
       ]
@@ -442,9 +442,9 @@
       "title": "macOS Developer ID signing + notarization; Windows Authenticode plan",
       "priority": "P0",
       "iteration": "C",
-      "status": "pending",
+      "status": "completed",
       "dependsOn": [],
-      "notes": "Fixes Gatekeeper “damaged” for real; needs Apple/Windows cert secrets in CI.",
+      "notes": "docs/CODE_SIGNING.md + release.yml conditional signing when CSC_*/APPLE_* secrets present.",
       "tests": [
         "manual: downloaded signed build opens without xattr workaround"
       ]
@@ -455,7 +455,7 @@
       "title": "Session switcher clarity + settings/connection form density pass",
       "priority": "P1",
       "iteration": "C",
-      "status": "pending",
+      "status": "completed",
       "dependsOn": [
         "p5-ui-conversation-hierarchy"
       ],
