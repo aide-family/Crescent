@@ -82,8 +82,9 @@ AppImage / deb builds are not code-signed with Apple/Microsoft tooling. Rely on 
 
 `.github/workflows/release.yml`:
 
+- Signing secrets are staged as `*_RAW` env vars and only promoted to `CSC_LINK` / `APPLE_*` when non-empty. An empty `CSC_LINK=""` must never reach electron-builder (it treats that as a cert path and fails with `<repo> not a file`).
 - If macOS signing secrets are set: build with notarization and hardened runtime enabled; do not force `CSC_IDENTITY_AUTO_DISCOVERY=false`.
-- Otherwise: keep the current unsigned path (`notarize=false`, `hardenedRuntime=false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`).
+- Otherwise: keep the current unsigned path (`notarize=false`, `hardenedRuntime=false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`, CSC_* unset).
 - Windows uses `CSC_LINK` / `WIN_CSC_LINK` when present; otherwise produces unsigned NSIS installers.
 
 ## Auto-update dependency
