@@ -19,11 +19,11 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- AI Agent beside a real terminal.
-- Local terminal and SSH connection workflows.
-- Command review flow for risky operations.
-- Skills and Wiki knowledge-base support for repeatable SOPs.
-- OpenAPI and MCP tool integrations.
+- Phase 4 distribution polish: in-app updates via GitHub Releases, packaging smoke checks, and optional CI signing when secrets are configured.
+- Default local instruction files (`IDENTITY.md`, `SOUL.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`) are seeded on first launch without overwriting existing files.
+- Conversation like/dislike feedback is mutually exclusive once submitted.
+- Session switcher clarity for peer terminals and active Agent execution.
+- Architecture extractions for terminal tabs, xterm lifecycle, and connection form helpers.
 
 ## Install Notes
 
