@@ -72,6 +72,23 @@ interface TerminalAgentApi {
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
     clear: (tabId?: string) => void
+    openSubterminal: (options: {
+      parentTabId: string
+      terminalName: string
+      cols?: number
+      rows?: number
+      initialCommand?: string
+    }) => Promise<{
+      ok: boolean
+      name?: string
+      tabId?: string
+      sessionId?: number
+      mode?: 'pty' | 'pipe'
+      pid?: number
+      shell?: string
+      cwd?: string
+      error?: string
+    }>
     onData: (callback: (event: { tabId: string; data: string }) => void) => () => void
     onPrompt: (
       callback: (event: { tabId: string; cwd: string; prompt?: string }) => void

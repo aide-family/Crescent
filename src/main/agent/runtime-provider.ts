@@ -1,10 +1,8 @@
 import type { AgentConfig } from './types'
 import { resolveModelProvider } from './model-provider-config'
 
-export type AgentApiMode = 'openai-chat-completions'
-
 export interface AgentRuntimeProvider {
-  apiMode: AgentApiMode
+  apiMode: 'openai-chat-completions'
   model: string
   baseUrl: string
   apiKey: string
@@ -13,7 +11,6 @@ export interface AgentRuntimeProvider {
 
 export function resolveAgentRuntimeProvider(config: AgentConfig): AgentRuntimeProvider {
   const provider = resolveModelProvider(config)
-
   return {
     apiMode: 'openai-chat-completions',
     model: provider.model,

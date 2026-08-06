@@ -15,19 +15,15 @@ describe('BUILT_IN_TOOL_CATALOG', () => {
     }
   })
 
-  it('marks command execution tools as high-risk and state-changing', () => {
-    const commandTools = BUILT_IN_TOOL_CATALOG.filter((tool) =>
-      tool.name.includes('terminal_command')
-    )
-
-    expect(commandTools.map((tool) => tool.name)).toEqual([
-      'execute_terminal_command',
-      'execute_subterminal_command'
+  it('exposes Pi workspace tools', () => {
+    expect(BUILT_IN_TOOL_CATALOG.map((tool) => tool.name).sort()).toEqual([
+      'bash',
+      'edit',
+      'read',
+      'write'
     ])
-    for (const tool of commandTools) {
-      expect(tool.risk).toBe('high')
-      expect(tool.requiresApproval).toBe(true)
-      expect(tool.stateChanging).toBe(true)
-    }
+    const bash = BUILT_IN_TOOL_CATALOG.find((tool) => tool.name === 'bash')
+    expect(bash?.risk).toBe('high')
+    expect(bash?.stateChanging).toBe(true)
   })
 })

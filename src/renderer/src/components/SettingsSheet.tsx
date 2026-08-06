@@ -12,8 +12,7 @@ import {
 } from 'lucide-react'
 
 import {
-  OpenApiProfileEditorFields,
-  OpenApiProfileList
+  OpenApiProfileEditorFields
 } from '@renderer/components/OpenApiSettingsFields'
 import { AppUpdateCard } from '@renderer/components/AppUpdateCard'
 import { StatusDot } from '@renderer/components/StatusIndicators'
@@ -99,6 +98,7 @@ export interface SettingsSheetProps {
   onDeleteProvider: (providerId: string) => void
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
+  onWorkspaceCwdChange: (value: string) => void
   onMaxActiveToolsChange: (value: number) => void
   onCommandWhitelistChange: (text: string) => void
   onCreateOpenApiProfile: () => void
@@ -132,7 +132,7 @@ export function SettingsSheet({
   settingsProviderId,
   modelOptions,
   providerModelsText,
-  commandWhitelistText,
+  commandWhitelistText: _commandWhitelistText,
   instructionFiles,
   selectedInstructionName,
   selectedInstructionFile,
@@ -151,10 +151,11 @@ export function SettingsSheet({
   onToggleProviderDetails,
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
-  onMaxActiveToolsChange,
-  onCommandWhitelistChange,
-  onCreateOpenApiProfile,
-  onToggleOpenApiProfileDetails,
+  onWorkspaceCwdChange,
+  onMaxActiveToolsChange: _onMaxActiveToolsChange,
+  onCommandWhitelistChange: _onCommandWhitelistChange,
+  onCreateOpenApiProfile: _onCreateOpenApiProfile,
+  onToggleOpenApiProfileDetails: _onToggleOpenApiProfileDetails,
   onDeleteOpenApiProfile,
   onOpenApiEditorOpenChange,
   onPatchActiveOpenApiProfile,
@@ -183,7 +184,7 @@ export function SettingsSheet({
     config.providers.find((provider) => provider.id === settingsProviderId) ?? settingsProvider
   const detailEditorOpen =
     (providerEditorOpen && Boolean(settingsProviderId)) ||
-    (openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
+    (false && openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
     (instructionEditorOpen && Boolean(selectedInstructionFile))
 
   return (
@@ -375,38 +376,20 @@ export function SettingsSheet({
               </Field>
               <AppUpdateCard t={t} />
               <Field>
-                <FieldLabel htmlFor="max-active-tools">{t.settings.dynamicToolLimit}</FieldLabel>
+                <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>
                 <Input
-                  id="max-active-tools"
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={config.maxActiveTools}
-                  onChange={(event) => onMaxActiveToolsChange(Number(event.target.value))}
+                  id="workspace-cwd"
+                  value={config.workspaceCwd ?? ''}
+                  onChange={(event) => onWorkspaceCwdChange(event.target.value)}
+                  placeholder="~/.crescent/workspace"
                 />
-                <FieldDescription>{t.settings.maxToolsHint}</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="command-whitelist">{t.settings.commandWhitelist}</FieldLabel>
-                <Textarea
-                  id="command-whitelist"
-                  className="min-h-28 resize-y font-mono text-xs"
-                  value={commandWhitelistText}
-                  onChange={(event) => onCommandWhitelistChange(event.target.value)}
-                  placeholder={'exact command\ncommand prefix *\n/^custom regex rule$/'}
-                />
-                <FieldDescription>{t.settings.commandWhitelistHint}</FieldDescription>
+                <FieldDescription>{t.settings.workspaceCwdHint}</FieldDescription>
               </Field>
               <Separator />
-              <OpenApiProfileList
-                profiles={config.openApiProfiles}
-                activeProfileId={config.openApiProfileId}
-                editorProfileId={settingsOpenApiProfile?.id}
-                editorOpen={openApiEditorOpen}
-                t={t}
-                onCreateProfile={onCreateOpenApiProfile}
-                onToggleProfileDetails={onToggleOpenApiProfileDetails}
-              />
+              <Field>
+                <FieldLabel>{t.settings.piToolsTitle}</FieldLabel>
+                <FieldDescription>{t.settings.piToolsHint}</FieldDescription>
+              </Field>
               <Separator />
               <Field>
                 <div className="flex items-center justify-between gap-2">
@@ -484,7 +467,12 @@ export function SettingsSheet({
                       <div className="space-y-1 text-muted-foreground">
                         {validation.tools?.map((tool) => (
                           <p key={tool.name}>
-                            {tool.name} · {tool.method.toUpperCase()} {tool.path}
+                            {tool.name}
+                            {tool.method && tool.path
+                              ? ` · ${tool.method.toUpperCase()} ${tool.path}`
+                              : tool.description
+                                ? ` · ${tool.description}`
+                                : ''}
                           </p>
                         ))}
                       </div>
