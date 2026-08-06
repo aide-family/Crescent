@@ -148,11 +148,20 @@ import {
   addUniqueToolRef,
   addUniqueWikiRef,
   buildAgentInputWithReferences,
+  buildCurrentTerminalAgentInput,
+  buildPostLoginAgentInput,
   buildRecentConversationContext,
   buildResumeAgentInput,
+  findDirectlyMentionedConnection,
   formatVisibleInputWithReferences,
-  isContinueIntent
+  hasUsableCurrentTerminal,
+  isConnectionOnlyRequest,
+  isContinueIntent,
+  isExplicitConnectionRequest,
+  isExplicitNonTerminalAgentRequest,
+  isSameConnectionTab
 } from '@renderer/lib/agent-input'
+import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
 import {
   buildConnectionCommands,
   buildConnectionLoginActions,
@@ -242,6 +251,7 @@ import type {
   AgentValidationResult,
   AgentSkillOption,
   AgentWikiReference,
+  AgentConnectionIntentResult,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
@@ -2992,6 +3002,60 @@ function App(): React.JSX.Element {
     if (connectionForm.id === id) resetConnectionForm()
   }
 
+  async function resolveConnectionIntentForInput(
+    input: string,
+    options?: {
+      conversationContext?: string
+      currentConnectionId?: string
+      currentConnectionName?: string
+      terminalSummary?: string
+    }
+  ): Promise<{
+    analysis?: AgentConnectionIntentResult
+    connection?: ConnectionConfig
+  }> {
+    let candidates = connections
+
+    try {
+      candidates = await window.api.connections.list()
+      setConnections(candidates)
+    } catch {
+      candidates = connections
+    }
+
+    try {
+      const analysis = await window.api.agent.resolveConnectionIntent({
+        input,
+        conversationContext: options?.conversationContext,
+        currentConnectionId: options?.currentConnectionId,
+        currentConnectionName: options?.currentConnectionName,
+        terminalSummary: options?.terminalSummary
+      })
+      if (analysis.needsClarification) {
+        return { analysis }
+      }
+      if (!analysis.shouldConnect || !analysis.ok || !analysis.connectionId) {
+        return { analysis }
+      }
+
+      return {
+        analysis,
+        connection: candidates.find((connection) => connection.id === analysis.connectionId)
+      }
+    } catch (error) {
+      return {
+        analysis: {
+          ok: false,
+          shouldConnect: false,
+          confidence: 0,
+          needsClarification: true,
+          clarificationQuestion: t.terminal.connectionClarifyFallback,
+          reason: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }
+  }
+
   async function submitAgent(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     await submitAgentMessage()
@@ -3001,6 +3065,7 @@ function App(): React.JSX.Element {
     const terminalTabId = activeTabIdRef.current
     const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
     const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
+    const terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
     const displayInput = (overrideInput ?? tab?.agentInput ?? '').trim()
     if (!displayInput) return
 
@@ -3081,19 +3146,254 @@ function App(): React.JSX.Element {
         thinkingMessage: message
       }))
     }
-    const _clearThinking = (): void => {
+    const clearThinking = (): void => {
       updateTab(chatTabId, (current) => ({
         ...current,
         agentThinking: false,
         thinkingMessage: undefined
       }))
     }
-    void _clearThinking
+    setThinking(t.input.thinkingAnalyzingRequest)
+
+    const terminalContext = await window.api.terminal.getContext(terminalTabId)
+    const pendingClarification = tab?.pendingClarification
+    const intentSourceInput =
+      pendingClarification?.kind === 'connection-intent'
+        ? `${pendingClarification.originalInput}\n\n${t.terminal.connectionClarifyReplyPrefix}\n${displayInput}`
+        : displayInput
+    if (pendingClarification) {
+      updateTab(chatTabId, (current) => ({ ...current, pendingClarification: undefined }))
+    }
+
+    const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
+    const explicitLocalFileRequest = hasExplicitLocalFileOperationIntent(intentSourceInput)
+    const directlyMentionedConnection = explicitLocalFileRequest
+      ? undefined
+      : findDirectlyMentionedConnection(intentSourceInput, connections)
+    const directlyMentionsCurrentConnection =
+      Boolean(directlyMentionedConnection) &&
+      isSameConnectionTab(terminalTab, directlyMentionedConnection)
+    const inputMentionsConnection =
+      Boolean(directlyMentionedConnection) && !directlyMentionsCurrentConnection
+    const shouldResolveConnectionIntent =
+      !resumeRequested &&
+      !directlyMentionsCurrentConnection &&
+      !explicitNonTerminalRequest &&
+      !explicitLocalFileRequest
+    const terminalSummary = [
+      `mode=${terminalContext.mode}`,
+      `cwd=${terminalContext.cwd || '-'}`,
+      terminalTab?.connectionId ? `tabConnectionId=${terminalTab.connectionId}` : '',
+      terminalTab?.connectionName ? `tabConnectionName=${terminalTab.connectionName}` : '',
+      terminalTab?.isSsh ? 'tabIsSsh=true' : 'tabIsSsh=false',
+      `recentOutput=${terminalContext.output.slice(-1200)}`
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
+    try {
+      if (shouldResolveConnectionIntent && !inputMentionsConnection) {
+        setThinking(t.input.thinkingResolvingConnection)
+      }
+      connectionIntent =
+        inputMentionsConnection && directlyMentionedConnection
+          ? {
+              analysis: {
+                ok: true,
+                shouldConnect: true,
+                connectionId: directlyMentionedConnection.id,
+                confidence: 100,
+                executeAfterLogin: !isConnectionOnlyRequest(
+                  intentSourceInput,
+                  directlyMentionedConnection
+                ),
+                matchBasis: 'name',
+                reason: `${t.terminal.connectionMatched}: ${directlyMentionedConnection.name}`
+              },
+              connection: directlyMentionedConnection
+            }
+          : shouldResolveConnectionIntent
+            ? await resolveConnectionIntentForInput(intentSourceInput, {
+                conversationContext,
+                currentConnectionId: terminalTab?.connectionId,
+                currentConnectionName: terminalTab?.connectionName,
+                terminalSummary
+              })
+            : undefined
+    } finally {
+      // Keep thinking visible until the next concrete UI phase replaces it.
+    }
+
+    if (connectionIntent?.analysis?.needsClarification) {
+      clearThinking()
+      const question =
+        connectionIntent.analysis.clarificationQuestion?.trim() ||
+        t.terminal.connectionClarifyFallback
+      appendLog(
+        {
+          kind: 'assistant',
+          text: formatAgentRunMarkdown(
+            {
+              logId: -1,
+              actions: [],
+              steps: [
+                {
+                  id: 'clarify',
+                  kind: 'status',
+                  title: t.terminal.connectionClarifyTitle,
+                  detail: [connectionIntent.analysis.reason, question].filter(Boolean).join('\n')
+                }
+              ],
+              result: question,
+              elapsedMs: Date.now() - startedAt
+            },
+            t
+          )
+        },
+        chatTabId
+      )
+      updateTab(chatTabId, (current) => ({
+        ...current,
+        pendingClarification: {
+          kind: 'connection-intent',
+          originalInput: pendingClarification?.originalInput || displayInput,
+          question
+        }
+      }))
+      return
+    }
+
+    const shouldUseCurrentTerminal =
+      terminalContext.mode !== 'none' &&
+      hasUsableCurrentTerminal(terminalTab, terminalContext.output) &&
+      !connectionIntent?.analysis?.shouldConnect &&
+      !explicitNonTerminalRequest &&
+      !isExplicitConnectionRequest(displayInput)
+
+    if (connectionIntent?.analysis?.shouldConnect) {
+      clearThinking()
+      const matchedConnection = connectionIntent.connection
+      const executeAfterLogin = connectionIntent.analysis.executeAfterLogin === true
+
+      if (!matchedConnection) {
+        appendLog(
+          {
+            kind: 'assistant',
+            text: formatAgentRunMarkdown(
+              {
+                logId: -1,
+                actions: [],
+                steps: [
+                  {
+                    id: 'match-miss',
+                    kind: 'status',
+                    title: t.terminal.connectionMatched,
+                    detail: connectionIntent.analysis.reason ?? displayInput
+                  }
+                ],
+                error: t.terminal.connectionNoMatch,
+                elapsedMs: Date.now() - startedAt
+              },
+              t
+            )
+          },
+          chatTabId
+        )
+        return
+      }
+
+      appendLog(
+        {
+          kind: 'assistant',
+          text: formatAgentRunMarkdown(
+            {
+              logId: -1,
+              actions: [],
+              steps: [
+                {
+                  id: 'match',
+                  kind: 'status',
+                  title: t.terminal.connectionMatched,
+                  detail: [
+                    matchedConnection.name,
+                    `${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`,
+                    connectionIntent.analysis.reason,
+                    executeAfterLogin ? t.terminal.postLoginSkillHint : ''
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
+                }
+              ],
+              result: executeAfterLogin
+                ? t.terminal.connectionIntentWithTaskResult
+                : t.terminal.connectionIntentResult,
+              elapsedMs: Date.now() - startedAt
+            },
+            t
+          )
+        },
+        chatTabId
+      )
+
+      const taskInput =
+        intentSourceInput === displayInput
+          ? input
+          : buildAgentInputWithReferences(
+              intentSourceInput,
+              skillRefs,
+              pathRefs,
+              toolRefs,
+              wikiRefs,
+              t
+            )
+      connectToConnection(
+        matchedConnection,
+        executeAfterLogin ? buildPostLoginAgentInput(taskInput, matchedConnection, t) : undefined,
+        executeAfterLogin
+          ? formatVisibleInputWithReferences(
+              displayInput,
+              skillRefs,
+              pathRefs,
+              toolRefs,
+              wikiRefs,
+              t
+            )
+          : undefined,
+        conversationContext,
+        false,
+        startedAt
+      )
+      return
+    }
+
     setThinking(t.input.thinkingPreparingRun)
-    await runAgentConversation(input, terminalTabId, undefined, displayInput, false, startedAt, {
-      conversationContext,
-      chatTabId
-    })
+    const resolvedInput =
+      intentSourceInput === displayInput
+        ? input
+        : buildAgentInputWithReferences(
+            intentSourceInput,
+            skillRefs,
+            pathRefs,
+            toolRefs,
+            wikiRefs,
+            t
+          )
+    const runInput = shouldUseCurrentTerminal
+      ? buildCurrentTerminalAgentInput(resolvedInput, terminalContext, t)
+      : resolvedInput
+    await runAgentConversation(
+      runInput,
+      terminalTabId,
+      terminalTab?.connectionId || undefined,
+      displayInput,
+      false,
+      startedAt,
+      {
+        conversationContext,
+        chatTabId
+      }
+    )
   }
 
   async function runAgentConversation(
