@@ -1,6 +1,6 @@
 import type { Dictionary } from '@renderer/i18n'
 import type { StoredAgentLogEntry } from '../../../shared/agent-types'
-import { trimMarkdownLines } from './agent-run-markdown'
+import { formatAgentRunDocument } from './agent-run-document'
 import type { AgentLogEntry, AgentRunAction, AgentRunViewState } from './terminal-tabs'
 
 export function logClassName(kind: AgentLogEntry['kind']): string {
@@ -169,121 +169,18 @@ export function normalizeStoredAgentLogKind(kind: string): AgentLogEntry['kind']
 }
 
 export function formatAgentRunMarkdown(run: AgentRunViewState, t: Dictionary): string {
-  const lines: string[] = []
-  const visibleActions = run.actions.filter((action) => !isNoisyMcpCatalogAction(action))
-
-  if (visibleActions.length > 0) {
-    lines.push(`**${t.input.actions}**`, '')
-    for (const action of visibleActions) {
-      lines.push(`- ${action.title}`)
-    }
-    lines.push('', '<details>', `<summary>${t.input.actionDetails}</summary>`, '')
-    for (const [index, action] of visibleActions.entries()) {
-      lines.push(`#### ${index + 1}. ${action.title}`, '', formatActionNarrative(action, t), '')
-    }
-    lines.push('</details>')
-  }
-
-  if (run.result) {
-    lines.push('', `**${t.input.result}**`, '', run.result)
-  }
-
-  if (run.error) {
-    lines.push('', `**${t.input.error}**`, '', run.error)
-  }
-
-  if (typeof run.elapsedMs === 'number') {
-    lines.push('', formatElapsedFooter(run.elapsedMs, t))
-  }
-
-  return lines.join('\n').trim()
+  return formatAgentRunDocument(
+    {
+      ...run,
+      steps: run.steps ?? [],
+      actions: (run.actions ?? []).filter((action) => !isNoisyMcpCatalogAction(action))
+    },
+    t
+  )
 }
 
 export function appendElapsedFooter(text: string, elapsedMs: number, t: Dictionary): string {
   return [text.trim(), formatElapsedFooter(elapsedMs, t)].filter(Boolean).join('\n\n')
-}
-
-function formatActionNarrative(action: AgentRunAction, t: Dictionary): string {
-  const intent = extractActionIntent(action, t)
-  const lines = [
-    ...(intent ? [`**${t.input.actionIntent}**`, intent, ''] : []),
-    `**${t.input.rawActionObservation}**`,
-    '```text',
-    action.detail,
-    '```'
-  ]
-
-  return lines.join('\n')
-}
-
-function extractActionIntent(action: AgentRunAction, t: Dictionary): string {
-  const operationReason = extractLabeledSection(action.detail, t.commandReview.operationReason)
-  if (operationReason) return operationReason
-
-  const command = extractActionCommand(action.detail, t)
-  if (command) return `${t.input.actionIntentCommand}\n\`\`\`bash\n${command}\n\`\`\``
-
-  const planSteps = extractNumberedLines(action.detail)
-  if (planSteps.length > 0) return [t.input.actionIntentPlan, ...planSteps].join('\n')
-
-  const skillReason = extractLabeledSection(action.detail, t.input.skillMatchReason)
-  if (skillReason) return `${t.input.actionIntentSkill} ${skillReason}`
-
-  const normalizedDetail = action.detail.trim()
-  if (normalizedDetail && normalizedDetail !== action.title.trim()) return normalizedDetail
-
-  return ''
-}
-
-function extractActionCommand(detail: string, t: Dictionary): string {
-  const labels = [
-    'Command',
-    t.commandReview.command,
-    t.commandReview.submitted,
-    `${t.commandReview.submitted}:`
-  ]
-
-  for (const label of labels) {
-    const value = extractLabeledSection(detail, label)
-    if (value) return value
-  }
-
-  return ''
-}
-
-function extractLabeledSection(detail: string, label: string): string {
-  const lines = detail.replace(/\r\n/g, '\n').split('\n')
-  const normalizedLabel = label.replace(/:$/, '').trim()
-  const startIndex = lines.findIndex((line) => {
-    const trimmed = line.trim()
-    return trimmed === `${normalizedLabel}:` || trimmed.startsWith(`${normalizedLabel}: `)
-  })
-  if (startIndex < 0) return ''
-
-  const firstLine = lines[startIndex].trim()
-  const inlineValue = firstLine.slice(`${normalizedLabel}:`.length).trim()
-  if (inlineValue) return inlineValue
-
-  const valueLines: string[] = []
-  for (const line of lines.slice(startIndex + 1)) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      if (valueLines.length > 0) break
-      continue
-    }
-    if (/^[^:：]{1,32}[:：]\s*$/.test(trimmed) && valueLines.length > 0) break
-    valueLines.push(line.trimEnd())
-  }
-
-  return trimMarkdownLines(valueLines)
-}
-
-function extractNumberedLines(detail: string): string[] {
-  return detail
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => /^\d+\.\s+/.test(line))
 }
 
 function formatElapsedFooter(elapsedMs: number, t: Dictionary): string {
