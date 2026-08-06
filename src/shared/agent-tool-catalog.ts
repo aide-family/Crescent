@@ -18,10 +18,33 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     method: 'post',
     path: 'terminal://temporary-subterminal',
     description:
-      'Execute a non-interactive shell command in a named temporary local-shell sub-terminal displayed under the current terminal.',
+      'Execute a shell command in a named docked sub-terminal under the current terminal. Supports wait (default) and detach modes for continuous observation.',
     source: 'built-in',
     risk: 'high',
     requiresApproval: true,
+    external: false,
+    stateChanging: true
+  },
+  {
+    name: 'read_subterminal_output',
+    method: 'get',
+    path: 'terminal://temporary-subterminal/output',
+    description:
+      'Read recent scrollback from a named docked sub-terminal for continuous-observation synthesis.',
+    source: 'built-in',
+    risk: 'low',
+    requiresApproval: false,
+    external: false,
+    stateChanging: false
+  },
+  {
+    name: 'interrupt_subterminal',
+    method: 'post',
+    path: 'terminal://temporary-subterminal/interrupt',
+    description: 'Send Ctrl+C to a named docked sub-terminal to stop a detached watch command.',
+    source: 'built-in',
+    risk: 'medium',
+    requiresApproval: false,
     external: false,
     stateChanging: true
   },

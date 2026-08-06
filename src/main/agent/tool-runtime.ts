@@ -23,6 +23,8 @@ import type {
 
 const TERMINAL_TOOL_NAME = 'execute_terminal_command'
 const SUBTERMINAL_TOOL_NAME = 'execute_subterminal_command'
+const READ_SUBTERMINAL_TOOL_NAME = 'read_subterminal_output'
+const INTERRUPT_SUBTERMINAL_TOOL_NAME = 'interrupt_subterminal'
 const LOCAL_FILE_WRITE_TOOL_NAME = 'write_local_file'
 const SAVE_WIKI_DOCUMENT_TOOL_NAME = 'save_wiki_document'
 const TERMINAL_COMMAND_TOOL: OpenAiTool = {
@@ -30,7 +32,7 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: TERMINAL_TOOL_NAME,
     description:
-      'Execute one shell command in a terminal that belongs to the current Crescent chat session, wait for completion, and return exit code plus output. Default target is the current/focused terminal. When session terminal inventory lists peer terminals, pass targetTerminalId to run on a specific peer in the same session. Do not invent terminal ids outside that inventory. For one-shot remote commands that should not use an interactive peer PTY, use ssh with a concrete remote command (preferably via execute_subterminal_command). In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have watchdog timeouts and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command.',
+      'Execute one shell command in a terminal that belongs to the current Crescent chat session, wait for completion, and return exit code plus output. Default target is the current/focused terminal. When session terminal inventory lists peer terminals or docked sub-terminals, pass targetTerminalId to run on a specific peer in the same session. Do not invent terminal ids outside that inventory. For one-shot remote commands that should not use an interactive peer PTY, use ssh with a concrete remote command (preferably via execute_subterminal_command). In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Wait-mode commands have watchdog timeouts and are interrupted with Ctrl+C when they exceed it. Use this for the single next step only, then inspect the result before deciding the next command.',
     parameters: {
       type: 'object',
       properties: {
@@ -42,7 +44,7 @@ const TERMINAL_COMMAND_TOOL: OpenAiTool = {
         targetTerminalId: {
           type: 'string',
           description:
-            'Optional tabId of a peer terminal from the session terminal inventory. Omit to use the current/focused terminal. Must match an id listed for this chat session.'
+            'Optional tabId of a peer or docked sub-terminal from the session terminal inventory. Omit to use the current/focused terminal. Must match an id listed for this chat session.'
         },
         timeoutMs: {
           type: 'number',
@@ -59,27 +61,74 @@ const SUBTERMINAL_COMMAND_TOOL: OpenAiTool = {
   function: {
     name: SUBTERMINAL_TOOL_NAME,
     description:
-      'Execute one shell command in a named temporary local-shell sub-terminal displayed under the current terminal. For operations on another host, use ssh with a concrete remote command. In PTY mode, password/passphrase/OTP prompts are surfaced to the user for input; in pipe fallback mode interactive prompts cannot be handled safely. Commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Use this instead of the current terminal when the operation needs to leave the current terminal context, work on another host/cluster, or compare multiple targets while preserving the current terminal. A single command may be a bounded compound shell loop/script when it performs one coherent read-only collection or reporting step. For generated local files, use write_local_file instead of this tool. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
+      'Execute one shell command in a named docked sub-terminal displayed under the current terminal. The sub-terminal is a full interactive PTY (local shell by default; use ssh with a concrete remote command for another host). Prefer mode=wait for finite collection commands. Prefer mode=detach for continuous observation such as top, atop, or tail -f so the main terminal can keep verifying in parallel; then use read_subterminal_output to sample output and interrupt_subterminal to stop. Password/passphrase/OTP prompts are surfaced to the user. Wait-mode commands have a watchdog timeout and are interrupted with Ctrl+C when they exceed it. Choose a clear role-based terminalName. At most three named sub-terminals are available per current terminal; reuse terminalName values for related follow-up commands.',
     parameters: {
       type: 'object',
       properties: {
         terminalName: {
           type: 'string',
           description:
-            'Short stable name for the temporary sub-terminal, such as host-a, cluster-b, or local. Reuse the same name for related commands.'
+            'Short stable name for the docked sub-terminal, such as host-a, cluster-b, watch, or local. Reuse the same name for related commands.'
         },
         command: {
           type: 'string',
           description:
-            'The exact single shell command to execute in the temporary sub-terminal. For another host, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+            'The exact single shell command to execute in the docked sub-terminal. For another host, use ssh with the concrete remote command to run. Do not batch unrelated inspections or chain multiple decision-dependent checks into one command. Shell loops, pipelines, and semicolon-separated commands are acceptable when they form one coherent read-only collection/reporting step.'
+        },
+        mode: {
+          type: 'string',
+          enum: ['wait', 'detach'],
+          description:
+            'wait (default) runs until completion with timeout. detach starts the command and returns immediately so continuous watchers like top/atop can keep running while the main terminal verifies other evidence.'
         },
         timeoutMs: {
           type: 'number',
           description:
-            'Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000. Long-running or stuck commands are interrupted with Ctrl+C on timeout.'
+            'Optional timeout in milliseconds for mode=wait. Defaults to 120000 and is capped at 600000. Ignored for mode=detach.'
         }
       },
       required: ['terminalName', 'command']
+    }
+  }
+}
+const READ_SUBTERMINAL_TOOL: OpenAiTool = {
+  type: 'function',
+  function: {
+    name: READ_SUBTERMINAL_TOOL_NAME,
+    description:
+      'Read recent scrollback from a named docked sub-terminal. Use after mode=detach continuous observation, or whenever you need the latest sub-terminal output without sending a new command.',
+    parameters: {
+      type: 'object',
+      properties: {
+        terminalName: {
+          type: 'string',
+          description:
+            'Name of the docked sub-terminal previously used with execute_subterminal_command.'
+        },
+        maxChars: {
+          type: 'number',
+          description: 'Optional max characters of recent output to return. Defaults to 12000.'
+        }
+      },
+      required: ['terminalName']
+    }
+  }
+}
+const INTERRUPT_SUBTERMINAL_TOOL: OpenAiTool = {
+  type: 'function',
+  function: {
+    name: INTERRUPT_SUBTERMINAL_TOOL_NAME,
+    description:
+      'Send Ctrl+C to a named docked sub-terminal to stop a detached watch command such as top/atop/tail -f.',
+    parameters: {
+      type: 'object',
+      properties: {
+        terminalName: {
+          type: 'string',
+          description: 'Name of the docked sub-terminal to interrupt.'
+        }
+      },
+      required: ['terminalName']
     }
   }
 }
@@ -299,18 +348,82 @@ export class AgentToolRuntime {
         emit({
           type: 'tool',
           name: SUBTERMINAL_TOOL_NAME,
-          message: `Submitting command in temporary sub-terminal "${args.terminalName}": ${args.command}`
+          message:
+            args.mode === 'detach'
+              ? `Starting detached command in docked sub-terminal "${args.terminalName}": ${args.command}`
+              : `Submitting command in docked sub-terminal "${args.terminalName}": ${args.command}`
         })
 
         const result = await subterminalExecutor.executeCommand(args.command, {
           terminalName: args.terminalName,
-          timeoutMs: args.timeoutMs
+          timeoutMs: args.timeoutMs,
+          mode: args.mode
         })
 
         return {
           ...result,
           output: truncateToolOutput(result.output)
         }
+      }
+    })
+
+    this.handlers.set(READ_SUBTERMINAL_TOOL_NAME, {
+      schema: READ_SUBTERMINAL_TOOL,
+      catalog: findBuiltInToolCatalogEntry(READ_SUBTERMINAL_TOOL_NAME),
+      execute: async (rawArguments) => {
+        const args = parseSubterminalNameArgs(rawArguments)
+        emit({
+          type: 'tool',
+          name: READ_SUBTERMINAL_TOOL_NAME,
+          message: `Reading docked sub-terminal "${args.terminalName}" output`
+        })
+
+        if (!subterminalExecutor.readOutput) {
+          return {
+            ok: false,
+            name: args.terminalName,
+            tabId: '',
+            mode: 'none',
+            cwd: '',
+            shell: '',
+            output: '',
+            busy: false,
+            detached: false,
+            error: 'Sub-terminal output reading is unavailable.'
+          }
+        }
+
+        const result = await subterminalExecutor.readOutput({
+          terminalName: args.terminalName,
+          maxChars: args.maxChars
+        })
+        return {
+          ...result,
+          output: truncateToolOutput(result.output)
+        }
+      }
+    })
+
+    this.handlers.set(INTERRUPT_SUBTERMINAL_TOOL_NAME, {
+      schema: INTERRUPT_SUBTERMINAL_TOOL,
+      catalog: findBuiltInToolCatalogEntry(INTERRUPT_SUBTERMINAL_TOOL_NAME),
+      execute: async (rawArguments) => {
+        const args = parseSubterminalNameArgs(rawArguments)
+        emit({
+          type: 'tool',
+          name: INTERRUPT_SUBTERMINAL_TOOL_NAME,
+          message: `Interrupting docked sub-terminal "${args.terminalName}"`
+        })
+
+        if (!subterminalExecutor.interrupt) {
+          return {
+            ok: false,
+            name: args.terminalName,
+            error: 'Sub-terminal interrupt is unavailable.'
+          }
+        }
+
+        return subterminalExecutor.interrupt({ terminalName: args.terminalName })
       }
     })
   }
@@ -509,13 +622,15 @@ function parseSubterminalCommandArgs(rawArguments: string): {
   terminalName: string
   command: string
   timeoutMs?: number
+  mode: 'wait' | 'detach'
 } {
   try {
     const parsed = JSON.parse(rawArguments || '{}') as unknown
 
-    if (!isRecord(parsed)) return { terminalName: 'temporary', command: '' }
+    if (!isRecord(parsed)) return { terminalName: 'temporary', command: '', mode: 'wait' }
 
     const timeoutMs = Number(parsed.timeoutMs)
+    const mode = parsed.mode === 'detach' ? 'detach' : 'wait'
 
     return {
       terminalName:
@@ -523,10 +638,32 @@ function parseSubterminalCommandArgs(rawArguments: string): {
           ? parsed.terminalName.trim()
           : 'temporary',
       command: typeof parsed.command === 'string' ? parsed.command.trim() : '',
-      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined,
+      mode
     }
   } catch {
-    return { terminalName: 'temporary', command: '' }
+    return { terminalName: 'temporary', command: '', mode: 'wait' }
+  }
+}
+
+function parseSubterminalNameArgs(rawArguments: string): {
+  terminalName: string
+  maxChars?: number
+} {
+  try {
+    const parsed = JSON.parse(rawArguments || '{}') as unknown
+    if (!isRecord(parsed)) return { terminalName: 'temporary' }
+
+    const maxChars = Number(parsed.maxChars)
+    return {
+      terminalName:
+        typeof parsed.terminalName === 'string' && parsed.terminalName.trim()
+          ? parsed.terminalName.trim()
+          : 'temporary',
+      maxChars: Number.isFinite(maxChars) && maxChars > 0 ? maxChars : undefined
+    }
+  } catch {
+    return { terminalName: 'temporary' }
   }
 }
 

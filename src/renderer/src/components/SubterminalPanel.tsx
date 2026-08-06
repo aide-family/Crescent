@@ -1,11 +1,20 @@
-import type { MutableRefObject } from 'react'
-import { ChevronDownIcon, ChevronUpIcon, Trash2Icon, XIcon } from 'lucide-react'
+import { useEffect, useRef, type MutableRefObject } from 'react'
+import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  PlusIcon,
+  Trash2Icon,
+  XIcon
+} from 'lucide-react'
 
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
+import { appTerminalTheme } from '@renderer/lib/design-system'
 import { getSubterminalWidths } from '@renderer/lib/terminal-text'
-import type { AgentTerminalTab } from '@renderer/lib/terminal-tabs'
+import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
 
 export interface SubterminalResizeState {
   tabId: string
@@ -21,6 +30,84 @@ export interface SubterminalHeightResizeState {
   startHeight: number
 }
 
+function SubterminalXtermPane({
+  subterminal,
+  shellExitedText
+}: {
+  subterminal: TemporarySubterminal
+  shellExitedText: string
+}): React.JSX.Element {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const terminalRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+
+    const terminal = new Terminal({
+      convertEol: true,
+      cursorBlink: true,
+      fontSize: 11,
+      lineHeight: 1.2,
+      theme: appTerminalTheme
+    })
+    const fitAddon = new FitAddon()
+    terminal.loadAddon(fitAddon)
+    terminal.open(host)
+    fitAddon.fit()
+    terminalRef.current = terminal
+    fitAddonRef.current = fitAddon
+
+    if (subterminal.rawOutput) {
+      terminal.write(subterminal.rawOutput)
+    }
+
+    const inputDisposable = terminal.onData((data) => {
+      window.api.terminal.write(data, subterminal.id)
+    })
+
+    const stopData = window.api.terminal.onData((event) => {
+      if (event.tabId !== subterminal.id) return
+      terminal.write(event.data)
+    })
+
+    const stopExit = window.api.terminal.onExit((event) => {
+      if (event.tabId !== subterminal.id) return
+      terminal.writeln(`\r\n\x1b[31m${shellExitedText} ${event.exitCode}.\x1b[0m`)
+    })
+
+    const resizeObserver = new ResizeObserver(() => {
+      const addon = fitAddonRef.current
+      const term = terminalRef.current
+      if (!addon || !term) return
+      addon.fit()
+      const dimensions = addon.proposeDimensions()
+      if (!dimensions) return
+      window.api.terminal.resize({
+        cols: dimensions.cols,
+        rows: dimensions.rows,
+        tabId: subterminal.id
+      })
+    })
+    resizeObserver.observe(host)
+
+    return () => {
+      inputDisposable.dispose()
+      stopData()
+      stopExit()
+      resizeObserver.disconnect()
+      terminal.dispose()
+      terminalRef.current = null
+      fitAddonRef.current = null
+    }
+    // Mount once per subterminal id; live output streams via listeners.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subterminal.id, shellExitedText])
+
+  return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-black/40" />
+}
+
 export function SubterminalPanel({
   activeTab,
   collapsed,
@@ -30,7 +117,8 @@ export function SubterminalPanel({
   t,
   onCollapsedChange,
   onCloseSubterminal,
-  onCloseAllSubterminals
+  onCloseAllSubterminals,
+  onOpenLocalSubterminal
 }: {
   activeTab: AgentTerminalTab
   collapsed: boolean
@@ -41,13 +129,37 @@ export function SubterminalPanel({
   onCollapsedChange: (collapsed: boolean) => void
   onCloseSubterminal: (tabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (tabId: string) => void
+  onOpenLocalSubterminal?: () => void
 }): React.JSX.Element | null {
-  if (activeTab.subTerminals.length === 0) return null
+  if (activeTab.subTerminals.length === 0) {
+    if (!onOpenLocalSubterminal) return null
+    return (
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-t border-white/10 bg-background/95 px-2">
+        <div className="min-w-0 truncate text-xs font-medium text-muted-foreground">
+          {t.terminal.temporarySubterminal}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t.terminal.openLocalSubterminal}
+          title={t.terminal.openLocalSubterminal}
+          onClick={onOpenLocalSubterminal}
+        >
+          <PlusIcon aria-hidden="true" />
+        </Button>
+      </div>
+    )
+  }
+
+  const canOpenMore = activeTab.subTerminals.length < 3
 
   return (
     <div
       className="shrink-0 border-t border-white/10 bg-background/95"
-      style={{ height: collapsed ? undefined : panelHeight }}
+      style={{
+        height: collapsed ? undefined : panelHeight
+      }}
     >
       {!collapsed && (
         <div
@@ -73,6 +185,21 @@ export function SubterminalPanel({
           {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {onOpenLocalSubterminal && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              disabled={!canOpenMore}
+              aria-label={t.terminal.openLocalSubterminal}
+              title={
+                canOpenMore ? t.terminal.openLocalSubterminal : t.terminal.subterminalLimitReached
+              }
+              onClick={onOpenLocalSubterminal}
+            >
+              <PlusIcon aria-hidden="true" />
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -118,7 +245,8 @@ export function SubterminalPanel({
                     <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
                       <div className="min-w-0">
                         <p className="truncate font-medium">
-                          {t.terminal.temporarySubterminal}: {subterminal.name}
+                          {t.terminal.subterminal}: {subterminal.name}
+                          {subterminal.connectionName ? ` · ${subterminal.connectionName}` : ''}
                         </p>
                         {subterminal.cwd && (
                           <p className="truncate text-[10px] text-muted-foreground">
@@ -145,9 +273,10 @@ export function SubterminalPanel({
                         </Button>
                       </div>
                     </div>
-                    <pre className="min-h-0 flex-1 select-text overflow-auto p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
-                      {subterminal.output || t.terminal.recentOutputEmpty}
-                    </pre>
+                    <SubterminalXtermPane
+                      subterminal={subterminal}
+                      shellExitedText={t.terminal.shellExited}
+                    />
                   </section>
                   {nextSubterminal && (
                     <div

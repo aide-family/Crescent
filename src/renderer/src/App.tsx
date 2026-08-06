@@ -522,6 +522,7 @@ function App(): React.JSX.Element {
     updateSubterminalOutput,
     updateSubterminalCwd,
     updateSubterminalStatus,
+    ensureSubterminal,
     closeSubterminal,
     closeAllSubterminals,
     resizeSubterminalPair
@@ -1175,9 +1176,6 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     return window.api.terminal.onData((event) => {
-      const subterminal = parseSubterminalTabId(event.tabId)
-      if (subterminal) return
-
       maybeRequestTerminalPassword(event.tabId, event.data)
     })
   }, [maybeRequestTerminalPassword])
@@ -2469,12 +2467,14 @@ function App(): React.JSX.Element {
     const sessionInventory =
       sessionTerminals.length > 1
         ? [
-            'session terminals (same chat session; use execute_terminal_command.targetTerminalId to choose):',
+            'session terminals (same chat session; use execute_terminal_command.targetTerminalId to choose peers or docked sub-terminals):',
             ...sessionTerminals.map((terminal) => {
               const markers = [
                 terminal.isCurrent ? 'current' : '',
+                terminal.kind === 'subterminal' ? 'subterminal' : '',
                 terminal.isSsh ? 'ssh' : 'local',
                 terminal.connectionName ? `connection=${terminal.connectionName}` : '',
+                terminal.subterminalName ? `name=${terminal.subterminalName}` : '',
                 terminal.cwd ? `cwd=${terminal.cwd}` : ''
               ]
                 .filter(Boolean)
@@ -2926,6 +2926,122 @@ function App(): React.JSX.Element {
       },
       resolveSessionChatTabId([...tabsRef.current, nextTab], nextTab.id)
     )
+  }
+
+  async function openLocalSubterminal(): Promise<void> {
+    const parentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
+    if (!parentTab) return
+    if (parentTab.subTerminals.length >= 3) {
+      appendLog({ kind: 'error', text: t.terminal.subterminalLimitReached }, parentTab.id)
+      return
+    }
+
+    const usedNames = new Set(parentTab.subTerminals.map((subterminal) => subterminal.name))
+    let terminalName = 'local'
+    for (let index = 1; usedNames.has(terminalName); index += 1) {
+      terminalName = `local-${index}`
+    }
+
+    const dimensions = fitAddonRef.current?.proposeDimensions()
+    const opened = await window.api.terminal.openSubterminal({
+      parentTabId: parentTab.id,
+      terminalName,
+      cols: dimensions?.cols ?? 100,
+      rows: Math.max(12, Math.floor((dimensions?.rows ?? 24) / 2))
+    })
+    if (!opened.ok || !opened.tabId || !opened.name) {
+      appendLog(
+        {
+          kind: 'error',
+          text: opened.error || t.terminal.subterminalLimitReached
+        },
+        parentTab.id
+      )
+      return
+    }
+
+    ensureSubterminal(parentTab.id, {
+      id: opened.tabId,
+      name: opened.name,
+      output: '',
+      rawOutput: '',
+      cwd: opened.cwd ?? '',
+      status: 'active',
+      isSsh: false,
+      terminalMode: opened.mode,
+      sessionId: opened.sessionId,
+      terminalReady: true
+    })
+    setSubterminalCollapsed(false)
+    appendLog(
+      { kind: 'status', text: `${t.terminal.openedSubterminal}: ${opened.name}` },
+      resolveSessionChatTabId(tabsRef.current, parentTab.id)
+    )
+  }
+
+  async function openConnectionInSubterminal(connection: ConnectionConfig): Promise<void> {
+    const parentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
+    if (!parentTab) {
+      connectFromConnectionManager(connection)
+      return
+    }
+    if (parentTab.subTerminals.length >= 3) {
+      appendLog({ kind: 'error', text: t.terminal.subterminalLimitReached }, parentTab.id)
+      return
+    }
+
+    if (isLocalConnection(connection)) {
+      await openLocalSubterminal()
+      return
+    }
+
+    const baseName = connection.name.trim().replace(/\s+/g, '-').slice(0, 32) || 'remote'
+    const usedNames = new Set(parentTab.subTerminals.map((subterminal) => subterminal.name))
+    let terminalName = baseName
+    for (let index = 1; usedNames.has(terminalName); index += 1) {
+      terminalName = `${baseName}-${index}`
+    }
+
+    const dimensions = fitAddonRef.current?.proposeDimensions()
+    const opened = await window.api.terminal.openSubterminal({
+      parentTabId: parentTab.id,
+      terminalName,
+      cols: dimensions?.cols ?? 100,
+      rows: Math.max(12, Math.floor((dimensions?.rows ?? 24) / 2))
+    })
+    if (!opened.ok || !opened.tabId || !opened.name) {
+      appendLog(
+        {
+          kind: 'error',
+          text: opened.error || t.terminal.subterminalLimitReached
+        },
+        parentTab.id
+      )
+      return
+    }
+
+    ensureSubterminal(parentTab.id, {
+      id: opened.tabId,
+      name: opened.name,
+      output: '',
+      rawOutput: '',
+      cwd: opened.cwd ?? '',
+      status: 'active',
+      connectionId: connection.id,
+      connectionName: connection.name,
+      isSsh: true,
+      terminalMode: opened.mode,
+      sessionId: opened.sessionId,
+      terminalReady: true
+    })
+    setSubterminalCollapsed(false)
+    setHiddenPane(null)
+    setTerminalPage('terminal')
+    appendLog(
+      { kind: 'status', text: `${t.terminal.openedSubterminal}: ${connection.name}` },
+      resolveSessionChatTabId(tabsRef.current, parentTab.id)
+    )
+    void executeConnectionAutomation(connection, opened.tabId, true)
   }
 
   function connectFromConnectionManager(connection: ConnectionConfig): void {
@@ -5180,6 +5296,7 @@ function App(): React.JSX.Element {
             onSubterminalCollapsedChange={setSubterminalCollapsed}
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
+            onOpenLocalSubterminal={() => void openLocalSubterminal()}
             onRetryConnection={() => void retryActiveConnection()}
           />
         )}
@@ -5308,6 +5425,10 @@ function App(): React.JSX.Element {
           openConnectionInCurrentSession(connection)
           setConnectionModalOpen(false)
         }}
+        onConnectInSubterminal={(connection) => {
+          void openConnectionInSubterminal(connection)
+          setConnectionModalOpen(false)
+        }}
         onCopyConnection={(connection) => void copyConnection(connection)}
         onDuplicateConnection={duplicateConnection}
         onEditConnection={editConnection}
@@ -5423,15 +5544,36 @@ function buildSessionTerminalRefs(
   currentTabId: string
 ): AgentSessionTerminalRef[] {
   const groupId = resolveSessionChatTabId(tabs, currentTabId)
-  return getSessionTerminals(tabs, groupId).map((tab) => ({
+  const peers = getSessionTerminals(tabs, groupId)
+  const refs: AgentSessionTerminalRef[] = peers.map((tab) => ({
     tabId: tab.id,
     title: getTerminalDisplayTitle(tab, tabs),
     connectionId: tab.connectionId,
     connectionName: tab.connectionName,
     isSsh: tab.isSsh,
     cwd: tab.terminalCwd || undefined,
-    isCurrent: tab.id === currentTabId
+    isCurrent: tab.id === currentTabId,
+    kind: 'terminal'
   }))
+
+  for (const tab of peers) {
+    for (const subterminal of tab.subTerminals) {
+      refs.push({
+        tabId: subterminal.id,
+        title: `sub:${subterminal.name}`,
+        connectionId: subterminal.connectionId,
+        connectionName: subterminal.connectionName,
+        isSsh: Boolean(subterminal.isSsh),
+        cwd: subterminal.cwd || undefined,
+        isCurrent: false,
+        kind: 'subterminal',
+        parentTabId: tab.id,
+        subterminalName: subterminal.name
+      })
+    }
+  }
+
+  return refs
 }
 
 function resolveCommandApprovalSessionLabel(

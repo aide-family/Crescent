@@ -54,7 +54,9 @@ import {
 import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminal,
-  executeCommandInTerminalWithPermissionRequest
+  executeCommandInTerminalWithPermissionRequest,
+  interruptTemporarySubterminal,
+  readTemporarySubterminalOutput
 } from '../terminal/ipc'
 import {
   appendOperationRecord,
@@ -687,6 +689,9 @@ export function registerAgentIpc(): void {
             tabId: executionTabId
           })
           const result = await execute(executableCommand)
+          if (result.subterminalTabId) {
+            activeRuns.get(runId)?.sessionTerminalIds.add(result.subterminalTabId)
+          }
           safeWebContentsSend(event.sender, 'agent:event', {
             type: 'command',
             phase: 'finished',
@@ -694,7 +699,7 @@ export function registerAgentIpc(): void {
             result,
             elapsedMs: Date.now() - startedAt,
             runId,
-            tabId: executionTabId
+            tabId: result.subterminalTabId || executionTabId
           })
 
           return result
@@ -860,9 +865,29 @@ export function registerAgentIpc(): void {
                       parentTabId,
                       options.terminalName,
                       executableCommand,
-                      options.timeoutMs
+                      options.timeoutMs,
+                      options.mode
                     ),
                   parentTabId || defaultTabId
+                )
+              },
+              readOutput: async (options) => {
+                const parentTabId =
+                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
+                return readTemporarySubterminalOutput(
+                  event.sender,
+                  parentTabId,
+                  options.terminalName,
+                  options.maxChars
+                )
+              },
+              interrupt: async (options) => {
+                const parentTabId =
+                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
+                return interruptTemporarySubterminal(
+                  event.sender,
+                  parentTabId,
+                  options.terminalName
                 )
               }
             }
