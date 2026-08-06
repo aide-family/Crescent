@@ -18,7 +18,7 @@ describe('mapPiSessionEventToAgentEvents', () => {
     ])
   })
 
-  it('maps tool execution start', () => {
+  it('maps tool execution start with command', () => {
     const event = {
       type: 'tool_execution_start',
       toolCallId: 'call-1',
@@ -30,10 +30,48 @@ describe('mapPiSessionEventToAgentEvents', () => {
       {
         type: 'tool',
         name: 'bash',
+        phase: 'started',
+        toolCallId: 'call-1',
+        command: 'ls',
         message: JSON.stringify({ command: 'ls' }),
         runId: 'run-1',
         tabId: 'tab-1'
       }
+    ])
+  })
+
+  it('maps tool execution end with result text', () => {
+    const event = {
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'bash',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'file.txt\n' }] }
+    } as unknown as AgentSessionEvent
+
+    expect(mapPiSessionEventToAgentEvents(event, meta)).toEqual([
+      {
+        type: 'tool',
+        name: 'bash',
+        phase: 'finished',
+        toolCallId: 'call-1',
+        isError: false,
+        message: 'file.txt\n',
+        runId: 'run-1',
+        tabId: 'tab-1'
+      }
+    ])
+  })
+
+  it('maps thinking deltas to thought events', () => {
+    const event = {
+      type: 'message_update',
+      message: { role: 'assistant', content: [], timestamp: Date.now() },
+      assistantMessageEvent: { type: 'thinking_delta', delta: '用' }
+    } as unknown as AgentSessionEvent
+
+    expect(mapPiSessionEventToAgentEvents(event, meta)).toEqual([
+      { type: 'thought', message: '用', runId: 'run-1', tabId: 'tab-1' }
     ])
   })
 

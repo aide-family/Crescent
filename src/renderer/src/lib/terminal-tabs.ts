@@ -19,12 +19,36 @@ export type AgentLogEntry =
 export interface AgentRunViewState {
   logId: number
   runId?: string
+  /** Derived snapshot for trace export / legacy consumers. */
   actions: AgentRunAction[]
+  /** Structured timeline steps (Cursor-style). */
+  steps: AgentRunStep[]
+  /** Accumulated thinking/reasoning text (coalesced deltas). */
+  thinkingText?: string
   startedAt?: number
   result?: string
   error?: string
   elapsedMs?: number
 }
+
+export type AgentRunStep =
+  | {
+      id: string
+      kind: 'status'
+      title: string
+      detail?: string
+    }
+  | {
+      id: string
+      kind: 'tool'
+      name: string
+      phase: 'started' | 'finished'
+      argsText?: string
+      command?: string
+      resultText?: string
+      isError?: boolean
+      toolCallId?: string
+    }
 
 export interface AgentRunAction {
   title: string

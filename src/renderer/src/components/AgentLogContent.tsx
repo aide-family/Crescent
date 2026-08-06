@@ -1,4 +1,4 @@
-import { AgentRunMarkdownContent } from '@renderer/components/AgentRunMarkdownContent'
+import { AgentRunTimeline } from '@renderer/components/AgentRunTimeline'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import type { Dictionary } from '@renderer/i18n'
 import {
@@ -7,7 +7,7 @@ import {
   logRoleLabel,
   summarizeBehaviorLog
 } from '@renderer/lib/agent-log'
-import { parseAgentRunMarkdown } from '@renderer/lib/agent-run-markdown'
+import { parseAgentRunDocument } from '@renderer/lib/agent-run-document'
 import type { AgentLogEntry } from '@renderer/lib/terminal-tabs'
 
 export function ActionLogRow({
@@ -71,11 +71,11 @@ export function AgentLogContent({
       )
     }
 
-    const parsedRun = entry.kind === 'assistant' ? parseAgentRunMarkdown(entry.text, t) : null
+    const parsedRun = entry.kind === 'assistant' ? parseAgentRunDocument(entry.text, t) : null
     if (parsedRun) {
       return (
-        <AgentRunMarkdownContent
-          parsed={parsedRun}
+        <AgentRunTimeline
+          document={parsedRun}
           t={t}
           copied={Boolean(copied)}
           feedbackRating={feedbackRating}

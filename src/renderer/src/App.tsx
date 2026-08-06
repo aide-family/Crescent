@@ -3114,9 +3114,11 @@ function App(): React.JSX.Element {
       if (runId) void window.api.agent.supplement({ runId, input })
       updateAgentRun(chatTabId, (run) => ({
         ...run,
-        actions: [
-          ...run.actions,
+        steps: [
+          ...(run.steps ?? []),
           {
+            id: `supplement-${Date.now()}`,
+            kind: 'status',
             title: t.input.contextSupplement,
             detail: formatVisibleInputWithReferences(
               `${t.input.contextSupplementDetail}\n${displayInput}`,
@@ -3216,10 +3218,13 @@ function App(): React.JSX.Element {
         text: formatAgentRunMarkdown(
           {
             logId: -1,
-            actions: [
+            actions: [],
+            steps: [
               {
+                id: 'start',
+                kind: 'status',
                 title: t.input.startedRun,
-                detail: config.workspaceCwd || t.input.contextSupplementDetail
+                detail: config.workspaceCwd || t.input.toolWorkspaceHint
               }
             ]
           },
@@ -3231,10 +3236,13 @@ function App(): React.JSX.Element {
     activeAgentRunRef.current.set(chatTabId, {
       logId: runLogId,
       runId,
-      actions: [
+      actions: [],
+      steps: [
         {
+          id: 'start',
+          kind: 'status',
           title: t.input.startedRun,
-          detail: config.workspaceCwd || t.input.contextSupplementDetail
+          detail: config.workspaceCwd || t.input.toolWorkspaceHint
         }
       ],
       startedAt
