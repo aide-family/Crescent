@@ -206,15 +206,17 @@ export interface AgentRunInput {
   conversationContext?: string
   providerId?: string
   model?: string
-  /** Chat/session tab id used as Pi session key. */
+  /** Chat/session tab id used as Pi session key and chat routing. */
   tabId?: string
-  /** @deprecated Agent no longer executes in terminal panes. */
+  /** Visible terminal pane where bash commands are executed (main or subterminal). */
+  executionTabId?: string
+  /** Recent terminal scrollback for command review / agent context. */
   terminalContext?: string
-  /** @deprecated Agent no longer executes in terminal panes. */
+  /** @deprecated Prefer executionTabId; kept for compatibility. */
   allowTerminalTools?: boolean
   /** @deprecated Agent no longer auto-connects SSH for runs. */
   connectionId?: string
-  /** @deprecated Agent no longer targets session terminals. */
+  /** Optional peer/subterminal inventory for targeting. */
   sessionTerminals?: AgentSessionTerminalRef[]
   locale?: string
 }
@@ -336,7 +338,10 @@ export interface CommandAuditResult {
 export interface CommandApprovalRequest {
   id: string
   runId: string
+  /** Visible terminal pane id (main or subterminal) where the command will run. */
   tabId?: string
+  /** Chat/session tab id used for in-conversation approval UI. */
+  chatTabId?: string
   command: string
   timeoutMs?: number
   audit: CommandAuditResult

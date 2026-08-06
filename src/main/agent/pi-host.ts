@@ -1,6 +1,8 @@
 import { homedir } from 'os'
 import { resolve } from 'path'
 
+import type { WebContents } from 'electron'
+
 import { buildLocalInstructionContext } from './instruction-files'
 import {
   extractAssistantTextFromMessages,
@@ -10,6 +12,12 @@ import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { getCrescentPiAgentDir, getCrescentPiSkillsDir } from './pi-paths'
 import { resolvePiModel, syncCrescentProvidersToModelRuntime } from './pi-model-runtime'
 import { loadPiCodingAgent, type PiCodingAgentModule } from './pi-sdk'
+import {
+  clearPtyBashExecContext,
+  createPtyBashToolDefinition,
+  setPtyBashExecContext
+} from './pi-terminal-bash'
+import { rejectPendingApprovalsForRun } from './command-approval'
 import type { AgentConfig, AgentEvent } from './types'
 
 type AgentSession = Awaited<ReturnType<PiCodingAgentModule['createAgentSession']>>['session']
@@ -20,13 +28,17 @@ interface HostedSession {
   sessionKey: string
   session: AgentSession
   cwd: string
+  toolProfile: string
   unsubscribe?: () => void
 }
+
+const TOOL_PROFILE = 'pty-bash-v1'
 
 interface ActiveRun {
   runId: string
   sessionKey: string
   abortRequested: boolean
+  abortController: AbortController
 }
 
 const hostedSessions = new Map<string, HostedSession>()
@@ -40,6 +52,10 @@ export interface PiHostRunInput {
   config: AgentConfig
   tabId?: string
   conversationContext?: string
+  webContents: WebContents
+  executionTabId: string
+  terminalContext?: string
+  locale?: string
   emit: (event: AgentEvent) => void
 }
 
@@ -52,10 +68,18 @@ export interface PiHostRunResult {
 
 export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult> {
   const { runId, sessionKey, emit } = input
-  activeRuns.set(runId, { runId, sessionKey, abortRequested: false })
+  const abortController = new AbortController()
+  activeRuns.set(runId, { runId, sessionKey, abortRequested: false, abortController })
   runIdBySessionKey.set(sessionKey, runId)
 
   try {
+    if (!input.executionTabId?.trim()) {
+      return {
+        ok: false,
+        error: 'Missing execution terminal tab. Open a terminal pane before running the agent.'
+      }
+    }
+
     const hosted = await ensureHostedSession(sessionKey, input.config)
     const modelRuntime = await syncCrescentProvidersToModelRuntime(input.config)
     const model = await resolvePiModel(input.config, modelRuntime)
@@ -71,9 +95,22 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       await hosted.session.setModel(model)
     }
 
+    setPtyBashExecContext(sessionKey, {
+      webContents: input.webContents,
+      executionTabId: input.executionTabId.trim(),
+      chatTabId: input.tabId,
+      runId,
+      userInput: input.input,
+      terminalContext: input.terminalContext,
+      locale: input.locale,
+      config: input.config,
+      emit,
+      signal: abortController.signal
+    })
+
     emit({
       type: 'status',
-      message: `Using ${model.provider}/${model.id} in ${hosted.cwd}`,
+      message: `Using ${model.provider}/${model.id}; bash runs in the visible terminal pane.`,
       runId,
       tabId: input.tabId
     })
@@ -115,6 +152,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     emit({ type: 'error', message, runId, tabId: input.tabId })
     return { ok: false, error: message }
   } finally {
+    clearPtyBashExecContext(sessionKey)
     const hosted = hostedSessions.get(sessionKey)
     hosted?.unsubscribe?.()
     if (hosted) hosted.unsubscribe = undefined
@@ -129,9 +167,13 @@ export async function cancelPiAgentRun(runId: string): Promise<boolean> {
   const active = activeRuns.get(runId)
   if (!active) return false
   active.abortRequested = true
+  active.abortController.abort()
+  rejectPendingApprovalsForRun(runId, 'Agent run was canceled.')
   const hosted = hostedSessions.get(active.sessionKey)
-  if (hosted) {
-    await hosted.session.abort()
+  try {
+    await hosted?.session.abort()
+  } catch {
+    // ignore abort errors
   }
   return true
 }
@@ -141,35 +183,28 @@ export async function steerPiAgentRun(runId: string, text: string): Promise<bool
   if (!active) return false
   const hosted = hostedSessions.get(active.sessionKey)
   if (!hosted) return false
-  await hosted.session.steer(text)
-  return true
-}
-
-export function disposePiSession(sessionKey: string): void {
-  const hosted = hostedSessions.get(sessionKey)
-  if (!hosted) return
-  hosted.unsubscribe?.()
-  hosted.session.dispose()
-  hostedSessions.delete(sessionKey)
-}
-
-export function disposeAllPiSessions(): void {
-  for (const key of [...hostedSessions.keys()]) {
-    disposePiSession(key)
+  try {
+    await hosted.session.steer(text)
+    return true
+  } catch {
+    return false
   }
 }
 
-async function ensureHostedSession(
-  sessionKey: string,
-  config: AgentConfig
-): Promise<HostedSession> {
-  const cwd = resolveAgentWorkspaceCwd(config)
+async function ensureHostedSession(sessionKey: string, config: AgentConfig): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
-  if (existing && existing.cwd === cwd) {
-    return existing
-  }
+  const cwd = resolveAgentWorkspaceCwd(config)
   if (existing) {
-    disposePiSession(sessionKey)
+    if (existing.toolProfile === TOOL_PROFILE && existing.cwd === cwd) {
+      return existing
+    }
+    try {
+      existing.unsubscribe?.()
+      existing.session.dispose()
+    } catch {
+      // ignore dispose errors when recreating for tool profile upgrades
+    }
+    hostedSessions.delete(sessionKey)
   }
 
   const pi = await loadPiCodingAgent()
@@ -184,6 +219,7 @@ async function ensureHostedSession(
 
   const instructionContext = buildLocalInstructionContext()
   const additionalSkillPaths = collectSkillRoots(config.skillRoot)
+  const ptyBashTool = createPtyBashToolDefinition(pi, cwd, sessionKey)
 
   const resourceLoader = new pi.DefaultResourceLoader({
     cwd,
@@ -195,8 +231,10 @@ async function ensureHostedSession(
         base,
         '',
         'You are Crescent, an Electron-hosted coding agent powered by Pi.',
-        'Use the built-in tools (read, write, edit, bash) against the workspace cwd.',
-        'Do not assume access to SSH session terminals; the user manages those panes manually.',
+        'File tools (read, write, edit) operate on the agent workspace cwd.',
+        'The bash tool executes in the user\'s visible terminal pane (main terminal or a docked subterminal).',
+        'Commands are pasted into the terminal so the user can see them; high-risk commands require in-chat approval before execution.',
+        'Prefer bash for cluster/host inspection when the user is already in the target environment.',
         instructionContext ? `\n# Local instructions\n${instructionContext}` : ''
       ]
         .filter(Boolean)
@@ -207,22 +245,26 @@ async function ensureHostedSession(
   const { session } = await pi.createAgentSession({
     cwd,
     agentDir,
-    model,
+    model: model ?? undefined,
     thinkingLevel: 'off',
     modelRuntime,
     resourceLoader,
     tools: [...DEFAULT_TOOLS],
+    customTools: [ptyBashTool as never],
     sessionManager: pi.SessionManager.inMemory(cwd),
     settingsManager
   })
 
-  const hosted: HostedSession = { sessionKey, session, cwd }
+  const hosted: HostedSession = { sessionKey, session, cwd, toolProfile: TOOL_PROFILE }
   hostedSessions.set(sessionKey, hosted)
   return hosted
 }
 
 function buildPromptText(input: PiHostRunInput): string {
   const parts = [input.input.trim()]
+  if (input.terminalContext?.trim()) {
+    parts.unshift(`# Current terminal context\n${input.terminalContext.trim()}\n`)
+  }
   if (input.conversationContext?.trim()) {
     parts.unshift(`# Recent conversation\n${input.conversationContext.trim()}\n`)
   }

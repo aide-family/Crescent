@@ -13,11 +13,12 @@ import {
   logListItemSpacingClass,
   logRoleLabel
 } from '@renderer/lib/agent-log'
-import type { AgentLogEntry } from '@renderer/lib/terminal-tabs'
+import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
 
 export function AgentLogList({
   logRef,
   entries,
+  liveRunByLogId,
   copiedLogId,
   thinking,
   thinkingMessage,
@@ -29,6 +30,7 @@ export function AgentLogList({
   onExportFull,
   onExportTrace,
   onOpsFeedback,
+  onResolveApproval,
   feedbackByLogId,
   feedbackBusyLogId,
   onRetryConnection,
@@ -36,6 +38,7 @@ export function AgentLogList({
 }: {
   logRef: RefObject<HTMLDivElement | null>
   entries: AgentLogEntry[]
+  liveRunByLogId?: Record<number, AgentRunViewState>
   copiedLogId?: number | null
   thinking?: boolean
   thinkingMessage?: string
@@ -50,6 +53,7 @@ export function AgentLogList({
   onExportFull: (entry: AgentLogEntry) => void
   onExportTrace: (entry: AgentLogEntry) => void
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
+  onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
   onRetryConnection?: () => void
@@ -119,6 +123,7 @@ export function AgentLogList({
                 </div>
                 <AgentLogContent
                   entry={entry}
+                  liveRun={liveRunByLogId?.[entry.id]}
                   t={t}
                   copied={copiedLogId === entry.id}
                   feedbackRating={feedbackByLogId?.[entry.id] ?? null}
@@ -128,6 +133,7 @@ export function AgentLogList({
                   onExportFull={() => onExportFull(entry)}
                   onExportTrace={() => onExportTrace(entry)}
                   onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
+                  onResolveApproval={onResolveApproval}
                 />
               </>
             ) : (
