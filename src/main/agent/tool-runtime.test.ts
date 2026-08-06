@@ -79,7 +79,7 @@ describe('AgentToolRuntime', () => {
           description: expect.stringContaining('For another host without a peer terminal, use ssh')
         },
         targetTerminalId: {
-          description: expect.stringContaining('peer terminal')
+          description: expect.stringContaining('peer or docked sub-terminal')
         }
       }
     })
@@ -230,9 +230,92 @@ describe('AgentToolRuntime', () => {
     )
     expect(subterminalExecutor.executeCommand).toHaveBeenCalledWith('pwd', {
       terminalName: 'local',
-      timeoutMs: undefined
+      timeoutMs: undefined,
+      mode: 'wait'
     })
     expect(result).toMatchObject({ ok: true, command: 'pwd', output: 'ok' })
+  })
+
+  it('dispatches detached sub-terminal commands without waiting', async () => {
+    const emit = vi.fn<(event: AgentEvent) => void>()
+    const subterminalExecutor: SubterminalCommandExecutor = {
+      executeCommand: vi.fn(async (command: string, options) => ({
+        ok: true,
+        command,
+        mode: 'pty',
+        cwd: '/tmp',
+        output: '',
+        detached: true,
+        subterminalName: options.terminalName,
+        subterminalTabId: 'parent::subterminal::watch'
+      })),
+      readOutput: vi.fn(async (options) => ({
+        ok: true,
+        name: options.terminalName,
+        tabId: 'parent::subterminal::watch',
+        mode: 'pty' as const,
+        cwd: '/tmp',
+        shell: '/bin/zsh',
+        output: 'top output',
+        busy: false,
+        detached: true
+      })),
+      interrupt: vi.fn(async (options) => ({
+        ok: true,
+        name: options.terminalName,
+        tabId: 'parent::subterminal::watch'
+      }))
+    }
+
+    const runtime = await AgentToolRuntime.create({
+      config,
+      brain: {} as AgentBrain,
+      userInput: 'watch cpu with top',
+      terminalExecutor: { executeCommand: vi.fn() },
+      subterminalExecutor,
+      emit
+    })
+
+    const detachResult = await runtime.execute(
+      'execute_subterminal_command',
+      JSON.stringify({ terminalName: 'watch', command: 'top', mode: 'detach' })
+    )
+    expect(subterminalExecutor.executeCommand).toHaveBeenCalledWith('top', {
+      terminalName: 'watch',
+      timeoutMs: undefined,
+      mode: 'detach'
+    })
+    expect(detachResult).toMatchObject({
+      ok: true,
+      detached: true,
+      subterminalName: 'watch',
+      output: ''
+    })
+
+    const readResult = await runtime.execute(
+      'read_subterminal_output',
+      JSON.stringify({ terminalName: 'watch' })
+    )
+    expect(subterminalExecutor.readOutput).toHaveBeenCalledWith({
+      terminalName: 'watch',
+      maxChars: undefined
+    })
+    expect(readResult).toMatchObject({ ok: true, output: 'top output', detached: true })
+
+    const interruptResult = await runtime.execute(
+      'interrupt_subterminal',
+      JSON.stringify({ terminalName: 'watch' })
+    )
+    expect(subterminalExecutor.interrupt).toHaveBeenCalledWith({ terminalName: 'watch' })
+    expect(interruptResult).toMatchObject({ ok: true, name: 'watch' })
+
+    expect(runtime.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining([
+        'execute_subterminal_command',
+        'read_subterminal_output',
+        'interrupt_subterminal'
+      ])
+    )
   })
 
   it('dispatches ssh commands to the temporary sub-terminal executor', async () => {
@@ -274,7 +357,8 @@ describe('AgentToolRuntime', () => {
       "ssh 10.42.131.142 'df -hT /home'",
       {
         terminalName: 'target',
-        timeoutMs: undefined
+        timeoutMs: undefined,
+        mode: 'wait'
       }
     )
     expect(result).toMatchObject({

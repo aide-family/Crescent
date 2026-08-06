@@ -282,13 +282,17 @@ const en = {
     breakdownRuleUseCurrentTerminal:
       'Run target-system inspection in the currently logged-in terminal and collect enough evidence before summarizing.',
     breakdownRuleUseSubterminal:
-      'Prefer a peer comparison terminal already in the current chat session when leaving the current terminal context or comparing targets; otherwise use a temporary sub-terminal for that work or for writing local artifacts.',
+      'Prefer a peer comparison terminal (full tab) when leaving the current context or comparing targets; use a docked sub-terminal for same-screen continuous observation (e.g. top/atop) while verifying in the main terminal. Sub-terminals are interactive; the agent can use detach mode for watchers.',
     breakdownTargetConnection: 'Target connection',
     breakdownTargetSystem: 'Target system',
-    closeAllSubterminals: 'Close all temporary sub-terminals',
-    closeSubterminal: 'Close temporary sub-terminal',
-    collapseSubterminals: 'Collapse temporary sub-terminals',
-    expandSubterminals: 'Expand temporary sub-terminals',
+    closeAllSubterminals: 'Close all sub-terminals',
+    closeSubterminal: 'Close sub-terminal',
+    collapseSubterminals: 'Collapse sub-terminals',
+    expandSubterminals: 'Expand sub-terminals',
+    openLocalSubterminal: 'Open local sub-terminal',
+    openSubterminalInSession: 'Open in sub-terminal',
+    openSubterminalInSessionDescription:
+      'Open an interactive docked sub-terminal under the current terminal for continuous observation and side-by-side troubleshooting',
     postLoginNotReady:
       'Post-login task did not start: the terminal still appears to be waiting for password, verification code, or interactive input.',
     postLoginTaskAborted:
@@ -297,14 +301,16 @@ const en = {
     postLoginSkillHint: 'Skill matching runs after login when the follow-up agent task starts.',
     postLoginTaskStarting: 'Login completed; starting the follow-up task.',
     recentOutputEmpty: 'recent output: <empty>',
-    resizeSubterminalHeight: 'Resize temporary sub-terminal height',
-    resizeSubterminals: 'Resize temporary sub-terminals',
+    resizeSubterminalHeight: 'Resize sub-terminal height',
+    resizeSubterminals: 'Resize sub-terminals',
     shellExited: 'Shell exited with code',
     subterminalActive: 'Active',
     subterminalExited: 'Exited',
     subterminal: 'Sub-terminal',
-    temporarySubterminal: 'Temporary sub-terminal',
+    temporarySubterminal: 'Sub-terminal',
+    subterminalLimitReached: 'At most 3 sub-terminals per terminal',
     openedPeerTerminal: 'Opened a comparison terminal in the current session',
+    openedSubterminal: 'Opened a sub-terminal',
     terminalMode: 'Terminal mode'
   },
   history: {

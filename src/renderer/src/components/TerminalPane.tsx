@@ -47,6 +47,7 @@ export function TerminalPane({
   onSubterminalCollapsedChange,
   onCloseSubterminal,
   onCloseAllSubterminals,
+  onOpenLocalSubterminal,
   onRetryConnection
 }: {
   widthPercent: number
@@ -85,6 +86,7 @@ export function TerminalPane({
   onSubterminalCollapsedChange: (collapsed: boolean) => void
   onCloseSubterminal: (parentTabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (parentTabId: string) => void
+  onOpenLocalSubterminal?: () => void
   onRetryConnection?: () => void
 }): React.JSX.Element {
   const showTerminalRecovery = Boolean(
@@ -179,6 +181,7 @@ export function TerminalPane({
           onCollapsedChange={onSubterminalCollapsedChange}
           onCloseSubterminal={onCloseSubterminal}
           onCloseAllSubterminals={onCloseAllSubterminals}
+          onOpenLocalSubterminal={onOpenLocalSubterminal}
         />
       </div>
     </div>

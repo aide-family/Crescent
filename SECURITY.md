@@ -20,7 +20,7 @@ Include:
 
 Crescent intentionally works near powerful local and remote capabilities:
 
-- Terminal and sub-terminal command execution.
+- Terminal and interactive docked sub-terminal command execution (including detached continuous observation).
 - SSH connections and credential prompts.
 - Local file parsing and artifact writing.
 - OpenAPI and MCP tool execution.

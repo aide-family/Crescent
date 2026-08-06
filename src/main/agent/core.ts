@@ -514,7 +514,10 @@ function formatToolCallDetail(toolName: string, rawArguments: string): string {
     lines.push(`Command: ${formatToolArgument(args.command)}`)
   } else if (toolName === 'execute_subterminal_command') {
     lines.push(`Terminal: ${formatToolArgument(args.terminalName)}`)
+    lines.push(`Mode: ${formatToolArgument(args.mode ?? 'wait')}`)
     lines.push(`Command: ${formatToolArgument(args.command)}`)
+  } else if (toolName === 'read_subterminal_output' || toolName === 'interrupt_subterminal') {
+    lines.push(`Terminal: ${formatToolArgument(args.terminalName)}`)
   } else if (toolName === 'write_local_file') {
     lines.push(`Path: ${formatToolArgument(args.path)}`)
   } else if (toolName === SAVE_WIKI_DOCUMENT_TOOL_NAME) {

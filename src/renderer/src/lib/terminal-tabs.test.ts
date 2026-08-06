@@ -107,6 +107,8 @@ describe('session groups', () => {
     expect(getSessionTerminals(tabs, 'root')).toEqual([root, peer])
     expect(getSessionChatTab(tabs, 'peer')).toBe(root)
     expect(resolveSessionChatTabId(tabs, 'peer')).toBe('root')
+    expect(resolveSessionChatTabId(tabs, 'root::subterminal::watch')).toBe('root')
+    expect(resolveSessionChatTabId(tabs, 'peer::subterminal::local')).toBe('root')
     expect(listSessionChatTabs(tabs)).toEqual([root, other])
     expect(getSessionDisplayTitle(peer, tabs)).toBe('prod · 2')
   })

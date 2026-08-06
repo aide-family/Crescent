@@ -44,8 +44,48 @@ export interface TerminalCommandExecutionResult {
   error?: string
   timedOut?: boolean
   terminalExited?: boolean
+  detached?: boolean
   subterminalName?: string
   subterminalTabId?: string
+}
+
+export interface TemporarySubterminalOpenOptions {
+  cols?: number
+  rows?: number
+  initialCommand?: string
+}
+
+export interface TemporarySubterminalOpenResult {
+  ok: boolean
+  name?: string
+  tabId?: string
+  sessionId?: number
+  mode?: 'pty' | 'pipe'
+  pid?: number
+  shell?: string
+  cwd?: string
+  error?: string
+}
+
+export interface TemporarySubterminalSnapshot {
+  ok: boolean
+  name: string
+  tabId: string
+  mode: 'pty' | 'pipe' | 'none'
+  cwd: string
+  shell: string
+  output: string
+  busy: boolean
+  detached: boolean
+  error?: string
+}
+
+interface TemporarySubterminalEntry {
+  name: string
+  tabId: string
+  busy: boolean
+  detached: boolean
+  lastUsedAt: number
 }
 
 const sessions = new Map<string, TerminalSession>()
@@ -65,10 +105,7 @@ const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
 const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
 const MAX_TEMPORARY_SUBTERMINALS = 3
-const temporarySubterminals = new Map<
-  string,
-  Array<{ name: string; tabId: string; busy: boolean; lastUsedAt: number }>
->()
+const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
 
 export function executeCommandInTerminal(
   senderId: number,
@@ -328,13 +365,15 @@ export async function executeCommandInTemporaryTerminal(
   parentTabId: string | undefined,
   terminalName: string,
   command: string,
-  timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS
+  timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
+  mode: 'wait' | 'detach' = 'wait'
 ): Promise<TerminalCommandExecutionResult> {
   const parent = normalizeTabId(parentTabId)
+  const normalizedCommand = command.trim()
   if (!parent) {
     return {
       ok: false,
-      command: command.trim(),
+      command: normalizedCommand,
       output: '',
       error: 'Missing parent terminal tab id for temporary sub-terminal.'
     }
@@ -345,7 +384,7 @@ export async function executeCommandInTemporaryTerminal(
   if (!slot.ok) {
     return {
       ok: false,
-      command: command.trim(),
+      command: normalizedCommand,
       output: '',
       error: slot.error
     }
@@ -355,10 +394,24 @@ export async function executeCommandInTemporaryTerminal(
   if (entry.busy) {
     return {
       ok: false,
-      command: command.trim(),
+      command: normalizedCommand,
       output: '',
       error: `Temporary sub-terminal "${name}" is already running a command.`
     }
+  }
+  if (entry.detached && mode === 'wait') {
+    return {
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      error: `Temporary sub-terminal "${name}" is running a detached watch command. Interrupt it first, or use mode=detach only after clearing the pane.`,
+      subterminalName: name,
+      subterminalTabId: entry.tabId
+    }
+  }
+
+  if (mode === 'detach') {
+    return executeDetachedCommandInTemporaryTerminal(webContents, entry, name, normalizedCommand)
   }
 
   entry.busy = true
@@ -379,6 +432,200 @@ export async function executeCommandInTemporaryTerminal(
   } finally {
     entry.busy = false
     entry.lastUsedAt = Date.now()
+  }
+}
+
+export function openTemporarySubterminal(
+  webContents: WebContents,
+  parentTabId: string | undefined,
+  terminalName: string,
+  options?: TemporarySubterminalOpenOptions
+): TemporarySubterminalOpenResult {
+  const parent = normalizeTabId(parentTabId)
+  if (!parent) {
+    return { ok: false, error: 'Missing parent terminal tab id for temporary sub-terminal.' }
+  }
+
+  const name = normalizeTemporaryTerminalName(terminalName)
+  const slot = ensureTemporarySubterminal(webContents, parent, name, options)
+  if (!slot.ok) return { ok: false, error: slot.error }
+
+  const key = getSessionKey(webContents.id, slot.entry.tabId)
+  const session = sessions.get(key)
+  if (!session) {
+    return {
+      ok: false,
+      name,
+      tabId: slot.entry.tabId,
+      error: 'Failed to start temporary sub-terminal session.'
+    }
+  }
+
+  return {
+    ok: true,
+    name,
+    tabId: slot.entry.tabId,
+    sessionId: session.id,
+    mode: session.mode,
+    pid: session.pid,
+    shell: session.shell,
+    cwd: session.cwd
+  }
+}
+
+export function readTemporarySubterminalOutput(
+  webContents: WebContents,
+  parentTabId: string | undefined,
+  terminalName: string,
+  maxChars = 12_000
+): TemporarySubterminalSnapshot {
+  const parent = normalizeTabId(parentTabId)
+  const name = normalizeTemporaryTerminalName(terminalName)
+  if (!parent) {
+    return {
+      ok: false,
+      name,
+      tabId: '',
+      mode: 'none',
+      cwd: '',
+      shell: '',
+      output: '',
+      busy: false,
+      detached: false,
+      error: 'Missing parent terminal tab id for temporary sub-terminal.'
+    }
+  }
+
+  const poolKey = getSessionKey(webContents.id, parent)
+  const entry = (temporarySubterminals.get(poolKey) ?? []).find((item) => item.name === name)
+  if (!entry) {
+    return {
+      ok: false,
+      name,
+      tabId: createTemporarySubterminalTabId(parent, name),
+      mode: 'none',
+      cwd: '',
+      shell: '',
+      output: '',
+      busy: false,
+      detached: false,
+      error: `Temporary sub-terminal "${name}" is not open.`
+    }
+  }
+
+  const key = getSessionKey(webContents.id, entry.tabId)
+  const session = sessions.get(key)
+  const output = (terminalOutputBuffers.get(key) ?? '').slice(-Math.max(1_000, maxChars))
+
+  return {
+    ok: true,
+    name,
+    tabId: entry.tabId,
+    mode: session?.mode ?? 'none',
+    cwd: session?.cwd ?? '',
+    shell: session?.shell ?? '',
+    output,
+    busy: entry.busy,
+    detached: entry.detached
+  }
+}
+
+export function interruptTemporarySubterminal(
+  webContents: WebContents,
+  parentTabId: string | undefined,
+  terminalName: string
+): { ok: boolean; name: string; tabId?: string; error?: string } {
+  const parent = normalizeTabId(parentTabId)
+  const name = normalizeTemporaryTerminalName(terminalName)
+  if (!parent) {
+    return { ok: false, name, error: 'Missing parent terminal tab id for temporary sub-terminal.' }
+  }
+
+  const poolKey = getSessionKey(webContents.id, parent)
+  const entry = (temporarySubterminals.get(poolKey) ?? []).find((item) => item.name === name)
+  if (!entry) {
+    return { ok: false, name, error: `Temporary sub-terminal "${name}" is not open.` }
+  }
+
+  const key = getSessionKey(webContents.id, entry.tabId)
+  const session = sessions.get(key)
+  if (!session) {
+    entry.detached = false
+    entry.busy = false
+    return {
+      ok: false,
+      name,
+      tabId: entry.tabId,
+      error: 'No active terminal session for this sub-terminal.'
+    }
+  }
+
+  interruptCommandSession(key, session)
+  entry.detached = false
+  entry.lastUsedAt = Date.now()
+  return { ok: true, name, tabId: entry.tabId }
+}
+
+function executeDetachedCommandInTemporaryTerminal(
+  webContents: WebContents,
+  entry: TemporarySubterminalEntry,
+  name: string,
+  command: string
+): TerminalCommandExecutionResult {
+  const key = getSessionKey(webContents.id, entry.tabId)
+  const session = sessions.get(key)
+  if (!session) {
+    return {
+      ok: false,
+      command,
+      output: '',
+      error: 'No active terminal session.',
+      subterminalName: name,
+      subterminalTabId: entry.tabId
+    }
+  }
+
+  if (!command) {
+    return {
+      ok: false,
+      command,
+      mode: session.mode,
+      cwd: session.cwd,
+      output: '',
+      error: 'Command is empty.',
+      subterminalName: name,
+      subterminalTabId: entry.tabId
+    }
+  }
+
+  if (session.mode === 'pipe' && isInteractiveCommand(command)) {
+    return {
+      ok: false,
+      command,
+      mode: session.mode,
+      cwd: session.cwd,
+      output: '',
+      error:
+        'Interactive commands such as ssh require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. Restart the app or rebuild node-pty.',
+      subterminalName: name,
+      subterminalTabId: entry.tabId
+    }
+  }
+
+  entry.detached = true
+  entry.lastUsedAt = Date.now()
+  session.display(formatReadableCommandInput(command))
+  session.write(session.mode === 'pty' ? `${command}\r` : `${command}\n`)
+
+  return {
+    ok: true,
+    command,
+    mode: session.mode,
+    cwd: session.cwd,
+    output: '',
+    detached: true,
+    subterminalName: name,
+    subterminalTabId: entry.tabId
   }
 }
 
@@ -486,6 +733,52 @@ export function registerTerminalIpc(): void {
     }
   )
 
+  ipcMain.handle(
+    'terminal:open-subterminal',
+    (
+      event,
+      options?: {
+        parentTabId?: string
+        terminalName?: string
+        cols?: number
+        rows?: number
+        initialCommand?: string
+      }
+    ) => {
+      return openTemporarySubterminal(event.sender, options?.parentTabId, options?.terminalName ?? '', {
+        cols: options?.cols,
+        rows: options?.rows,
+        initialCommand: options?.initialCommand
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'terminal:read-subterminal',
+    (
+      event,
+      options?: { parentTabId?: string; terminalName?: string; maxChars?: number }
+    ) => {
+      return readTemporarySubterminalOutput(
+        event.sender,
+        options?.parentTabId,
+        options?.terminalName ?? '',
+        options?.maxChars
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'terminal:interrupt-subterminal',
+    (event, options?: { parentTabId?: string; terminalName?: string }) => {
+      return interruptTemporarySubterminal(
+        event.sender,
+        options?.parentTabId,
+        options?.terminalName ?? ''
+      )
+    }
+  )
+
   ipcMain.on('terminal:write', (event, payload: { data?: string; tabId?: string } | string) => {
     const data = typeof payload === 'string' ? payload : payload?.data
     if (typeof data !== 'string') return
@@ -516,6 +809,9 @@ export function registerTerminalIpc(): void {
     }
 
     session.write(data)
+    if (data.includes('\x03')) {
+      clearTemporarySubterminalDetached(event.sender.id, tabId)
+    }
   })
 
   ipcMain.on(
@@ -604,6 +900,7 @@ export function registerTerminalIpc(): void {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return
     stopSession(getSessionKey(event.sender.id, tabId))
+    releaseTemporarySubterminalByTabId(event.sender.id, tabId)
   })
 
   ipcMain.on('terminal:clear', (event, payload?: { tabId?: string }) => {
@@ -617,6 +914,7 @@ export function stopAllTerminalSessions(): void {
   for (const key of sessions.keys()) {
     stopSession(key)
   }
+  temporarySubterminals.clear()
 }
 
 function stopSession(key: string): void {
@@ -634,18 +932,20 @@ function stopSession(key: string): void {
 function ensureTemporarySubterminal(
   webContents: WebContents,
   parentTabId: string,
-  terminalName: string
-):
-  | { ok: true; entry: { name: string; tabId: string; busy: boolean; lastUsedAt: number } }
-  | { ok: false; error: string } {
+  terminalName: string,
+  options?: TemporarySubterminalOpenOptions
+): { ok: true; entry: TemporarySubterminalEntry } | { ok: false; error: string } {
   const poolKey = getSessionKey(webContents.id, parentTabId)
   const pool = temporarySubterminals.get(poolKey) ?? []
   const existing = pool.find((entry) => entry.name === terminalName)
 
   if (existing) {
     if (!sessions.has(getSessionKey(webContents.id, existing.tabId))) {
-      startTemporaryTerminalSession(webContents, existing.tabId)
+      startTemporaryTerminalSession(webContents, existing.tabId, options)
+      existing.detached = false
+      existing.busy = false
     }
+    existing.lastUsedAt = Date.now()
     return { ok: true, entry: existing }
   }
 
@@ -658,20 +958,25 @@ function ensureTemporarySubterminal(
     }
   }
 
-  const entry = {
+  const entry: TemporarySubterminalEntry = {
     name: terminalName,
     tabId: createTemporarySubterminalTabId(parentTabId, terminalName),
     busy: false,
+    detached: false,
     lastUsedAt: Date.now()
   }
   pool.push(entry)
   temporarySubterminals.set(poolKey, pool)
-  startTemporaryTerminalSession(webContents, entry.tabId)
+  startTemporaryTerminalSession(webContents, entry.tabId, options)
 
   return { ok: true, entry }
 }
 
-function startTemporaryTerminalSession(webContents: WebContents, tabId: string): void {
+function startTemporaryTerminalSession(
+  webContents: WebContents,
+  tabId: string,
+  options?: TemporarySubterminalOpenOptions
+): void {
   const key = getSessionKey(webContents.id, tabId)
   stopSession(key)
 
@@ -681,11 +986,11 @@ function startTemporaryTerminalSession(webContents: WebContents, tabId: string):
   const session = createTerminalSession({
     sessionId,
     shell: launchConfig.shell,
-    args: launchConfig.args,
+    args: resolveTerminalArgs(launchConfig.args, options?.initialCommand),
     cwd: launchConfig.cwd,
     env: launchConfig.env,
-    cols: 100,
-    rows: 24,
+    cols: sanitizeDimension(options?.cols, 100),
+    rows: sanitizeDimension(options?.rows, 24),
     webContents,
     tabId,
     key
@@ -696,6 +1001,30 @@ function startTemporaryTerminalSession(webContents: WebContents, tabId: string):
   sessions.set(key, session)
 }
 
+function releaseTemporarySubterminalByTabId(senderId: number, tabId: string): void {
+  const parsed = parseTemporarySubterminalTabId(tabId)
+  if (!parsed) return
+
+  const poolKey = getSessionKey(senderId, parsed.parentTabId)
+  const pool = temporarySubterminals.get(poolKey)
+  if (!pool) return
+
+  const next = pool.filter((entry) => entry.tabId !== tabId)
+  if (next.length === 0) temporarySubterminals.delete(poolKey)
+  else temporarySubterminals.set(poolKey, next)
+}
+
+function clearTemporarySubterminalDetached(senderId: number, tabId: string): void {
+  const parsed = parseTemporarySubterminalTabId(tabId)
+  if (!parsed) return
+
+  const poolKey = getSessionKey(senderId, parsed.parentTabId)
+  const entry = (temporarySubterminals.get(poolKey) ?? []).find((item) => item.tabId === tabId)
+  if (!entry) return
+  entry.detached = false
+  entry.lastUsedAt = Date.now()
+}
+
 function normalizeTemporaryTerminalName(value: string): string {
   const normalized = value.trim().replace(/\s+/g, '-').slice(0, 40)
 
@@ -704,6 +1033,22 @@ function normalizeTemporaryTerminalName(value: string): string {
 
 function createTemporarySubterminalTabId(parentTabId: string, terminalName: string): string {
   return `${parentTabId}::subterminal::${encodeURIComponent(terminalName)}`
+}
+
+function parseTemporarySubterminalTabId(
+  tabId: string
+): { parentTabId: string; name: string } | undefined {
+  const marker = '::subterminal::'
+  const markerIndex = tabId.indexOf(marker)
+  if (markerIndex === -1) return undefined
+
+  const parentTabId = tabId.slice(0, markerIndex)
+  const encodedName = tabId.slice(markerIndex + marker.length)
+  try {
+    return { parentTabId, name: decodeURIComponent(encodedName) }
+  } catch {
+    return { parentTabId, name: encodedName }
+  }
 }
 
 function createTerminalSession(input: {
