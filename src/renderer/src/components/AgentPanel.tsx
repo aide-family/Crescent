@@ -42,6 +42,7 @@ import {
   getSessionGroupId,
   getTerminalDisplayTitle,
   type AgentLogEntry,
+  type AgentRunViewState,
   type AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import { buildModelSelectionValue } from '@renderer/lib/app-runtime'
@@ -81,6 +82,8 @@ export function AgentPanel({
   onOpsFeedback,
   feedbackByLogId,
   feedbackBusyLogId,
+  liveRunByLogId,
+  onResolveApproval,
   onToggleTerminalPane,
   onSelectSession,
   onSelectTerminal,
@@ -141,6 +144,8 @@ export function AgentPanel({
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
+  liveRunByLogId?: Record<number, AgentRunViewState>
+  onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onToggleTerminalPane: () => void
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
@@ -170,6 +175,7 @@ export function AgentPanel({
       <AgentLogList
         logRef={agentLogRef}
         entries={sessionChatTab.agentLog}
+        liveRunByLogId={liveRunByLogId}
         copiedLogId={sessionChatTab.copiedLogId}
         thinking={sessionChatTab.agentThinking}
         thinkingMessage={sessionChatTab.thinkingMessage}
@@ -181,6 +187,7 @@ export function AgentPanel({
         onExportFull={onExportFull}
         onExportTrace={onExportTrace}
         onOpsFeedback={onOpsFeedback}
+        onResolveApproval={onResolveApproval}
         feedbackByLogId={feedbackByLogId}
         feedbackBusyLogId={feedbackBusyLogId}
         onRetryConnection={onRetryConnection}

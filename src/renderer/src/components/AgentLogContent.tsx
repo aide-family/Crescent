@@ -7,8 +7,11 @@ import {
   logRoleLabel,
   summarizeBehaviorLog
 } from '@renderer/lib/agent-log'
-import { parseAgentRunDocument } from '@renderer/lib/agent-run-document'
-import type { AgentLogEntry } from '@renderer/lib/terminal-tabs'
+import {
+  agentRunViewToDocument,
+  parseAgentRunDocument
+} from '@renderer/lib/agent-run-document'
+import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
 
 export function ActionLogRow({
   entry,
@@ -41,6 +44,7 @@ export function ActionLogRow({
 
 export function AgentLogContent({
   entry,
+  liveRun,
   t,
   copied,
   feedbackRating,
@@ -49,9 +53,11 @@ export function AgentLogContent({
   onExportResult,
   onExportFull,
   onExportTrace,
-  onOpsFeedback
+  onOpsFeedback,
+  onResolveApproval
 }: {
   entry: AgentLogEntry
+  liveRun?: AgentRunViewState | null
   t: Dictionary
   copied?: boolean
   feedbackRating?: 'like' | 'dislike' | null
@@ -61,6 +67,7 @@ export function AgentLogContent({
   onExportFull?: () => void
   onExportTrace?: () => void
   onOpsFeedback?: (rating: 'like' | 'dislike') => void
+  onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -71,7 +78,12 @@ export function AgentLogContent({
       )
     }
 
-    const parsedRun = entry.kind === 'assistant' ? parseAgentRunDocument(entry.text, t) : null
+    const parsedRun =
+      entry.kind === 'assistant'
+        ? liveRun
+          ? agentRunViewToDocument(liveRun)
+          : parseAgentRunDocument(entry.text, t)
+        : null
     if (parsedRun) {
       return (
         <AgentRunTimeline
@@ -85,6 +97,7 @@ export function AgentLogContent({
           onExportFull={onExportFull}
           onExportTrace={onExportTrace}
           onOpsFeedback={onOpsFeedback}
+          onResolveApproval={onResolveApproval}
         />
       )
     }

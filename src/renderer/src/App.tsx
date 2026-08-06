@@ -32,7 +32,6 @@ import { AgentPanel } from '@renderer/components/AgentPanel'
 import { AppFooter } from '@renderer/components/AppFooter'
 import {
   CloseTabsConfirmModal,
-  CommandApprovalModal,
   PasswordPromptModal,
   type CloseTabsConfirmRequest,
   type PasswordPromptRequest
@@ -107,7 +106,6 @@ import {
   buildTraceFromAgentRunView,
   formatTraceExport
 } from '@renderer/lib/agent-run-trace-export'
-import { riskLabel } from '@renderer/lib/agent-event-formatters'
 import {
   buildAvailableToolRefs,
   flattenProviderModels,
@@ -244,7 +242,6 @@ import type {
   AgentValidationResult,
   AgentSkillOption,
   AgentWikiReference,
-  CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
@@ -326,7 +323,6 @@ function App(): React.JSX.Element {
   const [executionTerminalByChatId, setExecutionTerminalByChatId] = useState<
     Record<string, string>
   >({})
-  const pendingCommandApprovalsRef = useRef<CommandApprovalRequest[]>([])
   const passwordPromptsByTabRef = useRef(new Map<string, PasswordPromptRequest>())
   const validationRequestRef = useRef(0)
   const nextLogIdRef = useRef(1)
@@ -479,8 +475,6 @@ function App(): React.JSX.Element {
   const [connectionSaveMessage, setConnectionSaveMessage] = useState<SkillManageMessage | null>(
     null
   )
-  const [commandApproval, setCommandApproval] = useState<CommandApprovalRequest | null>(null)
-  const [commandRejectionReason, setCommandRejectionReason] = useState('')
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
@@ -612,7 +606,14 @@ function App(): React.JSX.Element {
     sessionTerminals,
     t
   ])
-  const { appendLog, updateAgentRun, appendAgentEvent } = useAgentRuns({
+  const {
+    appendLog,
+    updateAgentRun,
+    appendAgentEvent,
+    liveRunByLogId,
+    attachApprovalRequest,
+    resolveApprovalStep
+  } = useAgentRuns({
     activeTabIdRef,
     nextLogIdRef,
     activeAgentRunRef,
@@ -1359,7 +1360,11 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalRequest((request) => {
-      if (!isApprovalTargetAlive(request.tabId, tabsRef.current)) {
+      const targetId = request.chatTabId ?? request.tabId
+      const alive =
+        isApprovalTargetAlive(request.tabId, tabsRef.current) ||
+        isApprovalTargetAlive(request.chatTabId, tabsRef.current)
+      if (!alive) {
         void window.api.agent.resolveCommandApproval({
           requestId: request.id,
           approved: false,
@@ -1368,55 +1373,34 @@ function App(): React.JSX.Element {
         return
       }
 
-      setCommandApproval((current) => {
-        if (!current) {
-          setCommandRejectionReason('')
-          return request
-        }
-
-        const currentSessionId = resolveSessionChatTabId(
-          tabsRef.current,
-          current.tabId ?? activeTabIdRef.current
-        )
-        const requestSessionId = resolveSessionChatTabId(
-          tabsRef.current,
-          request.tabId ?? activeTabIdRef.current
-        )
-
-        if (currentSessionId === requestSessionId && current.runId === request.runId) {
-          setCommandRejectionReason('')
-          return request
-        }
-
-        pendingCommandApprovalsRef.current = [
-          ...pendingCommandApprovalsRef.current.filter((item) => item.id !== request.id),
-          request
-        ]
-        return current
-      })
+      const chatTabId = resolveSessionChatTabId(
+        tabsRef.current,
+        targetId ?? activeTabIdRef.current
+      )
+      attachApprovalRequest(chatTabId, request)
     })
-  }, [t.commandReview.sessionClosedRejection])
+  }, [attachApprovalRequest, t.commandReview.sessionClosedRejection])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
-      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
-        (item) => item.id !== payload.requestId && item.runId !== payload.runId
-      )
-      setCommandApproval((current) => {
-        if (current && current.id !== payload.requestId && current.runId !== payload.runId) {
-          return current
-        }
-        const { next, remaining } = takeNextQueuedCommandApproval(
-          pendingCommandApprovalsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current
+      for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {
+        if (run.runId !== payload.runId) continue
+        const pending = (run.steps ?? []).some(
+          (step) =>
+            step.kind === 'approval' &&
+            step.requestId === payload.requestId &&
+            step.phase === 'pending'
         )
-        pendingCommandApprovalsRef.current = remaining
-        return next
-      })
-      setCommandRejectionReason('')
+        if (!pending) continue
+        resolveApprovalStep(
+          chatTabId,
+          payload.requestId,
+          false,
+          t.commandReview.sessionClosedRejection
+        )
+      }
     })
-  }, [])
+  }, [resolveApprovalStep, t.commandReview.sessionClosedRejection])
 
   useEffect(() => {
     return window.api.agent.onSkillInstallEvent((event) => {
@@ -2244,20 +2228,6 @@ function App(): React.JSX.Element {
     const runId = activeRunIdRef.current.get(chatTabId)
     if (runId) {
       void window.api.agent.cancel(runId)
-      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
-        (item) => item.runId !== runId
-      )
-      setCommandApproval((current) => {
-        if (current?.runId !== runId) return current
-        const { next, remaining } = takeNextQueuedCommandApproval(
-          pendingCommandApprovalsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current
-        )
-        pendingCommandApprovalsRef.current = remaining
-        return next
-      })
-      setCommandRejectionReason('')
     }
     activeAgentRunRef.current.delete(chatTabId)
     activeRunIdRef.current.delete(chatTabId)
@@ -2286,38 +2256,6 @@ function App(): React.JSX.Element {
       passwordPromptOpenTabsRef.current.delete(tabId)
     }
 
-    pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter((item) => {
-      if (!item.tabId) return true
-      if (closedTabIds.includes(item.tabId)) return false
-      const subterminal = parseSubterminalTabId(item.tabId)
-      if (subterminal && closedTabIds.includes(subterminal.parentTabId)) return false
-      return true
-    })
-
-    setCommandApproval((current) => {
-      if (!current?.tabId) return current
-      if (closedTabIds.includes(current.tabId)) {
-        const { next, remaining } = takeNextQueuedCommandApproval(
-          pendingCommandApprovalsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current
-        )
-        pendingCommandApprovalsRef.current = remaining
-        return next
-      }
-      const subterminal = parseSubterminalTabId(current.tabId)
-      if (subterminal && closedTabIds.includes(subterminal.parentTabId)) {
-        const { next, remaining } = takeNextQueuedCommandApproval(
-          pendingCommandApprovalsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current
-        )
-        pendingCommandApprovalsRef.current = remaining
-        return next
-      }
-      return current
-    })
-
     if (
       passwordPromptRequestRef.current &&
       closedTabIds.includes(passwordPromptRequestRef.current.tabId)
@@ -2331,22 +2269,6 @@ function App(): React.JSX.Element {
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
     if (runId) void window.api.agent.cancel(runId)
-    if (runId) {
-      pendingCommandApprovalsRef.current = pendingCommandApprovalsRef.current.filter(
-        (item) => item.runId !== runId
-      )
-      setCommandApproval((current) => {
-        if (current?.runId !== runId) return current
-        const { next, remaining } = takeNextQueuedCommandApproval(
-          pendingCommandApprovalsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current
-        )
-        pendingCommandApprovalsRef.current = remaining
-        return next
-      })
-      setCommandRejectionReason('')
-    }
     if (runId) {
       updateAgentRun(chatTabId, (run) => ({
         ...run,
@@ -2417,21 +2339,30 @@ function App(): React.JSX.Element {
     showNextPasswordPrompt(passwordPromptRequest?.tabId)
   }
 
-  function resolveCommandApproval(approved: boolean): void {
-    if (!commandApproval) return
-
-    const requestId = commandApproval.id
-    const note = commandRejectionReason.trim()
-    const rejectionReason = approved ? '' : note
-    const { next, remaining } = takeNextQueuedCommandApproval(
-      pendingCommandApprovalsRef.current,
-      tabsRef.current,
-      activeTabIdRef.current
-    )
-    pendingCommandApprovalsRef.current = remaining
-    setCommandApproval(next)
-    setCommandRejectionReason('')
-    void window.api.agent.resolveCommandApproval({ requestId, approved, note, rejectionReason })
+  function resolveInlineCommandApproval(
+    requestId: string,
+    approved: boolean,
+    note?: string
+  ): void {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    // Prefer the chat that owns the pending approval step.
+    let targetChatTabId = chatTabId
+    for (const [candidateId, run] of activeAgentRunRef.current.entries()) {
+      const pending = (run.steps ?? []).some(
+        (step) => step.kind === 'approval' && step.requestId === requestId && step.phase === 'pending'
+      )
+      if (pending) {
+        targetChatTabId = candidateId
+        break
+      }
+    }
+    resolveApprovalStep(targetChatTabId, requestId, approved, note)
+    void window.api.agent.resolveCommandApproval({
+      requestId,
+      approved,
+      note,
+      rejectionReason: approved ? undefined : note
+    })
   }
 
   function showNextPasswordPrompt(preferredTabId = activeTabIdRef.current): void {
@@ -3224,7 +3155,7 @@ function App(): React.JSX.Element {
                 id: 'start',
                 kind: 'status',
                 title: t.input.startedRun,
-                detail: config.workspaceCwd || t.input.toolWorkspaceHint
+                detail: t.input.toolTerminalHint
               }
             ]
           },
@@ -3242,16 +3173,34 @@ function App(): React.JSX.Element {
           id: 'start',
           kind: 'status',
           title: t.input.startedRun,
-          detail: config.workspaceCwd || t.input.toolWorkspaceHint
+          detail: t.input.toolTerminalHint
         }
       ],
       startedAt
     })
 
+    // Publish the initial structured run so the timeline renders immediately.
+    updateAgentRun(chatTabId, (run) => run)
+
     try {
       const runTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
       const chatTab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
       const runModelSelection = resolveTabModelSelection(chatTab ?? runTab, config, visibleModels)
+      const executionTabId =
+        activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId
+      let terminalContext = ''
+      try {
+        const context = await window.api.terminal.getContext(executionTabId)
+        terminalContext = [
+          `mode: ${context.mode}`,
+          `cwd: ${context.cwd || '-'}`,
+          `shell: ${context.shell || '-'}`,
+          '',
+          (context.output || '').slice(-8000)
+        ].join('\n')
+      } catch {
+        terminalContext = ''
+      }
       const result = await window.api.agent.run({
         runId,
         input,
@@ -3261,6 +3210,8 @@ function App(): React.JSX.Element {
         providerId: runModelSelection.providerId,
         model: runModelSelection.model,
         tabId: chatTabId,
+        executionTabId,
+        terminalContext,
         locale
       })
 
@@ -4112,8 +4063,6 @@ function App(): React.JSX.Element {
 
     cancelAgentRunsOutsideTabs([])
     rejectApprovalsForClosedTabs(closedTabIds)
-    setCommandApproval(null)
-    setCommandRejectionReason('')
 
     setTabs([])
     setActiveTabId('')
@@ -4999,6 +4948,8 @@ function App(): React.JSX.Element {
             onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
             feedbackByLogId={opsFeedbackByLogId}
             feedbackBusyLogId={opsFeedbackBusyLogId}
+            liveRunByLogId={liveRunByLogId}
+            onResolveApproval={resolveInlineCommandApproval}
             onToggleTerminalPane={() => {
               setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
             }}
@@ -5129,20 +5080,6 @@ function App(): React.JSX.Element {
         onCancel={cancelPasswordPrompt}
         onSubmit={submitPasswordPrompt}
       />
-      <CommandApprovalModal
-        commandApproval={commandApproval}
-        sessionLabel={resolveCommandApprovalSessionLabel(commandApproval, tabs, tabsRef.current, t)}
-        isCurrentSession={Boolean(
-          commandApproval?.tabId &&
-          resolveSessionChatTabId(tabs, commandApproval.tabId) ===
-            resolveSessionChatTabId(tabs, activeTabId)
-        )}
-        t={t}
-        riskLabel={commandApproval ? riskLabel(commandApproval.audit.risk, t) : ''}
-        rejectionReason={commandRejectionReason}
-        onRejectionReasonChange={setCommandRejectionReason}
-        onResolve={resolveCommandApproval}
-      />
       <AppFooter shellState={shellState} activeTab={activeTab} agentMode={config.agentMode} t={t} />
     </main>
   )
@@ -5165,50 +5102,6 @@ function isApprovalTargetAlive(tabId: string | undefined, tabs: AgentTerminalTab
   return false
 }
 
-function takeNextQueuedCommandApproval(
-  queue: CommandApprovalRequest[],
-  tabs: AgentTerminalTab[],
-  preferredTabId: string
-): { next: CommandApprovalRequest | null; remaining: CommandApprovalRequest[] } {
-  if (queue.length === 0) return { next: null, remaining: [] }
-
-  const preferredSession = resolveSessionChatTabId(tabs, preferredTabId)
-  const preferredIndex = queue.findIndex(
-    (item) =>
-      resolveSessionChatTabId(tabs, item.tabId ?? preferredTabId) === preferredSession &&
-      isApprovalTargetAlive(item.tabId, tabs)
-  )
-  const fallbackIndex = queue.findIndex((item) => isApprovalTargetAlive(item.tabId, tabs))
-  const index = preferredIndex >= 0 ? preferredIndex : fallbackIndex
-  if (index < 0) return { next: null, remaining: [] }
-
-  const next = queue[index]
-  const remaining = queue.filter((_, itemIndex) => itemIndex !== index)
-  return { next, remaining }
-}
-
-function resolveCommandApprovalSessionLabel(
-  request: CommandApprovalRequest | null,
-  tabs: AgentTerminalTab[],
-  tabSnapshot: AgentTerminalTab[],
-  t: Dictionary
-): string {
-  if (!request?.tabId) return t.commandReview.unknownSession
-
-  const tab =
-    tabs.find((candidate) => candidate.id === request.tabId) ??
-    tabSnapshot.find((candidate) => candidate.id === request.tabId)
-  if (!tab) return t.commandReview.unknownSession
-
-  const title = getTerminalDisplayTitle(
-    tab,
-    [...tabs, ...tabSnapshot].filter(
-      (candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index
-    )
-  )
-  const cwd = tab.terminalCwd.trim()
-  return cwd ? `${title} · ${cwd}` : title
-}
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   const next = { ...record }

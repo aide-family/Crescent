@@ -49,6 +49,21 @@ export type AgentRunStep =
       isError?: boolean
       toolCallId?: string
     }
+  | {
+      id: string
+      kind: 'approval'
+      requestId: string
+      command: string
+      phase: 'pending' | 'approved' | 'rejected'
+      auditSummary?: string
+      operationReason?: string
+      risk?: 'low' | 'medium' | 'high'
+      riskPoints?: string[]
+      impactAnalysis?: string
+      recommendation?: string
+      note?: string
+      rejectionReason?: string
+    }
 
 export interface AgentRunAction {
   title: string

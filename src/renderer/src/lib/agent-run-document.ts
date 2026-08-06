@@ -102,6 +102,23 @@ export function deriveActionsFromSteps(steps: AgentRunStep[], thinkingText?: str
       actions.push({ title: step.title, detail: step.detail ?? step.title })
       continue
     }
+    if (step.kind === 'approval') {
+      actions.push({
+        title: `Command review: ${step.command}`,
+        detail: [
+          step.auditSummary,
+          step.phase === 'pending'
+            ? 'Awaiting approval'
+            : step.phase === 'approved'
+              ? 'Approved'
+              : 'Rejected',
+          step.note || step.rejectionReason
+        ]
+          .filter(Boolean)
+          .join('\n')
+      })
+      continue
+    }
     const detailParts = [
       step.command ? `Command:\n${step.command}` : step.argsText ? `Args:\n${step.argsText}` : '',
       step.resultText ? `Output:\n${step.resultText}` : '',
@@ -212,7 +229,26 @@ function isAgentRunStep(value: unknown): value is AgentRunStep {
   if (step.kind === 'tool') {
     return typeof step.name === 'string' && (step.phase === 'started' || step.phase === 'finished')
   }
+  if (step.kind === 'approval') {
+    return (
+      typeof step.requestId === 'string' &&
+      typeof step.command === 'string' &&
+      (step.phase === 'pending' || step.phase === 'approved' || step.phase === 'rejected')
+    )
+  }
   return false
+}
+
+/** Prefer live structured run state over reparsing serialized log text while streaming. */
+export function agentRunViewToDocument(run: AgentRunViewState): ParsedAgentRunDocument {
+  return {
+    version: 2,
+    thinkingText: run.thinkingText,
+    steps: run.steps ?? [],
+    resultMarkdown: run.result ?? '',
+    errorMarkdown: run.error ?? '',
+    elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
+  }
 }
 
 function escapeRegExp(value: string): string {

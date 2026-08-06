@@ -1,4 +1,4 @@
-import { useCallback, type MutableRefObject } from 'react'
+import { useCallback, useRef, useState, type MutableRefObject } from 'react'
 
 import type { Dictionary } from '@renderer/i18n'
 import {
@@ -20,7 +20,7 @@ import type {
   AgentRunViewState,
   AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
-import type { AgentEvent } from '../../../shared/agent-types'
+import type { AgentEvent, CommandApprovalRequest } from '../../../shared/agent-types'
 import { redactSensitiveText } from '../../../shared/secret-redaction'
 
 interface UseAgentRunsInput {
@@ -51,7 +51,20 @@ export function useAgentRuns({
   updateLogEntryText: (tabId: string, logId: number, text: string) => void
   updateAgentRun: (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState) => void
   appendAgentEvent: (event: AgentEvent, tabId?: string) => void
+  liveRunByLogId: Record<number, AgentRunViewState>
+  attachApprovalRequest: (chatTabId: string, request: CommandApprovalRequest) => void
+  resolveApprovalStep: (
+    chatTabId: string,
+    requestId: string,
+    approved: boolean,
+    note?: string
+  ) => void
 } {
+  const [liveRunByLogId, setLiveRunByLogId] = useState<Record<number, AgentRunViewState>>({})
+  const rafFlushRef = useRef<number | null>(null)
+  const dirtyTabIdsRef = useRef(new Set<string>())
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const appendLog = useCallback(
     (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): number => {
       const id = nextLogIdRef.current
@@ -74,26 +87,147 @@ export function useAgentRuns({
   )
 
   const updateLogEntryText = useCallback(
-    (tabId: string, logId: number, text: string): void => {
+    (tabId: string, logId: number, text: string, persist = true): void => {
       updateTab(tabId, (tab) => ({
         ...tab,
         agentLog: tab.agentLog.map((entry) => (entry.id === logId ? { ...entry, text } : entry))
       }))
-      void window.api.storage.updateAgentLog({ tabId, logId, text })
+      if (persist) {
+        void window.api.storage.updateAgentLog({ tabId, logId, text })
+      }
     },
     [updateTab]
   )
 
+  const publishLiveRun = useCallback((run: AgentRunViewState): void => {
+    setLiveRunByLogId((current) => {
+      if (current[run.logId] === run) return current
+      return { ...current, [run.logId]: run }
+    })
+  }, [])
+
+  const scheduleLiveFlush = useCallback(
+    (tabId: string, persistSoon = false): void => {
+      dirtyTabIdsRef.current.add(tabId)
+      if (persistSoon) {
+        if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = setTimeout(() => {
+          for (const dirtyTabId of dirtyTabIdsRef.current) {
+            const run = activeAgentRunRef.current.get(dirtyTabId)
+            if (!run) continue
+            updateLogEntryText(dirtyTabId, run.logId, formatAgentRunDocument(run, t), true)
+          }
+        }, 400)
+      }
+      if (rafFlushRef.current != null) return
+      rafFlushRef.current = window.requestAnimationFrame(() => {
+        rafFlushRef.current = null
+        for (const dirtyTabId of dirtyTabIdsRef.current) {
+          const run = activeAgentRunRef.current.get(dirtyTabId)
+          if (!run) continue
+          publishLiveRun(run)
+          // Keep serialized log text reasonably fresh without blocking every token.
+          updateLogEntryText(dirtyTabId, run.logId, formatAgentRunDocument(run, t), false)
+        }
+        dirtyTabIdsRef.current.clear()
+      })
+    },
+    [activeAgentRunRef, publishLiveRun, t, updateLogEntryText]
+  )
+
   const updateAgentRun = useCallback(
-    (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState): void => {
+    (
+      tabId: string,
+      updater: (run: AgentRunViewState) => AgentRunViewState,
+      options?: { immediatePersist?: boolean; streaming?: boolean }
+    ): void => {
       const run = activeAgentRunRef.current.get(tabId)
       if (!run) return
 
       const nextRun = syncActionsFromStructuredRun(updater(run))
       activeAgentRunRef.current.set(tabId, nextRun)
-      updateLogEntryText(tabId, nextRun.logId, formatAgentRunDocument(nextRun, t))
+
+      if (options?.streaming) {
+        scheduleLiveFlush(tabId, true)
+        return
+      }
+
+      publishLiveRun(nextRun)
+      updateLogEntryText(
+        tabId,
+        nextRun.logId,
+        formatAgentRunDocument(nextRun, t),
+        options?.immediatePersist !== false
+      )
     },
-    [activeAgentRunRef, t, updateLogEntryText]
+    [activeAgentRunRef, publishLiveRun, scheduleLiveFlush, t, updateLogEntryText]
+  )
+
+  const attachApprovalRequest = useCallback(
+    (chatTabId: string, request: CommandApprovalRequest): void => {
+      updateAgentRun(chatTabId, (run) => {
+        const steps = [...(run.steps ?? [])]
+        const index = steps.findIndex(
+          (step) =>
+            step.kind === 'approval' &&
+            step.phase === 'pending' &&
+            (!step.requestId || step.command === request.command)
+        )
+        if (index >= 0 && steps[index].kind === 'approval') {
+          steps[index] = {
+            ...steps[index],
+            requestId: request.id,
+            command: request.command,
+            auditSummary: request.audit.summary,
+            operationReason: request.audit.operationReason,
+            risk: request.audit.risk,
+            riskPoints: request.audit.riskPoints,
+            impactAnalysis: request.audit.impactAnalysis,
+            recommendation: request.audit.recommendation
+          }
+          return { ...run, steps }
+        }
+        return {
+          ...run,
+          steps: [
+            ...steps,
+            {
+              id: createStepId('approval'),
+              kind: 'approval',
+              requestId: request.id,
+              command: request.command,
+              phase: 'pending',
+              auditSummary: request.audit.summary,
+              operationReason: request.audit.operationReason,
+              risk: request.audit.risk,
+              riskPoints: request.audit.riskPoints,
+              impactAnalysis: request.audit.impactAnalysis,
+              recommendation: request.audit.recommendation
+            }
+          ]
+        }
+      })
+    },
+    [updateAgentRun]
+  )
+
+  const resolveApprovalStep = useCallback(
+    (chatTabId: string, requestId: string, approved: boolean, note?: string): void => {
+      updateAgentRun(chatTabId, (run) => ({
+        ...run,
+        steps: (run.steps ?? []).map((step) => {
+          if (step.kind !== 'approval' || step.requestId !== requestId) return step
+          if (step.phase !== 'pending') return step
+          return {
+            ...step,
+            phase: approved ? 'approved' : 'rejected',
+            note: approved ? note : undefined,
+            rejectionReason: approved ? undefined : note
+          }
+        })
+      }))
+    },
+    [updateAgentRun]
   )
 
   const appendAgentEvent = useCallback(
@@ -101,10 +235,14 @@ export function useAgentRuns({
       if (activeRunCanceledRef.current.has(tabId)) return
 
       if (event.type === 'token') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          result: `${run.result ?? ''}${event.text}`
-        }))
+        updateAgentRun(
+          tabId,
+          (run) => ({
+            ...run,
+            result: `${run.result ?? ''}${event.text}`
+          }),
+          { streaming: true }
+        )
         return
       }
 
@@ -115,10 +253,14 @@ export function useAgentRuns({
       if (event.type === 'thought') {
         const delta = localizeAgentEventMessage(event.message, t)
         if (!delta) return
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          thinkingText: `${run.thinkingText ?? ''}${delta}`
-        }))
+        updateAgentRun(
+          tabId,
+          (run) => ({
+            ...run,
+            thinkingText: `${run.thinkingText ?? ''}${delta}`
+          }),
+          { streaming: true }
+        )
         return
       }
 
@@ -162,18 +304,50 @@ export function useAgentRuns({
       }
 
       if (event.type === 'command-review') {
-        updateAgentRun(tabId, (run) => ({
-          ...run,
-          steps: [
-            ...(run.steps ?? []),
-            {
-              id: createStepId('status'),
-              kind: 'status',
-              title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
-              detail: formatCommandAuditActionDetail(event.command, event.audit, t)
+        updateAgentRun(tabId, (run) => {
+          const steps = [...(run.steps ?? [])]
+          const existingIndex = steps.findIndex(
+            (step) =>
+              step.kind === 'approval' &&
+              step.phase === 'pending' &&
+              step.command === event.command
+          )
+          const approvalStep = {
+            id: existingIndex >= 0 && steps[existingIndex].kind === 'approval'
+              ? steps[existingIndex].id
+              : createStepId('approval'),
+            kind: 'approval' as const,
+            requestId: '',
+            command: event.command,
+            phase: 'pending' as const,
+            auditSummary: event.audit.summary,
+            operationReason: event.audit.operationReason,
+            risk: event.audit.risk,
+            riskPoints: event.audit.riskPoints,
+            impactAnalysis: event.audit.impactAnalysis,
+            recommendation: event.audit.recommendation
+          }
+          if (!event.audit.requiresApproval) {
+            // Informational review only; keep as status.
+            return {
+              ...run,
+              steps: [
+                ...steps,
+                {
+                  id: createStepId('status'),
+                  kind: 'status',
+                  title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
+                  detail: formatCommandAuditActionDetail(event.command, event.audit, t)
+                }
+              ]
             }
-          ]
-        }))
+          }
+          if (existingIndex >= 0) {
+            steps[existingIndex] = approvalStep
+            return { ...run, steps }
+          }
+          return { ...run, steps: [...steps, approvalStep] }
+        })
         return
       }
 
@@ -312,7 +486,10 @@ export function useAgentRuns({
     appendLog,
     updateLogEntryText,
     updateAgentRun,
-    appendAgentEvent
+    appendAgentEvent,
+    liveRunByLogId,
+    attachApprovalRequest,
+    resolveApprovalStep
   }
 }
 
