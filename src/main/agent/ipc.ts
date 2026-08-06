@@ -14,7 +14,12 @@ import { listEditableInstructionFiles, saveEditableInstructionFile } from './ins
 import { AgentMemory } from './memory'
 import { AgentBrain } from './brain'
 import { checkTranscriptionSupport } from './transcription-support'
-import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
+import {
+  buildLocalOnlyConnectionIntentResult,
+  CONNECTION_INTENT_SYSTEM_PROMPT,
+  parseConnectionIntentResponse,
+  summarizeConnectionForAi
+} from './connection-intent'
 import {
   deleteAgentSkill,
   installAgentSkill,
@@ -44,10 +49,12 @@ import {
   appendOperationRecord,
   readAgentConfig,
   readCrescentMemory,
+  readCustomConnections,
   writeAgentConfig,
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
+import { loadSshConfigConnections } from '../connections/ssh-config'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
 import type {
   AgentConfig,
@@ -343,14 +350,44 @@ export function registerAgentIpc(): void {
       if (!input) return { ok: false, error: 'Input is empty.' }
       const localOnlyIntent = buildLocalOnlyConnectionIntentResult(input)
       if (localOnlyIntent) return localOnlyIntent
-      // Agent runs no longer auto-connect SSH; keep local-only heuristics for UI helpers.
-      return {
-        ok: true,
-        shouldConnect: false,
-        confidence: 0,
-        executeAfterLogin: false,
-        matchBasis: 'none',
-        reason: 'Pi agent runs use the local workspace cwd; SSH auto-connect is disabled.'
+
+      const connections = [...loadSshConfigConnections(), ...readCustomConnections()]
+      if (connections.length === 0) return { ok: false, reason: 'No configured connections.' }
+
+      try {
+        const completion = await new AgentBrain(readAgentConfig()).chat({
+          temperature: 0,
+          messages: [
+            {
+              role: 'system',
+              content: CONNECTION_INTENT_SYSTEM_PROMPT
+            },
+            {
+              role: 'user',
+              content: JSON.stringify(
+                {
+                  request: input,
+                  conversationContext: payload.conversationContext ?? '',
+                  currentConnectionId: payload.currentConnectionId ?? null,
+                  currentConnectionName: payload.currentConnectionName ?? null,
+                  terminalSummary: payload.terminalSummary ?? '',
+                  connections: connections.map(summarizeConnectionForAi)
+                },
+                null,
+                2
+              )
+            }
+          ]
+        })
+        return parseConnectionIntentResponse(
+          completion.choices[0]?.message.content ?? '',
+          connections
+        )
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
       }
     }
   )
