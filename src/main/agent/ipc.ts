@@ -30,6 +30,10 @@ import { cancelPiAgentRun, runPiAgent, steerPiAgentRun } from './pi-host'
 import { listPiAvailableModels, resolvePiModel, syncCrescentProvidersToModelRuntime } from './pi-model-runtime'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
+import {
+  rejectPendingApprovalsForTab,
+  resolveCommandApprovalDecision
+} from './command-approval'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   getWikiDocument,
@@ -53,6 +57,7 @@ import type {
   AgentConnectionIntentResult,
   AgentPathReference,
   AgentRunInput,
+  CommandApprovalDecision,
   PastedAttachmentInput,
   TranscribeAudioInput,
   TranscribeAudioResult,
@@ -309,8 +314,9 @@ export function registerAgentIpc(): void {
     return { ok }
   })
 
-  ipcMain.handle('agent:reject-approvals-for-tab', () => {
-    // Command approval removed from Pi agent path; keep IPC for renderer compatibility.
+  ipcMain.handle('agent:reject-approvals-for-tab', (_, tabId: string) => {
+    const normalized = typeof tabId === 'string' ? tabId.trim() : ''
+    if (normalized) rejectPendingApprovalsForTab(normalized, 'Session was closed.')
     return { ok: true }
   })
 
@@ -322,8 +328,8 @@ export function registerAgentIpc(): void {
     return { ok }
   })
 
-  ipcMain.handle('agent:resolve-command-approval', () => {
-    return { ok: true }
+  ipcMain.handle('agent:resolve-command-approval', (_, decision: CommandApprovalDecision) => {
+    return resolveCommandApprovalDecision(decision)
   })
 
   ipcMain.handle('agent:generate-command', async () => {
@@ -379,6 +385,7 @@ export function registerAgentIpc(): void {
       model: payload?.model
     })
     const sessionKey = payload?.tabId?.trim() || 'default'
+    const executionTabId = payload?.executionTabId?.trim() || payload?.tabId?.trim() || ''
 
     const result = await runPiAgent({
       runId,
@@ -387,11 +394,15 @@ export function registerAgentIpc(): void {
       config: agentConfig,
       tabId: payload?.tabId,
       conversationContext: payload?.conversationContext,
+      webContents: event.sender,
+      executionTabId,
+      terminalContext: payload?.terminalContext,
+      locale: payload?.locale,
       emit: (agentEvent) => {
         safeWebContentsSend(event.sender, 'agent:event', {
           ...agentEvent,
           runId,
-          tabId: payload?.tabId
+          tabId: agentEvent.tabId ?? payload?.tabId
         })
       }
     })
