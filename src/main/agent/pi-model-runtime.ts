@@ -1,4 +1,4 @@
-import type { Model } from '@earendil-works/pi-ai'
+import type { Api, Model } from '@earendil-works/pi-ai'
 
 import {
   deepSeekModelCompat,
@@ -12,7 +12,9 @@ import { getCrescentPiAuthPath, getCrescentPiModelsPath } from './pi-paths'
 import { loadPiCodingAgent } from './pi-sdk'
 import type { AgentConfig, AgentProviderConfig } from './types'
 
-type ModelRuntime = Awaited<ReturnType<Awaited<ReturnType<typeof loadPiCodingAgent>>['ModelRuntime']['create']>>
+type ModelRuntime = Awaited<
+  ReturnType<Awaited<ReturnType<typeof loadPiCodingAgent>>['ModelRuntime']['create']>
+>
 type ProviderConfigInput = Parameters<ModelRuntime['registerProvider']>[1]
 
 let runtimePromise: Promise<ModelRuntime> | undefined
@@ -58,7 +60,7 @@ export async function syncCrescentProvidersToModelRuntime(
 export async function resolvePiModel(
   config: AgentConfig,
   runtime: ModelRuntime
-): Promise<Model<any> | undefined> {
+): Promise<Model<Api> | undefined> {
   const providers = getAgentProviders(config)
   const providerId = sanitizeProviderId(config.providerId || providers[0]?.id || '')
   const modelId = config.model.trim()
@@ -82,7 +84,7 @@ export async function resolvePiModel(
   return all[0]
 }
 
-export function resolveThinkingLevelForModel(model: Model<any> | undefined): 'off' | 'high' {
+export function resolveThinkingLevelForModel(model: Model<Api> | undefined): 'off' | 'high' {
   if (!model?.reasoning) return 'off'
   return 'high'
 }
@@ -165,5 +167,10 @@ function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInp
 }
 
 function sanitizeProviderId(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'custom'
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-') || 'custom'
+  )
 }

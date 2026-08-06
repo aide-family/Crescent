@@ -1,13 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  PlusIcon,
-  Trash2Icon,
-  XIcon
-} from 'lucide-react'
+import { ChevronDownIcon, ChevronUpIcon, PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
 
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'

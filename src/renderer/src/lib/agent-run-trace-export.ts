@@ -15,10 +15,9 @@ export function buildTraceFromAgentRunView(input: {
   output?: string
   error?: string
 }): AgentRunTrace {
-  const actions =
-    input.run?.actions?.length
-      ? input.run.actions
-      : deriveActionsFromSteps(input.run?.steps ?? [], input.run?.thinkingText)
+  const actions = input.run?.actions?.length
+    ? input.run.actions
+    : deriveActionsFromSteps(input.run?.steps ?? [], input.run?.thinkingText)
 
   return buildAgentRunTrace({
     runId: input.runId,

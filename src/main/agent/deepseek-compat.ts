@@ -2,7 +2,9 @@ import type { AgentProviderConfig } from './types'
 
 const DEEPSEEK_HOST = /deepseek\.com/i
 
-export function isDeepSeekProvider(provider: Pick<AgentProviderConfig, 'id' | 'name' | 'baseUrl'>): boolean {
+export function isDeepSeekProvider(
+  provider: Pick<AgentProviderConfig, 'id' | 'name' | 'baseUrl'>
+): boolean {
   const id = provider.id.toLowerCase()
   const name = (provider.name || '').toLowerCase()
   const baseUrl = provider.baseUrl.toLowerCase()

@@ -113,5 +113,8 @@ function extractOutputFromDetail(detail: string): string | undefined {
 function stripCodeFence(value: string): string {
   const fenced = value.match(/^```[^\n]*\n([\s\S]*?)\n```$/m)
   if (fenced?.[1] != null) return fenced[1].trim()
-  return value.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '').trim()
+  return value
+    .replace(/^```[^\n]*\n?/, '')
+    .replace(/\n?```$/, '')
+    .trim()
 }
