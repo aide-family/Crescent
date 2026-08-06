@@ -86,6 +86,44 @@ const api = {
     clear: (tabId?: string): void => {
       ipcRenderer.send('terminal:clear', { tabId })
     },
+    openSubterminal: (options: {
+      parentTabId: string
+      terminalName: string
+      cols?: number
+      rows?: number
+      initialCommand?: string
+    }): Promise<{
+      ok: boolean
+      name?: string
+      tabId?: string
+      sessionId?: number
+      mode?: 'pty' | 'pipe'
+      pid?: number
+      shell?: string
+      cwd?: string
+      error?: string
+    }> => ipcRenderer.invoke('terminal:open-subterminal', options),
+    readSubterminal: (options: {
+      parentTabId: string
+      terminalName: string
+      maxChars?: number
+    }): Promise<{
+      ok: boolean
+      name: string
+      tabId: string
+      mode: 'pty' | 'pipe' | 'none'
+      cwd: string
+      shell: string
+      output: string
+      busy: boolean
+      detached: boolean
+      error?: string
+    }> => ipcRenderer.invoke('terminal:read-subterminal', options),
+    interruptSubterminal: (options: {
+      parentTabId: string
+      terminalName: string
+    }): Promise<{ ok: boolean; name: string; tabId?: string; error?: string }> =>
+      ipcRenderer.invoke('terminal:interrupt-subterminal', options),
     onData: (callback: (event: { tabId: string; data: string }) => void): (() => void) => {
       const listener = (
         _: Electron.IpcRendererEvent,

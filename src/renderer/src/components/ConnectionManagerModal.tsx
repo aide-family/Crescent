@@ -2,6 +2,7 @@ import {
   CopyIcon,
   CopyPlusIcon,
   Layers2Icon,
+  PanelBottomIcon,
   PencilIcon,
   ServerIcon,
   Trash2Icon,
@@ -44,6 +45,7 @@ export function ConnectionManagerModal({
   onSelectConnection,
   onConnect,
   onConnectInSession,
+  onConnectInSubterminal,
   onCopyConnection,
   onDuplicateConnection,
   onEditConnection,
@@ -77,6 +79,7 @@ export function ConnectionManagerModal({
   onSelectConnection: (connection: ConnectionConfig) => void
   onConnect: (connection: ConnectionConfig) => void
   onConnectInSession: (connection: ConnectionConfig) => void
+  onConnectInSubterminal: (connection: ConnectionConfig) => void
   onCopyConnection: (connection: ConnectionConfig) => void
   onDuplicateConnection: (connection: ConnectionConfig) => void
   onEditConnection: (connection: ConnectionConfig) => void
@@ -214,6 +217,20 @@ export function ConnectionManagerModal({
                   }}
                 >
                   <Layers2Icon aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-xs"
+                  aria-label={t.terminal.openSubterminalInSession}
+                  title={t.terminal.openSubterminalInSessionDescription}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onConnectInSubterminal(connection)
+                    onClose()
+                  }}
+                >
+                  <PanelBottomIcon aria-hidden="true" />
                 </Button>
                 <Button
                   type="button"

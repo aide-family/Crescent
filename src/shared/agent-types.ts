@@ -185,6 +185,10 @@ export interface AgentSessionTerminalRef {
   isSsh: boolean
   cwd?: string
   isCurrent?: boolean
+  /** Docked sub-terminal under a parent tab in the same chat session. */
+  kind?: 'terminal' | 'subterminal'
+  parentTabId?: string
+  subterminalName?: string
 }
 
 export interface AgentRunInput {
@@ -250,6 +254,7 @@ export interface TerminalCommandResult {
   error?: string
   timedOut?: boolean
   terminalExited?: boolean
+  detached?: boolean
   subterminalName?: string
   subterminalTabId?: string
 }
@@ -264,8 +269,26 @@ export interface TerminalCommandExecutor {
 export interface SubterminalCommandExecutor {
   executeCommand(
     command: string,
-    options: { terminalName: string; timeoutMs?: number }
+    options: { terminalName: string; timeoutMs?: number; mode?: 'wait' | 'detach' }
   ): Promise<TerminalCommandResult>
+  readOutput?(options: {
+    terminalName: string
+    maxChars?: number
+  }): Promise<{
+    ok: boolean
+    name: string
+    tabId: string
+    mode: 'pty' | 'pipe' | 'none'
+    cwd: string
+    shell: string
+    output: string
+    busy: boolean
+    detached: boolean
+    error?: string
+  }>
+  interrupt?(options: {
+    terminalName: string
+  }): Promise<{ ok: boolean; name: string; tabId?: string; error?: string }>
 }
 
 export interface LocalFileWriteResult {

@@ -81,6 +81,12 @@ export interface TemporarySubterminal {
   cwd: string
   status: 'active' | 'exited'
   widthPercent?: number
+  connectionId?: string
+  connectionName?: string
+  isSsh?: boolean
+  terminalMode?: 'pty' | 'pipe'
+  sessionId?: number
+  terminalReady?: boolean
 }
 
 const BLOCKED_TERMINAL_TITLE_PATTERN = /topology/i
@@ -174,6 +180,12 @@ export function getSessionChatTab(
 }
 
 export function resolveSessionChatTabId(tabs: AgentTerminalTab[], tabId: string): string {
+  const marker = '::subterminal::'
+  const markerIndex = tabId.indexOf(marker)
+  if (markerIndex !== -1) {
+    const parentTabId = tabId.slice(0, markerIndex)
+    return getSessionChatTab(tabs, parentTabId)?.id ?? parentTabId
+  }
   return getSessionChatTab(tabs, tabId)?.id ?? tabId
 }
 

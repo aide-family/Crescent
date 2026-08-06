@@ -18,6 +18,7 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
     id: string,
     status: TemporarySubterminal['status']
   ) => void
+  ensureSubterminal: (parentTabId: string, subterminal: TemporarySubterminal) => void
   closeSubterminal: (parentTabId: string, subterminalId: string) => void
   closeAllSubterminals: (parentTabId: string) => void
   resizeSubterminalPair: (
@@ -50,7 +51,8 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
           output: '',
           rawOutput: '',
           cwd: '',
-          status: 'active'
+          status: 'active',
+          terminalReady: true
         }
         const nextSubterminal = updater(base)
         const nextSubTerminals = existing
@@ -63,6 +65,21 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
       })
     },
     [updateTab]
+  )
+
+  const ensureSubterminal = useCallback(
+    (
+      parentTabId: string,
+      subterminal: TemporarySubterminal
+    ): void => {
+      upsertSubterminal(parentTabId, subterminal.name, subterminal.id, (current) => ({
+        ...current,
+        ...subterminal,
+        output: subterminal.output || current.output,
+        rawOutput: subterminal.rawOutput || current.rawOutput
+      }))
+    },
+    [upsertSubterminal]
   )
 
   const updateSubterminalOutput = useCallback(
@@ -158,6 +175,7 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
     updateSubterminalOutput,
     updateSubterminalCwd,
     updateSubterminalStatus,
+    ensureSubterminal,
     closeSubterminal,
     closeAllSubterminals,
     resizeSubterminalPair
