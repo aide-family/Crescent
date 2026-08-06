@@ -24,7 +24,7 @@ export function isContinueIntent(value: string): boolean {
 export function isExplicitConnectionRequest(value: string): boolean {
   return (
     /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value) ||
-    /(?:^|\s)(?:连接|登录|登陆|登入|进入|切换)(?:\s|到|至|$)/.test(value)
+    /(?:^|\s)(?:连接|登录|登陆|登入|进入|切换)(?:\s|到|至|$|[A-Za-z0-9\u4e00-\u9fff])/u.test(value)
   )
 }
 

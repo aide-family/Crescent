@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
+import {
+  buildLocalOnlyConnectionIntentResult,
+  parseConnectionIntentResponse
+} from './connection-intent'
+import type { ConnectionConfig } from './types'
+
+const aideConnection: ConnectionConfig = {
+  id: 'custom-aide',
+  source: 'custom',
+  name: 'aide',
+  host: '192.168.10.168',
+  user: 'aide',
+  port: 22,
+  actions: [],
+  sshOptions: []
+}
 
 describe('connection intent guardrails', () => {
   it('bypasses SSH matching for local hosts file edits even when the file contains a configured host IP', () => {
@@ -23,5 +38,29 @@ describe('connection intent guardrails', () => {
       matchBasis: 'none'
     })
     expect(result?.reason).toContain('IP addresses inside file contents are treated as data')
+  })
+
+  it('accepts a unique aide connection match from model JSON', () => {
+    const result = parseConnectionIntentResponse(
+      JSON.stringify({
+        shouldConnect: true,
+        connectionId: 'custom-aide',
+        confidence: 92,
+        executeAfterLogin: true,
+        userGoal: 'check loki health',
+        matchBasis: 'name',
+        needsClarification: false,
+        reason: 'matched aide by name'
+      }),
+      [aideConnection]
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      shouldConnect: true,
+      connectionId: 'custom-aide',
+      executeAfterLogin: true,
+      matchBasis: 'name'
+    })
   })
 })

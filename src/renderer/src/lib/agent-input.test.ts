@@ -45,4 +45,10 @@ describe('agent input connection matching', () => {
       aideConnection
     )
   })
+
+  it('matches 登录aide集群 without a space after 登录', () => {
+    expect(
+      findDirectlyMentionedConnection('登录aide集群，查看loki服务健康状态', [aideConnection])
+    ).toEqual(aideConnection)
+  })
 })
