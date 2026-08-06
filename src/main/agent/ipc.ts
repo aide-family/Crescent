@@ -1,6 +1,5 @@
 import { promises as fs } from 'fs'
-import { homedir } from 'os'
-import { basename, dirname, extname, isAbsolute, resolve } from 'path'
+import { basename, extname, resolve } from 'path'
 
 import {
   BrowserWindow,
@@ -11,26 +10,15 @@ import {
   type WebContents
 } from 'electron'
 
-import { generateTerminalCommand } from './command'
-import { CommandAuditor } from './command-auditor'
-import { matchCommandWhitelist } from './command-whitelist'
-import { buildExternalToolApprovalCommand, buildExternalToolAudit } from './external-tool-approval'
 import {
-  buildLocalInstructionContext,
   listEditableInstructionFiles,
   saveEditableInstructionFile
 } from './instruction-files'
 import { AgentMemory } from './memory'
-import { getAgentProviders } from './model-provider-config'
 import { AgentBrain } from './brain'
 import { checkTranscriptionSupport } from './transcription-support'
 import { buildLocalOnlyConnectionIntentResult } from './connection-intent'
-import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
-import { parseJsonFromModelContent } from '../../shared/json-parse'
-import { resolveOpsConnectionId } from '../../shared/local-connection'
-import { resolveActiveOpenApiProfile } from '../../shared/openapi-profiles'
 import {
-  buildAgentSkillContext,
   deleteAgentSkill,
   installAgentSkill,
   listAgentSkills,
@@ -38,13 +26,12 @@ import {
   searchAgentSkills,
   startAgentSkillInstall
 } from './skills'
-import { formatOpsHistoryContext } from './ops-history'
-import { runTerminalAgent } from './runner'
-import { loadOpenApiToolRegistry } from './tool-registry'
+import { cancelPiAgentRun, runPiAgent, steerPiAgentRun } from './pi-host'
+import { listPiAvailableModels, resolvePiModel, syncCrescentProvidersToModelRuntime } from './pi-model-runtime'
+import { resolveAgentWorkspaceCwd } from './pi-cwd'
+import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { safeWebContentsSend } from '../safe-ipc-send'
-import { loadMcpToolRegistry } from './mcp-runtime'
 import {
-  formatWikiContext,
   getWikiDocument,
   deleteWikiDocument,
   listWikiDocuments,
@@ -52,37 +39,20 @@ import {
   searchWikiDocuments
 } from './wiki'
 import {
-  executeCommandInTemporaryTerminal,
-  executeCommandInTerminal,
-  executeCommandInTerminalWithPermissionRequest,
-  interruptTemporarySubterminal,
-  readTemporarySubterminalOutput
-} from '../terminal/ipc'
-import {
   appendOperationRecord,
   readAgentConfig,
   readCrescentMemory,
-  readCustomConnections,
   writeAgentConfig,
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
-import { listOpsHistoryForConnection } from '../crescent-sqlite'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
-import { loadSshConfigConnections } from '../connections/ssh-config'
 import type {
-  AgentCommandInput,
   AgentConfig,
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
   AgentPathReference,
   AgentRunInput,
-  CommandApprovalDecision,
-  CommandApprovalRequest,
-  CommandAuditResult,
-  ConnectionConfig,
-  LocalFileWriter,
-  LocalFileWriteResult,
   PastedAttachmentInput,
   TranscribeAudioInput,
   TranscribeAudioResult,
@@ -90,99 +60,16 @@ import type {
   WikiSaveInput
 } from './types'
 
-interface ActiveAgentRun {
-  controller: AbortController
-  supplements: string[]
-  defaultTabId?: string
-  sessionTerminalIds: Set<string>
-  lastExecutionTabId?: string
-}
-
-const activeRuns = new Map<string, ActiveAgentRun>()
 const activeSkillInstalls = new Map<string, { cancel: () => void }>()
-const pendingCommandApprovals = new Map<
-  string,
-  {
-    runId: string
-    tabId?: string
-    webContents: WebContents
-    resolve: (decision: CommandApprovalDecisionResult) => void
-    timeout: NodeJS.Timeout
-  }
->()
-
-interface CommandApprovalDecisionResult {
-  approved: boolean
-  note?: string
-  rejectionReason?: string
-}
-
-function dismissCommandApprovalRequest(
-  webContents: WebContents,
-  requestId: string,
-  runId: string
-): void {
-  safeWebContentsSend(webContents, 'agent:command-approval-dismiss', { requestId, runId })
-}
-
-function settlePendingCommandApproval(
-  requestId: string,
-  decision: CommandApprovalDecisionResult,
-  options?: { dismiss?: boolean }
-): boolean {
-  const pending = pendingCommandApprovals.get(requestId)
-  if (!pending) return false
-
-  clearTimeout(pending.timeout)
-  pendingCommandApprovals.delete(requestId)
-  if (options?.dismiss !== false) {
-    dismissCommandApprovalRequest(pending.webContents, requestId, pending.runId)
-  }
-  pending.resolve(decision)
-  return true
-}
-
-function rejectPendingApprovalsForRun(
-  runId: string,
-  rejectionReason = 'Agent run was canceled.'
-): void {
-  for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
-    if (pending.runId !== runId) continue
-    settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
-  }
-}
-
-function rejectPendingApprovalsForTab(
-  tabId: string,
-  rejectionReason = 'Session was closed.'
-): void {
-  for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
-    if (pending.tabId !== tabId) continue
-    settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
-  }
-}
-
-function stripSkillContent<T extends { content?: unknown }>(skill: T): Omit<T, 'content'> {
-  const next = { ...skill }
-  delete next.content
-  return next
-}
 
 export function registerAgentIpc(): void {
+
   ipcMain.handle('agent:get-config', () => {
     return readAgentConfig()
   })
 
-  ipcMain.handle('agent:get-models', () => {
-    return getAgentProviders(readAgentConfig()).flatMap((provider) =>
-      provider.models.map((model) => ({
-        id: model.id,
-        name: model.name || model.id,
-        providerId: provider.id,
-        providerName: provider.name,
-        reasoning: Boolean(model.reasoning)
-      }))
-    )
+  ipcMain.handle('agent:get-models', async () => {
+    return listPiAvailableModels(readAgentConfig())
   })
 
   ipcMain.handle('agent:list-skills', () => {
@@ -392,6 +279,20 @@ export function registerAgentIpc(): void {
 
     try {
       await validateModel(nextConfig)
+      const cwd = resolveAgentWorkspaceCwd(nextConfig)
+      return {
+        ok: true,
+        modelOk: true,
+        toolCount: BUILT_IN_TOOL_CATALOG.length,
+        tools: BUILT_IN_TOOL_CATALOG.map((tool) =>
+          tool.name === 'bash'
+            ? {
+                ...tool,
+                description: `Run a local bash command in ${cwd}.`
+              }
+            : tool
+        )
+      }
     } catch (error) {
       return {
         ok: false,
@@ -399,121 +300,36 @@ export function registerAgentIpc(): void {
         error: error instanceof Error ? error.message : String(error)
       }
     }
-
-    const hasOpenApiConfig = Boolean(
-      nextConfig.openApiBaseUrl.trim() && nextConfig.openApiDocument.trim()
-    )
-    const hasMcpConfig = nextConfig.mcpServers.some(
-      (server) => server.enabled && server.command.trim()
-    )
-    if (!hasOpenApiConfig && !hasMcpConfig) {
-      return {
-        ok: true,
-        modelOk: true,
-        toolCount: BUILT_IN_TOOL_CATALOG.length,
-        tools: BUILT_IN_TOOL_CATALOG
-      }
-    }
-
-    try {
-      const openApiRegistry = hasOpenApiConfig
-        ? await loadOpenApiToolRegistry(nextConfig)
-        : { tools: [], catalog: [] }
-      const mcpRegistry = hasMcpConfig
-        ? await loadMcpToolRegistry(nextConfig)
-        : { tools: [], catalog: [], errors: [] }
-      if (mcpRegistry.errors.length > 0) {
-        throw new Error(`MCP server load failed: ${mcpRegistry.errors.join('; ')}`)
-      }
-
-      return {
-        ok: true,
-        modelOk: true,
-        toolCount:
-          BUILT_IN_TOOL_CATALOG.length + openApiRegistry.tools.length + mcpRegistry.tools.length,
-        tools: [...BUILT_IN_TOOL_CATALOG, ...openApiRegistry.catalog, ...mcpRegistry.catalog]
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        modelOk: true,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    }
   })
 
-  ipcMain.handle('agent:cancel', (_, runId: string) => {
+  ipcMain.handle('agent:cancel', async (_, runId: string) => {
     const normalizedRunId = typeof runId === 'string' ? runId.trim() : ''
     if (!normalizedRunId) return { ok: false }
+    const ok = await cancelPiAgentRun(normalizedRunId)
+    return { ok }
+  })
 
-    activeRuns.get(normalizedRunId)?.controller.abort()
-    rejectPendingApprovalsForRun(normalizedRunId)
+  ipcMain.handle('agent:reject-approvals-for-tab', () => {
+    // Command approval removed from Pi agent path; keep IPC for renderer compatibility.
     return { ok: true }
   })
 
-  ipcMain.handle('agent:reject-approvals-for-tab', (_, tabId: string) => {
-    const normalizedTabId = typeof tabId === 'string' ? tabId.trim() : ''
-    if (!normalizedTabId) return { ok: false }
-
-    rejectPendingApprovalsForTab(normalizedTabId)
-    return { ok: true }
-  })
-
-  ipcMain.handle('agent:supplement', (_, payload: { runId?: string; input?: string }) => {
+  ipcMain.handle('agent:supplement', async (_, payload: { runId?: string; input?: string }) => {
     const runId = payload?.runId?.trim()
     const input = payload?.input?.trim()
     if (!runId || !input) return { ok: false }
+    const ok = await steerPiAgentRun(runId, input)
+    return { ok }
+  })
 
-    const run = activeRuns.get(runId)
-    if (!run) return { ok: false }
-
-    run.supplements.push(input)
+  ipcMain.handle('agent:resolve-command-approval', () => {
     return { ok: true }
   })
 
-  ipcMain.handle('agent:resolve-command-approval', (_, payload: CommandApprovalDecision) => {
-    const requestId = payload?.requestId?.trim()
-    if (!requestId) return { ok: false }
-
+  ipcMain.handle('agent:generate-command', async () => {
     return {
-      ok: settlePendingCommandApproval(
-        requestId,
-        {
-          approved: Boolean(payload.approved),
-          note: typeof payload.note === 'string' ? payload.note : '',
-          rejectionReason:
-            typeof payload.rejectionReason === 'string' ? payload.rejectionReason : ''
-        },
-        { dismiss: false }
-      )
-    }
-  })
-
-  ipcMain.handle('agent:generate-command', async (_, payload: AgentCommandInput) => {
-    const config = readAgentConfig()
-    const instruction = payload?.instruction?.trim()
-
-    if (!instruction) return { ok: false, error: 'Command instruction is empty.' }
-
-    try {
-      const command = await generateTerminalCommand(
-        new AgentBrain(config),
-        createIsolatedMemory(),
-        {
-          instruction,
-          cwd: payload.cwd,
-          shell: payload.shell,
-          instructionContext: buildLocalInstructionContext(),
-          terminalContext: payload.terminalContext
-        }
-      )
-
-      return { ok: true, ...command }
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error)
-      }
+      ok: false,
+      error: 'Command generation was removed. Use the Pi coding agent chat instead.'
     }
   })
 
@@ -524,58 +340,14 @@ export function registerAgentIpc(): void {
       if (!input) return { ok: false, error: 'Input is empty.' }
       const localOnlyIntent = buildLocalOnlyConnectionIntentResult(input)
       if (localOnlyIntent) return localOnlyIntent
-
-      const connections = [...loadSshConfigConnections(), ...readCustomConnections()]
-      if (connections.length === 0) return { ok: false, reason: 'No configured connections.' }
-
-      try {
-        const completion = await new AgentBrain(readAgentConfig()).chat({
-          temperature: 0,
-          messages: [
-            {
-              role: 'system',
-              content: [
-                'You analyze a user request before any terminal or connection action. Decide whether the request needs opening one configured SSH connection, which configured connection best matches, whether work must continue after login, or whether you must ask the user a clarifying question first.',
-                'Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","needsClarification":true|false,"clarificationQuestion":"..."|null,"reason":"..."}.',
-                'Interpret the user request with the provided conversation context, current terminal summary, and configured connections. Do not rely on fixed business rules for a specific cluster or site.',
-                'Set needsClarification=true and provide one short clarificationQuestion when the target connection, whether to login first, or whether to stay in the current terminal is ambiguous. In that case set shouldConnect=false and connectionId=null.',
-                'Set shouldConnect=false for general chat, local-only work, or when clarification is required.',
-                'Local-only work includes local paths such as /etc/hosts, ~, $HOME, pasted local shell prompts, and requests that explicitly say the work is local/this machine.',
-                'IP addresses inside pasted file contents are data to edit, not SSH targets.',
-                'Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection.',
-                'Matching priority: a clear unique connection-name match wins first; then host/alias/user when the user clearly asks for a remote connection; description is weak context only.',
-                'If multiple connections could match or confidence would be below 60, prefer needsClarification over guessing. Do not invent connection ids.',
-                'Write clarificationQuestion in the same language as the user request.'
-              ].join('\n')
-            },
-            {
-              role: 'user',
-              content: JSON.stringify(
-                {
-                  request: input,
-                  conversationContext: payload.conversationContext ?? '',
-                  currentConnectionId: payload.currentConnectionId ?? null,
-                  currentConnectionName: payload.currentConnectionName ?? null,
-                  terminalSummary: payload.terminalSummary ?? '',
-                  connections: connections.map(summarizeConnectionForAi)
-                },
-                null,
-                2
-              )
-            }
-          ]
-        })
-        const parsed = parseConnectionIntentResponse(
-          completion.choices[0]?.message.content ?? '',
-          connections
-        )
-
-        return parsed
-      } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error)
-        }
+      // Agent runs no longer auto-connect SSH; keep local-only heuristics for UI helpers.
+      return {
+        ok: true,
+        shouldConnect: false,
+        confidence: 0,
+        executeAfterLogin: false,
+        matchBasis: 'none',
+        reason: 'Pi agent runs use the local workspace cwd; SSH auto-connect is disabled.'
       }
     }
   )
@@ -601,516 +373,37 @@ export function registerAgentIpc(): void {
       return { ok: true, text: 'Saved to long-term memory.' }
     }
 
-    try {
-      const controller = new AbortController()
-      const connection = findConnection(payload?.connectionId)
-      const instructionContext = buildLocalInstructionContext()
-      const wikiContext = formatWikiContext(await searchWikiDocuments(input, 5))
-      const agentConfig = normalizeAgentConfig({
-        ...readAgentConfig(),
-        providerId: payload?.providerId,
-        model: payload?.model
-      })
-      const profileContext =
-        resolveActiveOpenApiProfile(agentConfig)?.promptTemplate?.trim() || undefined
-      const skillInput = getSkillMatchingInput(payload, input)
-      const skillContext = buildAgentSkillContext(skillInput, agentConfig.skillRoot)
-      if (skillContext.matched.length > 0) {
+    const agentConfig = normalizeAgentConfig({
+      ...readAgentConfig(),
+      providerId: payload?.providerId,
+      model: payload?.model
+    })
+    const sessionKey = payload?.tabId?.trim() || 'default'
+
+    const result = await runPiAgent({
+      runId,
+      sessionKey,
+      input,
+      config: agentConfig,
+      tabId: payload?.tabId,
+      conversationContext: payload?.conversationContext,
+      emit: (agentEvent) => {
         safeWebContentsSend(event.sender, 'agent:event', {
-          type: 'skills',
-          message: `Loaded ${skillContext.matched.length} skills for this request.`,
-          skills: skillContext.matched.map(stripSkillContent),
+          ...agentEvent,
           runId,
           tabId: payload?.tabId
         })
       }
-      const commandAuditor = new CommandAuditor(agentConfig)
-      const allowTerminalTools = payload?.allowTerminalTools !== false
-      const defaultTabId = payload?.tabId?.trim() || ''
-      if (defaultTabId === 'default' || defaultTabId.toLowerCase() === 'local') {
-        return {
-          ok: false,
-          error: 'Reserved terminal tab id is not allowed. Each terminal requires a unique tabId.'
-        }
-      }
-      const sessionTerminalIds = new Set(
-        (payload?.sessionTerminals ?? [])
-          .map((terminal) => terminal.tabId?.trim())
-          .filter((tabId): tabId is string => Boolean(tabId))
-      )
-      if (defaultTabId) sessionTerminalIds.add(defaultTabId)
-      activeRuns.set(runId, {
-        controller,
-        supplements: [],
-        defaultTabId: defaultTabId || undefined,
-        sessionTerminalIds,
-        lastExecutionTabId: defaultTabId || undefined
-      })
+    })
 
-      const resolveExecutionTabId = (
-        targetTerminalId?: string
-      ): { ok: true; tabId: string } | { ok: false; error: string } => {
-        const requested = targetTerminalId?.trim() || defaultTabId
-        if (!requested) {
-          return { ok: false, error: 'No terminal is bound to this agent run.' }
-        }
-        if (sessionTerminalIds.size > 0 && !sessionTerminalIds.has(requested)) {
-          return {
-            ok: false,
-            error: `Terminal "${requested}" is outside the current chat session. Use a tabId from the session terminal inventory.`
-          }
-        }
-        if (sessionTerminalIds.size === 0 && requested !== defaultTabId) {
-          return {
-            ok: false,
-            error: 'Peer terminal targeting requires a session terminal inventory.'
-          }
-        }
-        return { ok: true, tabId: requested }
-      }
+    appendOperationRecord({
+      status: result.ok ? 'success' : 'error',
+      summary: input,
+      output: result.text || result.error
+    })
 
-      const executeReviewedCommand = async (
-        command: string,
-        timeoutMs: number | undefined,
-        execute: (command: string) => ReturnType<typeof executeCommandInTerminal>,
-        executionTabId: string
-      ): ReturnType<typeof executeCommandInTerminal> => {
-        const executableCommand = normalizeInteractivePrivilegeCommand(command)
-        const activeRun = activeRuns.get(runId)
-        if (activeRun) activeRun.lastExecutionTabId = executionTabId
-
-        const executeWithProgress = async (): ReturnType<typeof executeCommandInTerminal> => {
-          const startedAt = Date.now()
-          safeWebContentsSend(event.sender, 'agent:event', {
-            type: 'command',
-            phase: 'started',
-            command: executableCommand,
-            runId,
-            tabId: executionTabId
-          })
-          const result = await execute(executableCommand)
-          if (result.subterminalTabId) {
-            activeRuns.get(runId)?.sessionTerminalIds.add(result.subterminalTabId)
-          }
-          safeWebContentsSend(event.sender, 'agent:event', {
-            type: 'command',
-            phase: 'finished',
-            command: executableCommand,
-            result,
-            elapsedMs: Date.now() - startedAt,
-            runId,
-            tabId: result.subterminalTabId || executionTabId
-          })
-
-          return result
-        }
-        const whitelistRule = matchCommandWhitelist(executableCommand, agentConfig.commandWhitelist)
-        if (whitelistRule) {
-          safeWebContentsSend(event.sender, 'agent:event', {
-            type: 'status',
-            message: `Command matched whitelist: ${whitelistRule}`,
-            runId,
-            tabId: executionTabId
-          })
-          return executeWithProgress()
-        }
-
-        safeWebContentsSend(event.sender, 'agent:event', {
-          type: 'status',
-          message: 'Command review subprocess is analyzing risk.',
-          runId,
-          tabId: executionTabId
-        })
-        const audit = await commandAuditor.audit({
-          command: executableCommand,
-          userInput: input,
-          terminalContext: payload?.terminalContext ?? '',
-          locale: payload?.locale
-        })
-        safeWebContentsSend(event.sender, 'agent:event', {
-          type: 'command-review',
-          command: executableCommand,
-          audit,
-          runId,
-          tabId: executionTabId
-        })
-        if (!audit.requiresApproval) {
-          safeWebContentsSend(event.sender, 'agent:event', {
-            type: 'status',
-            message: 'Command audit classified this as read-only inspection.',
-            runId,
-            tabId: executionTabId
-          })
-          return executeWithProgress()
-        }
-
-        const approval = await requestCommandApproval({
-          webContents: event.sender,
-          runId,
-          tabId: executionTabId,
-          command: executableCommand,
-          timeoutMs,
-          audit,
-          signal: controller.signal
-        })
-
-        if (!approval.approved) {
-          const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
-          safeWebContentsSend(event.sender, 'agent:event', {
-            type: 'status',
-            message: rejectionReason
-              ? `Command rejected by user.\nUser rejection reason: ${rejectionReason}`
-              : 'Command rejected by user.',
-            runId,
-            tabId: executionTabId
-          })
-          return {
-            ok: false,
-            command: executableCommand,
-            output: '',
-            error: [
-              'Command execution was rejected by the user. Continue from this result and do not assume the command ran.',
-              rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
-            ]
-              .filter(Boolean)
-              .join('\n')
-          }
-        }
-
-        safeWebContentsSend(event.sender, 'agent:event', {
-          type: 'status',
-          message: approval.note?.trim()
-            ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
-            : 'Command approved by user.',
-          runId,
-          tabId: executionTabId
-        })
-        const approvalNote = approval.note?.trim()
-        if (approvalNote) {
-          activeRuns
-            .get(runId)
-            ?.supplements.push(
-              [
-                'Command execution was approved by the user with an additional note.',
-                `Approved command: ${executableCommand}`,
-                `User approval note: ${approvalNote}`
-              ].join('\n')
-            )
-        }
-
-        const executionResult = await executeWithProgress()
-        if (!approvalNote) return executionResult
-
-        return {
-          ...executionResult,
-          output: [`User approval note before execution: ${approvalNote}`, executionResult.output]
-            .filter(Boolean)
-            .join('\n')
-        }
-      }
-      const text = await runTerminalAgent(
-        agentConfig,
-        input,
-        createIsolatedMemory(),
-        payload?.terminalContext ?? '',
-        (agentEvent) => {
-          safeWebContentsSend(event.sender, 'agent:event', {
-            ...agentEvent,
-            runId,
-            tabId: activeRuns.get(runId)?.lastExecutionTabId ?? payload?.tabId
-          })
-        },
-        allowTerminalTools
-          ? {
-              executeCommand: async (command, timeoutMsOrOptions) => {
-                const options =
-                  typeof timeoutMsOrOptions === 'number'
-                    ? { timeoutMs: timeoutMsOrOptions }
-                    : (timeoutMsOrOptions ?? {})
-                const resolved = resolveExecutionTabId(options.targetTerminalId)
-                if (!resolved.ok) {
-                  return {
-                    ok: false,
-                    command: command.trim(),
-                    output: '',
-                    error: resolved.error
-                  }
-                }
-                return executeReviewedCommand(
-                  command,
-                  options.timeoutMs,
-                  (executableCommand) =>
-                    executeCommandInTerminalWithPermissionRequest(
-                      event.sender,
-                      executableCommand,
-                      options.timeoutMs,
-                      resolved.tabId
-                    ),
-                  resolved.tabId
-                )
-              }
-            }
-          : undefined,
-        allowTerminalTools
-          ? {
-              executeCommand: async (command, options) => {
-                const parentTabId =
-                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
-                return executeReviewedCommand(
-                  command,
-                  options.timeoutMs,
-                  (executableCommand) =>
-                    executeCommandInTemporaryTerminal(
-                      event.sender,
-                      parentTabId,
-                      options.terminalName,
-                      executableCommand,
-                      options.timeoutMs,
-                      options.mode
-                    ),
-                  parentTabId || defaultTabId
-                )
-              },
-              readOutput: async (options) => {
-                const parentTabId =
-                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
-                return readTemporarySubterminalOutput(
-                  event.sender,
-                  parentTabId,
-                  options.terminalName,
-                  options.maxChars
-                )
-              },
-              interrupt: async (options) => {
-                const parentTabId =
-                  activeRuns.get(runId)?.lastExecutionTabId || defaultTabId || payload?.tabId
-                return interruptTemporarySubterminal(
-                  event.sender,
-                  parentTabId,
-                  options.terminalName
-                )
-              }
-            }
-          : undefined,
-        createLocalFileWriter(event.sender),
-        {
-          signal: controller.signal,
-          instructionContext,
-          skillContext: skillContext.promptBlock,
-          wikiContext,
-          conversationContext: payload?.conversationContext?.trim(),
-          profileContext,
-          opsHistoryContext: formatOpsHistoryContext(
-            listOpsHistoryForConnection(resolveOpsConnectionId(payload?.connectionId), 16)
-          ),
-          consumeSupplementalInputs: () => {
-            const run = activeRuns.get(runId)
-            if (!run?.supplements.length) return []
-
-            return run.supplements.splice(0)
-          },
-          approveTool: async ({ toolName, rawArguments, catalog, userInput }) => {
-            const command = buildExternalToolApprovalCommand({
-              toolName,
-              rawArguments,
-              catalog,
-              userInput
-            })
-            const audit = buildExternalToolAudit({
-              toolName,
-              rawArguments,
-              catalog,
-              userInput
-            })
-
-            safeWebContentsSend(event.sender, 'agent:event', {
-              type: 'command-review',
-              command,
-              audit,
-              runId,
-              tabId: payload?.tabId
-            })
-
-            const approval = await requestCommandApproval({
-              webContents: event.sender,
-              runId,
-              tabId: payload?.tabId,
-              command,
-              audit,
-              signal: controller.signal
-            })
-
-            if (approval.approved) {
-              safeWebContentsSend(event.sender, 'agent:event', {
-                type: 'status',
-                message: approval.note?.trim()
-                  ? `Tool ${toolName} approved by user.\nUser approval note: ${approval.note.trim()}`
-                  : `Tool ${toolName} approved by user.`,
-                runId,
-                tabId: payload?.tabId
-              })
-            } else {
-              const rejectionReason = (approval.rejectionReason || approval.note || '').trim()
-              safeWebContentsSend(event.sender, 'agent:event', {
-                type: 'status',
-                message: rejectionReason
-                  ? `Tool ${toolName} rejected by user.\nUser rejection reason: ${rejectionReason}`
-                  : `Tool ${toolName} rejected by user.`,
-                runId,
-                tabId: payload?.tabId
-              })
-            }
-
-            return approval
-          }
-        }
-      )
-      appendOperationRecord({
-        connectionId: payload?.connectionId,
-        connectionName: connection?.name,
-        status: 'success',
-        summary: input,
-        output: text
-      })
-
-      return { ok: true, text }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const connection = findConnection(payload?.connectionId)
-      appendOperationRecord({
-        connectionId: payload?.connectionId,
-        connectionName: connection?.name,
-        status: 'error',
-        summary: input,
-        output: message
-      })
-      safeWebContentsSend(event.sender, 'agent:event', {
-        type: 'error',
-        message,
-        runId,
-        tabId: payload?.tabId
-      })
-      return { ok: false, error: message }
-    } finally {
-      activeRuns.delete(runId)
-    }
+    return result
   })
-}
-
-function createLocalFileWriter(webContents: WebContents): LocalFileWriter {
-  return {
-    writeFile: (path, content, options) =>
-      writeLocalArtifactFile(webContents, path, content, {
-        overwrite: options?.overwrite === true
-      })
-  }
-}
-
-async function writeLocalArtifactFile(
-  webContents: WebContents,
-  rawPath: string,
-  content: string,
-  options: { overwrite: boolean }
-): Promise<LocalFileWriteResult> {
-  const targetPath = resolveLocalArtifactPath(rawPath)
-  if (!targetPath) {
-    return { ok: false, path: rawPath, error: 'Local file path is empty.' }
-  }
-
-  const parent = dirname(targetPath)
-  const firstAttempt = await tryWriteLocalArtifact(targetPath, content, options)
-  if (firstAttempt.ok || !isLocalFilePermissionError(firstAttempt.error)) return firstAttempt
-
-  const authorizationPath = await requestLocalWriteAuthorization(webContents, parent)
-  if (!authorizationPath) {
-    return {
-      ...firstAttempt,
-      permissionRequested: true,
-      error: [
-        firstAttempt.error,
-        'Local folder access was not granted. Please grant access to the target folder and retry.'
-      ]
-        .filter(Boolean)
-        .join('\n')
-    }
-  }
-
-  const secondAttempt = await tryWriteLocalArtifact(targetPath, content, options)
-  return {
-    ...secondAttempt,
-    permissionRequested: true,
-    authorizationPath,
-    error: secondAttempt.ok
-      ? secondAttempt.error
-      : [
-          secondAttempt.error,
-          `Local folder access was requested for: ${authorizationPath}. Retry if macOS requires confirmation.`
-        ]
-          .filter(Boolean)
-          .join('\n')
-  }
-}
-
-async function tryWriteLocalArtifact(
-  targetPath: string,
-  content: string,
-  options: { overwrite: boolean }
-): Promise<LocalFileWriteResult> {
-  try {
-    await fs.mkdir(dirname(targetPath), { recursive: true })
-    const exists = await pathExists(targetPath)
-    if (exists && !options.overwrite) {
-      return {
-        ok: false,
-        path: targetPath,
-        error:
-          'Target file already exists. Choose a unique filename or set overwrite only when the user explicitly requested replacement.'
-      }
-    }
-
-    await fs.writeFile(targetPath, content, 'utf-8')
-    return {
-      ok: true,
-      path: targetPath,
-      bytes: Buffer.byteLength(content, 'utf-8'),
-      overwritten: exists
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      path: targetPath,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path)
-    return true
-  } catch (error) {
-    if (isErrorWithCode(error) && error.code === 'ENOENT') return false
-    throw error
-  }
-}
-
-async function requestLocalWriteAuthorization(
-  webContents: WebContents,
-  defaultPath: string
-): Promise<string | undefined> {
-  const options: OpenDialogOptions = {
-    title: 'Authorize local folder access',
-    message:
-      'Crescent could not write to the requested local folder. Select the target folder to grant access, then the write will be retried.',
-    defaultPath,
-    properties: ['openDirectory', 'createDirectory']
-  }
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const selection = browserWindow
-    ? await dialog.showOpenDialog(browserWindow, options)
-    : await dialog.showOpenDialog(options)
-
-  return selection.canceled ? undefined : selection.filePaths[0]
 }
 
 async function pickAgentPathReference(
@@ -1450,307 +743,19 @@ function extensionFromMimeType(mimeType?: string): string {
   }
 }
 
-function resolveLocalArtifactPath(path: string): string {
-  const trimmed = path.trim()
-  if (!trimmed) return ''
-
-  const expanded = trimmed.replace(/^~(?=\/|$)/, homedir()).replace(/^\$HOME(?=\/|$)/, homedir())
-
-  return isAbsolute(expanded) ? resolve(expanded) : resolve(homedir(), expanded)
-}
-
-function isLocalFilePermissionError(error: string | undefined): boolean {
-  return /(EACCES|EPERM|Permission denied|Operation not permitted)/i.test(error ?? '')
-}
-
-function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === 'object' && error !== null && 'code' in error
-}
-
-function requestCommandApproval(input: {
-  webContents: WebContents
-  runId: string
-  tabId?: string
-  command: string
-  timeoutMs?: number
-  audit: CommandAuditResult
-  signal?: AbortSignal
-}): Promise<CommandApprovalDecisionResult> {
-  if (input.webContents.isDestroyed()) return Promise.resolve({ approved: false })
-
-  const requestId = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const request: CommandApprovalRequest = {
-    id: requestId,
-    runId: input.runId,
-    tabId: input.tabId,
-    command: input.command,
-    timeoutMs: input.timeoutMs,
-    audit: input.audit
-  }
-
-  return new Promise((resolve) => {
-    const finish = (decision: CommandApprovalDecisionResult): void => {
-      input.signal?.removeEventListener('abort', onAbort)
-      resolve(decision)
-    }
-    const timeout = setTimeout(
-      () => {
-        settlePendingCommandApproval(requestId, { approved: false })
-      },
-      10 * 60 * 1000
-    )
-    const onAbort = (): void => {
-      settlePendingCommandApproval(requestId, {
-        approved: false,
-        rejectionReason: 'Agent run was canceled.'
-      })
-    }
-
-    pendingCommandApprovals.set(requestId, {
-      runId: input.runId,
-      tabId: input.tabId,
-      webContents: input.webContents,
-      resolve: finish,
-      timeout
-    })
-    input.signal?.addEventListener('abort', onAbort, { once: true })
-    if (input.signal?.aborted) {
-      onAbort()
-      return
-    }
-    safeWebContentsSend(input.webContents, 'agent:command-approval-request', request)
-  })
-}
-
-function summarizeConnectionForAi(connection: ConnectionConfig): Record<string, unknown> {
-  return {
-    id: connection.id,
-    matchingPriority:
-      'name is primary; host/user-visible identifiers are secondary; description is weak context only',
-    source: connection.source,
-    name: connection.name,
-    normalizedName: normalizeConnectionIntentText(connection.name),
-    host: connection.host,
-    user: connection.user,
-    port: connection.port,
-    identityFile: connection.identityFile,
-    description: connection.description,
-    normalizedDescription: normalizeConnectionIntentText(connection.description ?? ''),
-    sshOptions: connection.sshOptions
-  }
-}
-
-function normalizeConnectionIntentText(value: string): string {
-  return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
-}
-
-function parseConnectionIntentResponse(
-  content: string,
-  connections: ConnectionConfig[]
-): AgentConnectionIntentResult {
-  try {
-    const parsed = parseJsonFromModelContent<{
-      shouldConnect?: unknown
-      connectionId?: unknown
-      confidence?: unknown
-      executeAfterLogin?: unknown
-      userGoal?: unknown
-      matchBasis?: unknown
-      needsClarification?: unknown
-      clarificationQuestion?: unknown
-      reason?: unknown
-    }>(content)
-    const needsClarification = parsed.needsClarification === true
-    const clarificationQuestion =
-      typeof parsed.clarificationQuestion === 'string' && parsed.clarificationQuestion.trim()
-        ? parsed.clarificationQuestion.trim()
-        : undefined
-    const shouldConnect = parsed.shouldConnect === true && !needsClarification
-    const connectionId = typeof parsed.connectionId === 'string' ? parsed.connectionId : undefined
-    const confidence = Number(parsed.confidence)
-    const executeAfterLogin = parsed.executeAfterLogin === true
-    const knownIds = new Set(connections.map((connection) => connection.id))
-    const userGoal = typeof parsed.userGoal === 'string' ? parsed.userGoal : undefined
-    const matchBasis = parseConnectionMatchBasis(parsed.matchBasis)
-    const reason = typeof parsed.reason === 'string' ? parsed.reason : undefined
-
-    if (needsClarification) {
-      return {
-        ok: false,
-        shouldConnect: false,
-        confidence: Number.isFinite(confidence) ? confidence : 0,
-        executeAfterLogin: false,
-        userGoal,
-        matchBasis,
-        needsClarification: true,
-        clarificationQuestion:
-          clarificationQuestion ||
-          reason ||
-          'Please clarify which connection or terminal context to use.',
-        reason: reason || 'clarification required'
-      }
-    }
-
-    if (!shouldConnect) {
-      return {
-        ok: false,
-        shouldConnect: false,
-        confidence: Number.isFinite(confidence) ? confidence : 0,
-        executeAfterLogin: false,
-        userGoal,
-        matchBasis,
-        reason: reason || 'no connection needed'
-      }
-    }
-
-    if (!connectionId || !knownIds.has(connectionId) || !Number.isFinite(confidence)) {
-      return {
-        ok: false,
-        shouldConnect: false,
-        confidence: Number.isFinite(confidence) ? confidence : 0,
-        executeAfterLogin: false,
-        userGoal,
-        matchBasis,
-        needsClarification: true,
-        clarificationQuestion:
-          clarificationQuestion ||
-          'I could not uniquely match a configured SSH connection. Which connection should I use, or should I stay in the current terminal?',
-        reason: reason || 'no match'
-      }
-    }
-
-    if (confidence < 60) {
-      return {
-        ok: false,
-        shouldConnect: false,
-        confidence,
-        executeAfterLogin: false,
-        userGoal,
-        matchBasis,
-        needsClarification: true,
-        clarificationQuestion:
-          clarificationQuestion ||
-          `I am not sure whether to use connection "${connections.find((connection) => connection.id === connectionId)?.name ?? connectionId}". Should I connect to it, or stay in the current terminal?`,
-        reason: reason || 'low confidence'
-      }
-    }
-
-    return {
-      ok: true,
-      shouldConnect: true,
-      connectionId,
-      confidence,
-      executeAfterLogin,
-      userGoal,
-      matchBasis,
-      reason
-    }
-  } catch {
-    return {
-      ok: false,
-      shouldConnect: false,
-      confidence: 0,
-      needsClarification: true,
-      clarificationQuestion:
-        'I could not determine the target connection from that request. Which configured SSH connection should I use, or should I continue in the current terminal?',
-      reason: 'invalid model response'
-    }
-  }
-}
-
-function parseConnectionMatchBasis(value: unknown): AgentConnectionIntentResult['matchBasis'] {
-  return value === 'name' ||
-    value === 'host' ||
-    value === 'user' ||
-    value === 'description' ||
-    value === 'none'
-    ? value
-    : undefined
-}
-
 function createMemory(): AgentMemory {
   return new AgentMemory(readCrescentMemory(), (nextMemory) => {
     writeCrescentMemory(nextMemory)
   })
 }
 
-function createIsolatedMemory(): AgentMemory {
-  return new AgentMemory(
-    readCrescentMemory(),
-    (nextMemory) => {
-      writeCrescentMemory(nextMemory)
-    },
-    {
-      includeShortTerm: false,
-      includeOperations: false,
-      persistShortTerm: false
-    }
-  )
-}
-
 async function validateModel(config: AgentConfig): Promise<void> {
-  if (!config.providers.length) throw new Error('Model provider is required.')
-  if (!config.model.trim()) throw new Error('Model is required.')
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20_000)
-
-  let completion
-  try {
-    completion = await new AgentBrain(config).chat(
-      {
-        temperature: 0,
-        messages: [
-          {
-            role: 'user',
-            content: 'Reply with OK.'
-          }
-        ]
-      },
-      { signal: controller.signal }
-    )
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error('Model validation timed out after 20 seconds.')
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
+  const runtime = await syncCrescentProvidersToModelRuntime(config)
+  const model = await resolvePiModel(config, runtime)
+  if (!model) {
+    throw new Error('No model configured. Add a provider and model in Settings.')
   }
-
-  const text = completion.choices[0]?.message.content?.trim()
-  if (!text) throw new Error('Model returned an empty validation response.')
-}
-
-function findConnection(id: string | undefined): { id: string; name: string } | undefined {
-  if (!id) return undefined
-
-  return [...loadSshConfigConnections(), ...readCustomConnections()].find(
-    (connection) => connection.id === id
-  )
-}
-
-function getSkillMatchingInput(payload: AgentRunInput, input: string): string {
-  const explicitSkillInput = payload?.skillInput?.trim()
-  if (explicitSkillInput) return explicitSkillInput
-
-  const originalTask = extractOriginalUserTask(input)
-  return originalTask || input
-}
-
-function extractOriginalUserTask(input: string): string {
-  const lines = input.split(/\r?\n/)
-  const markerIndex = lines.findIndex((line) =>
-    /^(用户原始任务|Original user task)\s*:?\s*$/i.test(line.trim())
-  )
-  if (markerIndex < 0) return ''
-
-  return lines
-    .slice(markerIndex + 1)
-    .join('\n')
-    .trim()
-}
-
-function normalizeInteractivePrivilegeCommand(command: string): string {
-  return command.replace(/(^|[;&|]\s*)sudo\s+(?:-n|--non-interactive)\s+/g, '$1sudo ')
+  if (!config.model?.trim()) {
+    throw new Error('Model is required.')
+  }
 }

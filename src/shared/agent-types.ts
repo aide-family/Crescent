@@ -1,3 +1,4 @@
+/** @deprecated Plan/react modes removed; Pi session loop is the only runtime. */
 export type AgentMode = 'react' | 'plan-execute'
 
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'trace'
@@ -8,9 +9,15 @@ export interface AgentConfig {
   providers: AgentProviderConfig[]
   providerId?: string
   model: string
+  /** Workspace directory for Pi read/write/edit/bash tools. */
+  workspaceCwd?: string
+  /** @deprecated Ignored; Pi owns the agent loop. Kept for config migration. */
   agentMode: AgentMode
+  /** @deprecated Ignored after Pi migration. */
   maxActiveTools: number
+  /** @deprecated Agent no longer drives terminal commands. */
   commandWhitelist: string[]
+  /** @deprecated OpenAPI tools removed from agent loop; retained for settings migration. */
   openApiProfiles: AgentOpenApiProfile[]
   openApiProfileId?: string
   openApiBaseUrl: string
@@ -19,6 +26,7 @@ export interface AgentConfig {
   openApiMaxRetries: number
   openApiRetryBackoffMs: number
   skillRoot: string
+  /** @deprecated MCP tools removed from agent loop; retained for settings migration. */
   mcpServers: AgentMcpServerConfig[]
 }
 
@@ -198,11 +206,15 @@ export interface AgentRunInput {
   conversationContext?: string
   providerId?: string
   model?: string
-  terminalContext?: string
-  allowTerminalTools?: boolean
-  connectionId?: string
+  /** Chat/session tab id used as Pi session key. */
   tabId?: string
-  /** Peer terminals that belong to the same chat session; execution targets must be in this list. */
+  /** @deprecated Agent no longer executes in terminal panes. */
+  terminalContext?: string
+  /** @deprecated Agent no longer executes in terminal panes. */
+  allowTerminalTools?: boolean
+  /** @deprecated Agent no longer auto-connects SSH for runs. */
+  connectionId?: string
+  /** @deprecated Agent no longer targets session terminals. */
   sessionTerminals?: AgentSessionTerminalRef[]
   locale?: string
 }

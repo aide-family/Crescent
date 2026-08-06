@@ -543,6 +543,12 @@ const en = {
     commandWhitelist: 'Command whitelist',
     commandWhitelistHint:
       'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
+    workspaceCwd: 'Agent workspace',
+    workspaceCwdHint:
+      'Pi read/write/edit/bash tools run in this directory. Leave empty to use ~/.crescent/workspace.',
+    piToolsTitle: 'Pi tools',
+    piToolsHint:
+      'The agent uses Pi built-in tools (read, write, edit, bash). OpenAPI/MCP agent tools and terminal command tools have been removed.',
     copySkillInstallCommand: 'Copy install command',
     copySkillInstallLog: 'Copy install log',
     document: 'OpenAPI URL, JSON, or local file path',

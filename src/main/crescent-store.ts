@@ -54,6 +54,7 @@ export const defaultAgentConfig: AgentConfig = {
   providers: [],
   providerId: undefined,
   model: '',
+  workspaceCwd: undefined,
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: defaultCommandWhitelist,
@@ -92,7 +93,7 @@ export function readAgentConfig(): AgentConfig {
   const config = readCrescentConfig()
   const legacyWhitelist = config.agent.commandWhitelist
 
-  migrateCommandWhitelistIfNeeded(legacyWhitelist)
+  migrateCommandWhitelistIfNeeded(legacyWhitelist ?? [])
 
   return {
     ...config.agent,
@@ -103,7 +104,7 @@ export function readAgentConfig(): AgentConfig {
 export function writeAgentConfig(config: AgentConfig): AgentConfig {
   const current = readCrescentConfig()
   const normalized = normalizeAgentConfig(config)
-  const commandWhitelist = writeCommandWhitelistToDb(normalized.commandWhitelist)
+  const commandWhitelist = writeCommandWhitelistToDb(normalized.commandWhitelist ?? [])
 
   writeCrescentDbFlag('command_whitelist_migrated', true)
   const next = writeCrescentConfig({
@@ -201,8 +202,9 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     providers,
     providerId: provider?.id,
     model: modelOk ? requestedModel : defaultModel,
+    workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
-    maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools),
+    maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools ?? 5),
     commandWhitelist: normalizeStringList(
       config.commandWhitelist ?? defaultAgentConfig.commandWhitelist
     ),
