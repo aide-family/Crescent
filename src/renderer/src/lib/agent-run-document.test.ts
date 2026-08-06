@@ -52,11 +52,12 @@ describe('agent-run-document', () => {
     })
   })
 
-  it('still parses legacy markdown runs', () => {
+  it('still parses legacy markdown runs into timeline steps', () => {
     const markdown = [
       `**${t.input.actions}**`,
       '',
       '- 开始运行 Agent',
+      '- 调用工具: bash',
       '',
       `**${t.input.result}**`,
       '',
@@ -64,8 +65,10 @@ describe('agent-run-document', () => {
     ].join('\n')
 
     const parsed = parseAgentRunDocument(markdown, t)
-    expect(parsed?.version).toBe(1)
+    expect(parsed?.version).toBe(2)
     expect(parsed?.resultMarkdown).toBe('done')
-    expect(parsed?.actionsMarkdown).toContain('开始运行 Agent')
+    expect(parsed?.steps.length).toBeGreaterThan(0)
+    expect(parsed?.steps.some((step) => step.kind === 'status')).toBe(true)
+    expect(parsed?.steps.some((step) => step.kind === 'tool' && step.name === 'bash')).toBe(true)
   })
 })

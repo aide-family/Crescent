@@ -107,6 +107,13 @@ export function buildAvailableToolRefs(
 function isReasoningModelId(id: string): boolean {
   const normalized = id.toLowerCase()
   return (
-    normalized.includes('gpt-5') || normalized.includes('reasoner') || normalized.endsWith('-pro')
+    normalized.includes('gpt-5') ||
+    normalized.includes('reasoner') ||
+    normalized.includes('o1') ||
+    normalized.includes('o3') ||
+    normalized.includes('r1') ||
+    normalized.includes('v4-pro') ||
+    normalized.includes('v4-flash') ||
+    normalized.endsWith('-pro')
   )
 }

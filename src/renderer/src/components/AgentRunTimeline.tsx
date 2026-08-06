@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CheckIcon,
-  ChevronDownIcon,
+  ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
   FileJsonIcon,
@@ -24,6 +24,11 @@ import type { ParsedAgentRunDocument } from '@renderer/lib/agent-run-document'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 
+/**
+ * Cursor / Codex-style agent turn view:
+ * thinking → compact tool calls → answer markdown, in one continuous stream.
+ * No "action summary / action details" blocks.
+ */
 export function AgentRunTimeline({
   document,
   t,
@@ -50,20 +55,25 @@ export function AgentRunTimeline({
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
-  const hasResult = Boolean(document.resultMarkdown || document.errorMarkdown)
+  const hasResult = Boolean(document.resultMarkdown?.trim() || document.errorMarkdown?.trim())
   const resultPreviewMarkdown = document.resultMarkdown || document.errorMarkdown
   const headingIdPrefix = useMemo(() => `agent-result-${crypto.randomUUID()}`, [])
   const resultHeadings = useMemo(
     () => extractMarkdownHeadings(resultPreviewMarkdown, headingIdPrefix),
     [headingIdPrefix, resultPreviewMarkdown]
   )
-  const activity = resolveActivity(document, t)
-  const showLegacyActions = document.version === 1 && Boolean(document.actionsMarkdown?.trim())
-  const streamingResult = Boolean(document.resultMarkdown?.trim()) && typeof document.elapsedMs !== 'number'
+  const runFinished = typeof document.elapsedMs === 'number'
+  const streamingResult = Boolean(document.resultMarkdown?.trim()) && !runFinished
+  const visibleSteps = document.steps.filter((step) => !isNoiseStatusStep(step))
+  const activity = resolveActivity(document, visibleSteps, t)
+  const showActivity =
+    Boolean(activity) &&
+    !runFinished &&
+    (!hasResult || activity === t.input.activityAwaitingApproval)
 
   return (
-    <div className="min-w-0 space-y-3">
-      {activity ? (
+    <div className="min-w-0 space-y-2.5">
+      {showActivity ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
           <span>{activity}</span>
@@ -73,206 +83,180 @@ export function AgentRunTimeline({
       {document.thinkingText?.trim() ? (
         <ThinkingBlock
           text={document.thinkingText}
-          streaming={!hasResult && !document.errorMarkdown}
+          streaming={!hasResult && !document.errorMarkdown && !runFinished}
           t={t}
         />
       ) : null}
 
-      <div className="space-y-2">
-        {document.steps.map((step) => {
-          if (step.kind === 'status') {
-            return (
-              <div
-                key={step.id}
-                className="rounded-md border border-border/60 bg-muted/10 px-2.5 py-1.5 text-[11px] text-muted-foreground"
-                title={step.detail}
-              >
-                {step.title}
-              </div>
-            )
-          }
-          if (step.kind === 'tool') {
-            return <ToolStepCard key={step.id} step={step} t={t} />
-          }
-          if (step.kind === 'approval') {
-            return (
-              <ApprovalStepCard
-                key={step.id}
-                step={step}
-                t={t}
-                onResolve={onResolveApproval}
-              />
-            )
-          }
-          return null
-        })}
-      </div>
-
-      {hasResult ? (
-        <section className="app-sticky-scope min-w-0 rounded-md border bg-card shadow-sm">
-          <div className="app-sticky-section flex min-w-0 items-center justify-between gap-3 rounded-t-md border-b bg-card px-3 py-2">
-            <div className="min-w-0 text-xs font-semibold text-foreground">
-              {document.errorMarkdown ? t.input.error : t.input.result}
-              {streamingResult && !document.errorMarkdown ? (
-                <span className="ml-2 font-normal text-muted-foreground">
-                  {t.input.activityWriting}
-                </span>
-              ) : null}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
-                title={copied ? t.common.copied : t.common.copyResultTooltip}
-                onClick={onCopyResult}
-              >
-                {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-              </Button>
-              {onOpsFeedback ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    disabled={
-                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
-                    }
-                    aria-label={
-                      feedbackRating === 'dislike'
-                        ? t.common.likeResultLockedTooltip
-                        : t.common.likeResultTooltip
-                    }
-                    title={
-                      feedbackRating === 'dislike'
-                        ? t.common.likeResultLockedTooltip
-                        : feedbackRating === 'like'
-                          ? t.common.opsFeedbackAlreadyRated
-                          : t.common.likeResultTooltip
-                    }
-                    className={
-                      feedbackRating === 'like'
-                        ? 'text-emerald-400 hover:text-emerald-300'
-                        : feedbackRating === 'dislike'
-                          ? 'opacity-40'
-                          : undefined
-                    }
-                    onClick={() => {
-                      if (feedbackBusy || feedbackRating) return
-                      onOpsFeedback('like')
-                    }}
-                  >
-                    <ThumbsUpIcon aria-hidden="true" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    disabled={
-                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
-                    }
-                    aria-label={
-                      feedbackRating === 'like'
-                        ? t.common.dislikeResultLockedTooltip
-                        : t.common.dislikeResultTooltip
-                    }
-                    title={
-                      feedbackRating === 'like'
-                        ? t.common.dislikeResultLockedTooltip
-                        : feedbackRating === 'dislike'
-                          ? t.common.opsFeedbackAlreadyRated
-                          : t.common.dislikeResultTooltip
-                    }
-                    className={
-                      feedbackRating === 'dislike'
-                        ? 'text-destructive hover:text-destructive'
-                        : feedbackRating === 'like'
-                          ? 'opacity-40'
-                          : undefined
-                    }
-                    onClick={() => {
-                      if (feedbackBusy || feedbackRating) return
-                      onOpsFeedback('dislike')
-                    }}
-                  >
-                    <ThumbsDownIcon aria-hidden="true" />
-                  </Button>
-                </>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.enlarge}
-                title={t.common.enlarge}
-                onClick={() => setResultExpanded(true)}
-              >
-                <Maximize2Icon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.exportResultMarkdownTooltip}
-                title={t.common.exportResultMarkdownTooltip}
-                onClick={onExportResult}
-              >
-                <DownloadIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.exportFullMarkdownTooltip}
-                title={t.common.exportFullMarkdownTooltip}
-                onClick={onExportFull}
-              >
-                <FileTextIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t.common.exportTraceJsonTooltip}
-                title={t.common.exportTraceJsonTooltip}
-                onClick={onExportTrace}
-              >
-                <FileJsonIcon aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-          <div className="min-w-0 p-3">
-            {document.resultMarkdown ? <MarkdownContent value={document.resultMarkdown} t={t} /> : null}
-            {document.errorMarkdown ? (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive">
-                <MarkdownContent value={document.errorMarkdown} t={t} />
-              </div>
-            ) : null}
-            {typeof document.elapsedMs === 'number' || document.elapsedMarkdown ? (
-              <div className="mt-3 border-t pt-3 text-xs text-muted-foreground">
-                {typeof document.elapsedMs === 'number'
-                  ? `${t.input.elapsed}: ${formatDuration(document.elapsedMs)}`
-                  : document.elapsedMarkdown}
-              </div>
-            ) : null}
-          </div>
-        </section>
+      {visibleSteps.length > 0 ? (
+        <div className="space-y-1.5">
+          {visibleSteps.map((step) => {
+            if (step.kind === 'status') {
+              return (
+                <div
+                  key={step.id}
+                  className="text-[11px] leading-relaxed text-muted-foreground/80"
+                  title={step.detail}
+                >
+                  {step.title}
+                </div>
+              )
+            }
+            if (step.kind === 'tool') {
+              return <ToolCallRow key={step.id} step={step} t={t} />
+            }
+            if (step.kind === 'approval') {
+              return (
+                <ApprovalStepCard key={step.id} step={step} t={t} onResolve={onResolveApproval} />
+              )
+            }
+            return null
+          })}
+        </div>
       ) : null}
 
-      {showLegacyActions ? (
-        <details className="app-sticky-scope group min-w-0 rounded-md border bg-muted/10 shadow-xs" open={!hasResult}>
-          <summary className="app-sticky-section flex cursor-pointer select-none items-center justify-between gap-3 rounded-t-md border-b bg-card px-3 py-2 text-xs font-medium text-muted-foreground marker:content-none">
-            <span>{hasResult ? t.input.actionSummaryCompleted : t.input.actionSummary}</span>
-            <ChevronDownIcon
-              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </summary>
-          <div className="min-w-0 space-y-3 p-3">
-            <MarkdownContent value={document.actionsMarkdown ?? ''} t={t} />
+      {hasResult ? (
+        <div className="min-w-0 space-y-2">
+          {document.resultMarkdown?.trim() ? (
+            <div className="min-w-0 text-sm leading-relaxed text-foreground">
+              <MarkdownContent value={document.resultMarkdown} t={t} />
+              {streamingResult ? (
+                <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-foreground/50 align-middle" />
+              ) : null}
+            </div>
+          ) : null}
+          {document.errorMarkdown?.trim() ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <MarkdownContent value={document.errorMarkdown} t={t} />
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-1 pt-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
+              title={copied ? t.common.copied : t.common.copyResultTooltip}
+              onClick={onCopyResult}
+            >
+              {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+            </Button>
+            {onOpsFeedback ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+                  aria-label={
+                    feedbackRating === 'dislike'
+                      ? t.common.likeResultLockedTooltip
+                      : t.common.likeResultTooltip
+                  }
+                  title={
+                    feedbackRating === 'dislike'
+                      ? t.common.likeResultLockedTooltip
+                      : feedbackRating === 'like'
+                        ? t.common.opsFeedbackAlreadyRated
+                        : t.common.likeResultTooltip
+                  }
+                  className={
+                    feedbackRating === 'like'
+                      ? 'text-emerald-400 hover:text-emerald-300'
+                      : feedbackRating === 'dislike'
+                        ? 'opacity-40'
+                        : undefined
+                  }
+                  onClick={() => {
+                    if (feedbackBusy || feedbackRating) return
+                    onOpsFeedback('like')
+                  }}
+                >
+                  <ThumbsUpIcon aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+                  aria-label={
+                    feedbackRating === 'like'
+                      ? t.common.dislikeResultLockedTooltip
+                      : t.common.dislikeResultTooltip
+                  }
+                  title={
+                    feedbackRating === 'like'
+                      ? t.common.dislikeResultLockedTooltip
+                      : feedbackRating === 'dislike'
+                        ? t.common.opsFeedbackAlreadyRated
+                        : t.common.dislikeResultTooltip
+                  }
+                  className={
+                    feedbackRating === 'dislike'
+                      ? 'text-destructive hover:text-destructive'
+                      : feedbackRating === 'like'
+                        ? 'opacity-40'
+                        : undefined
+                  }
+                  onClick={() => {
+                    if (feedbackBusy || feedbackRating) return
+                    onOpsFeedback('dislike')
+                  }}
+                >
+                  <ThumbsDownIcon aria-hidden="true" />
+                </Button>
+              </>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t.common.enlarge}
+              title={t.common.enlarge}
+              onClick={() => setResultExpanded(true)}
+            >
+              <Maximize2Icon aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t.common.exportResultMarkdownTooltip}
+              title={t.common.exportResultMarkdownTooltip}
+              onClick={onExportResult}
+            >
+              <DownloadIcon aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t.common.exportFullMarkdownTooltip}
+              title={t.common.exportFullMarkdownTooltip}
+              onClick={onExportFull}
+            >
+              <FileTextIcon aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t.common.exportTraceJsonTooltip}
+              title={t.common.exportTraceJsonTooltip}
+              onClick={onExportTrace}
+            >
+              <FileJsonIcon aria-hidden="true" />
+            </Button>
+            {typeof document.elapsedMs === 'number' || document.elapsedMarkdown ? (
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                {typeof document.elapsedMs === 'number'
+                  ? formatDuration(document.elapsedMs)
+                  : document.elapsedMarkdown}
+              </span>
+            ) : null}
           </div>
-        </details>
+        </div>
       ) : null}
 
       {resultExpanded && resultPreviewMarkdown ? (
@@ -299,93 +283,85 @@ function ThinkingBlock({
   t: Dictionary
 }): React.JSX.Element {
   return (
-    <details className="group min-w-0 rounded-md border border-border/70 bg-muted/10" open={streaming}>
-      <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-muted-foreground marker:content-none">
-        <span className="inline-flex items-center gap-2">
-          {streaming ? <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" /> : null}
-          {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
-        </span>
-        <ChevronDownIcon
-          className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+    <details className="group min-w-0" open={streaming}>
+      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground marker:content-none">
+        <ChevronRightIcon
+          className="size-3 shrink-0 transition-transform group-open:rotate-90"
           aria-hidden="true"
         />
+        {streaming ? <Loader2Icon className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>{streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}</span>
       </summary>
-      <pre className="max-h-56 overflow-auto border-t border-border/50 px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+      <pre className="mt-1 max-h-48 overflow-auto border-l border-border/60 pl-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground/90">
         {text}
       </pre>
     </details>
   )
 }
 
-function ToolStepCard({
+function ToolCallRow({
   step,
   t
 }: {
   step: Extract<AgentRunStep, { kind: 'tool' }>
   t: Dictionary
 }): React.JSX.Element {
-  const statusLabel =
-    step.phase === 'started'
-      ? t.input.toolRunning
-      : step.isError
-        ? t.input.toolFailed
-        : t.input.toolFinished
+  const running = step.phase === 'started'
+  const preview = step.command?.trim() || summarizeArgs(step.argsText)
   const isBash = step.name === 'bash' || step.name === 'terminal' || Boolean(step.command)
+  const isFileTool = step.name === 'read' || step.name === 'write' || step.name === 'edit'
 
   return (
     <details
-      className="group min-w-0 rounded-md border border-border/70 bg-card shadow-xs"
-      open={step.phase === 'started' || Boolean(step.isError)}
+      className="group min-w-0 rounded-md border border-transparent hover:border-border/50"
+      open={running || Boolean(step.isError)}
     >
-      <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-3 py-2 marker:content-none">
-        <div className="min-w-0">
-          <div className="truncate text-xs font-semibold text-foreground">
-            {t.input.usedTool}: {step.name}
-          </div>
-          {isBash ? (
-            <div className="mt-0.5 text-[10px] text-muted-foreground">{t.input.toolTerminalHint}</div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
-          {step.phase === 'started' ? (
-            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-          ) : null}
+      <summary className="flex cursor-pointer select-none items-center gap-2 px-1 py-1 marker:content-none">
+        <ChevronRightIcon
+          className="size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
+        {running ? (
+          <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+        ) : (
           <span
-            className={
-              step.isError ? 'text-destructive' : step.phase === 'finished' ? 'text-emerald-500' : undefined
-            }
-          >
-            {statusLabel}
-          </span>
-          <ChevronDownIcon
-            className="size-3.5 transition-transform group-open:rotate-180"
+            className={`size-1.5 shrink-0 rounded-full ${
+              step.isError ? 'bg-destructive' : 'bg-emerald-500/80'
+            }`}
             aria-hidden="true"
           />
-        </div>
+        )}
+        <span className="shrink-0 text-xs font-medium text-foreground">{step.name}</span>
+        {preview ? (
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+            {preview}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+            {running ? t.input.toolRunning : step.isError ? t.input.toolFailed : t.input.toolFinished}
+          </span>
+        )}
       </summary>
-      <div className="space-y-2 border-t border-border/50 p-3 text-[11px]">
+      <div className="ml-5 space-y-2 border-l border-border/50 py-1.5 pl-3 text-[11px]">
+        {isBash ? (
+          <div className="text-[10px] text-muted-foreground">{t.input.toolTerminalHint}</div>
+        ) : null}
+        {isFileTool ? (
+          <div className="text-[10px] text-muted-foreground">{t.input.toolWorkspaceHint}</div>
+        ) : null}
         {step.command ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.input.toolCommand}</div>
-            <pre className="overflow-auto rounded-md bg-muted/30 p-2 font-mono whitespace-pre-wrap break-words">
-              {step.command}
-            </pre>
-          </div>
+          <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
+            {step.command}
+          </pre>
         ) : step.argsText ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.input.toolArgs}</div>
-            <pre className="overflow-auto rounded-md bg-muted/30 p-2 font-mono whitespace-pre-wrap break-words">
-              {step.argsText}
-            </pre>
-          </div>
+          <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
+            {step.argsText}
+          </pre>
         ) : null}
         {step.resultText ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.input.toolOutput}</div>
-            <pre className="max-h-64 overflow-auto rounded-md bg-muted/30 p-2 font-mono whitespace-pre-wrap break-words">
-              {step.resultText}
-            </pre>
-          </div>
+          <pre className="max-h-56 overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words text-muted-foreground">
+            {step.resultText}
+          </pre>
         ) : null}
       </div>
     </details>
@@ -409,13 +385,13 @@ function ApprovalStepCard({
     <div
       className={
         pending
-          ? 'min-w-0 rounded-md border border-amber-500/40 bg-amber-500/5 shadow-xs'
-          : 'min-w-0 rounded-md border border-border/70 bg-card shadow-xs'
+          ? 'min-w-0 rounded-md border border-amber-500/35 bg-amber-500/5'
+          : 'min-w-0 rounded-md border border-border/60'
       }
     >
-      <div className="flex items-start justify-between gap-3 border-b border-border/50 px-3 py-2">
+      <div className="flex items-start justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-foreground">
             <TriangleAlertIcon className="size-3.5 text-amber-500" aria-hidden="true" />
             <span>{t.commandReview.title}</span>
             <Badge variant={riskBadgeVariant(risk)}>{riskLabel(risk, t)}</Badge>
@@ -431,59 +407,40 @@ function ApprovalStepCard({
         </div>
       </div>
 
-      <div className="space-y-3 p-3 text-[11px]">
-        <div>
-          <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.command}</div>
-          <pre className="overflow-auto rounded-md bg-muted/30 p-2 font-mono whitespace-pre-wrap break-words">
-            {step.command}
-          </pre>
-        </div>
-        {step.auditSummary ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.auditSummary}</div>
-            <p className="text-foreground/90">{step.auditSummary}</p>
-          </div>
-        ) : null}
+      <div className="space-y-2.5 border-t border-border/40 px-3 py-2.5 text-[11px]">
+        <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
+          {step.command}
+        </pre>
+        {step.auditSummary ? <p className="text-foreground/90">{step.auditSummary}</p> : null}
         {step.operationReason ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.operationReason}</div>
-            <p className="text-foreground/90">{step.operationReason}</p>
-          </div>
+          <p className="text-muted-foreground">
+            <span className="font-medium text-foreground/80">{t.commandReview.operationReason}: </span>
+            {step.operationReason}
+          </p>
         ) : null}
         {step.riskPoints && step.riskPoints.length > 0 ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.riskPoints}</div>
-            <ul className="list-disc space-y-0.5 pl-4 text-foreground/90">
-              {step.riskPoints.map((point) => (
-                <li key={point}>{point}</li>
-              ))}
-            </ul>
-          </div>
+          <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+            {step.riskPoints.map((point) => (
+              <li key={point}>{point}</li>
+            ))}
+          </ul>
         ) : null}
-        {step.impactAnalysis ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.impactAnalysis}</div>
-            <p className="text-foreground/90">{step.impactAnalysis}</p>
-          </div>
-        ) : null}
+        {step.impactAnalysis ? <p className="text-muted-foreground">{step.impactAnalysis}</p> : null}
         {step.recommendation ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.recommendation}</div>
-            <p className="text-foreground/90">{step.recommendation}</p>
-          </div>
+          <p className="text-muted-foreground">
+            <span className="font-medium text-foreground/80">{t.commandReview.recommendation}: </span>
+            {step.recommendation}
+          </p>
         ) : null}
 
         {pending && onResolve ? (
           <>
-            <div>
-              <div className="mb-1 font-medium text-muted-foreground">{t.commandReview.decisionNote}</div>
-              <Textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder={t.commandReview.decisionNotePlaceholder}
-                className="min-h-16 resize-y text-xs"
-              />
-            </div>
+            <Textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder={t.commandReview.decisionNotePlaceholder}
+              className="min-h-14 resize-y text-xs"
+            />
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -505,16 +462,29 @@ function ApprovalStepCard({
         ) : null}
 
         {!pending && (step.note || step.rejectionReason) ? (
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">
-              {step.phase === 'approved' ? t.commandReview.decisionNote : t.commandReview.rejectionReason}
-            </div>
-            <p className="text-foreground/90">{step.note || step.rejectionReason}</p>
-          </div>
+          <p className="text-muted-foreground">{step.note || step.rejectionReason}</p>
         ) : null}
       </div>
     </div>
   )
+}
+
+function isNoiseStatusStep(step: AgentRunStep): boolean {
+  if (step.kind !== 'status') return false
+  const title = step.title.trim()
+  return (
+    /^Agent started\.?$/i.test(title) ||
+    /^Thinking…$/i.test(title) ||
+    /^Thinking\.\.\.$/i.test(title) ||
+    title === 'Agent finished.'
+  )
+}
+
+function summarizeArgs(argsText: string | undefined): string | undefined {
+  if (!argsText?.trim()) return undefined
+  const trimmed = argsText.trim().replace(/\s+/g, ' ')
+  if (trimmed.length <= 80) return trimmed
+  return `${trimmed.slice(0, 77)}…`
 }
 
 function riskBadgeVariant(risk: CommandRiskLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -529,24 +499,22 @@ function riskLabel(risk: CommandRiskLevel, t: Dictionary): string {
   return t.commandReview.lowRisk
 }
 
-function resolveActivity(document: ParsedAgentRunDocument, t: Dictionary): string | undefined {
+function resolveActivity(
+  document: ParsedAgentRunDocument,
+  steps: AgentRunStep[],
+  t: Dictionary
+): string | undefined {
   if (typeof document.elapsedMs === 'number') return undefined
-  const pendingApproval = [...document.steps]
+  const pendingApproval = [...steps]
     .reverse()
     .find((step) => step.kind === 'approval' && step.phase === 'pending')
   if (pendingApproval) return t.input.activityAwaitingApproval
-  const openTool = [...document.steps]
-    .reverse()
-    .find((step) => step.kind === 'tool' && step.phase === 'started')
+  const openTool = [...steps].reverse().find((step) => step.kind === 'tool' && step.phase === 'started')
   if (openTool && openTool.kind === 'tool') {
     return t.input.activityRunningTool.replace('{tool}', openTool.name)
   }
-  if (document.resultMarkdown?.trim()) {
-    return t.input.activityWriting
-  }
-  if (document.thinkingText?.trim()) {
-    return t.input.activityThinking
-  }
+  if (document.resultMarkdown?.trim()) return t.input.activityWriting
+  if (document.thinkingText?.trim()) return t.input.activityThinking
   return t.input.activityThinking
 }
 
@@ -601,13 +569,8 @@ function ResultFullscreenPreview({
         </Button>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(0,1fr)]">
-        <nav
-          className="min-h-0 overflow-auto border-r bg-muted/15 p-3"
-          aria-label={t.common.navigation}
-        >
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
-            {t.common.navigation}
-          </div>
+        <nav className="min-h-0 overflow-auto border-r bg-muted/15 p-3" aria-label={t.common.navigation}>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">{t.common.navigation}</div>
           {headings.length === 0 ? (
             <div className="rounded-md border bg-background/60 p-2 text-xs text-muted-foreground">
               {title}
@@ -646,7 +609,6 @@ function extractMarkdownHeadings(value: string, prefix: string): MarkdownHeading
     .flatMap((line) => {
       const match = line.match(/^(#{1,4})\s+(.+)$/)
       if (!match) return []
-
       const text = stripInlineMarkdown(match[2]).trim()
       const heading: MarkdownHeading = {
         id: buildMarkdownHeadingId(prefix, text, index),

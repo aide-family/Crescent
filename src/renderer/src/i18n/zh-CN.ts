@@ -45,16 +45,16 @@ const zhCN = {
     copyFailed: '复制失败',
     copyMarkdown: '复制 Markdown',
     copyResult: '复制结果内容',
-    copyResultTooltip: '复制结果正文，不包含动作明细',
+    copyResultTooltip: '仅复制助手回答正文',
     copySelectionOrMessage: '复制选中内容；未选中时复制整条消息',
     copySucceeded: '已复制到剪贴板',
     delete: '删除',
     duplicate: '创建副本',
     edit: '编辑',
     exportMarkdown: '导出 Markdown',
-    exportFullMarkdownTooltip: '导出完整消息 Markdown，包含动作明细、结果和耗时',
+    exportFullMarkdownTooltip: '导出完整回合 Markdown（思考、工具、回答）',
     exportResultMarkdown: '导出结果 Markdown',
-    exportResultMarkdownTooltip: '只导出结果区域 Markdown，不包含动作明细',
+    exportResultMarkdownTooltip: '仅导出助手回答 Markdown',
     exportTraceJson: '导出 Trace JSON',
     exportTraceJsonTooltip: '导出结构化 Agent 运行 Trace（工具细节已脱敏），便于排查调试',
     likeResult: '赞',
@@ -462,7 +462,7 @@ const zhCN = {
     toolDispatching: '正在调用工具',
     toolsConfigured: '工具已配置',
     understandingRequest: '正在理解用户需求和当前终端上下文',
-    usedTool: '调用工具'
+    usedTool: '工具'
   },
   roles: {
     assistant: 'Crescent',
@@ -515,7 +515,8 @@ const zhCN = {
     agentMode: 'Agent 模式',
     apiKey: 'OpenAI API Key',
     baseUrl: 'OpenAI 兼容 Base URL',
-    baseUrlHint: '填写 OpenAI 兼容接口地址，例如供应商提供的 /v1 地址。',
+    baseUrlHint:
+      'OpenAI 兼容接口。DeepSeek 可填 https://api.deepseek.com（会自动补全 /v1）。',
     closeTerminalConfirm: '关闭终端前提示风险',
     closeTerminalConfirmHint:
       '开启后，关闭单个或多个终端 Tab 前会再次确认；关闭后将直接停止对应终端会话。',
@@ -607,7 +608,8 @@ const zhCN = {
     noMcpTools: '当前 MCP 服务还没有加载到工具。保存配置后执行验证即可刷新。',
     model: '模型',
     modelHint: '配置 OpenAI 兼容模型供应商；API Key 仅保存在本地。',
-    modelListHint: '一行一个模型 ID。保存后可在模型选择器中选择。',
+    modelListHint:
+      '一行一个模型 ID。DeepSeek 示例：deepseek-chat、deepseek-reasoner、deepseek-v4-flash、deepseek-v4-pro。',
     newProvider: '新增供应商',
     newMcpServer: '新增 MCP',
     noMcpServers: '暂未配置 MCP 服务。',

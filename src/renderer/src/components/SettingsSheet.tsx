@@ -573,7 +573,7 @@ export function SettingsSheet({
                       className="min-h-44 resize-y font-mono text-xs"
                       value={providerModelsText}
                       onChange={(event) => onUpdateSettingsProviderModels(event.target.value)}
-                      placeholder={'model-id\nmodel-id-reasoner'}
+                      placeholder={'deepseek-chat\ndeepseek-reasoner'}
                     />
                     <FieldDescription>{t.settings.modelListHint}</FieldDescription>
                   </Field>
