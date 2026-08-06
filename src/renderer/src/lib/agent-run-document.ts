@@ -86,12 +86,17 @@ export function extractResultFromAgentRunDocument(value: string, t: Dictionary):
   return [parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean).join('\n\n').trim()
 }
 
-export function deriveActionsFromRun(run: Pick<AgentRunViewState, 'steps' | 'thinkingText' | 'actions'>): AgentRunAction[] {
+export function deriveActionsFromRun(
+  run: Pick<AgentRunViewState, 'steps' | 'thinkingText' | 'actions'>
+): AgentRunAction[] {
   if (run.actions?.length) return run.actions
   return deriveActionsFromSteps(run.steps ?? [], run.thinkingText)
 }
 
-export function deriveActionsFromSteps(steps: AgentRunStep[], thinkingText?: string): AgentRunAction[] {
+export function deriveActionsFromSteps(
+  steps: AgentRunStep[],
+  thinkingText?: string
+): AgentRunAction[] {
   const actions: AgentRunAction[] = []
   if (thinkingText?.trim()) {
     actions.push({
@@ -182,7 +187,9 @@ function formatDuration(elapsedMs: number): string {
 
 function parseElapsedMs(elapsedMarkdown: string | undefined, t: Dictionary): number | undefined {
   if (!elapsedMarkdown?.trim()) return undefined
-  const match = elapsedMarkdown.match(new RegExp(`${escapeRegExp(t.input.elapsed)}:\\s*(\\d+)ms`, 'i'))
+  const match = elapsedMarkdown.match(
+    new RegExp(`${escapeRegExp(t.input.elapsed)}:\\s*(\\d+)ms`, 'i')
+  )
   if (match) {
     const value = Number(match[1])
     return Number.isFinite(value) ? value : undefined

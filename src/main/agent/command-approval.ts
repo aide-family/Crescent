@@ -65,9 +65,7 @@ export function rejectPendingApprovalsForTab(
   }
 }
 
-export function resolveCommandApprovalDecision(
-  decision: CommandApprovalDecision
-): { ok: boolean } {
+export function resolveCommandApprovalDecision(decision: CommandApprovalDecision): { ok: boolean } {
   const requestId = decision?.requestId?.trim()
   if (!requestId) return { ok: false }
   const settled = settlePendingCommandApproval(
@@ -111,9 +109,12 @@ export function requestCommandApproval(input: {
       input.signal?.removeEventListener('abort', onAbort)
       resolve(decision)
     }
-    const timeout = setTimeout(() => {
-      settlePendingCommandApproval(requestId, { approved: false })
-    }, 10 * 60 * 1000)
+    const timeout = setTimeout(
+      () => {
+        settlePendingCommandApproval(requestId, { approved: false })
+      },
+      10 * 60 * 1000
+    )
     const onAbort = (): void => {
       settlePendingCommandApproval(requestId, {
         approved: false,

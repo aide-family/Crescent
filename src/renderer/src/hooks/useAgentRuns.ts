@@ -308,14 +308,13 @@ export function useAgentRuns({
           const steps = [...(run.steps ?? [])]
           const existingIndex = steps.findIndex(
             (step) =>
-              step.kind === 'approval' &&
-              step.phase === 'pending' &&
-              step.command === event.command
+              step.kind === 'approval' && step.phase === 'pending' && step.command === event.command
           )
           const approvalStep = {
-            id: existingIndex >= 0 && steps[existingIndex].kind === 'approval'
-              ? steps[existingIndex].id
-              : createStepId('approval'),
+            id:
+              existingIndex >= 0 && steps[existingIndex].kind === 'approval'
+                ? steps[existingIndex].id
+                : createStepId('approval'),
             kind: 'approval' as const,
             requestId: '',
             command: event.command,
@@ -493,11 +492,7 @@ export function useAgentRuns({
   }
 }
 
-function findOpenToolStepIndex(
-  steps: AgentRunStep[],
-  name: string,
-  toolCallId?: string
-): number {
+function findOpenToolStepIndex(steps: AgentRunStep[], name: string, toolCallId?: string): number {
   for (let index = steps.length - 1; index >= 0; index -= 1) {
     const step = steps[index]
     if (step.kind !== 'tool' || step.phase !== 'started') continue

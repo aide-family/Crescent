@@ -10,10 +10,7 @@ import {
   type WebContents
 } from 'electron'
 
-import {
-  listEditableInstructionFiles,
-  saveEditableInstructionFile
-} from './instruction-files'
+import { listEditableInstructionFiles, saveEditableInstructionFile } from './instruction-files'
 import { AgentMemory } from './memory'
 import { AgentBrain } from './brain'
 import { checkTranscriptionSupport } from './transcription-support'
@@ -27,13 +24,14 @@ import {
   startAgentSkillInstall
 } from './skills'
 import { cancelPiAgentRun, runPiAgent, steerPiAgentRun } from './pi-host'
-import { listPiAvailableModels, resolvePiModel, syncCrescentProvidersToModelRuntime } from './pi-model-runtime'
+import {
+  listPiAvailableModels,
+  resolvePiModel,
+  syncCrescentProvidersToModelRuntime
+} from './pi-model-runtime'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
-import {
-  rejectPendingApprovalsForTab,
-  resolveCommandApprovalDecision
-} from './command-approval'
+import { rejectPendingApprovalsForTab, resolveCommandApprovalDecision } from './command-approval'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   getWikiDocument,
@@ -68,7 +66,6 @@ import type {
 const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 
 export function registerAgentIpc(): void {
-
   ipcMain.handle('agent:get-config', () => {
     return readAgentConfig()
   })
