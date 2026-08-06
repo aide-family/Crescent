@@ -49,18 +49,16 @@ const en = {
     copyFailed: 'Copy failed',
     copyMarkdown: 'Copy Markdown',
     copyResult: 'Copy result',
-    copyResultTooltip: 'Copy result body only, excluding action details',
+    copyResultTooltip: 'Copy the assistant answer only',
     copySelectionOrMessage: 'Copy selection, or the whole message',
     copySucceeded: 'Copied to clipboard',
     delete: 'Delete',
     duplicate: 'Duplicate',
     edit: 'Edit',
     exportMarkdown: 'Export Markdown',
-    exportFullMarkdownTooltip:
-      'Export full message Markdown, including action details, result, and elapsed time',
+    exportFullMarkdownTooltip: 'Export the full turn as Markdown (thinking, tools, answer)',
     exportResultMarkdown: 'Export result Markdown',
-    exportResultMarkdownTooltip:
-      'Export only the result area as Markdown, excluding action details',
+    exportResultMarkdownTooltip: 'Export only the assistant answer as Markdown',
     exportTraceJson: 'Export trace JSON',
     exportTraceJsonTooltip:
       'Export a structured Agent run trace with redacted tool details for debugging',
@@ -346,7 +344,7 @@ const en = {
     actionPurposePrefix: 'I am doing this step to move forward with: ',
     actionPurposeSuffix: '.',
     actions: 'Actions',
-    thinkingProcess: 'Thinking',
+    thinkingProcess: 'Thought process',
     thinkingProcessStreaming: 'Thinking…',
     thinkingProcessCompleted: 'Thought process',
     activityThinking: 'Thinking…',
@@ -499,7 +497,7 @@ const en = {
     toolDispatching: 'Dispatching tool call',
     toolsConfigured: 'Tools configured',
     understandingRequest: 'Understanding the user request and current terminal context',
-    usedTool: 'Used tool'
+    usedTool: 'Tool'
   },
   roles: {
     assistant: 'Crescent',
@@ -555,7 +553,8 @@ const en = {
     agentMode: 'Agent mode',
     apiKey: 'OpenAI API key',
     baseUrl: 'OpenAI-compatible base URL',
-    baseUrlHint: 'Enter the OpenAI-compatible endpoint, such as the /v1 URL from your provider.',
+    baseUrlHint:
+      'OpenAI-compatible endpoint. For DeepSeek use https://api.deepseek.com (/v1 is added automatically).',
     closeTerminalConfirm: 'Warn before closing terminals',
     closeTerminalConfirmHint:
       'When enabled, Crescent confirms before closing one or more terminal tabs. When disabled, it stops the matching terminal sessions immediately.',
@@ -652,7 +651,8 @@ const en = {
       'No tools loaded for this MCP server. Run validation after saving the configuration.',
     model: 'Model',
     modelHint: 'Configure OpenAI-compatible providers; API keys stay local.',
-    modelListHint: 'One model ID per line. Save, then choose one from the model selector.',
+    modelListHint:
+      'One model ID per line. DeepSeek examples: deepseek-chat, deepseek-reasoner, deepseek-v4-flash, deepseek-v4-pro.',
     newProvider: 'New provider',
     newMcpServer: 'New MCP',
     noMcpServers: 'No MCP servers configured.',

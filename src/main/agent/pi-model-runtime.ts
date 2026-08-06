@@ -1,5 +1,12 @@
 import type { Model } from '@earendil-works/pi-ai'
 
+import {
+  deepSeekModelCompat,
+  deepSeekThinkingLevelMap,
+  isDeepSeekProvider,
+  normalizeProviderBaseUrl,
+  resolveModelReasoningFlag
+} from './deepseek-compat'
 import { getAgentProviders } from './model-provider-config'
 import { getCrescentPiAuthPath, getCrescentPiModelsPath } from './pi-paths'
 import { loadPiCodingAgent } from './pi-sdk'
@@ -38,6 +45,7 @@ export async function syncCrescentProvidersToModelRuntime(
       config.openAiApiKey?.trim() ||
       process.env.TERMINAL_AGENT_API_KEY?.trim() ||
       process.env.OPENAI_API_KEY?.trim() ||
+      process.env.DEEPSEEK_API_KEY?.trim() ||
       ''
     if (apiKey) {
       await runtime.setRuntimeApiKey(providerId, apiKey)
@@ -74,6 +82,11 @@ export async function resolvePiModel(
   return all[0]
 }
 
+export function resolveThinkingLevelForModel(model: Model<any> | undefined): 'off' | 'high' {
+  if (!model?.reasoning) return 'off'
+  return 'high'
+}
+
 export async function listPiAvailableModels(config: AgentConfig): Promise<
   Array<{
     id: string
@@ -101,32 +114,53 @@ export async function listPiAvailableModels(config: AgentConfig): Promise<
   }
 
   // Fall back to configured providers even if auth check failed (UI still needs the list).
-  return providers.flatMap((provider) =>
-    provider.models.map((model) => ({
+  return providers.flatMap((provider) => {
+    const deepseek = isDeepSeekProvider(provider)
+    return provider.models.map((model) => ({
       id: model.id,
       name: model.name || model.id,
       providerId: sanitizeProviderId(provider.id),
       providerName: provider.name || provider.id,
-      reasoning: Boolean(model.reasoning)
+      reasoning: resolveModelReasoningFlag({
+        modelId: model.id,
+        configuredReasoning: model.reasoning,
+        deepseek
+      })
     }))
-  )
+  })
 }
 
 function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInput {
+  const deepseek = isDeepSeekProvider(provider)
+  const baseUrl = normalizeProviderBaseUrl(provider.baseUrl, deepseek)
+
   return {
     name: provider.name || provider.id,
-    baseUrl: provider.baseUrl.trim() || undefined,
+    baseUrl: baseUrl || undefined,
     api: 'openai-completions',
     apiKey: provider.apiKey?.trim() || undefined,
-    models: provider.models.map((model) => ({
-      id: model.id,
-      name: model.name || model.id,
-      reasoning: Boolean(model.reasoning),
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 16_384
-    }))
+    models: provider.models.map((model) => {
+      const reasoning = resolveModelReasoningFlag({
+        modelId: model.id,
+        configuredReasoning: model.reasoning,
+        deepseek
+      })
+      return {
+        id: model.id,
+        name: model.name || model.id,
+        reasoning,
+        input: ['text'] as Array<'text'>,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: deepseek ? 128_000 : 128_000,
+        maxTokens: reasoning ? 16_384 : 8_192,
+        ...(deepseek
+          ? {
+              compat: deepSeekModelCompat(),
+              ...(reasoning ? { thinkingLevelMap: deepSeekThinkingLevelMap() } : {})
+            }
+          : {})
+      }
+    })
   }
 }
 

@@ -10,7 +10,11 @@ import {
 } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { getCrescentPiAgentDir, getCrescentPiSkillsDir } from './pi-paths'
-import { resolvePiModel, syncCrescentProvidersToModelRuntime } from './pi-model-runtime'
+import {
+  resolvePiModel,
+  resolveThinkingLevelForModel,
+  syncCrescentProvidersToModelRuntime
+} from './pi-model-runtime'
 import { loadPiCodingAgent, type PiCodingAgentModule } from './pi-sdk'
 import {
   clearPtyBashExecContext,
@@ -93,6 +97,13 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
 
     if (hosted.session.model?.id !== model.id || hosted.session.model?.provider !== model.provider) {
       await hosted.session.setModel(model)
+    }
+
+    const thinkingLevel = resolveThinkingLevelForModel(model)
+    try {
+      hosted.session.setThinkingLevel(thinkingLevel)
+    } catch {
+      // Older sessions / models may reject unsupported thinking levels.
     }
 
     setPtyBashExecContext(sessionKey, {
@@ -246,7 +257,7 @@ async function ensureHostedSession(sessionKey: string, config: AgentConfig): Pro
     cwd,
     agentDir,
     model: model ?? undefined,
-    thinkingLevel: 'off',
+    thinkingLevel: resolveThinkingLevelForModel(model ?? undefined),
     modelRuntime,
     resourceLoader,
     tools: [...DEFAULT_TOOLS],
