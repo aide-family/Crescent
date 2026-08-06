@@ -98,10 +98,11 @@ function createWindow(): void {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('Renderer process gone', details)
   })
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    if (level >= 2) {
-      console.error(`[renderer:${level}] ${message} (${sourceId}:${line})`)
-    }
+  mainWindow.webContents.on('console-message', (event) => {
+    if (event.level !== 'warning' && event.level !== 'error') return
+    console.error(
+      `[renderer:${event.level}] ${event.message} (${event.sourceId}:${event.lineNumber})`
+    )
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

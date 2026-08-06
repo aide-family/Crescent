@@ -8,12 +8,32 @@ export interface ParsedAgentRunMarkdown {
 }
 
 export function extractResultMarkdown(value: string, t: Dictionary): string {
-  const parsed = parseAgentRunMarkdown(value, t)
+  const normalized = value.replace(/\r\n/g, '\n')
+  if (normalized.startsWith('CRESCENT_RUN_V2\n')) {
+    const rest = normalized.slice('CRESCENT_RUN_V2\n'.length)
+    const jsonEnd = findJsonObjectEnd(rest)
+    if (jsonEnd > 0) {
+      try {
+        const parsed = JSON.parse(rest.slice(0, jsonEnd)) as {
+          result?: string
+          error?: string
+        }
+        return trimMarkdownLines(
+          [parsed.result, parsed.error].filter((part): part is string => Boolean(part?.trim()))
+        )
+      } catch {
+        // Fall through to markdown parsing of the remainder.
+      }
+      return extractResultMarkdown(rest.slice(jsonEnd).trim(), t)
+    }
+  }
+
+  const parsed = parseAgentRunMarkdown(normalized, t)
   if (parsed) {
     return trimMarkdownLines([parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean))
   }
 
-  return stripActionMarkdown(value.replace(/\r\n/g, '\n').split('\n'), t)
+  return stripActionMarkdown(normalized.split('\n'), t)
 }
 
 export function parseAgentRunMarkdown(value: string, t: Dictionary): ParsedAgentRunMarkdown | null {
@@ -121,4 +141,37 @@ function filterNoisyActionMarkdown(lines: string[]): string {
   }
 
   return trimMarkdownLines(filtered)
+}
+
+function findJsonObjectEnd(value: string): number {
+  const start = value.indexOf('{')
+  if (start < 0) return -1
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < value.length; i += 1) {
+    const ch = value[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (ch === '\\') {
+        escaped = true
+        continue
+      }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === '{') depth += 1
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return i + 1
+    }
+  }
+  return -1
 }

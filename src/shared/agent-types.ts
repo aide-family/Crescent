@@ -444,7 +444,15 @@ export type AgentEvent =
   | ({ type: 'thought'; message: string } & AgentEventMeta)
   | ({ type: 'plan'; steps: string[] } & AgentEventMeta)
   | ({ type: 'skills'; message: string; skills: AgentSkillUsage[] } & AgentEventMeta)
-  | ({ type: 'tool'; name: string; message: string } & AgentEventMeta)
+  | ({
+      type: 'tool'
+      name: string
+      message: string
+      phase?: 'started' | 'finished'
+      toolCallId?: string
+      isError?: boolean
+      command?: string
+    } & AgentEventMeta)
   | ({
       type: 'command'
       phase: 'started' | 'finished'

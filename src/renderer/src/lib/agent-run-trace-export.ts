@@ -1,5 +1,5 @@
 import type { Dictionary } from '../i18n'
-import { parseAgentRunMarkdown } from './agent-run-markdown'
+import { deriveActionsFromSteps, parseAgentRunDocument } from './agent-run-document'
 import type { AgentLogEntry, AgentRunViewState } from './terminal-tabs'
 import { buildAgentRunTrace, serializeAgentRunTrace } from '../../../shared/agent-run-trace'
 import type { AgentRunTrace, StoredAgentRun } from '../../../shared/agent-types'
@@ -15,6 +15,11 @@ export function buildTraceFromAgentRunView(input: {
   output?: string
   error?: string
 }): AgentRunTrace {
+  const actions =
+    input.run?.actions?.length
+      ? input.run.actions
+      : deriveActionsFromSteps(input.run?.steps ?? [], input.run?.thinkingText)
+
   return buildAgentRunTrace({
     runId: input.runId,
     tabId: input.tabId,
@@ -23,7 +28,7 @@ export function buildTraceFromAgentRunView(input: {
     connectionId: input.connectionId,
     startedAt: input.run?.startedAt ?? input.startedAt,
     elapsedMs: input.run?.elapsedMs,
-    actions: input.run?.actions,
+    actions,
     result: input.run?.result ?? input.output,
     error: input.run?.error ?? input.error
   })
@@ -37,9 +42,11 @@ export function buildTraceFromAgentLogEntry(input: {
 }): AgentRunTrace {
   if (input.storedRun?.trace) return input.storedRun.trace
 
-  const parsed = parseAgentRunMarkdown(input.entry.text, input.t)
-  const elapsedMs = parseElapsedMs(parsed?.elapsedMarkdown ?? '', input.t)
-  const actions = extractActionsFromMarkdown(parsed?.actionsMarkdown ?? '')
+  const parsed = parseAgentRunDocument(input.entry.text, input.t)
+  const actions =
+    parsed?.version === 2
+      ? deriveActionsFromSteps(parsed.steps, parsed.thinkingText)
+      : extractActionsFromMarkdown(parsed?.actionsMarkdown ?? '')
 
   return buildAgentRunTrace({
     runId: input.storedRun?.runId ?? `log-${input.tabId}-${input.entry.id}`,
@@ -48,7 +55,7 @@ export function buildTraceFromAgentLogEntry(input: {
     status: input.storedRun?.status ?? (parsed?.errorMarkdown ? 'error' : 'success'),
     connectionId: input.storedRun?.connectionId,
     startedAt: input.storedRun?.startedAt ?? input.entry.createdAt,
-    elapsedMs: input.storedRun?.elapsedMs ?? elapsedMs,
+    elapsedMs: input.storedRun?.elapsedMs ?? parsed?.elapsedMs,
     actions,
     result: parsed?.resultMarkdown || input.storedRun?.output,
     error: parsed?.errorMarkdown || input.storedRun?.error
@@ -90,17 +97,4 @@ function extractActionsFromMarkdown(
     .filter(Boolean)
 
   return bullets.map((title) => ({ title, detail: title }))
-}
-
-function parseElapsedMs(elapsedMarkdown: string, t: Dictionary): number | undefined {
-  const match = elapsedMarkdown.match(
-    new RegExp(`${escapeRegExp(t.input.elapsed)}:\\s*(\\d+)ms`, 'i')
-  )
-  if (!match) return undefined
-  const value = Number(match[1])
-  return Number.isFinite(value) ? value : undefined
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

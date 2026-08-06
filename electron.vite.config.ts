@@ -31,6 +31,7 @@ export default defineConfig({
           manualChunks(id) {
             if (id.includes('/src/main/safe-ipc-send')) return 'safe-ipc-send'
             if (id.includes('/src/main/crescent-paths')) return 'crescent-paths'
+            return undefined
           }
         }
       }

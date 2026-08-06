@@ -7,6 +7,8 @@ export interface PiEventBridgeMeta {
   tabId?: string
 }
 
+const MAX_TOOL_RESULT_CHARS = 8_000
+
 /**
  * Map Pi coding-agent session events onto Crescent renderer AgentEvent shapes
  * that useAgentRuns already understands (token / tool / thought / status / error / done).
@@ -37,6 +39,9 @@ export function mapPiSessionEventToAgentEvents(
         {
           type: 'tool',
           name: event.toolName,
+          phase: 'started',
+          toolCallId: event.toolCallId,
+          command: extractBashCommand(event.args),
           message: formatToolArgs(event.args),
           ...base
         }
@@ -46,7 +51,10 @@ export function mapPiSessionEventToAgentEvents(
         {
           type: 'tool',
           name: event.toolName,
-          message: event.isError ? 'Tool failed.' : 'Tool finished.',
+          phase: 'finished',
+          toolCallId: event.toolCallId,
+          isError: Boolean(event.isError),
+          message: formatToolResult(event.result, event.isError),
           ...base
         }
       ]
@@ -74,6 +82,56 @@ function formatToolArgs(args: unknown): string {
     return JSON.stringify(args).slice(0, 500)
   } catch {
     return String(args)
+  }
+}
+
+function extractBashCommand(args: unknown): string | undefined {
+  if (!args || typeof args !== 'object') return undefined
+  const command = (args as { command?: unknown }).command
+  return typeof command === 'string' && command.trim() ? command.trim() : undefined
+}
+
+function formatToolResult(result: unknown, isError: boolean): string {
+  const text = extractToolResultText(result)
+  if (text.trim()) return text.slice(0, MAX_TOOL_RESULT_CHARS)
+  return isError ? 'Tool failed.' : 'Tool finished.'
+}
+
+function extractToolResultText(result: unknown): string {
+  if (result == null) return ''
+  if (typeof result === 'string') return result
+  if (typeof result !== 'object') return String(result)
+
+  const record = result as Record<string, unknown>
+  if (typeof record.output === 'string') return record.output
+  if (typeof record.text === 'string') return record.text
+  if (typeof record.error === 'string') return record.error
+
+  if (Array.isArray(record.content)) {
+    const texts = record.content
+      .filter(
+        (part): part is { type: string; text: string } =>
+          Boolean(part) &&
+          typeof part === 'object' &&
+          (part as { type?: unknown }).type === 'text' &&
+          typeof (part as { text?: unknown }).text === 'string'
+      )
+      .map((part) => part.text)
+    if (texts.length > 0) return texts.join('\n')
+  }
+
+  if (record.details && typeof record.details === 'object') {
+    const details = record.details as Record<string, unknown>
+    if (typeof details.output === 'string') return details.output
+    if (typeof details.stdout === 'string' || typeof details.stderr === 'string') {
+      return [details.stdout, details.stderr].filter((part) => typeof part === 'string').join('\n')
+    }
+  }
+
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
   }
 }
 
