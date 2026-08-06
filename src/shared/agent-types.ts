@@ -285,10 +285,7 @@ export interface SubterminalCommandExecutor {
     command: string,
     options: { terminalName: string; timeoutMs?: number; mode?: 'wait' | 'detach' }
   ): Promise<TerminalCommandResult>
-  readOutput?(options: {
-    terminalName: string
-    maxChars?: number
-  }): Promise<{
+  readOutput?(options: { terminalName: string; maxChars?: number }): Promise<{
     ok: boolean
     name: string
     tabId: string

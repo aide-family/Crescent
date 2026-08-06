@@ -11,9 +11,7 @@ import {
   XIcon
 } from 'lucide-react'
 
-import {
-  OpenApiProfileEditorFields
-} from '@renderer/components/OpenApiSettingsFields'
+import { OpenApiProfileEditorFields } from '@renderer/components/OpenApiSettingsFields'
 import { AppUpdateCard } from '@renderer/components/AppUpdateCard'
 import { StatusDot } from '@renderer/components/StatusIndicators'
 import { Badge } from '@renderer/components/ui/badge'
@@ -184,7 +182,7 @@ export function SettingsSheet({
     config.providers.find((provider) => provider.id === settingsProviderId) ?? settingsProvider
   const detailEditorOpen =
     (providerEditorOpen && Boolean(settingsProviderId)) ||
-    (false && openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
+    (openApiEditorOpen && Boolean(settingsOpenApiProfile)) ||
     (instructionEditorOpen && Boolean(selectedInstructionFile))
 
   return (

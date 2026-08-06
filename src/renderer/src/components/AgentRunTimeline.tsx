@@ -148,7 +148,9 @@ export function AgentRunTimeline({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+                  disabled={
+                    feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                  }
                   aria-label={
                     feedbackRating === 'dislike'
                       ? t.common.likeResultLockedTooltip
@@ -179,7 +181,9 @@ export function AgentRunTimeline({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+                  disabled={
+                    feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                  }
                   aria-label={
                     feedbackRating === 'like'
                       ? t.common.dislikeResultLockedTooltip
@@ -290,7 +294,9 @@ function ThinkingBlock({
           aria-hidden="true"
         />
         {streaming ? <Loader2Icon className="size-3 animate-spin" aria-hidden="true" /> : null}
-        <span>{streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}</span>
+        <span>
+          {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
+        </span>
       </summary>
       <pre className="mt-1 max-h-48 overflow-auto border-l border-border/60 pl-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground/90">
         {text}
@@ -322,7 +328,10 @@ function ToolCallRow({
           aria-hidden="true"
         />
         {running ? (
-          <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+          <Loader2Icon
+            className="size-3 shrink-0 animate-spin text-muted-foreground"
+            aria-hidden="true"
+          />
         ) : (
           <span
             className={`size-1.5 shrink-0 rounded-full ${
@@ -338,7 +347,11 @@ function ToolCallRow({
           </span>
         ) : (
           <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {running ? t.input.toolRunning : step.isError ? t.input.toolFailed : t.input.toolFinished}
+            {running
+              ? t.input.toolRunning
+              : step.isError
+                ? t.input.toolFailed
+                : t.input.toolFinished}
           </span>
         )}
       </summary>
@@ -414,7 +427,9 @@ function ApprovalStepCard({
         {step.auditSummary ? <p className="text-foreground/90">{step.auditSummary}</p> : null}
         {step.operationReason ? (
           <p className="text-muted-foreground">
-            <span className="font-medium text-foreground/80">{t.commandReview.operationReason}: </span>
+            <span className="font-medium text-foreground/80">
+              {t.commandReview.operationReason}:{' '}
+            </span>
             {step.operationReason}
           </p>
         ) : null}
@@ -425,10 +440,14 @@ function ApprovalStepCard({
             ))}
           </ul>
         ) : null}
-        {step.impactAnalysis ? <p className="text-muted-foreground">{step.impactAnalysis}</p> : null}
+        {step.impactAnalysis ? (
+          <p className="text-muted-foreground">{step.impactAnalysis}</p>
+        ) : null}
         {step.recommendation ? (
           <p className="text-muted-foreground">
-            <span className="font-medium text-foreground/80">{t.commandReview.recommendation}: </span>
+            <span className="font-medium text-foreground/80">
+              {t.commandReview.recommendation}:{' '}
+            </span>
             {step.recommendation}
           </p>
         ) : null}
@@ -487,7 +506,9 @@ function summarizeArgs(argsText: string | undefined): string | undefined {
   return `${trimmed.slice(0, 77)}…`
 }
 
-function riskBadgeVariant(risk: CommandRiskLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
+function riskBadgeVariant(
+  risk: CommandRiskLevel
+): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (risk === 'high') return 'destructive'
   if (risk === 'medium') return 'secondary'
   return 'outline'
@@ -509,7 +530,9 @@ function resolveActivity(
     .reverse()
     .find((step) => step.kind === 'approval' && step.phase === 'pending')
   if (pendingApproval) return t.input.activityAwaitingApproval
-  const openTool = [...steps].reverse().find((step) => step.kind === 'tool' && step.phase === 'started')
+  const openTool = [...steps]
+    .reverse()
+    .find((step) => step.kind === 'tool' && step.phase === 'started')
   if (openTool && openTool.kind === 'tool') {
     return t.input.activityRunningTool.replace('{tool}', openTool.name)
   }
@@ -569,8 +592,13 @@ function ResultFullscreenPreview({
         </Button>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(0,1fr)]">
-        <nav className="min-h-0 overflow-auto border-r bg-muted/15 p-3" aria-label={t.common.navigation}>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">{t.common.navigation}</div>
+        <nav
+          className="min-h-0 overflow-auto border-r bg-muted/15 p-3"
+          aria-label={t.common.navigation}
+        >
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
+            {t.common.navigation}
+          </div>
           {headings.length === 0 ? (
             <div className="rounded-md border bg-background/60 p-2 text-xs text-muted-foreground">
               {title}

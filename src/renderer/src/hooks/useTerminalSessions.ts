@@ -68,10 +68,7 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
   )
 
   const ensureSubterminal = useCallback(
-    (
-      parentTabId: string,
-      subterminal: TemporarySubterminal
-    ): void => {
+    (parentTabId: string, subterminal: TemporarySubterminal): void => {
       upsertSubterminal(parentTabId, subterminal.name, subterminal.id, (current) => ({
         ...current,
         ...subterminal,

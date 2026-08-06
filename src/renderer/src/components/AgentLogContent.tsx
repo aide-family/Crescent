@@ -7,10 +7,7 @@ import {
   logRoleLabel,
   summarizeBehaviorLog
 } from '@renderer/lib/agent-log'
-import {
-  agentRunViewToDocument,
-  parseAgentRunDocument
-} from '@renderer/lib/agent-run-document'
+import { agentRunViewToDocument, parseAgentRunDocument } from '@renderer/lib/agent-run-document'
 import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
 
 export function ActionLogRow({

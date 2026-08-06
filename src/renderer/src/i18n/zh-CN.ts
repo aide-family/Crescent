@@ -515,8 +515,7 @@ const zhCN = {
     agentMode: 'Agent 模式',
     apiKey: 'OpenAI API Key',
     baseUrl: 'OpenAI 兼容 Base URL',
-    baseUrlHint:
-      'OpenAI 兼容接口。DeepSeek 可填 https://api.deepseek.com（会自动补全 /v1）。',
+    baseUrlHint: 'OpenAI 兼容接口。DeepSeek 可填 https://api.deepseek.com（会自动补全 /v1）。',
     closeTerminalConfirm: '关闭终端前提示风险',
     closeTerminalConfirmHint:
       '开启后，关闭单个或多个终端 Tab 前会再次确认；关闭后将直接停止对应终端会话。',

@@ -745,20 +745,22 @@ export function registerTerminalIpc(): void {
         initialCommand?: string
       }
     ) => {
-      return openTemporarySubterminal(event.sender, options?.parentTabId, options?.terminalName ?? '', {
-        cols: options?.cols,
-        rows: options?.rows,
-        initialCommand: options?.initialCommand
-      })
+      return openTemporarySubterminal(
+        event.sender,
+        options?.parentTabId,
+        options?.terminalName ?? '',
+        {
+          cols: options?.cols,
+          rows: options?.rows,
+          initialCommand: options?.initialCommand
+        }
+      )
     }
   )
 
   ipcMain.handle(
     'terminal:read-subterminal',
-    (
-      event,
-      options?: { parentTabId?: string; terminalName?: string; maxChars?: number }
-    ) => {
+    (event, options?: { parentTabId?: string; terminalName?: string; maxChars?: number }) => {
       return readTemporarySubterminalOutput(
         event.sender,
         options?.parentTabId,

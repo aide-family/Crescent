@@ -4,10 +4,7 @@ import { resolve } from 'path'
 import type { WebContents } from 'electron'
 
 import { buildLocalInstructionContext } from './instruction-files'
-import {
-  extractAssistantTextFromMessages,
-  mapPiSessionEventToAgentEvents
-} from './pi-event-bridge'
+import { extractAssistantTextFromMessages, mapPiSessionEventToAgentEvents } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { getCrescentPiAgentDir, getCrescentPiSkillsDir } from './pi-paths'
 import {
@@ -90,12 +87,14 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     if (!model) {
       return {
         ok: false,
-        error:
-          'No model available. Add an OpenAI-compatible provider with an API key in Settings.'
+        error: 'No model available. Add an OpenAI-compatible provider with an API key in Settings.'
       }
     }
 
-    if (hosted.session.model?.id !== model.id || hosted.session.model?.provider !== model.provider) {
+    if (
+      hosted.session.model?.id !== model.id ||
+      hosted.session.model?.provider !== model.provider
+    ) {
       await hosted.session.setModel(model)
     }
 
@@ -202,7 +201,10 @@ export async function steerPiAgentRun(runId: string, text: string): Promise<bool
   }
 }
 
-async function ensureHostedSession(sessionKey: string, config: AgentConfig): Promise<HostedSession> {
+async function ensureHostedSession(
+  sessionKey: string,
+  config: AgentConfig
+): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
   if (existing) {
@@ -243,7 +245,7 @@ async function ensureHostedSession(sessionKey: string, config: AgentConfig): Pro
         '',
         'You are Crescent, an Electron-hosted coding agent powered by Pi.',
         'File tools (read, write, edit) operate on the agent workspace cwd.',
-        'The bash tool executes in the user\'s visible terminal pane (main terminal or a docked subterminal).',
+        "The bash tool executes in the user's visible terminal pane (main terminal or a docked subterminal).",
         'Commands are pasted into the terminal so the user can see them; high-risk commands require in-chat approval before execution.',
         'Prefer bash for cluster/host inspection when the user is already in the target environment.',
         instructionContext ? `\n# Local instructions\n${instructionContext}` : ''

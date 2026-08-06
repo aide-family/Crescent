@@ -151,7 +151,7 @@ import {
   buildRecentConversationContext,
   buildResumeAgentInput,
   formatVisibleInputWithReferences,
-  isContinueIntent,
+  isContinueIntent
 } from '@renderer/lib/agent-input'
 import {
   buildConnectionCommands,
@@ -1373,10 +1373,7 @@ function App(): React.JSX.Element {
         return
       }
 
-      const chatTabId = resolveSessionChatTabId(
-        tabsRef.current,
-        targetId ?? activeTabIdRef.current
-      )
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetId ?? activeTabIdRef.current)
       attachApprovalRequest(chatTabId, request)
     })
   }, [attachApprovalRequest, t.commandReview.sessionClosedRejection])
@@ -2339,17 +2336,14 @@ function App(): React.JSX.Element {
     showNextPasswordPrompt(passwordPromptRequest?.tabId)
   }
 
-  function resolveInlineCommandApproval(
-    requestId: string,
-    approved: boolean,
-    note?: string
-  ): void {
+  function resolveInlineCommandApproval(requestId: string, approved: boolean, note?: string): void {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     // Prefer the chat that owns the pending approval step.
     let targetChatTabId = chatTabId
     for (const [candidateId, run] of activeAgentRunRef.current.entries()) {
       const pending = (run.steps ?? []).some(
-        (step) => step.kind === 'approval' && step.requestId === requestId && step.phase === 'pending'
+        (step) =>
+          step.kind === 'approval' && step.requestId === requestId && step.phase === 'pending'
       )
       if (pending) {
         targetChatTabId = candidateId
@@ -3096,18 +3090,10 @@ function App(): React.JSX.Element {
     }
     void _clearThinking
     setThinking(t.input.thinkingPreparingRun)
-    await runAgentConversation(
-      input,
-      terminalTabId,
-      undefined,
-      displayInput,
-      false,
-      startedAt,
-      {
-        conversationContext,
-        chatTabId
-      }
-    )
+    await runAgentConversation(input, terminalTabId, undefined, displayInput, false, startedAt, {
+      conversationContext,
+      chatTabId
+    })
   }
 
   async function runAgentConversation(
@@ -3186,8 +3172,7 @@ function App(): React.JSX.Element {
       const runTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
       const chatTab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
       const runModelSelection = resolveTabModelSelection(chatTab ?? runTab, config, visibleModels)
-      const executionTabId =
-        activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId
+      const executionTabId = activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId
       let terminalContext = ''
       try {
         const context = await window.api.terminal.getContext(executionTabId)
@@ -4798,8 +4783,9 @@ function App(): React.JSX.Element {
             providerEditorOpen={providerEditorOpen}
             openApiEditorOpen={openApiEditorOpen}
             settingsOpenApiProfile={
-              (config.openApiProfiles ?? []).find((profile) => profile.id === config.openApiProfileId) ??
-              (config.openApiProfiles ?? [])[0]
+              (config.openApiProfiles ?? []).find(
+                (profile) => profile.id === config.openApiProfileId
+              ) ?? (config.openApiProfiles ?? [])[0]
             }
             instructionEditorOpen={instructionEditorOpen}
             validation={validation}
@@ -4812,7 +4798,9 @@ function App(): React.JSX.Element {
             onDeleteProvider={deleteSettingsProvider}
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
-            onWorkspaceCwdChange={(value) => updateConfig('workspaceCwd', value.trim() || undefined)}
+            onWorkspaceCwdChange={(value) =>
+              updateConfig('workspaceCwd', value.trim() || undefined)
+            }
             onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
             onCommandWhitelistChange={(text) => {
               setCommandWhitelistText(text)
@@ -5101,7 +5089,6 @@ function isApprovalTargetAlive(tabId: string | undefined, tabs: AgentTerminalTab
 
   return false
 }
-
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   const next = { ...record }

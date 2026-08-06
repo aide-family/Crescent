@@ -204,7 +204,12 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     model: modelOk ? requestedModel : defaultModel,
     workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
-    maxActiveTools: clampNumber(config.maxActiveTools, 1, 12, defaultAgentConfig.maxActiveTools ?? 5),
+    maxActiveTools: clampNumber(
+      config.maxActiveTools,
+      1,
+      12,
+      defaultAgentConfig.maxActiveTools ?? 5
+    ),
     commandWhitelist: normalizeStringList(
       config.commandWhitelist ?? defaultAgentConfig.commandWhitelist
     ),
