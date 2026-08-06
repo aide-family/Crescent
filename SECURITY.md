@@ -13,19 +13,19 @@ Include:
 - Crescent version or commit SHA.
 - Operating system and package type.
 - Reproduction steps.
-- Impact and affected capability, such as terminal command execution, SSH, local file access, OpenAPI, MCP, model provider credentials, or knowledge-base storage.
+- Impact and affected capability, such as local Pi bash/file tools, SSH panes, model provider credentials, or knowledge-base storage.
 - Relevant logs with secrets, hostnames, private paths, tokens, and passwords removed.
 
 ## Security-Sensitive Areas
 
-Crescent intentionally works near powerful local and remote capabilities:
+Crescent embeds the [Pi coding agent](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) in the Electron main process. Agent runs use Pi built-in tools against a configured workspace directory:
 
-- Terminal and interactive docked sub-terminal command execution (including detached continuous observation).
-- SSH connections and credential prompts.
-- Local file parsing and artifact writing.
-- OpenAPI and MCP tool execution.
-- Model provider API keys and custom endpoints.
+- `read` / `write` / `edit` — local filesystem access under the agent workspace cwd.
+- `bash` — local shell execution with the user's privileges in that cwd (no agent command-approval gate in v1).
+- Model provider API keys and custom OpenAI-compatible endpoints (via Pi `ModelRuntime`).
 - Local knowledge-base and session persistence.
+
+Manual terminal / SSH panes remain available for interactive use; the agent does **not** drive remote PTY sessions or OpenAPI/MCP tool runtimes in this release.
 
 Changes in these areas should include tests or a clear manual verification note.
 
@@ -35,7 +35,7 @@ Release signing and notarization requirements are documented in [docs/CODE_SIGNI
 
 ## Maintainer Triage
 
-- Confirm whether the report crosses a command, filesystem, network, credential, or remote-state boundary.
-- Reproduce with a minimal configuration.
-- Check command approval, tool catalog metadata, local file destination handling, and secret redaction behavior.
+- Confirm whether the report crosses a filesystem, shell, network, credential, or remote-state boundary.
+- Reproduce with a minimal configuration and known workspace cwd.
+- Check secret redaction, credential storage under `~/.crescent/pi-agent/`, and workspace path handling.
 - Prefer a private patch and coordinated disclosure for confirmed vulnerabilities.

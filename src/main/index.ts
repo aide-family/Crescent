@@ -92,6 +92,18 @@ function createWindow(): void {
     mainWindow.show()
   })
 
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('Renderer failed to load', { errorCode, errorDescription, validatedURL })
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process gone', details)
+  })
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.error(`[renderer:${level}] ${message} (${sourceId}:${line})`)
+    }
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }

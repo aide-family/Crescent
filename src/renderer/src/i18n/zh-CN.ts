@@ -503,6 +503,11 @@ const zhCN = {
     commandWhitelist: '命令白名单',
     commandWhitelistHint:
       '一行一条规则。普通文本为精确匹配；末尾 * 表示前缀匹配；/.../ 表示正则匹配。命中的命令会跳过 AI 风险审核并直接执行。',
+    workspaceCwd: 'Agent 工作区',
+    workspaceCwdHint: 'Pi 的 read/write/edit/bash 工具在此目录运行。留空则使用 ~/.crescent/workspace。',
+    piToolsTitle: 'Pi 工具',
+    piToolsHint:
+      'Agent 使用 Pi 内置工具（read、write、edit、bash）。OpenAPI/MCP 与终端命令类 Agent 工具已移除。',
     copySkillInstallCommand: '复制安装命令',
     copySkillInstallLog: '复制安装日志',
     document: 'OpenAPI URL、JSON 或本地文件路径',
