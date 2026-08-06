@@ -21,9 +21,9 @@ export function mapPiSessionEventToAgentEvents(
 
   switch (event.type) {
     case 'agent_start':
-      return [{ type: 'status', message: 'Agent started.', ...base }]
+      return []
     case 'turn_start':
-      return [{ type: 'status', message: 'Thinking…', ...base }]
+      return []
     case 'message_update': {
       const assistantEvent = event.assistantMessageEvent
       if (assistantEvent.type === 'text_delta' && assistantEvent.delta) {

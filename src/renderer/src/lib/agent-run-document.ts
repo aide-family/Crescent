@@ -1,5 +1,6 @@
 import type { Dictionary } from '@renderer/i18n'
 import { parseAgentRunMarkdown } from './agent-run-markdown'
+import { legacyActionsMarkdownToSteps } from './legacy-actions-to-steps'
 import type { AgentRunAction, AgentRunStep, AgentRunViewState } from './terminal-tabs'
 
 export const AGENT_RUN_DOCUMENT_MARKER = 'CRESCENT_RUN_V2'
@@ -67,12 +68,13 @@ export function parseAgentRunDocument(value: string, t: Dictionary): ParsedAgent
   const legacy = parseAgentRunMarkdown(normalized, t)
   if (!legacy) return null
 
+  // Promote legacy action markdown into structured steps so the UI never falls
+  // back to the old "动作概要 / action summary" presentation.
   return {
-    version: 1,
-    steps: [],
+    version: 2,
+    steps: legacyActionsMarkdownToSteps(legacy.actionsMarkdown),
     resultMarkdown: legacy.resultMarkdown,
     errorMarkdown: legacy.errorMarkdown,
-    actionsMarkdown: legacy.actionsMarkdown,
     elapsedMarkdown: legacy.elapsedMarkdown,
     elapsedMs: parseElapsedMs(legacy.elapsedMarkdown, t)
   }
@@ -122,11 +124,11 @@ export function deriveActionsFromSteps(steps: AgentRunStep[], thinkingText?: str
     const detailParts = [
       step.command ? `Command:\n${step.command}` : step.argsText ? `Args:\n${step.argsText}` : '',
       step.resultText ? `Output:\n${step.resultText}` : '',
-      step.phase === 'started' ? 'Running…' : step.isError ? 'Tool failed.' : 'Tool finished.'
+      step.phase === 'started' ? 'Running…' : step.isError ? 'Tool failed.' : ''
     ].filter(Boolean)
     actions.push({
       title: `Tool: ${step.name}`,
-      detail: detailParts.join('\n\n')
+      detail: detailParts.join('\n\n') || step.name
     })
   }
   return actions
