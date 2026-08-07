@@ -470,7 +470,21 @@ export type AgentEvent =
     } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)
-  | ({ type: 'error'; message: string } & AgentEventMeta)
+  | ({
+      type: 'error'
+      message: string
+      /**
+       * Structured provider failure class (additive).
+       * `quota` must not dump raw HTTP JSON into the timeline.
+       */
+      kind?: 'quota' | 'transient' | 'other'
+      /** @deprecated Prefer `kind: 'quota'`. Kept for additive IPC compatibility. */
+      code?: 'quota_exceeded'
+      provider?: string
+      /** Human-readable reset / wait hint (e.g. "in about 5 min"). */
+      resetHint?: string
+      retryAfterMs?: number
+    } & AgentEventMeta)
   | ({ type: 'done'; message: string } & AgentEventMeta)
 
 export interface AgentEventMeta {

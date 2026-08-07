@@ -1,10 +1,19 @@
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent'
 
+import {
+  buildQuotaResetHint,
+  classifyProviderError,
+  formatQuotaWaitingStatus,
+  formatRetryAfterLabel,
+  summarizeProviderErrorForStatus
+} from '../../shared/provider-error'
 import type { AgentEvent } from './types'
 
 export interface PiEventBridgeMeta {
   runId: string
   tabId?: string
+  /** Host locale for resetHint / waiting status (`zh*` → zh). */
+  locale?: string
 }
 
 const MAX_TOOL_RESULT_CHARS = 8_000
@@ -58,14 +67,45 @@ export function mapPiSessionEventToAgentEvents(
           ...base
         }
       ]
-    case 'auto_retry_start':
+    case 'auto_retry_start': {
+      const locale = resolveBridgeLocale(meta.locale)
+      const classified = classifyProviderError(event.errorMessage ?? '')
+      if (classified.kind === 'quota_exceeded') {
+        // Stop surfacing raw JSON retries; host will abort further attempts.
+        const resetHint = buildQuotaResetHint(classified.retryAfterMs, locale)
+        return [
+          {
+            type: 'status',
+            message: formatQuotaWaitingStatus(classified, locale),
+            ...base
+          },
+          {
+            type: 'error',
+            message: 'AccountQuotaExceeded',
+            kind: 'quota',
+            code: 'quota_exceeded',
+            provider: classified.provider,
+            resetHint,
+            retryAfterMs: classified.retryAfterMs,
+            ...base
+          }
+        ]
+      }
+      const summary = summarizeProviderErrorForStatus(event.errorMessage ?? '')
+      const waitHint =
+        classified.retryAfterMs != null
+          ? formatRetryAfterLabel(classified.retryAfterMs, locale)
+          : locale === 'zh'
+            ? '等待恢复'
+            : 'waiting to recover'
       return [
         {
           type: 'status',
-          message: `Retrying (${event.attempt}/${event.maxAttempts}): ${event.errorMessage}`,
+          message: `Retrying (${event.attempt}/${event.maxAttempts}): ${summary} — ${waitHint}`,
           ...base
         }
       ]
+    }
     case 'compaction_start':
       return [{ type: 'status', message: `Compacting context (${event.reason})…`, ...base }]
     case 'agent_end':
@@ -163,4 +203,8 @@ export function extractAssistantTextFromMessages(messages: unknown[]): string {
     if (parts.length > 0) lastText = parts.join('\n').trim()
   }
   return lastText
+}
+
+function resolveBridgeLocale(locale: string | undefined): 'zh' | 'en' {
+  return locale?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
