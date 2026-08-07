@@ -34,7 +34,9 @@ export function AgentLogList({
   feedbackByLogId,
   feedbackBusyLogId,
   onRetryConnection,
-  onOpenConnections
+  onOpenConnections,
+  onAddCommandToWhitelist,
+  onInjectSuggestions
 }: {
   logRef: RefObject<HTMLDivElement | null>
   entries: AgentLogEntry[]
@@ -54,6 +56,8 @@ export function AgentLogList({
   onExportTrace: (entry: AgentLogEntry) => void
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
+  onAddCommandToWhitelist?: (command: string) => void
+  onInjectSuggestions?: (texts: string[]) => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
   onRetryConnection?: () => void
@@ -134,6 +138,8 @@ export function AgentLogList({
                   onExportTrace={() => onExportTrace(entry)}
                   onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
                   onResolveApproval={onResolveApproval}
+                  onAddCommandToWhitelist={onAddCommandToWhitelist}
+                  onInjectSuggestions={onInjectSuggestions}
                 />
               </>
             ) : (

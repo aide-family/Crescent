@@ -10,7 +10,7 @@ import {
   observeTerminalHostResize,
   type PipeTerminalState
 } from '../lib/pipe-terminal'
-import { parseSubterminalTabId } from '../lib/terminal-text'
+import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, parseSubterminalTabId } from '../lib/terminal-text'
 import {
   resolveSessionChatTabId,
   type AgentLogEntry,
@@ -139,8 +139,9 @@ export function useXtermLifecycle({
     terminal.open(host)
     fitAddon.fit()
 
-    if (tab.terminalOutput) terminal.write(tab.terminalOutput)
+    if (tab.terminalOutput) terminal.write(filterCrescentBootstrapOutput(tab.terminalOutput))
 
+    const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
       if (terminalModeRef.current === 'pipe') {
         handlePipeTerminalInput(terminal, data)
@@ -156,11 +157,14 @@ export function useXtermLifecycle({
         return
       }
 
+      const filtered = bootstrapFilter.push(event.data)
+      if (!filtered) return
+
       updateTab(event.tabId, (current) => ({
         ...current,
-        terminalOutput: `${current.terminalOutput}${event.data}`.slice(-200_000)
+        terminalOutput: `${current.terminalOutput}${filtered}`.slice(-200_000)
       }))
-      if (event.tabId === activeTabIdRef.current) terminal.write(event.data)
+      if (event.tabId === activeTabIdRef.current) terminal.write(filtered)
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
       const subterminal = parseSubterminalTabId(tabId)

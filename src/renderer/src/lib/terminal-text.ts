@@ -194,19 +194,134 @@ function isSubterminalDisplayNoise(line: string): boolean {
   const trimmed = line.trim()
   if (!trimmed) return false
 
+  if (isCrescentScriptBootstrapLine(trimmed)) return true
+
   return (
     trimmed === '%' ||
     /^➜\s+/.test(trimmed) ||
     /^stty\s+-?echo(?:\s+2>\/dev\/null)?$/.test(trimmed) ||
-    trimmed.includes('__crescent_script=$(mktemp') ||
     trimmed.includes('$__crescent_script') ||
     trimmed.includes('__crescent_status=') ||
     trimmed.includes('__CRESCENT_CMD_START_') ||
     trimmed.includes('__CRESCENT_CMD_END_') ||
     /printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(trimmed) ||
-    /base64\s+-[dD]\s+>/.test(trimmed) ||
-    /^[A-Za-z0-9+/=]{100,}$/.test(trimmed)
+    /base64\s+-[dD]\s+>/.test(trimmed)
   )
+}
+
+/**
+ * Detect Crescent PTY bootstrap lines that start with `__crescent_script=`
+ * (optionally after a shell prompt) and long base64 continuation lines.
+ */
+export function isCrescentScriptBootstrapLine(line: string): boolean {
+  // ANSI CSI sequences intentionally matched; control char is required.
+  // eslint-disable-next-line no-control-regex -- strip terminal ANSI escapes
+  const stripped = line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\r/g, '')
+  const trimmed = stripped.trim()
+  if (!trimmed) return false
+
+  if (trimmed.startsWith('__crescent_script=')) return true
+
+  // Prompt-prefixed echo, e.g. `user@host:~# __crescent_script=...`
+  const afterPrompt = trimmed.replace(/^.*?[%$#>]\s+/, '')
+  if (afterPrompt.startsWith('__crescent_script=')) return true
+
+  // Pure base64 continuation of the encoded script payload
+  if (/^[A-Za-z0-9+/=]{80,}$/.test(trimmed)) return true
+
+  return false
+}
+
+/** Filter bootstrap / base64 lines from a complete terminal buffer (display only). */
+export function filterCrescentBootstrapOutput(value: string): string {
+  const parts = value.split(/(\r\n|\n|\r)/)
+  let output = ''
+  let skipNewline = false
+
+  for (const part of parts) {
+    if (/^(\r\n|\n|\r)$/.test(part)) {
+      if (!skipNewline) output += part
+      skipNewline = false
+      continue
+    }
+    if (isCrescentScriptBootstrapLine(part)) {
+      skipNewline = true
+      continue
+    }
+    output += part
+  }
+
+  return output
+}
+
+/** Incremental filter for streaming PTY chunks written to xterm. */
+export function createCrescentBootstrapFilter(): {
+  push: (chunk: string) => string
+  flush: () => string
+} {
+  let carry = ''
+  return {
+    push(chunk: string): string {
+      const combined = carry + chunk
+      const parts = combined.split(/(\r\n|\n|\r)/)
+      const last = parts[parts.length - 1] ?? ''
+      const hasIncomplete = parts.length > 0 && !/^(\r\n|\n|\r)$/.test(last)
+      if (hasIncomplete) {
+        parts.pop()
+        carry = last
+      } else {
+        carry = ''
+      }
+
+      let output = ''
+      let skipNewline = false
+      for (const part of parts) {
+        if (/^(\r\n|\n|\r)$/.test(part)) {
+          if (!skipNewline) output += part
+          skipNewline = false
+          continue
+        }
+        if (isCrescentScriptBootstrapLine(part)) {
+          skipNewline = true
+          continue
+        }
+        output += part
+      }
+
+      if (!carry) return output
+
+      // Hold only when the incomplete line already looks like bootstrap / base64.
+      if (shouldHoldIncompleteBootstrapLine(carry)) {
+        return output
+      }
+
+      // Normal interactive typing: emit immediately.
+      output += carry
+      carry = ''
+      return output
+    },
+    flush(): string {
+      const rest = carry
+      carry = ''
+      if (!rest || isCrescentScriptBootstrapLine(rest) || shouldHoldIncompleteBootstrapLine(rest)) {
+        return ''
+      }
+      return rest
+    }
+  }
+}
+
+function shouldHoldIncompleteBootstrapLine(line: string): boolean {
+  // eslint-disable-next-line no-control-regex -- strip terminal ANSI escapes
+  const stripped = line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\r/g, '')
+  const trimmed = stripped.trim()
+  if (!trimmed) return false
+  if (trimmed.startsWith('__crescent_script=')) return true
+  const afterPrompt = trimmed.replace(/^.*?[%$#>]\s+/, '')
+  if (afterPrompt.startsWith('__crescent_script=')) return true
+  // Growing base64 blob mid-line
+  if (/^[A-Za-z0-9+/=]{40,}$/.test(trimmed)) return true
+  return false
 }
 
 function collapseBlankLines(lines: string[]): string[] {

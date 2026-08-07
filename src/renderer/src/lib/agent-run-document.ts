@@ -50,10 +50,16 @@ export function parseAgentRunDocument(value: string, t: Dictionary): ParsedAgent
       try {
         const parsed = JSON.parse(rest.slice(0, jsonEnd)) as SerializedAgentRunDocument
         if (parsed?.version === 2 && Array.isArray(parsed.steps)) {
+          const thinkingText =
+            typeof parsed.thinkingText === 'string' ? parsed.thinkingText : undefined
+          const steps = upgradeStepsWithThinkingText(
+            parsed.steps.filter(isAgentRunStep),
+            thinkingText
+          )
           return {
             version: 2,
-            thinkingText: typeof parsed.thinkingText === 'string' ? parsed.thinkingText : undefined,
-            steps: parsed.steps.filter(isAgentRunStep),
+            thinkingText: thinkingText ?? deriveThinkingTextFromSteps(steps),
+            steps,
             resultMarkdown: typeof parsed.result === 'string' ? parsed.result : '',
             errorMarkdown: typeof parsed.error === 'string' ? parsed.error : '',
             elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined
@@ -98,7 +104,8 @@ export function deriveActionsFromSteps(
   thinkingText?: string
 ): AgentRunAction[] {
   const actions: AgentRunAction[] = []
-  if (thinkingText?.trim()) {
+  const hasThoughtSteps = steps.some((step) => step.kind === 'thought')
+  if (!hasThoughtSteps && thinkingText?.trim()) {
     actions.push({
       title: 'Thinking',
       detail: thinkingText.trim()
@@ -107,6 +114,16 @@ export function deriveActionsFromSteps(
   for (const step of steps) {
     if (step.kind === 'status') {
       actions.push({ title: step.title, detail: step.detail ?? step.title })
+      continue
+    }
+    if (step.kind === 'thought') {
+      if (!step.text.trim()) continue
+      actions.push({ title: 'Thinking', detail: step.text.trim() })
+      continue
+    }
+    if (step.kind === 'message') {
+      if (!step.text.trim()) continue
+      actions.push({ title: 'Message', detail: step.text.trim() })
       continue
     }
     if (step.kind === 'approval') {
@@ -126,6 +143,7 @@ export function deriveActionsFromSteps(
       })
       continue
     }
+    if (step.kind !== 'tool') continue
     const detailParts = [
       step.command ? `Command:\n${step.command}` : step.argsText ? `Args:\n${step.argsText}` : '',
       step.resultText ? `Output:\n${step.resultText}` : '',
@@ -137,6 +155,103 @@ export function deriveActionsFromSteps(
     })
   }
   return actions
+}
+
+/** Promote legacy top-level thinkingText into an interleaved thought step when missing. */
+export function upgradeStepsWithThinkingText(
+  steps: AgentRunStep[],
+  thinkingText?: string
+): AgentRunStep[] {
+  if (!thinkingText?.trim()) return steps
+  if (steps.some((step) => step.kind === 'thought')) return steps
+  return [
+    {
+      id: 'thought-legacy',
+      kind: 'thought',
+      text: thinkingText.trim(),
+      phase: 'done'
+    },
+    ...steps
+  ]
+}
+
+export function deriveThinkingTextFromSteps(steps: AgentRunStep[]): string | undefined {
+  const texts = steps
+    .filter((step): step is Extract<AgentRunStep, { kind: 'thought' }> => step.kind === 'thought')
+    .map((step) => step.text.trim())
+    .filter(Boolean)
+  if (texts.length === 0) return undefined
+  return texts.join('\n\n')
+}
+
+export function closeStreamingThoughts(steps: AgentRunStep[]): AgentRunStep[] {
+  let changed = false
+  const next = steps.map((step) => {
+    if (step.kind === 'thought' && step.phase === 'streaming') {
+      changed = true
+      return { ...step, phase: 'done' as const }
+    }
+    return step
+  })
+  return changed ? next : steps
+}
+
+export function closeStreamingMessages(steps: AgentRunStep[]): AgentRunStep[] {
+  let changed = false
+  const next = steps.map((step) => {
+    if (step.kind === 'message' && step.phase === 'streaming') {
+      changed = true
+      return { ...step, phase: 'done' as const }
+    }
+    return step
+  })
+  return changed ? next : steps
+}
+
+/** Close open thought + message steps before a new timeline phase. */
+export function closeStreamingOpenSteps(steps: AgentRunStep[]): AgentRunStep[] {
+  return closeStreamingMessages(closeStreamingThoughts(steps))
+}
+
+/** Formal Result chrome is only shown after the run records elapsedMs. */
+export function shouldShowAgentRunResult(input: {
+  hasResultContent: boolean
+  elapsedMs?: number
+}): boolean {
+  return input.hasResultContent && typeof input.elapsedMs === 'number'
+}
+
+/**
+ * Hide a streaming message that duplicates the formal result panel.
+ * Equal after trim, or one side length > 200 and contains the other.
+ */
+export function isDuplicateResultMessage(messageText: string, resultMarkdown: string): boolean {
+  const message = messageText.trim()
+  const result = resultMarkdown.trim()
+  if (!message || !result) return false
+  if (message === result) return true
+  if (message.length > 200 && message.includes(result)) return true
+  if (result.length > 200 && result.includes(message)) return true
+  return false
+}
+
+/** Drop the last message step when it duplicates resultMarkdown (no placeholder). */
+export function omitDuplicateTrailingMessage(
+  steps: AgentRunStep[],
+  resultMarkdown: string
+): AgentRunStep[] {
+  let lastMessageIndex = -1
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].kind === 'message') {
+      lastMessageIndex = i
+      break
+    }
+  }
+  if (lastMessageIndex < 0) return steps
+  const step = steps[lastMessageIndex]
+  if (step.kind !== 'message') return steps
+  if (!isDuplicateResultMessage(step.text, resultMarkdown)) return steps
+  return steps.filter((_, index) => index !== lastMessageIndex)
 }
 
 export function syncActionsFromStructuredRun(run: AgentRunViewState): AgentRunViewState {
@@ -235,6 +350,12 @@ function isAgentRunStep(value: unknown): value is AgentRunStep {
   const step = value as AgentRunStep
   if (typeof step.id !== 'string') return false
   if (step.kind === 'status') return typeof step.title === 'string'
+  if (step.kind === 'thought') {
+    return typeof step.text === 'string' && (step.phase === 'streaming' || step.phase === 'done')
+  }
+  if (step.kind === 'message') {
+    return typeof step.text === 'string' && (step.phase === 'streaming' || step.phase === 'done')
+  }
   if (step.kind === 'tool') {
     return typeof step.name === 'string' && (step.phase === 'started' || step.phase === 'finished')
   }
@@ -250,10 +371,11 @@ function isAgentRunStep(value: unknown): value is AgentRunStep {
 
 /** Prefer live structured run state over reparsing serialized log text while streaming. */
 export function agentRunViewToDocument(run: AgentRunViewState): ParsedAgentRunDocument {
+  const steps = upgradeStepsWithThinkingText(run.steps ?? [], run.thinkingText)
   return {
     version: 2,
-    thinkingText: run.thinkingText,
-    steps: run.steps ?? [],
+    thinkingText: run.thinkingText ?? deriveThinkingTextFromSteps(steps),
+    steps,
     resultMarkdown: run.result ?? '',
     errorMarkdown: run.error ?? '',
     elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined

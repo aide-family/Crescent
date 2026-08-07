@@ -1,3 +1,5 @@
+import { matchGlobCommand, normalizeCommand } from '../../shared/command-guard'
+
 export function matchCommandWhitelist(command: string, rules: string[]): string | undefined {
   const normalizedCommand = normalizeCommand(command)
   if (!normalizedCommand) return undefined
@@ -7,18 +9,11 @@ export function matchCommandWhitelist(command: string, rules: string[]): string 
     if (!normalizedRule || normalizedRule.startsWith('#')) continue
 
     if (matchesRegexRule(normalizedCommand, normalizedRule)) return normalizedRule
-    if (matchesPrefixRule(normalizedCommand, normalizedRule)) return normalizedRule
+    if (matchGlobCommand(command, normalizedRule)) return normalizedRule
     if (normalizedCommand === normalizeCommand(normalizedRule)) return normalizedRule
   }
 
   return undefined
-}
-
-function matchesPrefixRule(command: string, rule: string): boolean {
-  if (!rule.endsWith('*')) return false
-
-  const prefix = normalizeCommand(rule.slice(0, -1))
-  return Boolean(prefix && command.startsWith(prefix))
 }
 
 function matchesRegexRule(command: string, rule: string): boolean {
@@ -34,8 +29,4 @@ function matchesRegexRule(command: string, rule: string): boolean {
   } catch {
     return false
   }
-}
-
-function normalizeCommand(value: string): string {
-  return value.trim().replace(/\s+/g, ' ')
 }

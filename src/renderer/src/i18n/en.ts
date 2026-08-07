@@ -115,7 +115,7 @@ const en = {
   },
   commandReview: {
     approved: 'Command approved by user',
-    analyzing: 'Command review subprocess is analyzing risk',
+    analyzing: 'Reviewing command…',
     approve: 'Approve and run',
     auditSummary: 'Audit summary',
     autoApproved: 'Command audit passed and was auto-approved',
@@ -146,7 +146,18 @@ const en = {
     riskPoints: 'Risk points',
     submitted: 'Command submitted for review',
     title: 'Command review',
-    whitelisted: 'Command matched the whitelist and was allowed directly'
+    addToWhitelist: 'Add to whitelist',
+    addToWhitelistTooltip: 'Add this command to the whitelist to skip AI audit next time',
+    addedToWhitelist: 'Added to whitelist',
+    whitelisted: 'Command matched the whitelist and was allowed directly',
+    lowRiskAutoPass: 'Low risk — auto-approved',
+    lowRiskAutoPassWithMs: 'Low risk — auto-approved · {ms}ms',
+    lowRiskGroupCollapsed: '✓ {n} read-only commands auto-approved · max {ms}ms',
+    timeoutManualConfirm: 'This command needs manual confirmation',
+    highRiskHuman: '⚠️ This command performs a remote action ({verb}). Confirm to proceed.',
+    whitelistSuggest: 'Add this class of commands to the whitelist?',
+    whitelistSuggestAdd: 'Add',
+    whitelistSuggestIgnore: 'Ignore'
   },
   connections: {
     actionsCount: 'login actions',
@@ -227,8 +238,13 @@ const en = {
       'No matching SSH connection was found. Check existing connections or custom connection names.',
     connectionClarifyFallback:
       'I could not determine the target connection. Tell me which SSH connection to log into, or whether to stay in the current terminal.',
+    connectionClarifyPickOne:
+      'Choose a connection target (reply with a number or name):\n{options}',
+    connectionNoneConfigured:
+      'No SSH/cluster connections are configured. Add one in the connection list, or say if you want to continue in the local terminal only.',
     connectionClarifyTitle: 'Connection target needs confirmation',
     connectionClarifyReplyPrefix: 'User clarification:',
+    autoConnecting: '→ Auto-connecting {label}…',
     connectionStarting: 'Starting connection with login actions',
     connectionTarget: 'Connection target',
     currentTerminalInstruction:
@@ -358,10 +374,15 @@ const en = {
     toolFinished: 'Finished',
     toolFailed: 'Failed',
     toolCommand: 'Command',
+    toolCommandLabel: 'Terminal command',
     toolArgs: 'Arguments',
     toolOutput: 'Output',
     toolWorkspaceHint: 'File tools run in the agent workspace.',
     toolTerminalHint: 'Commands run in the visible terminal pane.',
+    expandCommand: 'Expand command',
+    collapseCommand: 'Collapse command',
+    copyCommand: 'Copy command',
+    autoApprovedShort: 'Auto-allowed',
     agentCanceled: 'Agent run was stopped manually.',
     askPlaceholder: 'Ask AI, or type /command check the current terminal',
     chatNoTools: 'Chat works without OpenAPI tools',
@@ -441,6 +462,11 @@ const en = {
     thinkingAnalyzingRequest:
       'Understanding your request and checking the current terminal context…',
     thinkingResolvingConnection: 'Deciding whether a configured SSH connection should be opened…',
+    routingTo: '→ {label}',
+    injectSelectedSuggestions: 'Add selected suggestions to input',
+    injectedSuggestionsCount: 'Added {n} suggestion(s)',
+    approvalNotePlaceholder: 'Optional note for the AI',
+    yourApprovalNote: 'Your note: {note}',
     thinkingPreparingRun: 'Preparing the execution plan and available tools…',
     slashCommandHint: 'Type / to reference context, MCP tools, mode, or skills',
     slashNew: 'New session',

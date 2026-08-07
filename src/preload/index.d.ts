@@ -177,6 +177,8 @@ interface TerminalAgentApi {
     resolve: (id: string) => Promise<ConnectionConfig | undefined>
     save: (input: ConnectionInput) => Promise<ConnectionConfig[]>
     delete: (id: string) => Promise<ConnectionConfig[]>
+    getLastUsed: () => Promise<string | null>
+    setLastUsed: (id: string) => Promise<string | null>
   }
   storage: {
     saveTabs: (tabs: StoredSessionTab[]) => Promise<{ ok: boolean }>

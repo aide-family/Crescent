@@ -126,6 +126,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     })
 
     let collectedText = ''
+    let lastRetryError = ''
     hosted.unsubscribe?.()
     hosted.unsubscribe = hosted.session.subscribe((event) => {
       for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
@@ -134,6 +135,13 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       })) {
         if (agentEvent.type === 'token') {
           collectedText += agentEvent.text
+        }
+        if (
+          agentEvent.type === 'status' &&
+          typeof agentEvent.message === 'string' &&
+          /^Retrying\b/i.test(agentEvent.message)
+        ) {
+          lastRetryError = agentEvent.message
         }
         emit(agentEvent)
       }
@@ -149,10 +157,16 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
 
     const messages = hosted.session.messages as unknown[]
     const finalText =
-      extractAssistantTextFromMessages(messages).trim() || collectedText.trim() || 'Done.'
+      extractAssistantTextFromMessages(messages).trim() || collectedText.trim()
 
-    emit({ type: 'done', message: finalText, runId, tabId: input.tabId })
-    return { ok: true, text: finalText }
+    if (!finalText && lastRetryError) {
+      emit({ type: 'error', message: lastRetryError, runId, tabId: input.tabId })
+      return { ok: false, error: lastRetryError }
+    }
+
+    const text = finalText || 'Done.'
+    emit({ type: 'done', message: text, runId, tabId: input.tabId })
+    return { ok: true, text }
   } catch (error) {
     const active = activeRuns.get(runId)
     if (active?.abortRequested) {
@@ -248,7 +262,59 @@ async function ensureHostedSession(
         "The bash tool executes in the user's visible terminal pane (main terminal or a docked subterminal).",
         'Commands are pasted into the terminal so the user can see them; high-risk commands require in-chat approval before execution.',
         'Prefer bash for cluster/host inspection when the user is already in the target environment.',
-        instructionContext ? `\n# Local instructions\n${instructionContext}` : ''
+        '',
+        '# Expert guided execution',
+        'Work like a senior ops engineer guiding the operator through the investigation:',
+        '- Before each diagnostic bash command, write one short user-facing sentence with the goal or hypothesis.',
+        '- After you receive evidence, briefly interpret what it means and say what you will check next.',
+        '- Do not dump a long silent sequence of commands and only summarize at the end.',
+        '- Put private reasoning in the thinking/reasoning channel; put operator-facing guidance in normal reply text.',
+        '- When finished, give a structured conclusion: status, notable risks, and recommended next actions.',
+        instructionContext ? `\n# Local instructions\n${instructionContext}` : '',
+        '',
+        '# 命令粒度',
+        '- 单次调用 ≤3 段子命令且同质（全只读）；「状态查询」与「日志抽取」不混在同一条链里。',
+        '',
+        '# 集群全量巡检流程',
+        '1. 一条概览命令定位异常：kubectl get pods -A --no-headers | awk \'$4!="Running"&&$4!="Completed"\'',
+        '2. 只深钻异常 Pod：每个异常 Pod 独立一次 describe + 一次 logs --tail。',
+        '3. 健康服务按命名空间聚合为一行，不逐 Pod 列表。',
+        '4. 节点资源（free -h && df -h）合并进环境确认命令。',
+        '',
+        '# 叙述纪律',
+        '- 用户可见的阶段间文字 ≤1 句；思考每轮 ≤3 句，禁止引用命令输出原文。',
+        '',
+        '# 全量报告模板（问题前置，仅输出一次）',
+        '## 📊 集群健康报告',
+        '**❌ 异常服务**｜表格置顶：服务 / 命名空间 / 状态 / 原因',
+        '**🔧 修复建议**｜编号列表，每条可直接执行',
+        '**✅ 健康摘要**｜每命名空间一行',
+        '**概览**｜节点 / 版本 / 运行时间 / 内存 / 磁盘',
+        '**总体评价**｜≤2 句',
+        '',
+        '# 收尾与清理纪律',
+        '- 禁止在任务末尾启动后台进程（& / nohup）、kill、port-forward 常驻；',
+        '  需要临时 port-forward 时，用单条前台命令包住超时：',
+        "  `timeout 8 sh -c 'kubectl port-forward ... & PF=$!; sleep 2; curl ...; kill $PF'`",
+        '  整条视为一次调用，不留残留进程。',
+        '- 收尾只允许只读汇总命令；任何含 kill/&/port-forward 的命令不得作为最后一步。',
+        '- 同一命令执行失败后，不原样重试；先分析 stderr 再换方案',
+        '  （已触发过审批的命令尤其如此，禁止重复弹审批）。',
+        '# 集群内服务访问经验',
+        '- 容器内常无 curl/wget；访问集群内服务优先 kubectl port-forward，',
+        '  避免 exec curl → exec wget → port-forward 的试错链。',
+        '',
+        '# 图表输出纪律',
+        '- 架构图 / 流程图 / 时序图 / 拓扑图一律用 mermaid 代码块输出',
+        '  （```mermaid ... ```），禁止用 ASCII art、Unicode 框线或纯文本模拟图表。',
+        '- 常用类型映射：架构/拓扑 → graph LR/TD；流程 → flowchart；时序 → sequenceDiagram；',
+        '  类/ER → classDiagram/erDiagram。',
+        '- 节点文字简短，连线带语义标签；图过大时拆成多张分主题图。',
+        '',
+        '# 连接与登录纪律',
+        '- 目标终端/SSH/集群连接由系统路由层处理；你不要向用户询问或列举登录方式',
+        '  （例如 Crescent 终端 / kubectl 直连 / SSH）。',
+        '- 目标环境未就绪时等待工具结果，不要改口问用户怎么连；直接执行任务。'
       ]
         .filter(Boolean)
         .join('\n')
@@ -274,14 +340,37 @@ async function ensureHostedSession(
 }
 
 function buildPromptText(input: PiHostRunInput): string {
-  const parts = [input.input.trim()]
-  if (input.terminalContext?.trim()) {
-    parts.unshift(`# Current terminal context\n${input.terminalContext.trim()}\n`)
-  }
+  const parts: string[] = []
+  const languageDirective = buildLanguageDirective(input.locale)
+  if (languageDirective) parts.push(languageDirective)
   if (input.conversationContext?.trim()) {
-    parts.unshift(`# Recent conversation\n${input.conversationContext.trim()}\n`)
+    parts.push(`# Recent conversation\n${input.conversationContext.trim()}\n`)
   }
+  if (input.terminalContext?.trim()) {
+    parts.push(`# Current terminal context\n${input.terminalContext.trim()}\n`)
+  }
+  parts.push(input.input.trim())
   return parts.join('\n')
+}
+
+function buildLanguageDirective(locale: string | undefined): string {
+  const normalized = locale?.trim().toLowerCase() ?? ''
+  if (normalized.startsWith('zh')) {
+    return [
+      '# Language',
+      'Write all user-facing replies AND internal thinking/reasoning entirely in Simplified Chinese (简体中文).',
+      'Do not mix Chinese and English in prose.',
+      'Keep commands, paths, tool names, package names, and log identifiers in their original form.',
+      ''
+    ].join('\n')
+  }
+  return [
+    '# Language',
+    'Write all user-facing replies AND internal thinking/reasoning entirely in English.',
+    'Do not mix languages in prose.',
+    'Keep commands, paths, tool names, package names, and log identifiers in their original form.',
+    ''
+  ].join('\n')
 }
 
 function collectSkillRoots(skillRoot: string): string[] {

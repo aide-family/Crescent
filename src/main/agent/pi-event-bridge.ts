@@ -136,17 +136,19 @@ function extractToolResultText(result: unknown): string {
 }
 
 export function extractAssistantTextFromMessages(messages: unknown[]): string {
-  const texts: string[] = []
+  let lastText = ''
   for (const message of messages) {
     if (!message || typeof message !== 'object') continue
     const role = (message as { role?: string }).role
     if (role !== 'assistant') continue
     const content = (message as { content?: unknown }).content
     if (typeof content === 'string') {
-      texts.push(content)
+      const trimmed = content.trim()
+      if (trimmed) lastText = trimmed
       continue
     }
     if (!Array.isArray(content)) continue
+    const parts: string[] = []
     for (const part of content) {
       if (
         part &&
@@ -154,9 +156,11 @@ export function extractAssistantTextFromMessages(messages: unknown[]): string {
         (part as { type?: string }).type === 'text' &&
         typeof (part as { text?: string }).text === 'string'
       ) {
-        texts.push((part as { text: string }).text)
+        const text = (part as { text: string }).text.trim()
+        if (text) parts.push(text)
       }
     }
+    if (parts.length > 0) lastText = parts.join('\n').trim()
   }
-  return texts.join('\n').trim()
+  return lastText
 }

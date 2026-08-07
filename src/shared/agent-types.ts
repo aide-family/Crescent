@@ -322,6 +322,8 @@ export interface LocalFileWriter {
 
 export type CommandRiskLevel = 'low' | 'medium' | 'high'
 
+export type CommandAuditSource = 'whitelist' | 'rule' | 'subagent' | 'timeout-fallback'
+
 export interface CommandAuditResult {
   summary: string
   operationReason: string
@@ -330,6 +332,10 @@ export interface CommandAuditResult {
   riskPoints: string[]
   impactAnalysis: string
   recommendation: string
+  /** Classification funnel source (additive IPC field). */
+  source?: CommandAuditSource
+  /** Time spent classifying this command, in milliseconds. */
+  elapsedMs?: number
 }
 
 export interface CommandApprovalRequest {

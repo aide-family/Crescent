@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Rasterize vector masters into Electron packaging icons.
+ * Rasterize the logo master into Electron packaging icons + in-app assets.
  *
  * Source of truth:
- *   build/icons/crescent-app.svg  → build/icon.png + resources/icon.png + .icns/.ico
- *   build/icons/crescent-mark.svg → renderer favicon / UI mark
+ *   build/icons/crescent-logo.png  → build/icon.png + resources/icon.png + .icns/.ico
+ *                                   → renderer favicon / ProductLogo mark
  *
  * Usage:
  *   npm run icons
@@ -15,18 +15,67 @@ const os = require('node:os')
 const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
-const appSvg = path.join(root, 'build/icons/crescent-app.svg')
-const markSvg = path.join(root, 'build/icons/crescent-mark.svg')
+const logoMaster = path.join(root, 'build/icons/crescent-logo.png')
 const outBuildPng = path.join(root, 'build/icon.png')
 const outResourcesPng = path.join(root, 'resources/icon.png')
 const outIcns = path.join(root, 'build/icon.icns')
 const outIco = path.join(root, 'build/icon.ico')
 const outMarkPng = path.join(root, 'src/renderer/src/assets/crescent-mark.png')
-const outFaviconSvg = path.join(root, 'src/renderer/src/assets/crescent-logo.svg')
+const outLogoPng = path.join(root, 'src/renderer/src/assets/crescent-logo.png')
 
-async function renderPng(sharp, svgPath, size, background) {
-  return sharp(svgPath, { density: 384 })
-    .resize(size, size, { fit: 'contain', background })
+const charcoal = { r: 13, g: 17, b: 23, alpha: 1 }
+
+/**
+ * Keep mark artwork inside the macOS icon safe zone so the outer ring is not
+ * clipped by the squircle mask (~80–85% of the canvas).
+ */
+const LOGO_SAFE_SCALE = 0.82
+
+/**
+ * macOS / iOS icon corner radius ≈ 22.37% of edge length.
+ * Electron's `app.dock.setIcon()` does NOT apply the system squircle mask, so
+ * packaging + dock icons must bake transparent rounded corners into the PNG.
+ */
+function squircleMaskSvg(size) {
+  const radius = Math.round(size * 0.2237)
+  return Buffer.from(
+    `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">` +
+      `<rect width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#fff"/>` +
+      `</svg>`
+  )
+}
+
+async function renderAppIcon(sharp, masterPath, size) {
+  const logoSize = Math.max(1, Math.round(size * LOGO_SAFE_SCALE))
+  const resized = await sharp(masterPath)
+    .resize(logoSize, logoSize, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer()
+
+  const plate = await sharp({
+    create: {
+      width: size,
+      height: size,
+      channels: 4,
+      background: charcoal
+    }
+  })
+    .composite([{ input: resized, gravity: 'center' }])
+    .png()
+    .toBuffer()
+
+  const mask = await sharp(squircleMaskSvg(size)).png().toBuffer()
+
+  return sharp(plate)
+    .composite([{ input: mask, blend: 'dest-in' }])
+    .withMetadata({ density: 72 })
+    .png({ compressionLevel: 9 })
+    .toBuffer()
+}
+
+async function renderTransparentMark(sharp, masterPath, size) {
+  return sharp(masterPath)
+    .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .withMetadata({ density: 72 })
     .png({ compressionLevel: 9 })
     .toBuffer()
@@ -117,14 +166,11 @@ async function main() {
     throw new Error('Missing sharp. Install with: npm i -D sharp')
   }
 
-  for (const file of [appSvg, markSvg]) {
-    if (!fs.existsSync(file)) throw new Error(`Missing icon master: ${file}`)
+  if (!fs.existsSync(logoMaster)) {
+    throw new Error(`Missing icon master: ${logoMaster}`)
   }
 
-  const charcoal = { r: 13, g: 17, b: 23, alpha: 1 }
-  const transparent = { r: 0, g: 0, b: 0, alpha: 0 }
-
-  const appBuffer = await renderPng(sharp, appSvg, 1024, charcoal)
+  const appBuffer = await renderAppIcon(sharp, logoMaster, 1024)
   fs.mkdirSync(path.dirname(outBuildPng), { recursive: true })
   fs.mkdirSync(path.dirname(outResourcesPng), { recursive: true })
   fs.writeFileSync(outBuildPng, appBuffer)
@@ -142,10 +188,11 @@ async function main() {
   }
   fs.writeFileSync(outIco, createIcoFromPngs(icoEntries))
 
-  const markBuffer = await renderPng(sharp, markSvg, 256, transparent)
+  const markBuffer = await renderTransparentMark(sharp, logoMaster, 256)
+  const logoBuffer = await renderTransparentMark(sharp, logoMaster, 512)
   fs.mkdirSync(path.dirname(outMarkPng), { recursive: true })
   fs.writeFileSync(outMarkPng, markBuffer)
-  fs.copyFileSync(markSvg, outFaviconSvg)
+  fs.writeFileSync(outLogoPng, logoBuffer)
 
   const previewDir = path.join(root, 'build/icons/preview')
   fs.mkdirSync(previewDir, { recursive: true })
@@ -162,7 +209,7 @@ async function main() {
   if (fs.existsSync(outIcns)) console.log(`  ${path.relative(root, outIcns)}`)
   console.log(`  ${path.relative(root, outIco)}`)
   console.log(`  ${path.relative(root, outMarkPng)}`)
-  console.log(`  ${path.relative(root, outFaviconSvg)}`)
+  console.log(`  ${path.relative(root, outLogoPng)}`)
   console.log(`  ${path.relative(root, previewDir)}/icon-{16..1024}.png`)
 }
 

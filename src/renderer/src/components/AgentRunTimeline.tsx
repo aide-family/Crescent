@@ -2,13 +2,16 @@ import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
+  ChevronUpIcon,
   CopyIcon,
   DownloadIcon,
   FileJsonIcon,
   FileTextIcon,
   Loader2Icon,
   Maximize2Icon,
+  ShieldPlusIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
   TriangleAlertIcon,
@@ -21,8 +24,12 @@ import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
 import type { ParsedAgentRunDocument } from '@renderer/lib/agent-run-document'
+import { shouldShowAgentRunResult, omitDuplicateTrailingMessage } from '@renderer/lib/agent-run-document'
+import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
+import { extractRiskVerb, shouldShowWhitelistEntry } from '../../../shared/command-guard'
+import { extractResultSuggestions } from '@renderer/lib/result-suggestions'
 
 /**
  * Cursor / Codex-style agent turn view:
@@ -40,7 +47,9 @@ export function AgentRunTimeline({
   onExportFull,
   onExportTrace,
   onOpsFeedback,
-  onResolveApproval
+  onResolveApproval,
+  onAddCommandToWhitelist,
+  onInjectSuggestions
 }: {
   document: ParsedAgentRunDocument
   t: Dictionary
@@ -53,9 +62,10 @@ export function AgentRunTimeline({
   onExportTrace?: () => void
   onOpsFeedback?: (rating: OpsHistoryRating) => void
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
+  onAddCommandToWhitelist?: (command: string) => void
+  onInjectSuggestions?: (texts: string[]) => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
-  const hasResult = Boolean(document.resultMarkdown?.trim() || document.errorMarkdown?.trim())
   const resultPreviewMarkdown = document.resultMarkdown || document.errorMarkdown
   const headingIdPrefix = useMemo(() => `agent-result-${crypto.randomUUID()}`, [])
   const resultHeadings = useMemo(
@@ -63,14 +73,24 @@ export function AgentRunTimeline({
     [headingIdPrefix, resultPreviewMarkdown]
   )
   const runFinished = typeof document.elapsedMs === 'number'
-  const streamingResult = Boolean(document.resultMarkdown?.trim()) && !runFinished
-  const visibleSteps = document.steps.filter((step) => !isNoiseStatusStep(step))
+  const hasApprovalStep = document.steps.some((step) => step.kind === 'approval')
+  const visibleSteps = omitDuplicateTrailingMessage(
+    coalesceVisiblePtyToolSteps(
+      document.steps.filter((step) => !isNoiseStatusStep(step, t, hasApprovalStep))
+    ),
+    document.resultMarkdown
+  )
+  const timelineItems = groupLowRiskAutoPassSteps(visibleSteps)
+  const hasResultContent = Boolean(
+    document.resultMarkdown?.trim() || document.errorMarkdown?.trim()
+  )
+  // Formal Result chrome only after the run finishes — mid-run prose lives in message steps.
+  const showResult = shouldShowAgentRunResult({
+    hasResultContent,
+    elapsedMs: document.elapsedMs
+  })
   const activity = resolveActivity(document, visibleSteps, t)
-  const showActivity =
-    Boolean(activity) &&
-    !runFinished &&
-    (!hasResult || activity === t.input.activityAwaitingApproval)
-
+  const showActivity = Boolean(activity) && !runFinished
   return (
     <div className="min-w-0 space-y-2.5">
       {showActivity ? (
@@ -80,17 +100,26 @@ export function AgentRunTimeline({
         </div>
       ) : null}
 
-      {document.thinkingText?.trim() ? (
-        <ThinkingBlock
-          text={document.thinkingText}
-          streaming={!hasResult && !document.errorMarkdown && !runFinished}
-          t={t}
-        />
-      ) : null}
-
-      {visibleSteps.length > 0 ? (
-        <div className="space-y-1.5">
-          {visibleSteps.map((step) => {
+      {timelineItems.length > 0 ? (
+        <div className="min-w-0 space-y-2">
+          {timelineItems.map((item) => {
+            if (item.kind === 'low-risk-group') {
+              return (
+                <CollapsedLowRiskGroup
+                  key={item.id}
+                  steps={item.steps}
+                  t={t}
+                />
+              )
+            }
+            const step = item.step
+            const index = item.index
+            if (step.kind === 'thought') {
+              return <ThoughtStepRow key={step.id} step={step} t={t} />
+            }
+            if (step.kind === 'message') {
+              return <MessageStepRow key={step.id} step={step} t={t} />
+            }
             if (step.kind === 'status') {
               return (
                 <div
@@ -103,11 +132,24 @@ export function AgentRunTimeline({
               )
             }
             if (step.kind === 'tool') {
-              return <ToolCallRow key={step.id} step={step} t={t} />
+              const previous = visibleSteps[index - 1]
+              const hideCommand =
+                previous?.kind === 'approval' &&
+                Boolean(step.command?.trim()) &&
+                previous.command.trim() === step.command?.trim()
+              return (
+                <ToolCallRow key={step.id} step={step} t={t} hideCommand={hideCommand} />
+              )
             }
             if (step.kind === 'approval') {
               return (
-                <ApprovalStepCard key={step.id} step={step} t={t} onResolve={onResolveApproval} />
+                <ApprovalStepCard
+                  key={step.id}
+                  step={step}
+                  t={t}
+                  onResolve={onResolveApproval}
+                  onAddToWhitelist={onAddCommandToWhitelist}
+                />
               )
             }
             return null
@@ -115,13 +157,23 @@ export function AgentRunTimeline({
         </div>
       ) : null}
 
-      {hasResult ? (
-        <div className="min-w-0 space-y-2">
+      {showResult ? (
+        <div className="min-w-0 space-y-2 border-t border-amber-500/20 pt-3">
           {document.resultMarkdown?.trim() ? (
-            <div className="min-w-0 text-sm leading-relaxed text-foreground">
-              <MarkdownContent value={document.resultMarkdown} t={t} />
-              {streamingResult ? (
-                <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-foreground/50 align-middle" />
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
+                <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                <span>{t.input.result}</span>
+              </div>
+              <div className="min-w-0 text-[15px] leading-relaxed text-amber-950/90 dark:text-amber-50/95">
+                <MarkdownContent value={document.resultMarkdown} t={t} />
+              </div>
+              {onInjectSuggestions ? (
+                <ResultSuggestionsPicker
+                  resultMarkdown={document.resultMarkdown}
+                  t={t}
+                  onInject={onInjectSuggestions}
+                />
               ) : null}
             </div>
           ) : null}
@@ -131,7 +183,15 @@ export function AgentRunTimeline({
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-1 pt-0.5">
+          <div className="flex items-center justify-between gap-2 pt-0.5">
+            <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
+              {typeof document.elapsedMs === 'number'
+                ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
+                : document.elapsedMarkdown
+                  ? `${t.input.elapsed}：${document.elapsedMarkdown}`
+                  : null}
+            </span>
+            <div className="flex flex-wrap items-center justify-end gap-1">
             <Button
               type="button"
               variant="ghost"
@@ -252,13 +312,7 @@ export function AgentRunTimeline({
             >
               <FileJsonIcon aria-hidden="true" />
             </Button>
-            {typeof document.elapsedMs === 'number' || document.elapsedMarkdown ? (
-              <span className="ml-1 text-[10px] text-muted-foreground">
-                {typeof document.elapsedMs === 'number'
-                  ? formatDuration(document.elapsedMs)
-                  : document.elapsedMarkdown}
-              </span>
-            ) : null}
+            </div>
           </div>
         </div>
       ) : null}
@@ -277,122 +331,306 @@ export function AgentRunTimeline({
   )
 }
 
-function ThinkingBlock({
-  text,
-  streaming,
+const THOUGHT_PREVIEW_CHARS = 120
+
+function ThoughtStepRow({
+  step,
   t
 }: {
-  text: string
-  streaming: boolean
+  step: Extract<AgentRunStep, { kind: 'thought' }>
   t: Dictionary
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  const text = step.text.trim()
+  if (!text) return null
+  const streaming = step.phase === 'streaming'
+  const needsCollapse = !streaming && text.length > THOUGHT_PREVIEW_CHARS
+
+  if (needsCollapse) {
+    return (
+      <details className="group min-w-0" open>
+        <summary className="flex cursor-pointer select-none items-start gap-1.5 marker:content-none">
+          <ChevronRightIcon
+            className="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic">
+            <span className="mr-1.5 not-italic text-muted-foreground/70">
+              {t.input.thinkingProcessCompleted}
+            </span>
+            <span className="group-open:hidden">
+              {text.slice(0, THOUGHT_PREVIEW_CHARS)}
+              {text.length > THOUGHT_PREVIEW_CHARS ? '…' : ''}
+            </span>
+            <span className="hidden whitespace-pre-wrap break-words group-open:inline">{text}</span>
+          </span>
+        </summary>
+      </details>
+    )
+  }
+
   return (
-    <details className="group min-w-0" open={streaming}>
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground marker:content-none">
-        <ChevronRightIcon
-          className="size-3 shrink-0 transition-transform group-open:rotate-90"
+    <div className="flex items-start gap-1.5 min-w-0">
+      {streaming ? (
+        <Loader2Icon
+          className="mt-0.5 size-3 shrink-0 animate-spin text-muted-foreground"
           aria-hidden="true"
         />
-        {streaming ? <Loader2Icon className="size-3 animate-spin" aria-hidden="true" /> : null}
-        <span>
+      ) : (
+        <span className="mt-1 size-1.5 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden="true" />
+      )}
+      <div className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap break-words">
+        <span className="mr-1.5 not-italic text-muted-foreground/70">
           {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
         </span>
-      </summary>
-      <pre className="mt-1 max-h-48 overflow-auto border-l border-border/60 pl-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground/90">
         {text}
-      </pre>
-    </details>
+      </div>
+    </div>
+  )
+}
+
+function MessageStepRow({
+  step,
+  t
+}: {
+  step: Extract<AgentRunStep, { kind: 'message' }>
+  t: Dictionary
+}): React.JSX.Element | null {
+  const text = step.text.trim()
+  if (!text) return null
+  const streaming = step.phase === 'streaming'
+  return (
+    <div className="min-w-0 text-[14px] leading-relaxed text-foreground/90">
+      <MarkdownContent value={text} t={t} />
+      {streaming ? (
+        <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-foreground/40 align-middle" />
+      ) : null}
+    </div>
   )
 }
 
 function ToolCallRow({
   step,
-  t
+  t,
+  hideCommand = false
 }: {
   step: Extract<AgentRunStep, { kind: 'tool' }>
   t: Dictionary
+  hideCommand?: boolean
 }): React.JSX.Element {
   const running = step.phase === 'started'
-  const preview = step.command?.trim() || summarizeArgs(step.argsText)
-  const isBash = step.name === 'bash' || step.name === 'terminal' || Boolean(step.command)
-  const isFileTool = step.name === 'read' || step.name === 'write' || step.name === 'edit'
+  const command = step.command?.trim()
+  const preview = hideCommand ? undefined : command || summarizeArgs(step.argsText)
+  const observation = step.resultText?.trim()
+  const showObservation = Boolean(observation && observation !== command)
+  const observationLong = Boolean(showObservation && observation && observation.length > 240)
+  const isPtyCommand = step.name === 'bash' || step.name === 'terminal'
+  const toolLabel = isPtyCommand ? t.input.toolCommandLabel : step.name
+  const statusLabel = running
+    ? t.input.toolRunning
+    : step.isError
+      ? t.input.toolFailed
+      : t.input.toolFinished
 
   return (
-    <details
-      className="group min-w-0 rounded-md border border-transparent hover:border-border/50"
-      open={running || Boolean(step.isError)}
-    >
-      <summary className="flex cursor-pointer select-none items-center gap-2 px-1 py-1 marker:content-none">
-        <ChevronRightIcon
-          className="size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
-          aria-hidden="true"
-        />
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex items-start gap-2 min-w-0">
         {running ? (
           <Loader2Icon
-            className="size-3 shrink-0 animate-spin text-muted-foreground"
+            className="mt-0.5 size-3 shrink-0 animate-spin text-sky-500"
             aria-hidden="true"
           />
         ) : (
           <span
-            className={`size-1.5 shrink-0 rounded-full ${
-              step.isError ? 'bg-destructive' : 'bg-emerald-500/80'
+            className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
+              step.isError ? 'bg-destructive' : 'bg-sky-500/80'
             }`}
             aria-hidden="true"
           />
         )}
-        <span className="shrink-0 text-xs font-medium text-foreground">{step.name}</span>
-        {preview ? (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-            {preview}
-          </span>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {running
-              ? t.input.toolRunning
-              : step.isError
-                ? t.input.toolFailed
-                : t.input.toolFinished}
-          </span>
-        )}
-      </summary>
-      <div className="ml-5 space-y-2 border-l border-border/50 py-1.5 pl-3 text-[11px]">
-        {isBash ? (
-          <div className="text-[10px] text-muted-foreground">{t.input.toolTerminalHint}</div>
-        ) : null}
-        {isFileTool ? (
-          <div className="text-[10px] text-muted-foreground">{t.input.toolWorkspaceHint}</div>
-        ) : null}
-        {step.command ? (
-          <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
-            {step.command}
-          </pre>
-        ) : step.argsText ? (
-          <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
-            {step.argsText}
-          </pre>
-        ) : null}
-        {step.resultText ? (
-          <pre className="max-h-56 overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words text-muted-foreground">
-            {step.resultText}
-          </pre>
-        ) : null}
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="text-xs font-bold text-sky-600 dark:text-sky-400">{toolLabel}</span>
+            <span className="text-[11px] font-medium text-sky-600/80 dark:text-sky-400/80">
+              {statusLabel}
+            </span>
+          </div>
+          {preview ? <CommandBlock command={preview} t={t} tone="command" /> : null}
+        </div>
       </div>
-    </details>
+
+      {showObservation && observation ? (
+        observationLong ? (
+          <details className="group ml-5 min-w-0">
+            <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 marker:content-none">
+              <ChevronRightIcon
+                className="size-3 shrink-0 transition-transform group-open:rotate-90"
+                aria-hidden="true"
+              />
+              <span className="truncate font-mono group-open:hidden">
+                {observation.slice(0, 120)}
+                {observation.length > 120 ? '…' : ''}
+              </span>
+              <span className="hidden group-open:inline">{t.input.toolFinished}</span>
+            </summary>
+            <pre className="mt-1 max-h-56 overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90">
+              {observation}
+            </pre>
+          </details>
+        ) : (
+          <pre className="ml-5 max-h-56 overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90">
+            {observation}
+          </pre>
+        )
+      ) : null}
+    </div>
+  )
+}
+
+function isLowRiskAutoPassStep(
+  step: AgentRunStep
+): step is Extract<AgentRunStep, { kind: 'approval' }> {
+  return step.kind === 'approval' && step.risk === 'low' && step.phase !== 'pending'
+}
+
+type TimelineItem =
+  | { kind: 'step'; step: AgentRunStep; index: number }
+  | {
+      kind: 'low-risk-group'
+      id: string
+      steps: Array<Extract<AgentRunStep, { kind: 'approval' }>>
+    }
+
+function groupLowRiskAutoPassSteps(steps: AgentRunStep[]): TimelineItem[] {
+  const items: TimelineItem[] = []
+  let index = 0
+  while (index < steps.length) {
+    const step = steps[index]
+    if (isLowRiskAutoPassStep(step)) {
+      let end = index + 1
+      while (end < steps.length && isLowRiskAutoPassStep(steps[end])) end += 1
+      if (end - index >= 2) {
+        items.push({
+          kind: 'low-risk-group',
+          id: `low-risk-group-${step.id}`,
+          steps: steps.slice(index, end) as Array<Extract<AgentRunStep, { kind: 'approval' }>>
+        })
+        index = end
+        continue
+      }
+    }
+    items.push({ kind: 'step', step, index })
+    index += 1
+  }
+  return items
+}
+
+function CollapsedLowRiskGroup({
+  steps,
+  t
+}: {
+  steps: Array<Extract<AgentRunStep, { kind: 'approval' }>>
+  t: Dictionary
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const maxMs = Math.max(
+    0,
+    ...steps.map((step) => (typeof step.elapsedMs === 'number' ? Math.round(step.elapsedMs) : 0))
+  )
+  const label = t.commandReview.lowRiskGroupCollapsed
+    .replace('{n}', String(steps.length))
+    .replace('{ms}', String(maxMs))
+
+  return (
+    <div className="min-w-0 rounded-md border border-border/50">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-muted-foreground"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <CheckIcon className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+        <span className="min-w-0 flex-1">{label}</span>
+        {expanded ? (
+          <ChevronUpIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronDownIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="space-y-1.5 border-t border-border/40 px-2 py-2">
+          {steps.map((step) => (
+            <ApprovalStepCard key={step.id} step={step} t={t} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
 function ApprovalStepCard({
   step,
   t,
-  onResolve
+  onResolve,
+  onAddToWhitelist
 }: {
   step: Extract<AgentRunStep, { kind: 'approval' }>
   t: Dictionary
   onResolve?: (requestId: string, approved: boolean, note?: string) => void
+  onAddToWhitelist?: (command: string) => void
 }): React.JSX.Element {
   const [note, setNote] = useState('')
+  const [whitelistSuggestionDismissed, setWhitelistSuggestionDismissed] = useState(false)
+  const [whitelistAdded, setWhitelistAdded] = useState(false)
   const pending = step.phase === 'pending'
   const risk = step.risk ?? 'medium'
+  const canWhitelist = Boolean(step.command.trim() && onAddToWhitelist)
+  const isLowAutoPass = risk === 'low' && !pending
+  const isTimeoutPending = pending && step.source === 'timeout-fallback'
+  const isHighPending = pending && risk === 'high'
+  const showWhitelistEntry =
+    canWhitelist &&
+    shouldShowWhitelistEntry({
+      phase: step.phase,
+      risk,
+      alreadyAdded: whitelistAdded
+    }) &&
+    !whitelistSuggestionDismissed
+  const showWhitelistAdded =
+    canWhitelist &&
+    risk === 'high' &&
+    step.phase === 'approved' &&
+    whitelistAdded &&
+    !whitelistSuggestionDismissed
+
+  if (isLowAutoPass) {
+    const elapsed =
+      typeof step.elapsedMs === 'number' ? Math.max(0, Math.round(step.elapsedMs)) : undefined
+    return (
+      <div className="min-w-0 rounded-md border border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <CheckIcon className="size-3.5 text-emerald-600" aria-hidden="true" />
+          <span>
+            {elapsed === undefined
+              ? t.commandReview.lowRiskAutoPass
+              : t.commandReview.lowRiskAutoPassWithMs.replace('{ms}', String(elapsed))}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
+  const statusLabel =
+    step.phase === 'pending'
+      ? t.input.approvalPending
+      : step.phase === 'approved'
+        ? step.requestId
+          ? t.input.approvalAllowed
+          : t.input.autoApprovedShort
+        : t.input.approvalDenied
+
+  const riskVerb = extractRiskVerb(step.command)
+  const humanSummary =
+    step.auditSummary?.trim() ||
+    t.commandReview.highRiskHuman.replace('{verb}', riskVerb)
 
   return (
     <div
@@ -402,6 +640,44 @@ function ApprovalStepCard({
           : 'min-w-0 rounded-md border border-border/60'
       }
     >
+      {showWhitelistEntry ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 px-3 py-2 text-[11px]">
+          <span className="text-foreground/90">{t.commandReview.whitelistSuggest}</span>
+          <div className="flex flex-wrap gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => {
+                onAddToWhitelist?.(step.command)
+                setWhitelistAdded(true)
+              }}
+            >
+              {t.commandReview.whitelistSuggestAdd}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => setWhitelistSuggestionDismissed(true)}
+            >
+              {t.commandReview.whitelistSuggestIgnore}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {showWhitelistAdded ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 px-3 py-2 text-[11px]">
+          <span className="text-muted-foreground">{t.commandReview.addedToWhitelist}</span>
+          <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-[11px]" disabled>
+            <ShieldPlusIcon className="size-3.5" aria-hidden="true" />
+            {t.commandReview.addedToWhitelist}
+          </Button>
+        </div>
+      ) : null}
+
       <div className="flex items-start justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-foreground">
@@ -409,55 +685,57 @@ function ApprovalStepCard({
             <span>{t.commandReview.title}</span>
             <Badge variant={riskBadgeVariant(risk)}>{riskLabel(risk, t)}</Badge>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{t.commandReview.description}</p>
         </div>
-        <div className="shrink-0 text-[10px] text-muted-foreground">
-          {step.phase === 'pending'
-            ? t.input.approvalPending
-            : step.phase === 'approved'
-              ? t.input.approvalAllowed
-              : t.input.approvalDenied}
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <span className="text-[10px] text-muted-foreground">{statusLabel}</span>
         </div>
       </div>
 
       <div className="space-y-2.5 border-t border-border/40 px-3 py-2.5 text-[11px]">
-        <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
-          {step.command}
-        </pre>
-        {step.auditSummary ? <p className="text-foreground/90">{step.auditSummary}</p> : null}
-        {step.operationReason ? (
-          <p className="text-muted-foreground">
-            <span className="font-medium text-foreground/80">
-              {t.commandReview.operationReason}:{' '}
-            </span>
-            {step.operationReason}
-          </p>
-        ) : null}
-        {step.riskPoints && step.riskPoints.length > 0 ? (
-          <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
-            {step.riskPoints.map((point) => (
-              <li key={point}>{point}</li>
-            ))}
-          </ul>
-        ) : null}
-        {step.impactAnalysis ? (
-          <p className="text-muted-foreground">{step.impactAnalysis}</p>
-        ) : null}
-        {step.recommendation ? (
-          <p className="text-muted-foreground">
-            <span className="font-medium text-foreground/80">
-              {t.commandReview.recommendation}:{' '}
-            </span>
-            {step.recommendation}
-          </p>
-        ) : null}
+        <CommandBlock command={step.command} t={t} tone="audit" />
+
+        {isTimeoutPending ? (
+          <p className="text-foreground/90">{t.commandReview.timeoutManualConfirm}</p>
+        ) : isHighPending || (risk === 'high' && !pending) ? (
+          <p className="text-foreground/90">{highlightRiskVerb(humanSummary, riskVerb)}</p>
+        ) : (
+          <>
+            {step.auditSummary ? <p className="text-foreground/90">{step.auditSummary}</p> : null}
+            {step.operationReason ? (
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground/80">
+                  {t.commandReview.operationReason}:{' '}
+                </span>
+                {step.operationReason}
+              </p>
+            ) : null}
+            {step.riskPoints && step.riskPoints.length > 0 ? (
+              <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+                {step.riskPoints.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            ) : null}
+            {step.impactAnalysis ? (
+              <p className="text-muted-foreground">{step.impactAnalysis}</p>
+            ) : null}
+            {step.recommendation ? (
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground/80">
+                  {t.commandReview.recommendation}:{' '}
+                </span>
+                {step.recommendation}
+              </p>
+            ) : null}
+          </>
+        )}
 
         {pending && onResolve ? (
           <>
             <Textarea
               value={note}
               onChange={(event) => setNote(event.target.value)}
-              placeholder={t.commandReview.decisionNotePlaceholder}
+              placeholder={t.input.approvalNotePlaceholder}
               className="min-h-14 resize-y text-xs"
             />
             <div className="flex flex-wrap gap-2">
@@ -480,23 +758,262 @@ function ApprovalStepCard({
           </>
         ) : null}
 
-        {!pending && (step.note || step.rejectionReason) ? (
-          <p className="text-muted-foreground">{step.note || step.rejectionReason}</p>
+        {!pending && step.note?.trim() ? (
+          <p className="rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-foreground/90">
+            {t.input.yourApprovalNote.replace('{note}', step.note.trim())}
+          </p>
+        ) : null}
+
+        {!pending && !step.note?.trim() && step.rejectionReason ? (
+          <p className="text-muted-foreground">{step.rejectionReason}</p>
         ) : null}
       </div>
     </div>
   )
 }
 
-function isNoiseStatusStep(step: AgentRunStep): boolean {
+function ResultSuggestionsPicker({
+  resultMarkdown,
+  t,
+  onInject
+}: {
+  resultMarkdown: string
+  t: Dictionary
+  onInject: (texts: string[]) => void
+}): React.JSX.Element | null {
+  const suggestions = useMemo(() => extractResultSuggestions(resultMarkdown), [resultMarkdown])
+  const [selected, setSelected] = useState<Record<number, boolean>>({})
+  const [status, setStatus] = useState<string | null>(null)
+
+  if (suggestions.length === 0) return null
+
+  const selectedTexts = suggestions.filter((_, index) => selected[index])
+
+  return (
+    <div className="mt-2 space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+      <div className="text-[11px] font-medium text-foreground/80">{t.input.injectSelectedSuggestions}</div>
+      <ul className="space-y-1.5">
+        {suggestions.map((item, index) => (
+          <li key={`${index}-${item.slice(0, 24)}`} className="flex items-start gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={Boolean(selected[index])}
+              onChange={(event) =>
+                setSelected((current) => ({ ...current, [index]: event.target.checked }))
+              }
+            />
+            <span className="min-w-0 text-muted-foreground">{item}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 text-[11px]"
+          disabled={selectedTexts.length === 0}
+          onClick={() => {
+            onInject(selectedTexts)
+            setStatus(
+              t.input.injectedSuggestionsCount.replace('{n}', String(selectedTexts.length))
+            )
+          }}
+        >
+          {t.input.injectSelectedSuggestions}
+        </Button>
+        {status ? <span className="text-[10px] text-muted-foreground">{status}</span> : null}
+      </div>
+    </div>
+  )
+}
+
+function highlightRiskVerb(summary: string, verb: string): React.ReactNode {
+  if (!verb) return summary
+  const markers = [`（${verb}）`, `(${verb})`]
+  for (const marker of markers) {
+    const index = summary.indexOf(marker)
+    if (index < 0) continue
+    return (
+      <>
+        {summary.slice(0, index + 1)}
+        <strong className="font-semibold text-amber-700 dark:text-amber-400">{verb}</strong>
+        {summary.slice(index + marker.length - 1)}
+      </>
+    )
+  }
+  return summary
+}
+
+function CommandBlock({
+  command,
+  t,
+  tone = 'command'
+}: {
+  command: string
+  t: Dictionary
+  tone?: 'command' | 'audit'
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const lineCount = command.split('\n').length
+  const needsFold = lineCount > 2 || command.length > 120
+
+  async function copyCommand(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard may be unavailable in restricted contexts.
+    }
+  }
+
+  const toneClass =
+    tone === 'audit'
+      ? 'border-border/50 bg-muted/25 text-foreground'
+      : 'border-sky-500/20 bg-sky-500/5 text-sky-900/90 dark:text-sky-100/90'
+
+  return (
+    <div className={`relative min-w-0 rounded border ${toneClass}`}>
+      <button
+        type="button"
+        className="block w-full cursor-pointer rounded text-left"
+        title={t.input.copyCommand}
+        aria-label={t.input.copyCommand}
+        onClick={() => void copyCommand()}
+      >
+        <pre
+          className={`overflow-hidden p-2 pr-16 font-mono text-[11px] whitespace-pre-wrap break-words ${
+            needsFold && !expanded ? 'line-clamp-2' : ''
+          }`}
+        >
+          {command}
+        </pre>
+      </button>
+      <div className="absolute top-1 right-1 flex items-center gap-0.5">
+        {needsFold ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6 text-muted-foreground"
+            aria-label={expanded ? t.input.collapseCommand : t.input.expandCommand}
+            title={expanded ? t.input.collapseCommand : t.input.expandCommand}
+            onClick={(event) => {
+              event.stopPropagation()
+              setExpanded((value) => !value)
+            }}
+          >
+            {expanded ? (
+              <ChevronUpIcon className="size-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronDownIcon className="size-3.5" aria-hidden="true" />
+            )}
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-6 text-muted-foreground"
+          aria-label={copied ? t.common.copied : t.input.copyCommand}
+          title={copied ? t.common.copied : t.input.copyCommand}
+          onClick={(event) => {
+            event.stopPropagation()
+            void copyCommand()
+          }}
+        >
+          {copied ? (
+            <CheckIcon className="size-3.5 text-emerald-500" aria-hidden="true" />
+          ) : (
+            <CopyIcon className="size-3.5" aria-hidden="true" />
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Drop consecutive identical bash/terminal rows that survived event merging. */
+function coalesceVisiblePtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
+  const next: AgentRunStep[] = []
+  for (const step of steps) {
+    const prev = next[next.length - 1]
+    if (
+      step.kind === 'tool' &&
+      prev?.kind === 'tool' &&
+      (step.name === 'bash' || step.name === 'terminal') &&
+      (prev.name === 'bash' || prev.name === 'terminal')
+    ) {
+      const left = (prev.command || prev.argsText || '').trim()
+      const right = (step.command || step.argsText || '').trim()
+      if (left && right && left === right) {
+        const merged: Extract<AgentRunStep, { kind: 'tool' }> = {
+          ...prev,
+          name: 'bash',
+          phase:
+            step.phase === 'finished' || prev.phase === 'finished' ? 'finished' : prev.phase,
+          command: prev.command || step.command,
+          resultText: prev.resultText || step.resultText,
+          isError: Boolean(prev.isError) || Boolean(step.isError),
+          toolCallId: prev.toolCallId || step.toolCallId,
+          argsText: undefined
+        }
+        next[next.length - 1] = merged
+        continue
+      }
+    }
+    next.push(step)
+  }
+  return next
+}
+
+function isNoiseStatusStep(
+  step: AgentRunStep,
+  t: Dictionary,
+  hasApprovalStep = false
+): boolean {
   if (step.kind !== 'status') return false
   const title = step.title.trim()
-  return (
+  if (
     /^Agent started\.?$/i.test(title) ||
     /^Thinking…$/i.test(title) ||
     /^Thinking\.\.\.$/i.test(title) ||
-    title === 'Agent finished.'
-  )
+    title === 'Agent finished.' ||
+    title === t.input.startedRun
+  ) {
+    return true
+  }
+  if (hasApprovalStep && isClassifyingStatusMessage(title, t)) {
+    return true
+  }
+  if (hasApprovalStep && step.detail && isClassifyingStatusMessage(step.detail, t)) {
+    return true
+  }
+  if (title === t.commandReview.title || title.startsWith(`${t.commandReview.title}:`)) {
+    return true
+  }
+  if (
+    title === t.commandReview.readOnlyAllowed ||
+    title === t.commandReview.whitelisted ||
+    title === t.commandReview.autoApproved
+  ) {
+    return true
+  }
+  if (step.detail) {
+    const detail = step.detail.trim()
+    if (
+      detail === t.commandReview.readOnlyAllowed ||
+      detail === t.commandReview.whitelisted ||
+      detail === t.input.toolTerminalHint ||
+      detail.startsWith(t.commandReview.title)
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 function summarizeArgs(argsText: string | undefined): string | undefined {
@@ -530,13 +1047,20 @@ function resolveActivity(
     .reverse()
     .find((step) => step.kind === 'approval' && step.phase === 'pending')
   if (pendingApproval) return t.input.activityAwaitingApproval
+  const openThought = [...steps]
+    .reverse()
+    .find((step) => step.kind === 'thought' && step.phase === 'streaming')
+  if (openThought) return t.input.activityThinking
+  const openMessage = [...steps]
+    .reverse()
+    .find((step) => step.kind === 'message' && step.phase === 'streaming')
+  if (openMessage) return t.input.activityWriting
   const openTool = [...steps]
     .reverse()
     .find((step) => step.kind === 'tool' && step.phase === 'started')
   if (openTool && openTool.kind === 'tool') {
     return t.input.activityRunningTool.replace('{tool}', openTool.name)
   }
-  if (document.resultMarkdown?.trim()) return t.input.activityWriting
   if (document.thinkingText?.trim()) return t.input.activityThinking
   return t.input.activityThinking
 }

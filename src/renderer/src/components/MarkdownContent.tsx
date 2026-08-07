@@ -32,6 +32,7 @@ import {
 } from '@renderer/components/ui/select'
 import type { Dictionary } from '@renderer/i18n'
 import { appMermaidThemeVariables } from '@renderer/lib/design-system'
+import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
 import {
   copyFeedback,
   copyText,
@@ -444,7 +445,7 @@ function MarkdownCodeBlock({
     window.setTimeout(() => setCopied(false), 1200)
   }
 
-  if (normalizedLanguage === 'mermaid') {
+  if (isMermaidCodeLanguage(normalizedLanguage)) {
     return <MermaidBlock code={code} t={t} onCopy={copyCode} copied={copied} />
   }
 

@@ -40,6 +40,18 @@ export type AgentRunStep =
     }
   | {
       id: string
+      kind: 'thought'
+      text: string
+      phase: 'streaming' | 'done'
+    }
+  | {
+      id: string
+      kind: 'message'
+      text: string
+      phase: 'streaming' | 'done'
+    }
+  | {
+      id: string
       kind: 'tool'
       name: string
       phase: 'started' | 'finished'
@@ -63,6 +75,8 @@ export type AgentRunStep =
       recommendation?: string
       note?: string
       rejectionReason?: string
+      source?: 'whitelist' | 'rule' | 'subagent' | 'timeout-fallback'
+      elapsedMs?: number
     }
 
 export interface AgentRunAction {
