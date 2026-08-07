@@ -109,57 +109,88 @@ export function PasswordPromptModal({
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }): React.JSX.Element | null {
-  if (!request) return null
+  // Kept for API compatibility; password prompts now render inline in the chat pane.
+  void request
+  void t
+  void value
+  void error
+  void inputRef
+  void onChange
+  void onCancel
+  void onSubmit
+  return null
+}
 
+/** Inline password prompt in the conversation pane (command-approval style). */
+export function PasswordPromptInlineCard({
+  request,
+  t,
+  value,
+  error,
+  inputRef,
+  onChange,
+  onCancel,
+  onSubmit
+}: {
+  request: PasswordPromptRequest
+  t: Dictionary
+  value: string
+  error: string
+  inputRef: Ref<HTMLInputElement>
+  onChange: (value: string) => void
+  onCancel: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}): React.JSX.Element {
   return (
-    <div
-      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="password-prompt-title"
+    <form
+      onSubmit={onSubmit}
+      className="min-w-0 rounded-md border border-amber-500/35 bg-amber-500/5"
     >
-      <form
-        onSubmit={onSubmit}
-        className="app-modal-panel w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl"
-      >
-        <div className="app-modal-header border-b px-4 py-3">
-          <h2 id="password-prompt-title" className="text-sm font-semibold">
-            {t.terminal.passwordPromptTitle}
-          </h2>
-          <p className="mt-1 text-xs text-muted-foreground">{request.title}</p>
-        </div>
-        <div className="space-y-4 px-4 py-4">
-          <div className="rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs text-muted-foreground">
-            {request.prompt}
+      <div className="flex items-start justify-between gap-3 px-3 py-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-foreground">
+            <TriangleAlertIcon className="size-3.5 text-amber-500" aria-hidden="true" />
+            <span>{t.terminal.passwordPromptTitle}</span>
           </div>
-          <Field>
-            <FieldLabel htmlFor="terminal-password-input">
-              {t.terminal.passwordPromptLabel}
-            </FieldLabel>
-            <Input
-              id="terminal-password-input"
-              ref={inputRef}
-              type="password"
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              autoComplete="current-password"
-            />
-            <FieldDescription>{t.terminal.passwordPromptDescription}</FieldDescription>
-          </Field>
-          {error && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          )}
+          <p className="mt-1 text-[11px] text-muted-foreground">{request.title}</p>
         </div>
-        <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
-          <Button type="button" variant="outline" onClick={onCancel}>
+        <div className="shrink-0 text-[10px] text-muted-foreground">{t.input.approvalPending}</div>
+      </div>
+
+      <div className="space-y-2.5 border-t border-border/40 px-3 py-2.5 text-[11px]">
+        <pre className="overflow-auto rounded bg-muted/25 p-2 font-mono whitespace-pre-wrap break-words">
+          {request.prompt}
+        </pre>
+        <Field>
+          <FieldLabel htmlFor="terminal-password-inline-input">
+            {t.terminal.passwordPromptLabel}
+          </FieldLabel>
+          <Input
+            id="terminal-password-inline-input"
+            ref={inputRef}
+            type="password"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            autoComplete="current-password"
+            className="h-9"
+          />
+          <FieldDescription>{t.terminal.passwordPromptDescription}</FieldDescription>
+        </Field>
+        {error ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm">
+            {t.terminal.passwordPromptSubmit}
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onCancel}>
             {t.common.cancel}
           </Button>
-          <Button type="submit">{t.terminal.passwordPromptSubmit}</Button>
         </div>
-      </form>
-    </div>
+      </div>
+    </form>
   )
 }
 

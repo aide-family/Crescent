@@ -1,14 +1,46 @@
 import type { AgentProviderConfig } from './types'
 
 const DEEPSEEK_HOST = /deepseek\.com/i
+const OPENAI_HOST = /(?:^|\.)openai\.com$/i
+
+export function isDeepSeekModelId(modelId: string): boolean {
+  return modelId.toLowerCase().includes('deepseek')
+}
 
 export function isDeepSeekProvider(
-  provider: Pick<AgentProviderConfig, 'id' | 'name' | 'baseUrl'>
+  provider: Pick<AgentProviderConfig, 'id' | 'name' | 'baseUrl'> & {
+    models?: Array<{ id: string }>
+  }
 ): boolean {
   const id = provider.id.toLowerCase()
   const name = (provider.name || '').toLowerCase()
   const baseUrl = provider.baseUrl.toLowerCase()
-  return id.includes('deepseek') || name.includes('deepseek') || DEEPSEEK_HOST.test(baseUrl)
+  if (id.includes('deepseek') || name.includes('deepseek') || DEEPSEEK_HOST.test(baseUrl)) {
+    return true
+  }
+  return (provider.models ?? []).some((model) => isDeepSeekModelId(model.id))
+}
+
+/** Official OpenAI API hosts may use `developer` role for reasoning models. */
+export function isOpenAiOfficialHost(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl.trim()).hostname.toLowerCase()
+    return OPENAI_HOST.test(host)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Most OpenAI-compatible gateways reject `messages.role = developer`.
+ * Only leave developer-role support to official OpenAI hosts (non-DeepSeek).
+ */
+export function openAiCompatibleModelCompat(baseUrl: string) {
+  if (isOpenAiOfficialHost(baseUrl)) return undefined
+  return {
+    supportsStore: false,
+    supportsDeveloperRole: false
+  }
 }
 
 export function isDeepSeekReasoningModelId(modelId: string): boolean {

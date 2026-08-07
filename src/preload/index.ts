@@ -297,7 +297,10 @@ const api = {
     save: (input: ConnectionInput): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('connections:save', input),
     delete: (id: string): Promise<ConnectionConfig[]> =>
-      ipcRenderer.invoke('connections:delete', id)
+      ipcRenderer.invoke('connections:delete', id),
+    getLastUsed: (): Promise<string | null> => ipcRenderer.invoke('connections:get-last-used'),
+    setLastUsed: (id: string): Promise<string | null> =>
+      ipcRenderer.invoke('connections:set-last-used', id)
   },
   storage: {
     saveTabs: (tabs: StoredSessionTab[]): Promise<{ ok: boolean }> =>

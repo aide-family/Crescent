@@ -3,14 +3,17 @@ import { useCallback, useRef, useState, type MutableRefObject } from 'react'
 import type { Dictionary } from '@renderer/i18n'
 import {
   formatAgentEventActionTitle,
-  formatCommandAuditActionDetail,
-  formatCommandExecutionActionDetail,
+  formatCommandObservation,
   formatLoadedSkillsActionDetail,
+  isClassifyingStatusMessage,
+  isNoiseAuditStatusMessage,
   isNoisyMcpCatalogMessage,
-  localizeAgentEventMessage,
-  riskLabel
+  localizeAgentEventMessage
 } from '@renderer/lib/agent-event-formatters'
 import {
+  closeStreamingMessages,
+  closeStreamingOpenSteps,
+  closeStreamingThoughts,
   formatAgentRunDocument,
   syncActionsFromStructuredRun
 } from '@renderer/lib/agent-run-document'
@@ -183,7 +186,9 @@ export function useAgentRuns({
             risk: request.audit.risk,
             riskPoints: request.audit.riskPoints,
             impactAnalysis: request.audit.impactAnalysis,
-            recommendation: request.audit.recommendation
+            recommendation: request.audit.recommendation,
+            source: request.audit.source,
+            elapsedMs: request.audit.elapsedMs
           }
           return { ...run, steps }
         }
@@ -202,7 +207,9 @@ export function useAgentRuns({
               risk: request.audit.risk,
               riskPoints: request.audit.riskPoints,
               impactAnalysis: request.audit.impactAnalysis,
-              recommendation: request.audit.recommendation
+              recommendation: request.audit.recommendation,
+              source: request.audit.source,
+              elapsedMs: request.audit.elapsedMs
             }
           ]
         }
@@ -237,10 +244,25 @@ export function useAgentRuns({
       if (event.type === 'token') {
         updateAgentRun(
           tabId,
-          (run) => ({
-            ...run,
-            result: `${run.result ?? ''}${event.text}`
-          }),
+          (run) => {
+            let steps = closeStreamingThoughts(run.steps ?? [])
+            const last = steps[steps.length - 1]
+            if (last?.kind === 'message' && last.phase === 'streaming') {
+              steps = [...steps]
+              steps[steps.length - 1] = { ...last, text: `${last.text}${event.text}` }
+            } else {
+              steps = [
+                ...steps,
+                {
+                  id: createStepId('message'),
+                  kind: 'message',
+                  text: event.text,
+                  phase: 'streaming'
+                }
+              ]
+            }
+            return { ...run, steps }
+          },
           { streaming: true }
         )
         return
@@ -249,16 +271,36 @@ export function useAgentRuns({
       if (event.type === 'done') return
 
       if (event.type === 'status' && isNoisyMcpCatalogMessage(event.message)) return
+      if (event.type === 'status' && isNoiseAuditStatusMessage(event.message, t)) return
 
       if (event.type === 'thought') {
         const delta = localizeAgentEventMessage(event.message, t)
         if (!delta) return
         updateAgentRun(
           tabId,
-          (run) => ({
-            ...run,
-            thinkingText: `${run.thinkingText ?? ''}${delta}`
-          }),
+          (run) => {
+            let steps = closeStreamingMessages(run.steps ?? [])
+            const last = steps[steps.length - 1]
+            if (last?.kind === 'thought' && last.phase === 'streaming') {
+              steps = [...steps]
+              steps[steps.length - 1] = { ...last, text: `${last.text}${delta}` }
+            } else {
+              steps = [
+                ...steps,
+                {
+                  id: createStepId('thought'),
+                  kind: 'thought',
+                  text: delta,
+                  phase: 'streaming'
+                }
+              ]
+            }
+            return {
+              ...run,
+              steps,
+              thinkingText: `${run.thinkingText ?? ''}${delta}`
+            }
+          },
           { streaming: true }
         )
         return
@@ -266,12 +308,13 @@ export function useAgentRuns({
 
       if (event.type === 'status') {
         const title = formatAgentEventActionTitle(event, t)
+        if (isNoiseAuditStatusMessage(title, t)) return
         const detail = localizeAgentEventMessage(event.message, t)
         updateAgentRun(tabId, (run) => {
-          const steps = run.steps ?? []
+          const steps = closeStreamingOpenSteps(run.steps ?? [])
           const last = steps[steps.length - 1]
           if (last?.kind === 'status' && last.title === title) {
-            return run
+            return steps === run.steps ? run : { ...run, steps }
           }
           const step: AgentRunStep = {
             id: createStepId('status'),
@@ -291,7 +334,7 @@ export function useAgentRuns({
         updateAgentRun(tabId, (run) => ({
           ...run,
           steps: [
-            ...(run.steps ?? []),
+            ...closeStreamingOpenSteps(run.steps ?? []),
             {
               id: createStepId('status'),
               kind: 'status',
@@ -305,10 +348,14 @@ export function useAgentRuns({
 
       if (event.type === 'command-review') {
         updateAgentRun(tabId, (run) => {
-          const steps = [...(run.steps ?? [])]
+          const steps = closeStreamingOpenSteps(run.steps ?? []).filter(
+            (step) => !isClassifyingStatusStep(step, t)
+          )
           const existingIndex = steps.findIndex(
             (step) =>
-              step.kind === 'approval' && step.phase === 'pending' && step.command === event.command
+              step.kind === 'approval' &&
+              (step.phase === 'pending' || step.phase === 'approved') &&
+              step.command === event.command
           )
           const approvalStep = {
             id:
@@ -318,28 +365,18 @@ export function useAgentRuns({
             kind: 'approval' as const,
             requestId: '',
             command: event.command,
-            phase: 'pending' as const,
+            phase: (event.audit.requiresApproval ? 'pending' : 'approved') as
+              | 'pending'
+              | 'approved'
+              | 'rejected',
             auditSummary: event.audit.summary,
             operationReason: event.audit.operationReason,
             risk: event.audit.risk,
             riskPoints: event.audit.riskPoints,
             impactAnalysis: event.audit.impactAnalysis,
-            recommendation: event.audit.recommendation
-          }
-          if (!event.audit.requiresApproval) {
-            // Informational review only; keep as status.
-            return {
-              ...run,
-              steps: [
-                ...steps,
-                {
-                  id: createStepId('status'),
-                  kind: 'status',
-                  title: `${t.commandReview.title}: ${riskLabel(event.audit.risk, t)}`,
-                  detail: formatCommandAuditActionDetail(event.command, event.audit, t)
-                }
-              ]
-            }
+            recommendation: event.audit.recommendation,
+            source: event.audit.source,
+            elapsedMs: event.audit.elapsedMs
           }
           if (existingIndex >= 0) {
             steps[existingIndex] = approvalStep
@@ -354,7 +391,7 @@ export function useAgentRuns({
         updateAgentRun(tabId, (run) => ({
           ...run,
           steps: [
-            ...(run.steps ?? []),
+            ...closeStreamingOpenSteps(run.steps ?? []),
             {
               id: createStepId('status'),
               kind: 'status',
@@ -368,93 +405,167 @@ export function useAgentRuns({
 
       if (event.type === 'tool') {
         const phase = event.phase ?? 'finished'
-        const argsOrResult = redactSensitiveText(localizeAgentEventMessage(event.message, t))
+        const rawMessage = event.message ?? ''
+        if (phase === 'finished' && isNoiseAuditStatusMessage(rawMessage, t)) {
+          return
+        }
+        const argsOrResult = redactSensitiveText(localizeAgentEventMessage(rawMessage, t))
         updateAgentRun(tabId, (run) => {
-          const steps = [...(run.steps ?? [])]
+          let steps = [...(run.steps ?? [])]
+          const toolName = event.name === 'terminal' ? 'bash' : event.name
+          const isPty = toolName === 'bash'
+          const command =
+            event.command?.trim() ||
+            (phase === 'started' ? extractCommandFromArgsText(argsOrResult) : undefined)
+
           if (phase === 'started') {
+            steps = closeStreamingOpenSteps(steps)
+            // Reuse an open PTY step (command may have arrived first) so we never
+            // render bash + terminal as two identical command rows.
+            if (isPty) {
+              const openIndex = findOpenPtyToolStepIndex(
+                steps,
+                toolName,
+                event.toolCallId,
+                command
+              )
+              const openStep = openIndex >= 0 ? steps[openIndex] : undefined
+              if (openStep?.kind === 'tool' && openStep.phase === 'started') {
+                steps[openIndex] = {
+                  ...openStep,
+                  name: 'bash',
+                  toolCallId: event.toolCallId || openStep.toolCallId,
+                  command: command || openStep.command,
+                  // Prefer plain command over JSON args for display.
+                  argsText:
+                    command || openStep.command ? undefined : argsOrResult || undefined
+                }
+                return { ...run, steps }
+              }
+            }
             steps.push({
               id: createStepId('tool'),
               kind: 'tool',
-              name: event.name,
+              name: toolName,
               phase: 'started',
-              argsText: argsOrResult || undefined,
-              command: event.command?.trim() || extractCommandFromArgsText(argsOrResult),
+              argsText: isPty && command ? undefined : argsOrResult || undefined,
+              command: command || undefined,
               toolCallId: event.toolCallId
             })
             return { ...run, steps }
           }
 
-          const openIndex = findOpenToolStepIndex(steps, event.name, event.toolCallId)
+          const openIndex = findOpenPtyToolStepIndex(steps, event.name, event.toolCallId, command)
           if (openIndex >= 0) {
             const existing = steps[openIndex]
             if (existing.kind === 'tool') {
               steps[openIndex] = {
                 ...existing,
+                name: existing.name === 'terminal' ? 'bash' : existing.name,
                 phase: 'finished',
-                resultText: argsOrResult || undefined,
-                isError: Boolean(event.isError),
-                command: existing.command || event.command?.trim() || undefined
+                // Prefer PTY command observation when already present; otherwise use tool result.
+                resultText: existing.resultText || argsOrResult || undefined,
+                isError: Boolean(event.isError) || Boolean(existing.isError),
+                command: existing.command || command || undefined,
+                toolCallId: event.toolCallId || existing.toolCallId,
+                argsText: existing.command || command ? undefined : existing.argsText
               }
-              return { ...run, steps }
+              return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
             }
           }
 
           steps.push({
             id: createStepId('tool'),
             kind: 'tool',
-            name: event.name,
+            name: toolName,
             phase: 'finished',
             resultText: argsOrResult || undefined,
             isError: Boolean(event.isError),
-            command: event.command?.trim() || undefined,
+            command: command || undefined,
             toolCallId: event.toolCallId
           })
-          return { ...run, steps }
+          return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })
         return
       }
 
       if (event.type === 'command') {
         updateAgentRun(tabId, (run) => {
-          const steps = [...(run.steps ?? [])]
-          const detail = formatCommandExecutionActionDetail(event, t)
+          let steps = [...(run.steps ?? [])]
           if (event.phase === 'started') {
+            // Merge into the open bash tool step so bash + terminal are not duplicated.
+            const openIndex = (() => {
+              const bash = findOpenToolStepIndex(steps, 'bash')
+              if (bash >= 0) return bash
+              return findOpenToolStepIndex(steps, 'terminal')
+            })()
+            if (openIndex >= 0 && steps[openIndex].kind === 'tool') {
+              steps[openIndex] = {
+                ...steps[openIndex],
+                name: 'bash',
+                command: event.command || steps[openIndex].command,
+                argsText: undefined
+              }
+              return { ...run, steps }
+            }
+            steps = closeStreamingOpenSteps(steps)
             steps.push({
               id: createStepId('tool'),
               kind: 'tool',
-              name: 'terminal',
+              name: 'bash',
               phase: 'started',
-              command: event.command,
-              argsText: detail
+              command: event.command
             })
             return { ...run, steps }
           }
 
-          const openIndex = findOpenToolStepIndex(steps, 'terminal')
+          const observation = formatCommandObservation(event, t)
+          const openIndex = (() => {
+            const bash = findOpenToolStepIndex(steps, 'bash')
+            if (bash >= 0) return bash
+            return findOpenToolStepIndex(steps, 'terminal')
+          })()
           if (openIndex >= 0) {
             const existing = steps[openIndex]
             if (existing.kind === 'tool') {
               steps[openIndex] = {
                 ...existing,
+                name: 'bash',
                 phase: 'finished',
-                resultText: detail,
+                resultText: observation || undefined,
                 isError: event.result ? !event.result.ok : false,
-                command: existing.command || event.command
+                command: existing.command || event.command,
+                argsText: undefined
               }
-              return { ...run, steps }
+              return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
             }
+          }
+
+          // Prefer updating a just-finished PTY row with the same command over adding another.
+          const finishedSame = findFinishedPtyToolStepIndex(steps, event.command)
+          if (finishedSame >= 0 && steps[finishedSame].kind === 'tool') {
+            const existing = steps[finishedSame]
+            steps[finishedSame] = {
+              ...existing,
+              name: 'bash',
+              resultText: existing.resultText || observation || undefined,
+              isError: event.result ? !event.result.ok : Boolean(existing.isError),
+              command: existing.command || event.command,
+              argsText: undefined
+            }
+            return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
           }
 
           steps.push({
             id: createStepId('tool'),
             kind: 'tool',
-            name: 'terminal',
+            name: 'bash',
             phase: 'finished',
             command: event.command,
-            resultText: detail,
+            resultText: observation || undefined,
             isError: event.result ? !event.result.ok : false
           })
-          return { ...run, steps }
+          return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })
         return
       }
@@ -464,7 +575,7 @@ export function useAgentRuns({
           ...run,
           error: localizeAgentEventMessage(event.message, t),
           steps: [
-            ...(run.steps ?? []),
+            ...closeStreamingOpenSteps(run.steps ?? []),
             {
               id: createStepId('status'),
               kind: 'status',
@@ -500,6 +611,104 @@ function findOpenToolStepIndex(steps: AgentRunStep[], name: string, toolCallId?:
     if (step.name === name) return index
   }
   return -1
+}
+
+function isClassifyingStatusStep(
+  step: AgentRunStep,
+  t: Dictionary
+): boolean {
+  if (step.kind !== 'status') return false
+  return (
+    isClassifyingStatusMessage(step.title, t) ||
+    (Boolean(step.detail) && isClassifyingStatusMessage(step.detail!, t))
+  )
+}
+
+/** Match bash/terminal as one PTY command lifecycle so finish events update the same row. */
+function findOpenPtyToolStepIndex(
+  steps: AgentRunStep[],
+  name: string,
+  toolCallId?: string,
+  command?: string
+): number {
+  const isPty = name === 'bash' || name === 'terminal'
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    if (step.kind !== 'tool') continue
+    if (toolCallId && step.toolCallId && step.toolCallId === toolCallId) return index
+    if (!isPty) {
+      if (step.phase === 'started' && step.name === name) return index
+      continue
+    }
+    if (step.name !== 'bash' && step.name !== 'terminal') continue
+    if (step.phase === 'started') return index
+    if (command && step.command === command) return index
+  }
+  return -1
+}
+
+function findFinishedPtyToolStepIndex(steps: AgentRunStep[], command?: string): number {
+  const trimmed = command?.trim()
+  if (!trimmed) return -1
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    if (step.kind !== 'tool' || step.phase !== 'finished') continue
+    if (step.name !== 'bash' && step.name !== 'terminal') continue
+    if (step.command?.trim() === trimmed) return index
+  }
+  return -1
+}
+
+/** Collapse back-to-back bash/terminal rows that show the same command. */
+function coalesceAdjacentPtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
+  const next: AgentRunStep[] = []
+  for (const step of steps) {
+    const prev = next[next.length - 1]
+    if (
+      step.kind === 'tool' &&
+      prev?.kind === 'tool' &&
+      isPtyToolName(step.name) &&
+      isPtyToolName(prev.name) &&
+      normalizeToolCommand(prev) === normalizeToolCommand(step) &&
+      normalizeToolCommand(step)
+    ) {
+      next[next.length - 1] = {
+        ...prev,
+        name: 'bash',
+        phase:
+          Boolean(prev.resultText || step.resultText) ||
+          (prev.phase === 'finished' && step.phase === 'finished')
+            ? 'finished'
+            : prev.phase === 'started' || step.phase === 'started'
+              ? 'started'
+              : 'finished',
+        command: prev.command || step.command,
+        toolCallId: prev.toolCallId || step.toolCallId,
+        resultText: prev.resultText || step.resultText,
+        isError: Boolean(prev.isError) || Boolean(step.isError),
+        argsText: undefined
+      }
+      continue
+    }
+    if (step.kind === 'tool' && isPtyToolName(step.name)) {
+      next.push({
+        ...step,
+        name: 'bash',
+        argsText: step.command?.trim() ? undefined : step.argsText
+      })
+      continue
+    }
+    next.push(step)
+  }
+  return next
+}
+
+function isPtyToolName(name: string): boolean {
+  return name === 'bash' || name === 'terminal'
+}
+
+function normalizeToolCommand(step: Extract<AgentRunStep, { kind: 'tool' }>): string {
+  return (step.command || extractCommandFromArgsText(step.argsText ?? '') || '').trim()
 }
 
 function extractCommandFromArgsText(argsText: string): string | undefined {

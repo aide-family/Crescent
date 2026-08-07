@@ -7,7 +7,7 @@ import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { appTerminalTheme } from '@renderer/lib/design-system'
-import { getSubterminalWidths } from '@renderer/lib/terminal-text'
+import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, getSubterminalWidths } from '@renderer/lib/terminal-text'
 import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
 
 export interface SubterminalResizeState {
@@ -54,16 +54,18 @@ function SubterminalXtermPane({
     fitAddonRef.current = fitAddon
 
     if (subterminal.rawOutput) {
-      terminal.write(subterminal.rawOutput)
+      terminal.write(filterCrescentBootstrapOutput(subterminal.rawOutput))
     }
 
+    const bootstrapFilter = createCrescentBootstrapFilter()
     const inputDisposable = terminal.onData((data) => {
       window.api.terminal.write(data, subterminal.id)
     })
 
     const stopData = window.api.terminal.onData((event) => {
       if (event.tabId !== subterminal.id) return
-      terminal.write(event.data)
+      const filtered = bootstrapFilter.push(event.data)
+      if (filtered) terminal.write(filtered)
     })
 
     const stopExit = window.api.terminal.onExit((event) => {

@@ -1,15 +1,15 @@
 import type { WebContents } from 'electron'
 
+import { normalizeCommand } from '../../shared/command-guard'
 import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminalWithPermissionRequest,
   type TerminalCommandExecutionResult
 } from '../terminal/ipc'
-import { CommandAuditor } from './command-auditor'
+import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
-import { matchCommandWhitelist } from './command-whitelist'
 import type { PiCodingAgentModule } from './pi-sdk'
-import type { AgentConfig, AgentEvent, CommandAuditResult } from './types'
+import type { AgentConfig, AgentEvent } from './types'
 
 export interface PtyBashExecContext {
   webContents: WebContents
@@ -28,15 +28,44 @@ export interface PtyBashExecContext {
    * the execution tab instead of the main pane.
    */
   subterminalName?: string
+  /** Fingerprints of commands that already failed in this run (normalized). */
+  failedFingerprints?: Set<string>
+}
+
+/** Run-scoped failed command fingerprints (shared across session context updates). */
+const failedFingerprintsByRunId = new Map<string, Set<string>>()
+
+export function getFailedCommandFingerprints(runId: string): Set<string> {
+  let set = failedFingerprintsByRunId.get(runId)
+  if (!set) {
+    set = new Set()
+    failedFingerprintsByRunId.set(runId, set)
+  }
+  return set
+}
+
+export function clearFailedCommandFingerprints(runId: string): void {
+  failedFingerprintsByRunId.delete(runId)
+}
+
+/** Pure helper for tests: whether a normalized fingerprint is blocked. */
+export function shouldBlockFailedRetry(
+  fingerprint: string,
+  failed: ReadonlySet<string>
+): boolean {
+  return Boolean(fingerprint && failed.has(fingerprint))
 }
 
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
 
 export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecContext): void {
+  context.failedFingerprints = getFailedCommandFingerprints(context.runId)
   execContextBySessionKey.set(sessionKey, context)
 }
 
 export function clearPtyBashExecContext(sessionKey: string): void {
+  const existing = execContextBySessionKey.get(sessionKey)
+  if (existing?.runId) clearFailedCommandFingerprints(existing.runId)
   execContextBySessionKey.delete(sessionKey)
 }
 
@@ -89,6 +118,27 @@ async function executeReviewedPtyCommand(input: {
   const executableCommand = normalizeInteractivePrivilegeCommand(input.command)
   const timeoutMs = normalizeTimeout(input.timeoutMs)
   const executionTabId = context.executionTabId
+  const fingerprint = normalizeCommand(executableCommand)
+  const failed = context.failedFingerprints ?? getFailedCommandFingerprints(context.runId)
+  const zh = Boolean(context.locale?.toLowerCase().startsWith('zh'))
+
+  if (shouldBlockFailedRetry(fingerprint, failed)) {
+    const message = zh
+      ? '该命令本轮已失败过一次，禁止原样重试。请分析 stderr 后换方案（不要再次提交相同命令以免重复审批）。'
+      : 'This command already failed once in this run. Do not retry it unchanged — analyze stderr and try a different approach (avoid re-triggering approval).'
+    context.emit({
+      type: 'status',
+      message,
+      runId: context.runId,
+      tabId: executionTabId
+    })
+    return {
+      ok: false,
+      command: executableCommand,
+      output: '',
+      error: message
+    }
+  }
 
   const executeWithProgress = async (): Promise<TerminalCommandExecutionResult> => {
     const startedAt = Date.now()
@@ -116,6 +166,10 @@ async function executeReviewedPtyCommand(input: {
           executionTabId
         )
 
+    if (!result.ok && fingerprint) {
+      failed.add(fingerprint)
+    }
+
     context.emit({
       type: 'command',
       phase: 'finished',
@@ -142,47 +196,35 @@ async function executeReviewedPtyCommand(input: {
     return result
   }
 
-  const whitelistRule = matchCommandWhitelist(
-    executableCommand,
-    context.config.commandWhitelist ?? []
-  )
-  if (whitelistRule) {
-    context.emit({
-      type: 'status',
-      message: `Command matched whitelist: ${whitelistRule}`,
-      runId: context.runId,
-      tabId: executionTabId
-    })
-    return executeWithProgress()
-  }
-
   context.emit({
     type: 'status',
-    message: 'Command review subprocess is analyzing risk.',
+    message: 'Command review is classifying risk.',
     runId: context.runId,
     tabId: executionTabId
   })
 
-  const auditor = new CommandAuditor(context.config)
-  const audit: CommandAuditResult = await auditor.audit({
-    command: executableCommand,
+  const classified = await classifyCommand(executableCommand, {
+    config: context.config,
     userInput: context.userInput,
-    terminalContext: context.terminalContext ?? '',
+    terminalContext: context.terminalContext,
     locale: context.locale
   })
 
   context.emit({
     type: 'command-review',
     command: executableCommand,
-    audit,
+    audit: classified.audit,
     runId: context.runId,
     tabId: executionTabId
   })
 
-  if (!audit.requiresApproval) {
+  if (classified.level === 'low') {
     context.emit({
       type: 'status',
-      message: 'Command audit classified this as read-only inspection.',
+      message:
+        classified.source === 'whitelist'
+          ? `Command matched whitelist: ${classified.whitelistRule}`
+          : 'Command audit classified this as read-only inspection.',
       runId: context.runId,
       tabId: executionTabId
     })
@@ -196,7 +238,7 @@ async function executeReviewedPtyCommand(input: {
     chatTabId: context.chatTabId,
     command: executableCommand,
     timeoutMs,
-    audit,
+    audit: classified.audit,
     signal: input.signal
   })
 
@@ -226,13 +268,34 @@ async function executeReviewedPtyCommand(input: {
   context.emit({
     type: 'status',
     message: approval.note?.trim()
-      ? `Command approved by user.\nUser note: ${approval.note.trim()}`
+      ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
       : 'Command approved by user.',
     runId: context.runId,
     tabId: executionTabId
   })
 
-  return executeWithProgress()
+  const result = await executeWithProgress()
+  return withUserApprovalNote(result, approval.note)
+}
+
+/** Prefix tool-visible command result with the operator's approve note (model-readable). */
+export function withUserApprovalNote(
+  result: TerminalCommandExecutionResult,
+  note: string | undefined
+): TerminalCommandExecutionResult {
+  const trimmed = note?.trim()
+  if (!trimmed) return result
+  const prefix = `User approval note: ${trimmed}`
+  if (result.ok) {
+    return {
+      ...result,
+      output: [prefix, result.output].filter(Boolean).join('\n\n')
+    }
+  }
+  return {
+    ...result,
+    error: [prefix, result.error].filter(Boolean).join('\n\n')
+  }
 }
 
 function normalizeInteractivePrivilegeCommand(command: string): string {

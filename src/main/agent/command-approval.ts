@@ -113,7 +113,7 @@ export function requestCommandApproval(input: {
       () => {
         settlePendingCommandApproval(requestId, { approved: false })
       },
-      10 * 60 * 1000
+      60 * 1000
     )
     const onAbort = (): void => {
       settlePendingCommandApproval(requestId, {

@@ -16,6 +16,7 @@ import {
 
 import { AgentLogList } from '@renderer/components/AgentLogList'
 import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
+import { PasswordPromptInlineCard, type PasswordPromptRequest } from '@renderer/components/AppModals'
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
 import { StatusDot, TerminalActivityDot } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
@@ -55,6 +56,7 @@ export function AgentPanel({
   activeTab,
   tabs,
   agentLogRef,
+  agentInputRef,
   slashCommandListRef,
   slashMenuVisible,
   slashCommandOptions,
@@ -84,6 +86,8 @@ export function AgentPanel({
   feedbackBusyLogId,
   liveRunByLogId,
   onResolveApproval,
+  onAddCommandToWhitelist,
+  onInjectSuggestions,
   onToggleTerminalPane,
   onSelectSession,
   onSelectTerminal,
@@ -106,7 +110,14 @@ export function AgentPanel({
   voiceWhisperSupported = true,
   onStopAgent,
   onRetryConnection,
-  onOpenConnections
+  onOpenConnections,
+  passwordPromptRequest = null,
+  passwordPromptValue = '',
+  passwordPromptError = '',
+  passwordPromptInputRef,
+  onPasswordPromptChange,
+  onPasswordPromptCancel,
+  onPasswordPromptSubmit
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -114,6 +125,7 @@ export function AgentPanel({
   activeTab: AgentTerminalTab
   tabs: AgentTerminalTab[]
   agentLogRef: RefObject<HTMLDivElement | null>
+  agentInputRef?: RefObject<HTMLTextAreaElement | null>
   slashCommandListRef: RefObject<HTMLDivElement | null>
   slashMenuVisible: boolean
   slashCommandOptions: SlashCommandOption[]
@@ -146,6 +158,8 @@ export function AgentPanel({
   feedbackBusyLogId?: number | null
   liveRunByLogId?: Record<number, AgentRunViewState>
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
+  onAddCommandToWhitelist?: (command: string) => void
+  onInjectSuggestions?: (texts: string[]) => void
   onToggleTerminalPane: () => void
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
@@ -169,6 +183,13 @@ export function AgentPanel({
   onStopAgent: () => void
   onRetryConnection?: () => void
   onOpenConnections?: () => void
+  passwordPromptRequest?: PasswordPromptRequest | null
+  passwordPromptValue?: string
+  passwordPromptError?: string
+  passwordPromptInputRef?: RefObject<HTMLInputElement | null>
+  onPasswordPromptChange?: (value: string) => void
+  onPasswordPromptCancel?: () => void
+  onPasswordPromptSubmit?: (event: FormEvent<HTMLFormElement>) => void
 }): React.JSX.Element {
   return (
     <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
@@ -188,11 +209,31 @@ export function AgentPanel({
         onExportTrace={onExportTrace}
         onOpsFeedback={onOpsFeedback}
         onResolveApproval={onResolveApproval}
+        onAddCommandToWhitelist={onAddCommandToWhitelist}
+        onInjectSuggestions={onInjectSuggestions}
         feedbackByLogId={feedbackByLogId}
         feedbackBusyLogId={feedbackBusyLogId}
         onRetryConnection={onRetryConnection}
         onOpenConnections={onOpenConnections}
       />
+      {passwordPromptRequest &&
+      passwordPromptInputRef &&
+      onPasswordPromptChange &&
+      onPasswordPromptCancel &&
+      onPasswordPromptSubmit ? (
+        <div className="shrink-0 border-t bg-background px-4 pt-3">
+          <PasswordPromptInlineCard
+            request={passwordPromptRequest}
+            t={t}
+            value={passwordPromptValue}
+            error={passwordPromptError}
+            inputRef={passwordPromptInputRef}
+            onChange={onPasswordPromptChange}
+            onCancel={onPasswordPromptCancel}
+            onSubmit={onPasswordPromptSubmit}
+          />
+        </div>
+      ) : null}
       <div className="app-input-dock space-y-3 bg-background p-4">
         <form onSubmit={onSubmit} className="space-y-2">
           <div className="flex items-center gap-2">
@@ -390,6 +431,7 @@ export function AgentPanel({
               </div>
             ) : null}
             <Textarea
+              ref={agentInputRef}
               value={sessionChatTab.agentInput}
               onChange={(event) => onAgentInputChange(event.target.value)}
               onKeyDown={onAgentInputKeyDown}

@@ -95,34 +95,83 @@ export function formatCommandExecutionActionDetail(
   event: Extract<AgentEvent, { type: 'command' }>,
   t: Dictionary
 ): string {
-  const lines = [`${t.commandReview.command}:`, event.command]
+  // Timeline / chat observation: command output only (no exit code / elapsed / pty meta).
+  return formatCommandObservation(event, t)
+}
 
+/** User-facing observation for a terminal command: stdout/stderr only. */
+export function formatCommandObservation(
+  event: Extract<AgentEvent, { type: 'command' }>,
+  t: Dictionary
+): string {
   if (event.phase === 'started') {
-    lines.push('', t.terminal.commandRunning)
-    return lines.join('\n')
+    return ''
   }
 
   const result = event.result
-  lines.push('', `${t.terminal.commandStatus}: ${result?.ok ? t.input.done : t.input.error}`)
-  if (typeof result?.exitCode === 'number') {
-    lines.push(`${t.terminal.commandExitCode}: ${result.exitCode}`)
-  }
-  if (typeof event.elapsedMs === 'number') {
-    lines.push(`${t.input.elapsed}: ${formatDuration(event.elapsedMs)}`)
-  }
-  if (result?.cwd) lines.push(`${t.app.workingDirectory}: ${result.cwd}`)
-  if (result?.mode) lines.push(`${t.terminal.terminalMode}: ${result.mode}`)
-  if (result?.subterminalName) lines.push(`${t.terminal.subterminal}: ${result.subterminalName}`)
+  const sanitized = sanitizeCommandObservation(result?.output ?? '', result?.error ?? '')
+  const lines: string[] = []
+
   if (result?.timedOut) lines.push(t.terminal.commandTimedOut)
   if (result?.terminalExited) lines.push(t.terminal.terminalDisconnected)
-  if (result?.error) lines.push('', `${t.input.error}:`, result.error)
+  if (sanitized.error) lines.push(sanitized.error)
+  if (sanitized.output) lines.push(truncateCommandOutput(sanitized.output))
 
-  const output = truncateCommandOutput(result?.output ?? '')
-  if (output) {
-    lines.push('', `${t.terminal.commandOutput}:`, output)
+  if (lines.length > 0) return lines.join('\n\n')
+  if (result && !result.ok) return t.input.error
+  return ''
+}
+
+const LOGQL_PARSE_ERROR = /parse error at line .* unexpected IDENTIFIER/i
+
+/**
+ * When stdout is valid success JSON (e.g. Loki API), drop LogQL-style parse
+ * errors that were incorrectly appended via stderr / pipeline noise.
+ */
+export function sanitizeCommandObservation(
+  output: string,
+  error: string
+): { output: string; error: string } {
+  const trimmedOutput = output.trim()
+  let keepError = error.trim()
+
+  if (isSuccessfulApiJson(trimmedOutput)) {
+    keepError = keepError
+      .split(/\r?\n/)
+      .filter((line) => !LOGQL_PARSE_ERROR.test(line))
+      .join('\n')
+      .trim()
+    return { output: trimmedOutput, error: keepError }
   }
 
-  return lines.join('\n')
+  // Also strip parse-error lines glued onto the output blob itself.
+  if (trimmedOutput && LOGQL_PARSE_ERROR.test(trimmedOutput)) {
+    const withoutParse = trimmedOutput
+      .split(/\r?\n/)
+      .filter((line) => !LOGQL_PARSE_ERROR.test(line))
+      .join('\n')
+      .trim()
+    if (isSuccessfulApiJson(withoutParse)) {
+      return { output: withoutParse, error: keepError }
+    }
+  }
+
+  return { output: truncateCommandOutput(output), error: keepError }
+}
+
+function isSuccessfulApiJson(value: string): boolean {
+  if (!value.startsWith('{') && !value.startsWith('[')) return false
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const status = (parsed as { status?: unknown }).status
+      if (status === 'success') return true
+    }
+    // Any other well-formed JSON still counts as successful structured stdout.
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function formatAgentEventActionTitle(
@@ -134,8 +183,12 @@ export function formatAgentEventActionTitle(
       if (/^Loaded \d+ MCP tools:/.test(event.message)) {
         return event.message.split('\n')[0]?.replace(/:$/, '.') ?? event.message
       }
-      if (event.message.startsWith('Command approved by user.')) return t.commandReview.approved
-      if (event.message.startsWith('Command rejected by user.')) return t.commandReview.rejected
+      if (event.message.startsWith('Command approved by user.')) {
+        return localizeAgentEventMessage(event.message, t)
+      }
+      if (event.message.startsWith('Command rejected by user.')) {
+        return localizeAgentEventMessage(event.message, t)
+      }
       return localizeAgentEventMessage(event.message, t)
     case 'thought':
       return localizeAgentEventMessage(event.message, t)
@@ -148,6 +201,57 @@ export function formatAgentEventActionTitle(
 
 export function isNoisyMcpCatalogMessage(message: string): boolean {
   return /^Loaded \d+ MCP tools?\b/i.test(message.trim())
+}
+
+/** Audit / whitelist / auto-approve chatter that should not appear in the chat timeline. */
+export function isNoiseAuditStatusMessage(message: string, t: Dictionary): boolean {
+  const trimmed = message.trim()
+  if (!trimmed) return false
+
+  if (isNoisyMcpCatalogMessage(trimmed)) return true
+
+  const localized = localizeAgentEventMessage(trimmed, t).trim()
+  const noiseExact = new Set([
+    t.commandReview.readOnlyAllowed,
+    t.commandReview.whitelisted,
+    t.commandReview.autoApproved,
+    'Command audit classified this as read-only inspection.'
+  ])
+  if (noiseExact.has(trimmed) || noiseExact.has(localized)) return true
+
+  if (trimmed.startsWith('Command matched whitelist:')) return true
+  if (trimmed.startsWith('Submitting command for review:')) return true
+  if (/^Submitting command in temporary sub-terminal "/.test(trimmed)) return true
+
+  // Keep "analyzing / classifying" visible so the operator can see audit in progress.
+  // Hidden after command-review arrives (see useAgentRuns / isNoiseStatusStep).
+  if (isClassifyingStatusMessage(trimmed, t) || isClassifyingStatusMessage(localized, t)) {
+    return false
+  }
+
+  const reviewTitle = t.commandReview.title
+  if (trimmed === reviewTitle || trimmed.startsWith(`${reviewTitle}:`)) return true
+  if (localized === reviewTitle || localized.startsWith(`${reviewTitle}:`)) return true
+
+  // Risk-only titles like "命令审核：低风险" / "Command review: Low risk"
+  const riskLabels = [t.commandReview.lowRisk, t.commandReview.mediumRisk, t.commandReview.highRisk]
+  for (const label of riskLabels) {
+    if (trimmed === `${reviewTitle}: ${label}` || localized === `${reviewTitle}: ${label}`) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/** Pending "command review in progress" status lines. */
+export function isClassifyingStatusMessage(message: string, t: Dictionary): boolean {
+  const trimmed = message.trim()
+  return (
+    trimmed === 'Command review subprocess is analyzing risk.' ||
+    trimmed === 'Command review is classifying risk.' ||
+    trimmed === t.commandReview.analyzing
+  )
 }
 
 export function localizeAgentEventMessage(message: string, t: Dictionary): string {
@@ -164,10 +268,17 @@ export function localizeAgentEventMessage(message: string, t: Dictionary): strin
   if (message === 'Command audit classified this as read-only inspection.') {
     return t.commandReview.readOnlyAllowed
   }
-  if (message === 'Command review subprocess is analyzing risk.') return t.commandReview.analyzing
+  if (
+    message === 'Command review subprocess is analyzing risk.' ||
+    message === 'Command review is classifying risk.'
+  ) {
+    return t.commandReview.analyzing
+  }
   if (message.startsWith('Command matched whitelist:')) return t.commandReview.whitelisted
   if (message.startsWith('Command approved by user.')) {
-    const note = message.match(/User approval note:\s*([\s\S]+)$/)?.[1]?.trim()
+    const note =
+      message.match(/User approval note:\s*([\s\S]+)$/)?.[1]?.trim() ||
+      message.match(/User note:\s*([\s\S]+)$/)?.[1]?.trim()
     return note
       ? `${t.commandReview.approved}\n${t.commandReview.decisionNote}: ${note}`
       : t.commandReview.approved
@@ -224,10 +335,4 @@ function truncateCommandOutput(output: string): string {
 
   const maxLength = 4000
   return normalized.length > maxLength ? `${normalized.slice(-maxLength)}\n...` : normalized
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-
-  return `${(ms / 1000).toFixed(1)}s`
 }
