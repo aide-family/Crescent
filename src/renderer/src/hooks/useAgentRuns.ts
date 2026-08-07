@@ -571,16 +571,34 @@ export function useAgentRuns({
       }
 
       if (event.type === 'error') {
+        const isQuota = event.kind === 'quota' || event.code === 'quota_exceeded'
+        const provider = event.provider?.trim() || t.input.modelQuotaUnknownProvider
+        const resetHint =
+          event.resetHint?.trim() ||
+          (event.retryAfterMs != null
+            ? t.input.modelQuotaResetHintMinutes.replace(
+                '{minutes}',
+                String(Math.max(1, Math.ceil(event.retryAfterMs / 60_000)))
+              )
+            : t.input.modelQuotaResetHintSoon)
+        const humanError = isQuota
+          ? t.input.modelQuotaExceeded
+              .replace('{provider}', provider)
+              .replace('{resetHint}', resetHint)
+          : localizeAgentEventMessage(event.message, t)
         updateAgentRun(tabId, (run) => ({
           ...run,
-          error: localizeAgentEventMessage(event.message, t),
+          error: humanError,
+          errorKind: isQuota ? 'quota' : event.kind === 'transient' ? 'transient' : 'other',
+          errorProvider: isQuota ? provider : event.provider,
+          errorResetHint: isQuota ? resetHint : undefined,
           steps: [
             ...closeStreamingOpenSteps(run.steps ?? []),
             {
               id: createStepId('status'),
               kind: 'status',
-              title: `${t.input.error}: ${localizeAgentEventMessage(event.message, t)}`,
-              detail: localizeAgentEventMessage(event.message, t)
+              title: isQuota ? t.input.modelQuotaExceededTitle : `${t.input.error}: ${humanError}`,
+              detail: humanError
             }
           ]
         }))

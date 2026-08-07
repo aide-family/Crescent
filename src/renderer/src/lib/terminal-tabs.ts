@@ -28,6 +28,10 @@ export interface AgentRunViewState {
   startedAt?: number
   result?: string
   error?: string
+  /** Structured provider failure class when error is set (additive). */
+  errorKind?: 'quota' | 'transient' | 'other'
+  errorProvider?: string
+  errorResetHint?: string
   elapsedMs?: number
 }
 

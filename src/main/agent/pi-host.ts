@@ -19,6 +19,11 @@ import {
   setPtyBashExecContext
 } from './pi-terminal-bash'
 import { rejectPendingApprovalsForRun } from './command-approval'
+import {
+  buildQuotaResetHint,
+  classifyProviderError,
+  isQuotaExhaustedError
+} from '../../shared/provider-error'
 import type { AgentConfig, AgentEvent } from './types'
 
 type AgentSession = Awaited<ReturnType<PiCodingAgentModule['createAgentSession']>>['session']
@@ -127,11 +132,38 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
 
     let collectedText = ''
     let lastRetryError = ''
+    let quotaExceeded:
+      | {
+          provider?: string
+          resetHint: string
+          retryAfterMs?: number
+        }
+      | undefined
+    const bridgeLocale = input.locale?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
     hosted.unsubscribe?.()
     hosted.unsubscribe = hosted.session.subscribe((event) => {
+      if (event.type === 'auto_retry_start' && isQuotaExhaustedError(event.errorMessage ?? '')) {
+        const classified = classifyProviderError(event.errorMessage ?? '')
+        quotaExceeded = {
+          provider: classified.provider ?? model.provider,
+          resetHint: buildQuotaResetHint(classified.retryAfterMs, bridgeLocale),
+          retryAfterMs: classified.retryAfterMs
+        }
+        // abortRetry() only works after _prepareRetry wires _retryAbortController
+        // (created synchronously after this emit returns). Microtask is soon enough.
+        queueMicrotask(() => {
+          try {
+            hosted.session.abortRetry()
+          } catch {
+            // ignore
+          }
+        })
+      }
+
       for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
         runId,
-        tabId: input.tabId
+        tabId: input.tabId,
+        locale: input.locale
       })) {
         if (agentEvent.type === 'token') {
           collectedText += agentEvent.text
@@ -142,6 +174,14 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
           /^Retrying\b/i.test(agentEvent.message)
         ) {
           lastRetryError = agentEvent.message
+        }
+        if (agentEvent.type === 'error' && agentEvent.kind === 'quota' && !quotaExceeded) {
+          quotaExceeded = {
+            provider: agentEvent.provider ?? model.provider,
+            resetHint:
+              agentEvent.resetHint ?? buildQuotaResetHint(agentEvent.retryAfterMs, bridgeLocale),
+            retryAfterMs: agentEvent.retryAfterMs
+          }
         }
         emit(agentEvent)
       }
@@ -155,12 +195,53 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       return { ok: false, canceled: true, error: 'Canceled.', text: collectedText.trim() }
     }
 
+    if (quotaExceeded) {
+      const message = 'AccountQuotaExceeded'
+      emit({
+        type: 'error',
+        message,
+        kind: 'quota',
+        code: 'quota_exceeded',
+        provider: quotaExceeded.provider,
+        resetHint: quotaExceeded.resetHint,
+        retryAfterMs: quotaExceeded.retryAfterMs,
+        runId,
+        tabId: input.tabId
+      })
+      return { ok: false, error: message }
+    }
+
     const messages = hosted.session.messages as unknown[]
-    const finalText =
-      extractAssistantTextFromMessages(messages).trim() || collectedText.trim()
+    const finalText = extractAssistantTextFromMessages(messages).trim() || collectedText.trim()
 
     if (!finalText && lastRetryError) {
-      emit({ type: 'error', message: lastRetryError, runId, tabId: input.tabId })
+      const classified = classifyProviderError(lastRetryError)
+      if (classified.kind === 'quota_exceeded') {
+        emit({
+          type: 'error',
+          message: 'AccountQuotaExceeded',
+          kind: 'quota',
+          code: 'quota_exceeded',
+          provider: classified.provider ?? model.provider,
+          resetHint: buildQuotaResetHint(classified.retryAfterMs, bridgeLocale),
+          retryAfterMs: classified.retryAfterMs,
+          runId,
+          tabId: input.tabId
+        })
+        return { ok: false, error: 'AccountQuotaExceeded' }
+      }
+      emit({
+        type: 'error',
+        message: lastRetryError,
+        kind:
+          classified.kind === 'rate_limit' || classified.kind === 'transient'
+            ? 'transient'
+            : 'other',
+        provider: classified.provider,
+        retryAfterMs: classified.retryAfterMs,
+        runId,
+        tabId: input.tabId
+      })
       return { ok: false, error: lastRetryError }
     }
 
@@ -173,7 +254,32 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       return { ok: false, canceled: true, error: 'Canceled.' }
     }
     const message = error instanceof Error ? error.message : String(error)
-    emit({ type: 'error', message, runId, tabId: input.tabId })
+    const classified = classifyProviderError(message)
+    if (classified.kind === 'quota_exceeded') {
+      const locale = input.locale?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+      emit({
+        type: 'error',
+        message: 'AccountQuotaExceeded',
+        kind: 'quota',
+        code: 'quota_exceeded',
+        provider: classified.provider,
+        resetHint: buildQuotaResetHint(classified.retryAfterMs, locale),
+        retryAfterMs: classified.retryAfterMs,
+        runId,
+        tabId: input.tabId
+      })
+      return { ok: false, error: 'AccountQuotaExceeded' }
+    }
+    emit({
+      type: 'error',
+      message,
+      kind:
+        classified.kind === 'rate_limit' || classified.kind === 'transient' ? 'transient' : 'other',
+      provider: classified.provider,
+      retryAfterMs: classified.retryAfterMs,
+      runId,
+      tabId: input.tabId
+    })
     return { ok: false, error: message }
   } finally {
     clearPtyBashExecContext(sessionKey)

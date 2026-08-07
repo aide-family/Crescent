@@ -11,6 +11,9 @@ export interface ParsedAgentRunDocument {
   steps: AgentRunStep[]
   resultMarkdown: string
   errorMarkdown: string
+  errorKind?: 'quota' | 'transient' | 'other'
+  errorProvider?: string
+  errorResetHint?: string
   elapsedMs?: number
   /** Legacy markdown actions block (v1 only). */
   actionsMarkdown?: string
@@ -23,6 +26,9 @@ interface SerializedAgentRunDocument {
   steps: AgentRunStep[]
   result?: string
   error?: string
+  errorKind?: 'quota' | 'transient' | 'other'
+  errorProvider?: string
+  errorResetHint?: string
   elapsedMs?: number
 }
 
@@ -33,6 +39,9 @@ export function formatAgentRunDocument(run: AgentRunViewState, t: Dictionary): s
     steps: run.steps ?? [],
     result: run.result?.trim() ? run.result : undefined,
     error: run.error?.trim() ? run.error : undefined,
+    errorKind: run.errorKind,
+    errorProvider: run.errorProvider,
+    errorResetHint: run.errorResetHint,
     elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
   }
 
@@ -62,6 +71,11 @@ export function parseAgentRunDocument(value: string, t: Dictionary): ParsedAgent
             steps,
             resultMarkdown: typeof parsed.result === 'string' ? parsed.result : '',
             errorMarkdown: typeof parsed.error === 'string' ? parsed.error : '',
+            errorKind: parseErrorKind(parsed.errorKind),
+            errorProvider:
+              typeof parsed.errorProvider === 'string' ? parsed.errorProvider : undefined,
+            errorResetHint:
+              typeof parsed.errorResetHint === 'string' ? parsed.errorResetHint : undefined,
             elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined
           }
         }
@@ -378,8 +392,16 @@ export function agentRunViewToDocument(run: AgentRunViewState): ParsedAgentRunDo
     steps,
     resultMarkdown: run.result ?? '',
     errorMarkdown: run.error ?? '',
+    errorKind: run.errorKind,
+    errorProvider: run.errorProvider,
+    errorResetHint: run.errorResetHint,
     elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
   }
+}
+
+function parseErrorKind(value: unknown): 'quota' | 'transient' | 'other' | undefined {
+  if (value === 'quota' || value === 'transient' || value === 'other') return value
+  return undefined
 }
 
 function escapeRegExp(value: string): string {
