@@ -53,7 +53,8 @@ export function AgentLogContent({
   onOpsFeedback,
   onResolveApproval,
   onAddCommandToWhitelist,
-  onInjectSuggestions
+  onInjectSuggestions,
+  onOpenModelSettings
 }: {
   entry: AgentLogEntry
   liveRun?: AgentRunViewState | null
@@ -69,6 +70,7 @@ export function AgentLogContent({
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
+  onOpenModelSettings?: () => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -101,6 +103,7 @@ export function AgentLogContent({
           onResolveApproval={onResolveApproval}
           onAddCommandToWhitelist={onAddCommandToWhitelist}
           onInjectSuggestions={onInjectSuggestions}
+          onOpenModelSettings={onOpenModelSettings}
         />
       )
     }

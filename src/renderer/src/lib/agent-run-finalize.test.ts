@@ -68,4 +68,33 @@ describe('agent-run-finalize', () => {
     expect(isPlaceholderDoneText('完成。', '完成。')).toBe(true)
     expect(isPlaceholderDoneText('Loki ok', 'Done.')).toBe(false)
   })
+
+  it('does not treat quota exhaustion as a successful Done result', () => {
+    const run: AgentRunViewState = {
+      logId: 1,
+      actions: [],
+      steps: [
+        {
+          id: '1',
+          kind: 'status',
+          title: '模型配额已用尽',
+          detail: '⚠️ 模型服务配额已用尽（DeepSeek），预计约 5 分钟后恢复。'
+        }
+      ],
+      error: '⚠️ 模型服务配额已用尽（DeepSeek），预计约 5 分钟后恢复。',
+      errorKind: 'quota',
+      errorProvider: 'DeepSeek',
+      errorResetHint: '约 5 分钟后'
+    }
+    expect(
+      resolveSuccessfulAgentResult({
+        text: 'Done.',
+        run,
+        doneFallback: 'Done.'
+      })
+    ).toEqual({
+      ok: false,
+      error: '⚠️ 模型服务配额已用尽（DeepSeek），预计约 5 分钟后恢复。'
+    })
+  })
 })

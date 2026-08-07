@@ -89,6 +89,7 @@ export function AgentPanel({
   onResolveApproval,
   onAddCommandToWhitelist,
   onInjectSuggestions,
+  onOpenModelSettings,
   onClarifyConfirm,
   onClarifyDismiss,
   onToggleTerminalPane,
@@ -163,6 +164,7 @@ export function AgentPanel({
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
+  onOpenModelSettings?: () => void
   onClarifyConfirm?: (label: string) => void
   onClarifyDismiss?: () => void
   onToggleTerminalPane: () => void
@@ -220,6 +222,7 @@ export function AgentPanel({
         feedbackBusyLogId={feedbackBusyLogId}
         onRetryConnection={onRetryConnection}
         onOpenConnections={onOpenConnections}
+        onOpenModelSettings={onOpenModelSettings}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
       onClarifyConfirm &&

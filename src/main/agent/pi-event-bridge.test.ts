@@ -91,4 +91,44 @@ describe('mapPiSessionEventToAgentEvents', () => {
     ])
     expect(text).toBe('Loki 健康。')
   })
+
+  it('maps AccountQuotaExceeded auto_retry_start to kind:quota and does not emit Retrying (2/2)', () => {
+    const event = {
+      type: 'auto_retry_start',
+      attempt: 1,
+      maxAttempts: 2,
+      delayMs: 1000,
+      errorMessage:
+        '429: {"code":"AccountQuotaExceeded","message":"You have reached your API usage limit","type":"Limit"}'
+    } as unknown as AgentSessionEvent
+
+    const events = mapPiSessionEventToAgentEvents(event, meta)
+    expect(events.some((e) => e.type === 'status' && /^Retrying\b/.test(e.message))).toBe(false)
+    const error = events.find((e) => e.type === 'error')
+    expect(error).toMatchObject({
+      type: 'error',
+      kind: 'quota',
+      code: 'quota_exceeded',
+      message: 'AccountQuotaExceeded'
+    })
+    expect(JSON.stringify(events)).not.toContain('"type":"Limit"')
+  })
+
+  it('keeps transient 429 auto_retry_start as Retrying status (blind retry allowed)', () => {
+    const event = {
+      type: 'auto_retry_start',
+      attempt: 1,
+      maxAttempts: 2,
+      delayMs: 1000,
+      errorMessage: '429 rate limit: Too Many Requests'
+    } as unknown as AgentSessionEvent
+
+    const events = mapPiSessionEventToAgentEvents(event, meta)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      type: 'status',
+      message: expect.stringMatching(/^Retrying \(1\/2\):/)
+    })
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+  })
 })

@@ -5,12 +5,15 @@ import { COMMAND_AUDIT_TIMEOUT_MS, resolveAuditModel, tryParseAuditLevel } from 
 import { classifyCommand } from './command-classify'
 import type { AgentConfig } from './types'
 
+const auditorAuditCalls: string[] = []
+
 vi.mock('./command-auditor', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./command-auditor')>()
   return {
     ...actual,
     CommandAuditor: class {
-      async audit(): Promise<never> {
+      async audit(input: { command: string }): Promise<never> {
+        auditorAuditCalls.push(input.command)
         throw new actual.CommandAuditTimeoutError()
       }
     }
@@ -136,6 +139,21 @@ describe('classifyCommand funnel', () => {
     })
     expect(del.level).toBe('high')
     expect(del.source).toBe('rule')
+  })
+
+  it('write-approval invariant: kubectl delete is HIGH/requiresApproval without model HTTP', async () => {
+    // CommandAuditor is mocked above — HIGH must short-circuit on static rules
+    // and never invoke the auditor (no brain/model HTTP).
+    auditorAuditCalls.length = 0
+    const result = await classifyCommand('kubectl delete deployment api -n prod', {
+      config: baseConfig(),
+      userInput: 'remove broken deploy'
+    })
+    expect(result.level).toBe('high')
+    expect(result.source).toBe('rule')
+    expect(result.audit.requiresApproval).toBe(true)
+    expect(result.audit.risk).toBe('high')
+    expect(auditorAuditCalls).toEqual([])
   })
 
   it('flags kubectl exec as high via rule (not subagent)', async () => {

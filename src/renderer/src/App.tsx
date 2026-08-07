@@ -5673,6 +5673,9 @@ function App(): React.JSX.Element {
             liveRunByLogId={liveRunByLogId}
             onResolveApproval={resolveInlineCommandApproval}
             onAddCommandToWhitelist={(command) => void addCommandToWhitelist(command)}
+            onOpenModelSettings={() => {
+              setSheetOpen(true)
+            }}
             onInjectSuggestions={(texts) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
               const block = formatSuggestionsForInput(texts)

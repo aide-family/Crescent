@@ -20,6 +20,7 @@ import {
 
 import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { QuotaErrorCard } from '@renderer/components/QuotaErrorCard'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
@@ -50,7 +51,8 @@ export function AgentRunTimeline({
   onOpsFeedback,
   onResolveApproval,
   onAddCommandToWhitelist,
-  onInjectSuggestions
+  onInjectSuggestions,
+  onOpenModelSettings
 }: {
   document: ParsedAgentRunDocument
   t: Dictionary
@@ -65,6 +67,7 @@ export function AgentRunTimeline({
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
+  onOpenModelSettings?: () => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
   const resultPreviewMarkdown = document.resultMarkdown || document.errorMarkdown
@@ -179,9 +182,19 @@ export function AgentRunTimeline({
             </div>
           ) : null}
           {document.errorMarkdown?.trim() ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              <MarkdownContent value={document.errorMarkdown} t={t} />
-            </div>
+            document.errorKind === 'quota' ? (
+              <QuotaErrorCard
+                t={t}
+                provider={document.errorProvider}
+                resetHint={document.errorResetHint}
+                message={document.errorMarkdown}
+                onOpenModelSettings={onOpenModelSettings}
+              />
+            ) : (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <MarkdownContent value={document.errorMarkdown} t={t} />
+              </div>
+            )
           ) : null}
 
           <div className="flex items-center justify-between gap-2 pt-0.5">
