@@ -226,6 +226,18 @@ export function isCrescentScriptBootstrapLine(line: string): boolean {
   const afterPrompt = trimmed.replace(/^.*?[%$#>]\s+/, '')
   if (afterPrompt.startsWith('__crescent_script=')) return true
 
+  // One-liner may appear mid-stream / mid-prompt: `__crescent_script=$(mktemp)...printf...base64`
+  if (trimmed.includes('__crescent_script=$(mktemp')) return true
+  if (
+    trimmed.includes('__crescent_script=') &&
+    (/\$\(mktemp\b/.test(trimmed) || /printf\s+%s/.test(trimmed) || /base64\s+-[dD]/.test(trimmed))
+  ) {
+    return true
+  }
+
+  // Long printf %s 'base64...' fragment (display noise even without the mktemp prefix)
+  if (/printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(trimmed)) return true
+
   // Pure base64 continuation of the encoded script payload
   if (/^[A-Za-z0-9+/=]{80,}$/.test(trimmed)) return true
 
@@ -319,6 +331,9 @@ function shouldHoldIncompleteBootstrapLine(line: string): boolean {
   if (trimmed.startsWith('__crescent_script=')) return true
   const afterPrompt = trimmed.replace(/^.*?[%$#>]\s+/, '')
   if (afterPrompt.startsWith('__crescent_script=')) return true
+  if (trimmed.includes('__crescent_script=$(mktemp')) return true
+  if (trimmed.includes('__crescent_script=')) return true
+  if (/printf\s+%s\s+'[A-Za-z0-9+/=]{40,}/.test(trimmed)) return true
   // Growing base64 blob mid-line
   if (/^[A-Za-z0-9+/=]{40,}$/.test(trimmed)) return true
   return false

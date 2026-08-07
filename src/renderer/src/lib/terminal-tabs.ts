@@ -124,6 +124,8 @@ export interface PendingAgentClarification {
   kind: 'connection-intent'
   originalInput: string
   question: string
+  options?: Array<{ id: string; label: string }>
+  defaultOptionId?: string
 }
 
 export interface TemporarySubterminal {

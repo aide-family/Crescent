@@ -1,4 +1,10 @@
-import { HIGH, READONLY, extractRiskVerb, hasHighWriteVerb } from '../../shared/command-guard'
+import {
+  HIGH,
+  READONLY,
+  extractRiskVerb,
+  hasHighWriteVerb,
+  isStaticallyReadonly
+} from '../../shared/command-guard'
 import type { CommandAuditSource } from '../../shared/agent-types'
 import { CommandAuditor, CommandAuditTimeoutError } from './command-auditor'
 import { matchCommandWhitelist } from './command-whitelist'
@@ -15,6 +21,7 @@ export interface ClassifyCommandResult {
 /**
  * Funnel order: HIGH → whitelist → READONLY → subagent.
  * Destructive HIGH always wins over a broad whitelist pattern.
+ * Subagent "high" is clamped to low when static READONLY matches.
  */
 export async function classifyCommand(
   cmd: string,
@@ -55,9 +62,15 @@ export async function classifyCommand(
       locale: ctx.locale
     })
     const elapsedMs = Date.now() - startedAt
-    const level: 'low' | 'high' = audit.risk === 'low' ? 'low' : 'high'
+    // Clamp mistaken high ratings when the command is statically read-only.
+    const level: 'low' | 'high' =
+      audit.risk === 'low' || isStaticallyReadonly(cmd) ? 'low' : 'high'
     const human =
-      level === 'high' ? buildHighRiskHumanSummary(cmd, ctx.locale) : audit.summary
+      level === 'high'
+        ? buildHighRiskHumanSummary(cmd, ctx.locale)
+        : isStaticallyReadonly(cmd)
+          ? buildReadOnlyHumanSummary(cmd, ctx.locale)
+          : audit.summary
     return {
       level,
       source: 'subagent',
@@ -78,7 +91,8 @@ export async function classifyCommand(
   } catch (error) {
     const elapsedMs = Date.now() - startedAt
     if (error instanceof CommandAuditTimeoutError) {
-      const level: 'low' | 'high' = hasHighWriteVerb(cmd) ? 'high' : 'low'
+      const level: 'low' | 'high' =
+        hasHighWriteVerb(cmd) && !isStaticallyReadonly(cmd) ? 'high' : 'low'
       const audit = buildTimeoutFallbackAudit(level, elapsedMs, ctx.locale, cmd)
       return { level, source: 'timeout-fallback', elapsedMs, audit }
     }
@@ -92,6 +106,14 @@ function buildHighRiskHumanSummary(cmd: string, locale: string | undefined): str
   return zh
     ? `⚠️ 该命令会执行远程操作（${verb}），需你确认后执行。`
     : `⚠️ This command performs a remote action (${verb}). Confirm to proceed.`
+}
+
+function buildReadOnlyHumanSummary(cmd: string, locale: string | undefined): string {
+  const zh = resolveZh(locale)
+  const verb = extractRiskVerb(cmd)
+  return zh
+    ? `该命令为只读查询（${verb}）。`
+    : `This command is a read-only query (${verb}).`
 }
 
 function buildRuleAudit(
