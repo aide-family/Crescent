@@ -36,7 +36,7 @@ import {
   type PasswordPromptRequest
 } from '@renderer/components/AppModals'
 import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
-import { extractResultMarkdown } from '@renderer/components/MarkdownContent'
+import { extractResultMarkdown } from '@renderer/lib/agent-run-markdown'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
 import {
@@ -3449,6 +3449,14 @@ function App(): React.JSX.Element {
       const question =
         connectionIntent.analysis.clarificationQuestion?.trim() ||
         t.terminal.connectionClarifyFallback
+      const clarifyOptions =
+        route.clarifyOptions && route.clarifyOptions.length > 0
+          ? route.clarifyOptions
+          : connections.map((c) => ({ id: c.id, label: c.name }))
+      const defaultOptionId =
+        lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
+          ? lastUsedConnectionId
+          : undefined
       appendLog(
         {
           kind: 'assistant',
@@ -3477,7 +3485,9 @@ function App(): React.JSX.Element {
         pendingClarification: {
           kind: 'connection-intent',
           originalInput: pendingClarification?.originalInput || displayInput,
-          question
+          question,
+          options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
+          defaultOptionId
         }
       }))
       return
@@ -3511,6 +3521,11 @@ function App(): React.JSX.Element {
         connections.map((c) => ({ id: c.id, label: c.name }))
       )
       const question = t.terminal.connectionClarifyPickOne.replace('{options}', optionsText)
+      const clarifyOptions = connections.map((c) => ({ id: c.id, label: c.name }))
+      const defaultOptionId =
+        lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
+          ? lastUsedConnectionId
+          : undefined
       appendLog(
         {
           kind: 'assistant',
@@ -3539,7 +3554,9 @@ function App(): React.JSX.Element {
         pendingClarification: {
           kind: 'connection-intent',
           originalInput: pendingClarification?.originalInput || displayInput,
-          question
+          question,
+          options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
+          defaultOptionId
         }
       }))
       return
@@ -5674,6 +5691,32 @@ function App(): React.JSX.Element {
                   el.setSelectionRange(end, end)
                 }
               })
+            }}
+            onClarifyConfirm={(label) => {
+              const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+              const trimmed = label.trim()
+              if (!trimmed) return
+              updateTab(chatTabId, (current) => ({
+                ...current,
+                agentInput: current.agentInput.trim()
+                  ? `${current.agentInput.trim()}\n${trimmed}`
+                  : trimmed
+              }))
+              queueMicrotask(() => {
+                agentInputRef.current?.focus()
+                const el = agentInputRef.current
+                if (el) {
+                  const end = el.value.length
+                  el.setSelectionRange(end, end)
+                }
+              })
+            }}
+            onClarifyDismiss={() => {
+              const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+              updateTab(chatTabId, (current) => ({
+                ...current,
+                pendingClarification: undefined
+              }))
             }}
             passwordPromptRequest={passwordPromptRequest}
             passwordPromptValue={passwordPromptValue}

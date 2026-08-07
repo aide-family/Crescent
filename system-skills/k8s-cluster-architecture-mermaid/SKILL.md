@@ -92,7 +92,10 @@ kubectl api-resources
 5. Keep each diagram focused. If the topology is large, split it into platform, application traffic, and storage/observability diagrams.
 6. Avoid overly long labels. Put detailed findings outside the diagram.
 7. Include unknown or unverified parts as dashed or clearly labeled nodes when they matter.
-8. **Never** use ASCII art, Unicode box-drawing, or plain-text wireframes for architecture/topology. Always use fenced ` ```mermaid ` blocks.
+8. **Never** use ASCII art, Unicode box-drawing (`+--+`, `│`, `┌`), or plain-text wireframes for architecture/topology. The **only** accepted diagram format is a fenced ` ```mermaid ` block. If you catch yourself drawing boxes in plain text, delete that section and emit Mermaid instead.
+9. Prefer multiple focused Mermaid diagrams over one huge chart (platform / traffic path / storage).
+10. Annotate critical paths with ①②③ in the diagram labels or adjacent bullets: external→Ingress→Service→Pod; CNI/IPPool; logging dual path.
+11. Do not preview the final architecture report as long mid-turn bullet lists; keep interim operator text to one short sentence.
 
 Example:
 

@@ -18,7 +18,8 @@ import {
   XIcon
 } from 'lucide-react'
 
-import { buildMarkdownHeadingId, MarkdownContent } from '@renderer/components/MarkdownContent'
+import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
+import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
@@ -28,7 +29,7 @@ import { shouldShowAgentRunResult, omitDuplicateTrailingMessage } from '@rendere
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
-import { extractRiskVerb, shouldShowWhitelistEntry } from '../../../shared/command-guard'
+import { extractRiskVerb, isStaticallyReadonly, shouldShowWhitelistEntry } from '../../../shared/command-guard'
 import { extractResultSuggestions } from '@renderer/lib/result-suggestions'
 
 /**
@@ -400,7 +401,7 @@ function MessageStepRow({
   const streaming = step.phase === 'streaming'
   return (
     <div className="min-w-0 text-[14px] leading-relaxed text-foreground/90">
-      <MarkdownContent value={text} t={t} />
+      <MarkdownContent value={text} t={t} streaming={streaming} />
       {streaming ? (
         <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-foreground/40 align-middle" />
       ) : null}
@@ -630,7 +631,9 @@ function ApprovalStepCard({
   const riskVerb = extractRiskVerb(step.command)
   const humanSummary =
     step.auditSummary?.trim() ||
-    t.commandReview.highRiskHuman.replace('{verb}', riskVerb)
+    (isStaticallyReadonly(step.command)
+      ? t.commandReview.readOnlyHuman.replace('{verb}', riskVerb)
+      : t.commandReview.highRiskHuman.replace('{verb}', riskVerb))
 
   return (
     <div
