@@ -43,9 +43,15 @@ export function isExplicitNonTerminalAgentRequest(
 
 export function hasUsableCurrentTerminal(
   tab: AgentTerminalTab | undefined,
-  output: string
+  output: string,
+  terminalMode?: string
 ): boolean {
-  if (tab?.isSsh || tab?.connectionId) return true
+  if (terminalMode === 'none') return false
+  if (tab && tab.terminalReady === false) return false
+
+  if (tab?.isSsh || tab?.connectionId) {
+    return tab.terminalReady !== false && terminalMode !== 'none'
+  }
 
   const normalized = normalizeTerminalControlText(output).trim()
   if (!normalized) return false

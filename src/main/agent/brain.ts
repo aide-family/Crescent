@@ -28,16 +28,22 @@ export class AgentBrain {
 
   chat(
     params: Omit<ChatCompletionCreateParamsNonStreaming, 'model' | 'stream'>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; model?: string }
   ): Promise<ChatCompletion> {
+    const { model: modelOverride, signal } = options ?? {}
     return this.client.chat.completions.create(
       {
-        model: this.model,
+        model: modelOverride?.trim() || this.model,
         ...params,
         stream: false
       },
-      options
+      signal ? { signal } : undefined
     )
+  }
+
+  /** Default model bound to this brain (from agent config). */
+  get defaultModel(): string {
+    return this.model
   }
 
   async transcribeAudio(input: {

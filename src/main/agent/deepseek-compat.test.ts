@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  isDeepSeekModelId,
   isDeepSeekProvider,
   isDeepSeekReasoningModelId,
+  isOpenAiOfficialHost,
   normalizeProviderBaseUrl,
+  openAiCompatibleModelCompat,
   resolveModelReasoningFlag
 } from './deepseek-compat'
 
@@ -16,6 +19,29 @@ describe('deepseek-compat', () => {
     expect(
       isDeepSeekProvider({ id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com' })
     ).toBe(false)
+  })
+
+  it('detects DeepSeek from model ids on custom provider ids', () => {
+    expect(
+      isDeepSeekProvider({
+        id: 'provider-1785763036475',
+        name: 'Gateway',
+        baseUrl: 'https://gateway.example.com/v1',
+        models: [{ id: 'DeepSeek-V4-Pro' }]
+      })
+    ).toBe(true)
+    expect(isDeepSeekModelId('DeepSeek-V4-Pro')).toBe(true)
+    expect(isDeepSeekModelId('gpt-4o')).toBe(false)
+  })
+
+  it('disables developer role for non-OpenAI OpenAI-compatible hosts', () => {
+    expect(isOpenAiOfficialHost('https://api.openai.com/v1')).toBe(true)
+    expect(isOpenAiOfficialHost('https://gateway.example.com/v1')).toBe(false)
+    expect(openAiCompatibleModelCompat('https://api.openai.com/v1')).toBeUndefined()
+    expect(openAiCompatibleModelCompat('https://gateway.example.com/v1')).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false
+    })
   })
 
   it('normalizes DeepSeek base URLs to /v1', () => {

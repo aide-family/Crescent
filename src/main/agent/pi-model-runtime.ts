@@ -5,6 +5,7 @@ import {
   deepSeekThinkingLevelMap,
   isDeepSeekProvider,
   normalizeProviderBaseUrl,
+  openAiCompatibleModelCompat,
   resolveModelReasoningFlag
 } from './deepseek-compat'
 import { getAgentProviders } from './model-provider-config'
@@ -135,6 +136,7 @@ export async function listPiAvailableModels(config: AgentConfig): Promise<
 function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInput {
   const deepseek = isDeepSeekProvider(provider)
   const baseUrl = normalizeProviderBaseUrl(provider.baseUrl, deepseek)
+  const gatewayCompat = openAiCompatibleModelCompat(provider.baseUrl)
 
   return {
     name: provider.name || provider.id,
@@ -160,7 +162,9 @@ function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInp
               compat: deepSeekModelCompat(),
               ...(reasoning ? { thinkingLevelMap: deepSeekThinkingLevelMap() } : {})
             }
-          : {})
+          : gatewayCompat
+            ? { compat: gatewayCompat }
+            : {})
       }
     })
   }

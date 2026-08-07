@@ -3,7 +3,9 @@ import { ipcMain } from 'electron'
 import {
   deleteCustomConnection,
   readCustomConnections,
-  upsertCustomConnection
+  readLastUsedConnectionId,
+  upsertCustomConnection,
+  writeLastUsedConnectionId
 } from '../crescent-store'
 import { deleteOpsHistoryForConnection } from '../crescent-sqlite'
 import type { ConnectionConfig, ConnectionInput } from '../agent/types'
@@ -29,6 +31,15 @@ export function registerConnectionIpc(): void {
     deleteCustomConnection(id)
     deleteOpsHistoryForConnection(id ?? '')
     return listConnections()
+  })
+
+  ipcMain.handle('connections:get-last-used', async () => {
+    return readLastUsedConnectionId() ?? null
+  })
+
+  ipcMain.handle('connections:set-last-used', async (_, id: string) => {
+    writeLastUsedConnectionId(id)
+    return readLastUsedConnectionId() ?? null
   })
 }
 

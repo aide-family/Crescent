@@ -92,6 +92,7 @@ kubectl api-resources
 5. Keep each diagram focused. If the topology is large, split it into platform, application traffic, and storage/observability diagrams.
 6. Avoid overly long labels. Put detailed findings outside the diagram.
 7. Include unknown or unverified parts as dashed or clearly labeled nodes when they matter.
+8. **Never** use ASCII art, Unicode box-drawing, or plain-text wireframes for architecture/topology. Always use fenced ` ```mermaid ` blocks.
 
 Example:
 

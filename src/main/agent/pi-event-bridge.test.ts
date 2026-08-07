@@ -82,4 +82,13 @@ describe('mapPiSessionEventToAgentEvents', () => {
     ])
     expect(text).toBe('done')
   })
+
+  it('uses the last assistant message text as the final result', () => {
+    const text = extractAssistantTextFromMessages([
+      { role: 'assistant', content: [{ type: 'text', text: '先检查 pods。' }] },
+      { role: 'user', content: 'ok' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Loki 健康。' }] }
+    ])
+    expect(text).toBe('Loki 健康。')
+  })
 })

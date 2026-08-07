@@ -41,6 +41,8 @@ export {
 export interface CrescentConfigFile {
   agent: AgentConfig
   connections: ConnectionConfig[]
+  /** Soft default for connection routing after a successful SSH login. */
+  lastUsedConnectionId?: string
 }
 
 export interface CrescentMemoryFile {
@@ -142,8 +144,30 @@ export function deleteCustomConnection(id: string): void {
   const current = readCrescentConfig()
   writeCrescentConfig({
     ...current,
-    connections: current.connections.filter((connection) => connection.id !== id)
+    connections: current.connections.filter((connection) => connection.id !== id),
+    lastUsedConnectionId:
+      current.lastUsedConnectionId === id ? undefined : current.lastUsedConnectionId
   })
+}
+
+export function readLastUsedConnectionId(): string | undefined {
+  return readCrescentConfig().lastUsedConnectionId
+}
+
+export function writeLastUsedConnectionId(connectionId: string | undefined): void {
+  const current = readCrescentConfig()
+  const trimmed = normalizeLastUsedConnectionId(connectionId)
+  if (current.lastUsedConnectionId === trimmed) return
+  writeCrescentConfig({
+    ...current,
+    lastUsedConnectionId: trimmed
+  })
+}
+
+/** Normalize optional last-used connection id from config / IPC input. */
+export function normalizeLastUsedConnectionId(value: unknown): string | undefined {
+  const trimmed = String(value ?? '').trim()
+  return trimmed || undefined
 }
 
 export function readCrescentMemory(): CrescentMemoryFile {
@@ -353,7 +377,8 @@ function normalizeConfigFile(value: unknown): CrescentConfigFile {
     agent: normalizeAgentConfig(isRecord(record.agent) ? record.agent : {}),
     connections: Array.isArray(record.connections)
       ? record.connections.map(normalizeConnection).filter((connection) => connection.host)
-      : []
+      : [],
+    lastUsedConnectionId: normalizeLastUsedConnectionId(record.lastUsedConnectionId)
   }
 }
 
