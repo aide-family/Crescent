@@ -19,11 +19,11 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Phase 4 distribution polish: in-app updates via GitHub Releases, packaging smoke checks, and optional CI signing when secrets are configured.
-- Default local instruction files (`IDENTITY.md`, `SOUL.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`) are seeded on first launch without overwriting existing files.
-- Conversation like/dislike feedback is mutually exclusive once submitted.
-- Session switcher clarity for peer terminals and active Agent execution.
-- Architecture extractions for terminal tabs, xterm lifecycle, and connection form helpers.
+- Graceful model quota handling: `AccountQuotaExceeded` / quota 429 stops blind retries and shows a human-readable quota card (provider + reset hint + switch-model shortcut) instead of raw JSON.
+- Cursor-style agent timeline with coalesced thinking, tool results, and DeepSeek reasoning support.
+- Pi bash runs in the visible PTY with in-chat high-risk command approvals (`kubectl delete` and other writes stay gated independently of model HTTP).
+- Command classification funnel refinements and connection clarification UI for SSH / cluster login flows.
+- Branding and icon asset updates; SSH connection intent matching restored for cluster login requests.
 
 ## Install Notes
 
