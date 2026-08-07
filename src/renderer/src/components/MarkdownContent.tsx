@@ -4,8 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent
+  type PointerEvent as ReactPointerEvent
 } from 'react'
 import { createPortal } from 'react-dom'
 import mermaid from 'mermaid'
@@ -32,6 +31,11 @@ import {
 } from '@renderer/components/ui/select'
 import type { Dictionary } from '@renderer/i18n'
 import { appMermaidThemeVariables } from '@renderer/lib/design-system'
+import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
+import {
+  resolveMermaidBlockUiState,
+  scanMarkdownFence
+} from '@renderer/lib/markdown-fence'
 import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
 import {
   copyFeedback,
@@ -40,17 +44,12 @@ import {
   notifyOperationError,
   saveTextFile
 } from '@renderer/lib/operation-feedback'
-export {
-  extractResultMarkdown,
-  parseAgentRunMarkdown,
-  trimMarkdownLines,
-  type ParsedAgentRunMarkdown
-} from '@renderer/lib/agent-run-markdown'
 
 const MERMAID_MIN_ZOOM = 0.05
 const MERMAID_MAX_ZOOM = 10
 const MERMAID_ZOOM_STEP = 0.15
 const MERMAID_ZOOM_EPSILON = 0.001
+const MERMAID_RENDER_DEBOUNCE_MS = 100
 
 const MERMAID_RENDER_CONFIG = {
   startOnLoad: false,
@@ -63,6 +62,8 @@ const MERMAID_RENDER_CONFIG = {
   themeVariables: appMermaidThemeVariables,
   fontFamily: 'ui-sans-serif, system-ui, sans-serif'
 } as const
+
+const mermaidSvgCache = new Map<string, string>()
 
 async function downloadSvg(value: string, filename: string, t: Dictionary): Promise<void> {
   await saveTextFile(
@@ -225,15 +226,17 @@ function buildMermaidFilename(extension: 'svg' | 'png'): string {
 export function MarkdownContent({
   value,
   t,
-  headingIdPrefix
+  headingIdPrefix,
+  streaming = false
 }: {
   value: string
   t: Dictionary
   headingIdPrefix?: string
+  streaming?: boolean
 }): React.JSX.Element {
   return (
     <div className="markdown-body select-text min-w-0 space-y-2 overflow-hidden leading-relaxed break-words">
-      {renderMarkdownBlocks(value, t, { headingIdPrefix })}
+      {renderMarkdownBlocks(value, t, { headingIdPrefix, streaming })}
     </div>
   )
 }
@@ -241,12 +244,13 @@ export function MarkdownContent({
 function renderMarkdownBlocks(
   value: string,
   t: Dictionary,
-  options: { headingIdPrefix?: string } = {}
+  options: { headingIdPrefix?: string; streaming?: boolean } = {}
 ): React.ReactNode[] {
   const lines = value.replace(/\r\n/g, '\n').split('\n')
   const nodes: React.ReactNode[] = []
   let index = 0
   let headingIndex = 0
+  const streaming = Boolean(options.streaming)
 
   while (index < lines.length) {
     const line = lines[index]
@@ -308,24 +312,16 @@ function renderMarkdownBlocks(
       continue
     }
 
-    const fence = line.match(/^(```|~~~)([\w-]+)?\s*$/)
+    const fence = scanMarkdownFence(lines, index)
     if (fence) {
-      const fenceMarker = fence[1]
-      const codeLines: string[] = []
-      index += 1
-      while (
-        index < lines.length &&
-        !new RegExp(`^${escapeRegExp(fenceMarker)}\\s*$`).test(lines[index])
-      ) {
-        codeLines.push(lines[index])
-        index += 1
-      }
-      index += 1
+      index = fence.nextIndex
       nodes.push(
         <MarkdownCodeBlock
           key={nodes.length}
-          code={codeLines.join('\n')}
-          language={fence[2] ?? ''}
+          code={fence.code}
+          language={fence.language}
+          closed={fence.closed}
+          streaming={streaming}
           t={t}
         />
       )
@@ -429,11 +425,15 @@ function renderMarkdownBlocks(
 function MarkdownCodeBlock({
   code,
   language,
-  t
+  t,
+  closed = true,
+  streaming = false
 }: {
   code: string
   language: string
   t: Dictionary
+  closed?: boolean
+  streaming?: boolean
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const normalizedLanguage = language.trim().toLowerCase()
@@ -446,13 +446,24 @@ function MarkdownCodeBlock({
   }
 
   if (isMermaidCodeLanguage(normalizedLanguage)) {
-    return <MermaidBlock code={code} t={t} onCopy={copyCode} copied={copied} />
+    return (
+      <MermaidBlock
+        code={code}
+        closed={closed}
+        streaming={streaming}
+        t={t}
+        onCopy={copyCode}
+        copied={copied}
+      />
+    )
   }
 
   return (
     <div className="app-code-panel min-w-0 rounded-md border bg-[var(--app-terminal)] text-zinc-100">
       <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[var(--app-terminal-rail)] px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">{label}</span>
+        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">
+          {closed ? label : `${label || 'text'}…`}
+        </span>
         <Button
           type="button"
           variant="ghost"
@@ -472,28 +483,17 @@ function MarkdownCodeBlock({
   )
 }
 
-export function buildMarkdownHeadingId(prefix: string, text: string, index: number): string {
-  const slug =
-    text
-      .toLowerCase()
-      .replace(/[`*_~[\]()#+.!?，。！？：:;；、/\\|]+/g, '')
-      .trim()
-      .replace(/\s+/g, '-') || 'heading'
-
-  return `${prefix}-${index}-${slug}`
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function MermaidBlock({
   code,
+  closed,
+  streaming,
   t,
   onCopy,
   copied
 }: {
   code: string
+  closed: boolean
+  streaming: boolean
   t: Dictionary
   onCopy: () => Promise<void>
   copied: boolean
@@ -508,6 +508,7 @@ function MermaidBlock({
     scrollLeft: number
     scrollTop: number
   } | null>(null)
+  const zoomRef = useRef(1)
   const [svg, setSvg] = useState('')
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState(false)
@@ -516,34 +517,73 @@ function MermaidBlock({
   const [exportSelectKey, setExportSelectKey] = useState(0)
   const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
 
+  zoomRef.current = zoom
+
   useEffect(() => {
-    let disposed = false
-
-    async function renderDiagram(): Promise<void> {
-      mermaid.initialize(MERMAID_RENDER_CONFIG)
-
-      setSvg('')
-      setError('')
-
-      try {
-        const result = await mermaid.render(diagramIdRef.current, code)
-        if (!disposed) {
-          setSvg(result.svg)
-          setDiagramSize(getSvgDimensions(result.svg))
-        }
-      } catch (renderError) {
-        if (!disposed) {
-          setError(renderError instanceof Error ? renderError.message : String(renderError))
-        }
-      }
+    if (!closed) {
+      return
     }
 
-    void renderDiagram()
+    const cached = mermaidSvgCache.get(code)
+    if (cached) {
+      queueMicrotask(() => {
+        setSvg(cached)
+        setError('')
+        setDiagramSize(getSvgDimensions(cached))
+      })
+      return
+    }
+
+    let disposed = false
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        mermaid.initialize(MERMAID_RENDER_CONFIG)
+        try {
+          const result = await mermaid.render(diagramIdRef.current, code)
+          if (disposed) return
+          mermaidSvgCache.set(code, result.svg)
+          setSvg(result.svg)
+          setError('')
+          setDiagramSize(getSvgDimensions(result.svg))
+        } catch (renderError) {
+          if (disposed) return
+          setSvg('')
+          setError(renderError instanceof Error ? renderError.message : String(renderError))
+        }
+      })()
+    }, MERMAID_RENDER_DEBOUNCE_MS)
 
     return () => {
       disposed = true
+      window.clearTimeout(timer)
     }
-  }, [code])
+  }, [code, closed])
+
+  const uiState = resolveMermaidBlockUiState({
+    closed,
+    streaming,
+    hasSvg: Boolean(svg),
+    hasError: Boolean(error)
+  })
+
+  // Non-passive wheel listener for fullscreen zoom (React onWheel is passive).
+  useEffect(() => {
+    if (!expanded) return
+    const node = expandedScrollRef.current
+    if (!node) return
+
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      const direction = event.deltaY > 0 ? -1 : 1
+      updateZoom(zoomRef.current + direction * MERMAID_ZOOM_STEP, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      })
+    }
+
+    node.addEventListener('wheel', onWheel, { passive: false })
+    return () => node.removeEventListener('wheel', onWheel)
+  }, [expanded, zoom, diagramSize.height, diagramSize.width])
 
   function centerExpandedMermaid(
     container: HTMLDivElement,
@@ -636,15 +676,6 @@ function MermaidBlock({
     }
   }
 
-  function handleExpandedWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    event.preventDefault()
-    const direction = event.deltaY > 0 ? -1 : 1
-    updateZoom(zoom + direction * MERMAID_ZOOM_STEP, {
-      clientX: event.clientX,
-      clientY: event.clientY
-    })
-  }
-
   function handleExpandedPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     if (event.button !== 0) return
 
@@ -721,47 +752,84 @@ function MermaidBlock({
     transform: `translate(-50%, -50%) scale(${zoom})`
   } as CSSProperties
 
+  const body =
+    uiState === 'ready' && svg ? (
+      <div
+        className="min-w-0 overflow-auto bg-[var(--app-terminal)] p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    ) : uiState === 'generating' ? (
+      <div className="space-y-2 p-3">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          {t.common.mermaidGenerating}
+        </div>
+        {code.trim() ? (
+          <details className="rounded-md border border-border/50 bg-muted/20">
+            <summary className="cursor-pointer px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              {t.common.mermaidSourceToggle}
+            </summary>
+            <pre className="min-w-0 overflow-hidden whitespace-pre-wrap break-words border-t border-border/40 p-2.5 font-mono text-[11px] text-muted-foreground">
+              <code>{code}</code>
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    ) : (
+      <div className="space-y-2 p-3">
+        <div className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
+          {t.common.mermaidRenderFailed}
+        </div>
+        <pre className="min-w-0 overflow-hidden rounded bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+          <code>{code}</code>
+        </pre>
+      </div>
+    )
+
   return (
     <div className="app-mermaid-panel min-w-0 rounded-md border bg-background">
-      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b bg-background px-3 py-1.5">
+      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
         <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           mermaid
         </span>
         <div className="flex shrink-0 items-center gap-1">
+          {svg ? (
+            <>
+              <Select
+                key={`export-${exportSelectKey}`}
+                onValueChange={handleMermaidExportFormat}
+              >
+                <SelectTrigger
+                  className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+                  aria-label={t.common.exportDiagram}
+                  title={t.common.exportDiagram}
+                >
+                  <DownloadIcon className="size-3.5" aria-hidden="true" />
+                  <SelectValue placeholder={t.common.exportDiagram} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
+                  <SelectItem value="png">{t.common.exportPng}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                className="h-6 w-6"
+                aria-label={t.common.enlarge}
+                title={t.common.enlarge}
+                onClick={() => setExpanded(true)}
+              >
+                <Maximize2Icon aria-hidden="true" />
+              </Button>
+            </>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="h-6 w-6 shrink-0"
-            aria-label={t.common.enlarge}
-            title={t.common.enlarge}
-            disabled={!svg}
-            onClick={() => setExpanded(true)}
-          >
-            <Maximize2Icon aria-hidden="true" />
-          </Button>
-          <Select
-            key={`inline-export-${exportSelectKey}`}
-            onValueChange={handleMermaidExportFormat}
-            disabled={!svg}
-          >
-            <SelectTrigger
-              className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
-              aria-label={t.common.exportDiagram}
-              title={t.common.exportDiagram}
-            >
-              <SelectValue placeholder={t.common.exportDiagram} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-              <SelectItem value="png">{t.common.exportPng}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="h-6 w-6 shrink-0"
+            className="h-6 w-6"
             aria-label={copied ? t.common.copied : t.common.copy}
             title={copied ? t.common.copied : t.common.copy}
             onClick={() => void onCopy()}
@@ -770,26 +838,7 @@ function MermaidBlock({
           </Button>
         </div>
       </div>
-      {svg ? (
-        <div
-          className="min-w-0 overflow-auto bg-[var(--app-terminal)] p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : error ? (
-        <div className="space-y-2 p-3">
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </div>
-          <pre className="min-w-0 overflow-hidden rounded bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
-            <code>{code}</code>
-          </pre>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-          mermaid
-        </div>
-      )}
+      {body}
       {expanded && svg
         ? createPortal(
             <div
@@ -798,18 +847,17 @@ function MermaidBlock({
               aria-modal="true"
               aria-label={t.common.enlarge}
             >
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-background px-4 py-3">
-                <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                  mermaid
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                <span className="text-xs text-muted-foreground">
+                  mermaid · {zoomPercent}%
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="outline"
                     size="icon"
                     aria-label={t.common.zoomOut}
                     title={t.common.zoomOut}
-                    disabled={zoom <= MERMAID_MIN_ZOOM + MERMAID_ZOOM_EPSILON}
                     onClick={() => updateZoom(zoom - MERMAID_ZOOM_STEP)}
                   >
                     <ZoomOutIcon aria-hidden="true" />
@@ -817,31 +865,9 @@ function MermaidBlock({
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
-                    className="min-w-16 font-mono"
-                    aria-label={t.common.reset}
-                    title={t.common.reset}
-                    onClick={() => updateZoom(1)}
-                  >
-                    {zoomPercent}%
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t.common.fitToScreen}
-                    title={t.common.fitToScreen}
-                    onClick={fitExpandedMermaidToViewport}
-                  >
-                    {t.common.fitToScreen}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
                     size="icon"
                     aria-label={t.common.zoomIn}
                     title={t.common.zoomIn}
-                    disabled={zoom >= MERMAID_MAX_ZOOM - MERMAID_ZOOM_EPSILON}
                     onClick={() => updateZoom(zoom + MERMAID_ZOOM_STEP)}
                   >
                     <ZoomInIcon aria-hidden="true" />
@@ -900,7 +926,6 @@ function MermaidBlock({
                 className={`min-h-0 flex-1 touch-none overflow-auto bg-[var(--app-terminal)] select-none ${
                   panning ? 'cursor-grabbing' : 'cursor-grab'
                 }`}
-                onWheel={handleExpandedWheel}
                 onPointerDown={handleExpandedPointerDown}
                 onPointerMove={handleExpandedPointerMove}
                 onPointerUp={stopExpandedPan}

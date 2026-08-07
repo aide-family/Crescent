@@ -16,6 +16,7 @@ import {
 
 import { AgentLogList } from '@renderer/components/AgentLogList'
 import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
+import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
 import { PasswordPromptInlineCard, type PasswordPromptRequest } from '@renderer/components/AppModals'
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
 import { StatusDot, TerminalActivityDot } from '@renderer/components/StatusIndicators'
@@ -88,6 +89,8 @@ export function AgentPanel({
   onResolveApproval,
   onAddCommandToWhitelist,
   onInjectSuggestions,
+  onClarifyConfirm,
+  onClarifyDismiss,
   onToggleTerminalPane,
   onSelectSession,
   onSelectTerminal,
@@ -160,6 +163,8 @@ export function AgentPanel({
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
+  onClarifyConfirm?: (label: string) => void
+  onClarifyDismiss?: () => void
   onToggleTerminalPane: () => void
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
@@ -216,6 +221,17 @@ export function AgentPanel({
         onRetryConnection={onRetryConnection}
         onOpenConnections={onOpenConnections}
       />
+      {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
+      onClarifyConfirm &&
+      onClarifyDismiss ? (
+        <ConnectionClarifyCard
+          key={`${sessionChatTab.pendingClarification.originalInput}:${sessionChatTab.pendingClarification.defaultOptionId ?? ''}`}
+          clarification={sessionChatTab.pendingClarification}
+          t={t}
+          onConfirm={onClarifyConfirm}
+          onDismiss={onClarifyDismiss}
+        />
+      ) : null}
       {passwordPromptRequest &&
       passwordPromptInputRef &&
       onPasswordPromptChange &&

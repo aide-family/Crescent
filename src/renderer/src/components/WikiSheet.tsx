@@ -10,7 +10,8 @@ import {
   XIcon
 } from 'lucide-react'
 
-import { MarkdownContent, buildMarkdownHeadingId } from '@renderer/components/MarkdownContent'
+import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
 import { SkillManageStatus, type SkillManageMessage } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldLabel } from '@renderer/components/ui/field'

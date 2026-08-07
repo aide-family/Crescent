@@ -51,6 +51,16 @@ describe('classifyByStaticRules', () => {
     expect(extractRiskVerb('kubectl delete pod x -n y')).toBe('kubectl delete')
   })
 
+  it('extractRiskVerb uses kubectl get for readonly inspection (not change)', () => {
+    expect(extractRiskVerb('kubectl get cm promtail-config -n monitoring -o yaml')).toBe(
+      'kubectl get'
+    )
+    expect(extractRiskVerb('kubectl describe pod foo')).toBe('kubectl describe')
+    expect(classifyByStaticRules('kubectl get cm promtail-config -n monitoring')).toBe('low')
+    expect(extractRiskVerb('kubectl -n monitoring get cm promtail-config')).toBe('kubectl get')
+    expect(classifyByStaticRules('kubectl -n monitoring get cm promtail-config')).toBe('low')
+  })
+
   it('shouldShowWhitelistEntry only after high-risk approval', () => {
     expect(
       shouldShowWhitelistEntry({ phase: 'pending', risk: 'high', alreadyAdded: false })

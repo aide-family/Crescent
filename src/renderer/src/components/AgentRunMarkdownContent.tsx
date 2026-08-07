@@ -13,7 +13,8 @@ import {
   XIcon
 } from 'lucide-react'
 
-import { buildMarkdownHeadingId, MarkdownContent } from '@renderer/components/MarkdownContent'
+import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import type { ParsedAgentRunMarkdown } from '@renderer/lib/agent-run-markdown'

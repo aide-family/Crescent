@@ -1,11 +1,25 @@
+/**
+ * kubectl may place flags/args between the binary and the verb
+ * (`kubectl -n ns get cm`). Match non-greedily up to the first verb token.
+ */
+const KUBECTL_BEFORE_VERB = String.raw`\bkubectl(?:\s+[^\s]+)*?\s+`
+
 /** Destructive / state-changing shell patterns (checked before READONLY). */
-export const HIGH =
-  /\b(rm|mv|dd|kill|reboot)\b|systemctl\s+(restart|stop|start|enable|disable)|kubectl\s+(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec)|docker\s+(rm|rmi|restart|stop|run)|\b(chmod|chown|tee)\b|(?<!2)>(?!\/dev\/null)/
+export const HIGH = new RegExp(
+  String.raw`\b(rm|mv|dd|kill|reboot)\b|systemctl\s+(restart|stop|start|enable|disable)|` +
+    KUBECTL_BEFORE_VERB +
+    String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec)|` +
+    String.raw`docker\s+(rm|rmi|restart|stop|run)|\b(chmod|chown|tee)\b|(?<!2)>(?!\/dev\/null)`
+)
 
 /** Clearly read-only inspection patterns. */
-export const READONLY =
-  /kubectl\s+(get|describe|logs|top|explain|cluster-info|version)|docker\s+(ps|inspect|logs|images)|systemctl\s+(status|is-active|list-units)|journalctl|\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which)\b|curl\s+(-[a-zA-Z]*s|--max-time)/
-
+export const READONLY = new RegExp(
+  KUBECTL_BEFORE_VERB +
+    String.raw`(get|describe|logs|top|explain|cluster-info|version)|` +
+    String.raw`docker\s+(ps|inspect|logs|images)|systemctl\s+(status|is-active|list-units)|journalctl|` +
+    String.raw`\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which)\b|` +
+    String.raw`curl\s+(-[a-zA-Z]*s|--max-time)`
+)
 export type StaticCommandLevel = 'high' | 'low' | 'gray'
 
 const IPV4_PORT =
@@ -112,14 +126,19 @@ export function hasHighWriteVerb(cmd: string): boolean {
 }
 
 /**
- * Extract the first write/risk verb for human-readable approval copy.
- * Prefers compound forms like `kubectl exec`.
+ * Extract a human-readable verb for approval copy.
+ * Prefers write verbs (`kubectl exec`); falls back to readonly verbs (`kubectl get`)
+ * instead of the opaque label `change`.
  */
 export function extractRiskVerb(cmd: string): string {
-  const kubectl = cmd.match(
-    /\bkubectl\s+(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec|port-forward)\b/i
+  const kubectlWrite = cmd.match(
+    new RegExp(
+      KUBECTL_BEFORE_VERB +
+        String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec|port-forward)\b`,
+      'i'
+    )
   )
-  if (kubectl) return `kubectl ${kubectl[1].toLowerCase()}`
+  if (kubectlWrite) return `kubectl ${kubectlWrite[1].toLowerCase()}`
 
   const docker = cmd.match(/\bdocker\s+(rm|rmi|restart|stop|run)\b/i)
   if (docker) return `docker ${docker[1].toLowerCase()}`
@@ -132,7 +151,24 @@ export function extractRiskVerb(cmd: string): string {
 
   if (/(?<!2)>(?!\/dev\/null)/.test(cmd)) return '>'
 
+  const kubectlRead = cmd.match(
+    new RegExp(
+      KUBECTL_BEFORE_VERB +
+        String.raw`(get|describe|logs|top|explain|cluster-info|version|api-resources|config)\b`,
+      'i'
+    )
+  )
+  if (kubectlRead) return `kubectl ${kubectlRead[1].toLowerCase()}`
+
+  const dockerRead = cmd.match(/\bdocker\s+(ps|inspect|logs|images)\b/i)
+  if (dockerRead) return `docker ${dockerRead[1].toLowerCase()}`
+
   return 'change'
+}
+
+/** True when static READONLY matches and HIGH does not. */
+export function isStaticallyReadonly(cmd: string): boolean {
+  return !HIGH.test(cmd) && READONLY.test(cmd)
 }
 
 /**

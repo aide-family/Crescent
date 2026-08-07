@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { extractRiskVerb } from '../../shared/command-guard'
 import { COMMAND_AUDIT_TIMEOUT_MS, resolveAuditModel, tryParseAuditLevel } from './command-auditor'
 import { classifyCommand } from './command-classify'
 import type { AgentConfig } from './types'
@@ -97,6 +98,28 @@ describe('classifyCommand funnel', () => {
     )
     expect(result.level).toBe('low')
     expect(result.source).toBe('rule')
+  })
+
+  it('classifies kubectl get cm as low with verb kubectl get (not change)', async () => {
+    const cmd = 'kubectl get cm promtail-config -n monitoring -o yaml'
+    const result = await classifyCommand(cmd, {
+      config: baseConfig(),
+      userInput: 'inspect promtail'
+    })
+    expect(result.level).toBe('low')
+    expect(result.source).toBe('rule')
+    expect(extractRiskVerb(cmd)).toBe('kubectl get')
+  })
+
+  it('classifies kubectl with flags before get as low', async () => {
+    const cmd = 'kubectl -n monitoring get cm promtail-config -o yaml'
+    const result = await classifyCommand(cmd, {
+      config: baseConfig(),
+      userInput: 'inspect'
+    })
+    expect(result.level).toBe('low')
+    expect(result.source).toBe('rule')
+    expect(extractRiskVerb(cmd)).toBe('kubectl get')
   })
 
   it('flags rm and kubectl delete as high via rules', async () => {
