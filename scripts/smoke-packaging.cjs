@@ -20,7 +20,6 @@ const PLATFORM_RULES = [
       /\.dmg$/i,
       /mac.*\.zip$/i,
       /darwin.*\.zip$/i,
-      /-universal.*\.zip$/i,
       /-arm64.*\.zip$/i,
       /-x64.*\.zip$/i
     ]
