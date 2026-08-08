@@ -31,6 +31,7 @@ import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 import { extractRiskVerb, isStaticallyReadonly, shouldShowWhitelistEntry } from '../../../shared/command-guard'
+import { parseBatchedToolOutput, type BatchedCommandPart } from '../../../shared/readonly-batch'
 import { extractResultSuggestions } from '@renderer/lib/result-suggestions'
 
 /**
@@ -435,7 +436,8 @@ function ToolCallRow({
   const command = step.command?.trim()
   const preview = hideCommand ? undefined : command || summarizeArgs(step.argsText)
   const observation = step.resultText?.trim()
-  const showObservation = Boolean(observation && observation !== command)
+  const batchParts = observation ? parseBatchedToolOutput(observation) : null
+  const showObservation = Boolean(observation && observation !== command && !batchParts)
   const observationLong = Boolean(showObservation && observation && observation.length > 240)
   const isPtyCommand = step.name === 'bash' || step.name === 'terminal'
   const toolLabel = isPtyCommand ? t.input.toolCommandLabel : step.name
@@ -468,7 +470,16 @@ function ToolCallRow({
               {statusLabel}
             </span>
           </div>
-          {preview ? <CommandBlock command={preview} t={t} tone="command" /> : null}
+          {batchParts ? (
+            <BatchCommandGroupCard
+              parts={batchParts}
+              isError={Boolean(step.isError)}
+              running={running}
+              t={t}
+            />
+          ) : preview ? (
+            <CommandBlock command={preview} t={t} tone="command" />
+          ) : null}
         </div>
       </div>
 
@@ -495,6 +506,124 @@ function ToolCallRow({
             {observation}
           </pre>
         )
+      ) : null}
+    </div>
+  )
+}
+
+function BatchCommandGroupCard({
+  parts,
+  isError,
+  running,
+  t
+}: {
+  parts: BatchedCommandPart[]
+  isError: boolean
+  running: boolean
+  t: Dictionary
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const previewCount = 2
+  const visible = expanded ? parts : parts.slice(0, previewCount)
+  const hiddenCount = Math.max(0, parts.length - previewCount)
+  const statusIcon = running ? (
+    <Loader2Icon className="size-3.5 shrink-0 animate-spin text-sky-500" aria-hidden="true" />
+  ) : isError ? (
+    <TriangleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
+  ) : (
+    <CheckIcon className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+  )
+
+  return (
+    <div className="min-w-0 rounded-md border border-border/50">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
+        {statusIcon}
+        <span className="min-w-0 flex-1">
+          {t.commandReview.batchGroupCollapsed.replace('{n}', String(parts.length))}
+        </span>
+      </div>
+      <div className="space-y-2 border-t border-border/40 px-2 py-2">
+        {visible.map((part) => (
+          <BatchCommandSegment key={`${part.index}-${part.command}`} part={part} t={t} />
+        ))}
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            className="flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/40"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? (
+              <>
+                <ChevronUpIcon className="size-3.5" aria-hidden="true" />
+                {t.commandReview.batchGroupHide}
+              </>
+            ) : (
+              <>
+                <ChevronDownIcon className="size-3.5" aria-hidden="true" />
+                {t.commandReview.batchGroupShowMore.replace('{n}', String(hiddenCount))}
+              </>
+            )}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function BatchCommandSegment({
+  part,
+  t
+}: {
+  part: BatchedCommandPart
+  t: Dictionary
+}): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const segmentId = `batch-cmd-${part.index}`
+
+  async function copyOutput(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(part.output || part.command)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard may be unavailable.
+    }
+  }
+
+  function scrollToOutput(): void {
+    document.getElementById(segmentId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
+  return (
+    <div className="min-w-0 space-y-1 rounded border border-sky-500/15 bg-sky-500/5 p-2">
+      <div className="flex items-start gap-1.5">
+        <CheckIcon className="mt-0.5 size-3 shrink-0 text-emerald-600" aria-hidden="true" />
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left font-mono text-[11px] text-sky-900/90 dark:text-sky-100/90"
+          onClick={scrollToOutput}
+          title={part.command}
+        >
+          <span className="line-clamp-2 whitespace-pre-wrap break-words">{part.command}</span>
+        </button>
+        <button
+          type="button"
+          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted/50"
+          title={t.commandReview.batchCopyOutput}
+          aria-label={t.commandReview.batchCopyOutput}
+          onClick={() => void copyOutput()}
+        >
+          <CopyIcon className="size-3" aria-hidden="true" />
+        </button>
+      </div>
+      <pre
+        id={segmentId}
+        className="max-h-40 overflow-auto rounded border border-emerald-500/15 bg-emerald-500/5 p-1.5 font-mono text-[10px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90"
+      >
+        {part.output || '(no output)'}
+      </pre>
+      {copied ? (
+        <span className="text-[10px] text-muted-foreground">{t.common.copied}</span>
       ) : null}
     </div>
   )

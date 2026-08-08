@@ -15,9 +15,11 @@ export const HIGH = new RegExp(
 /** Clearly read-only inspection patterns. */
 export const READONLY = new RegExp(
   KUBECTL_BEFORE_VERB +
-    String.raw`(get|describe|logs|top|explain|cluster-info|version)|` +
-    String.raw`docker\s+(ps|inspect|logs|images)|systemctl\s+(status|is-active|list-units)|journalctl|` +
-    String.raw`\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which)\b|` +
+    String.raw`(get|describe|logs|top|explain|cluster-info|version|api-resources|config|auth|diff|wait)|` +
+    String.raw`docker\s+(ps|inspect|logs|images|stats|version|info|history|port)|` +
+    String.raw`docker\s+compose\s+(ps|logs|config)|` +
+    String.raw`systemctl\s+(status|is-active|list-units|show|list-timers)|journalctl|` +
+    String.raw`\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which|find|stat|id|pwd|env|printenv|lsof|du|uptime|ip)\b|` +
     String.raw`curl\s+(-[a-zA-Z]*s|--max-time)`
 )
 export type StaticCommandLevel = 'high' | 'low' | 'gray'
@@ -41,6 +43,11 @@ const PRESERVE_TOKENS = new Set([
   'explain',
   'cluster-info',
   'version',
+  'api-resources',
+  'config',
+  'auth',
+  'diff',
+  'wait',
   'delete',
   'apply',
   'patch',
@@ -55,6 +62,11 @@ const PRESERVE_TOKENS = new Set([
   'ps',
   'inspect',
   'images',
+  'stats',
+  'info',
+  'history',
+  'port',
+  'compose',
   'rm',
   'rmi',
   'restart',
@@ -63,6 +75,8 @@ const PRESERVE_TOKENS = new Set([
   'status',
   'is-active',
   'list-units',
+  'show',
+  'list-timers',
   'cat',
   'ls',
   'echo',
@@ -78,6 +92,16 @@ const PRESERVE_TOKENS = new Set([
   'tail',
   'wc',
   'which',
+  'find',
+  'stat',
+  'id',
+  'pwd',
+  'env',
+  'printenv',
+  'lsof',
+  'du',
+  'uptime',
+  'ip',
   'mv',
   'dd',
   'kill',
@@ -154,13 +178,18 @@ export function extractRiskVerb(cmd: string): string {
   const kubectlRead = cmd.match(
     new RegExp(
       KUBECTL_BEFORE_VERB +
-        String.raw`(get|describe|logs|top|explain|cluster-info|version|api-resources|config)\b`,
+        String.raw`(get|describe|logs|top|explain|cluster-info|version|api-resources|config|auth|diff|wait)\b`,
       'i'
     )
   )
   if (kubectlRead) return `kubectl ${kubectlRead[1].toLowerCase()}`
 
-  const dockerRead = cmd.match(/\bdocker\s+(ps|inspect|logs|images)\b/i)
+  const dockerComposeRead = cmd.match(/\bdocker\s+compose\s+(ps|logs|config)\b/i)
+  if (dockerComposeRead) return `docker compose ${dockerComposeRead[1].toLowerCase()}`
+
+  const dockerRead = cmd.match(
+    /\bdocker\s+(ps|inspect|logs|images|stats|version|info|history|port)\b/i
+  )
   if (dockerRead) return `docker ${dockerRead[1].toLowerCase()}`
 
   return 'change'

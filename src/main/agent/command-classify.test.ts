@@ -103,6 +103,15 @@ describe('classifyCommand funnel', () => {
     expect(result.source).toBe('rule')
   })
 
+  it('classifies compound kubectl get scripts as readonly low', async () => {
+    const result = await classifyCommand('kubectl get pods; kubectl get svc', {
+      config: baseConfig(),
+      userInput: '批量采集'
+    })
+    expect(result.level).toBe('low')
+    expect(result.source).toBe('rule')
+  })
+
   it('classifies kubectl get cm as low with verb kubectl get (not change)', async () => {
     const cmd = 'kubectl get cm promtail-config -n monitoring -o yaml'
     const result = await classifyCommand(cmd, {

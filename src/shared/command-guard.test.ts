@@ -85,6 +85,38 @@ describe('classifyByStaticRules', () => {
     expect(classifyByStaticRules('helm list -A')).toBe('gray')
     expect(classifyByStaticRules('python3 inspect_cluster.py')).toBe('gray')
   })
+
+  it('classifies expanded readonly kubectl/docker/linux/systemctl verbs as low', () => {
+    expect(classifyByStaticRules('kubectl api-resources')).toBe('low')
+    expect(classifyByStaticRules('kubectl config view')).toBe('low')
+    expect(classifyByStaticRules('kubectl auth can-i get pods')).toBe('low')
+    expect(classifyByStaticRules('kubectl diff -f manifest.yaml')).toBe('low')
+    expect(classifyByStaticRules('kubectl wait --for=condition=Ready pod/x')).toBe('low')
+    expect(classifyByStaticRules('docker stats --no-stream')).toBe('low')
+    expect(classifyByStaticRules('docker version')).toBe('low')
+    expect(classifyByStaticRules('docker info')).toBe('low')
+    expect(classifyByStaticRules('docker history nginx')).toBe('low')
+    expect(classifyByStaticRules('docker port nginx')).toBe('low')
+    expect(classifyByStaticRules('docker compose ps')).toBe('low')
+    expect(classifyByStaticRules('docker compose logs app')).toBe('low')
+    expect(classifyByStaticRules('docker compose config')).toBe('low')
+    expect(classifyByStaticRules('systemctl show nginx')).toBe('low')
+    expect(classifyByStaticRules('systemctl list-timers')).toBe('low')
+    expect(classifyByStaticRules('find /var/log -name "*.log"')).toBe('low')
+    expect(classifyByStaticRules('stat /etc/hosts')).toBe('low')
+    expect(classifyByStaticRules('id')).toBe('low')
+    expect(classifyByStaticRules('pwd')).toBe('low')
+    expect(classifyByStaticRules('env')).toBe('low')
+    expect(classifyByStaticRules('printenv PATH')).toBe('low')
+    expect(classifyByStaticRules('lsof -i')).toBe('low')
+    expect(classifyByStaticRules('du -sh /tmp')).toBe('low')
+    expect(classifyByStaticRules('uptime')).toBe('low')
+    expect(classifyByStaticRules('ip addr')).toBe('low')
+  })
+
+  it('classifies compound readonly get scripts as low', () => {
+    expect(classifyByStaticRules('kubectl get pods; kubectl get svc')).toBe('low')
+  })
 })
 
 describe('hasHighWriteVerb (timeout fallback)', () => {

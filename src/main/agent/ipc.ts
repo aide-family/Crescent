@@ -54,6 +54,7 @@ import {
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
+import { listSkillTemplates, saveSkillTemplate } from '../crescent-sqlite'
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
 import type {
@@ -69,6 +70,7 @@ import type {
   TranscriptionSupportResult,
   WikiSaveInput
 } from './types'
+import type { SkillTemplateSaveInput } from './types'
 
 const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 
@@ -83,6 +85,14 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:list-skills', () => {
     return listAgentSkills(readAgentConfig().skillRoot)
+  })
+
+  ipcMain.handle('agent:list-skill-templates', () => {
+    return listSkillTemplates()
+  })
+
+  ipcMain.handle('agent:save-skill-template', (_, input: SkillTemplateSaveInput) => {
+    return saveSkillTemplate(input ?? { name: '', promptTemplate: '' })
   })
 
   ipcMain.handle('agent:search-skills', (_, query: string) => {
