@@ -35,6 +35,25 @@ describe('splitShellSegments', () => {
       'kubectl get pods'
     ])
   })
+
+  it('does not split on ; inside $(...)', () => {
+    expect(splitShellSegments('echo $(a;b)')).toEqual(['echo $(a;b)'])
+  })
+
+  it('does not split on ; inside backticks', () => {
+    expect(splitShellSegments('echo `a;b`')).toEqual(['echo `a;b`'])
+  })
+
+  it('does not split on ; inside nested $(...)', () => {
+    expect(splitShellSegments('echo $(a $(b;c);d)')).toEqual(['echo $(a $(b;c);d)'])
+  })
+
+  it('splits after closed $(...) while keeping the substitution intact', () => {
+    expect(splitShellSegments('echo $(a;b); kubectl get pods')).toEqual([
+      'echo $(a;b)',
+      'kubectl get pods'
+    ])
+  })
 })
 
 describe('planReadonlyBatch', () => {

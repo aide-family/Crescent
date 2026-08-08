@@ -27,13 +27,25 @@ export interface BatchedCommandPart {
 
 /**
  * Quote-aware split on `;`, `&&`, and newlines.
- * Separators inside single/double quotes are preserved.
+ * Separators inside single/double quotes, `$(...)` (nested paren depth),
+ * and backticks (toggle, non-nesting) are preserved.
+ *
+ * Security dossier (HIGH anchoring):
+ * `command-guard` HIGH is unanchored (no `^`/`$`); it substring-matches with `\b`.
+ * `classifyByStaticRules` / `isStaticallyReadonly` call `HIGH.test(cmd)` on the raw
+ * string (not after `normalizeCommand`). Example: `echo $(kubectl delete pod x)` still
+ * hits HIGH via the `kubectl … delete` substring — both raw and after normalize
+ * (tokens keep `$(kubectl` / `x)`). Keeping substitution as one segment therefore does
+ * not weaken HIGH detection; the whole script stays `high` and `planReadonlyBatch`
+ * will not inject separators.
  */
 export function splitShellSegments(script: string): string[] {
   const segments: string[] = []
   let current = ''
   let quote: "'" | '"' | null = null
   let escape = false
+  let inBacktick = false
+  let substDepth = 0
 
   const push = (): void => {
     const trimmed = current.trim()
@@ -64,6 +76,36 @@ export function splitShellSegments(script: string): string[] {
 
     if (ch === "'" || ch === '"') {
       quote = ch
+      current += ch
+      continue
+    }
+
+    if (ch === '`') {
+      inBacktick = !inBacktick
+      current += ch
+      continue
+    }
+
+    if (!inBacktick && ch === '$' && script[i + 1] === '(') {
+      substDepth += 1
+      current += '$('
+      i += 1
+      continue
+    }
+
+    if (substDepth > 0 && ch === '(') {
+      substDepth += 1
+      current += ch
+      continue
+    }
+
+    if (substDepth > 0 && ch === ')') {
+      substDepth -= 1
+      current += ch
+      continue
+    }
+
+    if (substDepth > 0 || inBacktick) {
       current += ch
       continue
     }
