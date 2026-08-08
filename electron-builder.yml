@@ -40,9 +40,9 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # Prebuilds are identical in the x64/arm64 temp apps; allow the universal merger
-  # to keep one copy instead of attempting lipo on same-arch Mach-O files.
-  x64ArchFiles: '**/node-pty/prebuilds/**'
+  # Prebuilds (node-pty, pi-tui, …) ship every arch in each temp app; allow the
+  # universal merger to keep one copy instead of lipo on same-arch Mach-O files.
+  x64ArchFiles: '**/prebuilds/**'
   target:
     - dmg
     - zip
