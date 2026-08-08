@@ -67,5 +67,7 @@ export type {
   ToolCatalogEntry,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput
+  WikiSaveInput,
+  SkillTemplate,
+  SkillTemplateSaveInput
 } from '../../shared/agent-types'

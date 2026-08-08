@@ -13,6 +13,12 @@ import type {
   StoredSessionHistoryItem,
   StoredSessionTab
 } from './agent/types'
+import {
+  listSkillTemplatesFromDb,
+  saveSkillTemplateToDb,
+  type SkillTemplate,
+  type SkillTemplateSaveInput
+} from './agent/skill-templates'
 import type { CrescentMemoryFile } from './crescent-store'
 import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
 
@@ -125,6 +131,14 @@ export function initializeCrescentDatabase(): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS skill_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prompt_template TEXT NOT NULL,
+      tags TEXT,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_agent_logs_tab_created_at
       ON agent_logs (tab_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_tab_updated_at
@@ -133,6 +147,8 @@ export function initializeCrescentDatabase(): void {
       ON operation_records (created_at);
     CREATE INDEX IF NOT EXISTS idx_ops_history_tab_created_at
       ON ops_history_records (tab_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_skill_templates_created_at
+      ON skill_templates (created_at);
   `)
 
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
@@ -977,6 +993,14 @@ export function writeCrescentDbFlag(key: string, value: boolean): void {
     `
     )
     .run(key, value ? 'true' : 'false', new Date().toISOString())
+}
+
+export function listSkillTemplates(): SkillTemplate[] {
+  return listSkillTemplatesFromDb(getDatabase())
+}
+
+export function saveSkillTemplate(input: SkillTemplateSaveInput): SkillTemplate {
+  return saveSkillTemplateToDb(getDatabase(), input)
 }
 
 function getDatabase(): DatabaseSync {

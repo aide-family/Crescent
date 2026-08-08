@@ -174,6 +174,22 @@ export interface WikiSaveInput {
   id?: string
 }
 
+/** Local SOP / skill prompt templates (v1.0.3 scaffold; editor in v1.1). */
+export interface SkillTemplate {
+  id: string
+  name: string
+  promptTemplate: string
+  tags: string
+  createdAt: number
+}
+
+export interface SkillTemplateSaveInput {
+  id?: string
+  name: string
+  promptTemplate: string
+  tags?: string
+}
+
 export interface OperationRecord {
   id: string
   createdAt: string

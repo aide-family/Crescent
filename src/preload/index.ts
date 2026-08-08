@@ -38,7 +38,9 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput
+  WikiSaveInput,
+  SkillTemplate,
+  SkillTemplateSaveInput
 } from '../shared/agent-types'
 import type {
   AppUpdateActionResult,
@@ -165,6 +167,10 @@ const api = {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
     listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),
+    listSkillTemplates: (): Promise<SkillTemplate[]> =>
+      ipcRenderer.invoke('agent:list-skill-templates'),
+    saveSkillTemplate: (input: SkillTemplateSaveInput): Promise<SkillTemplate> =>
+      ipcRenderer.invoke('agent:save-skill-template', input),
     searchSkills: (query: string): Promise<AgentSkillSearchResult[]> =>
       ipcRenderer.invoke('agent:search-skills', query),
     installSkill: (input: {

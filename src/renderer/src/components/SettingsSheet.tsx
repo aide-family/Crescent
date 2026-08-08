@@ -1,5 +1,6 @@
 import {
   BotIcon,
+  BookMarkedIcon,
   CheckIcon,
   FileTextIcon,
   Loader2Icon,
@@ -28,6 +29,12 @@ import {
   SheetTitle,
   SheetTrigger
 } from '@renderer/components/ui/sheet'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
   Select,
@@ -373,6 +380,31 @@ export function SettingsSheet({
                 </label>
               </Field>
               <AppUpdateCard t={t} />
+              <Field>
+                <FieldLabel>{t.settings.skillsSopsSection}</FieldLabel>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex w-full">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-start gap-2"
+                          disabled
+                        >
+                          <BookMarkedIcon data-icon="inline-start" />
+                          {t.settings.skillsSopsSection}
+                          <Badge variant="secondary" className="ml-auto text-[10px]">
+                            {t.settings.skillsSopsComingSoon}
+                          </Badge>
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{t.settings.skillsSopsComingSoon}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <FieldDescription>{t.settings.skillsSopsHint}</FieldDescription>
+              </Field>
               <Field>
                 <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>
                 <Input

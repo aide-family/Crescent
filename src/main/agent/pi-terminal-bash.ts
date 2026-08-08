@@ -1,6 +1,7 @@
 import type { WebContents } from 'electron'
 
 import { normalizeCommand } from '../../shared/command-guard'
+import { applyBatchOutputFormatting, planReadonlyBatch } from '../../shared/readonly-batch'
 import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminalWithPermissionRequest,
@@ -142,6 +143,9 @@ async function executeReviewedPtyCommand(input: {
 
   const executeWithProgress = async (): Promise<TerminalCommandExecutionResult> => {
     const startedAt = Date.now()
+    const batchPlan = planReadonlyBatch(executableCommand)
+    const ptyCommand = batchPlan.inject ? batchPlan.ptyCommand : executableCommand
+
     context.emit({
       type: 'command',
       phase: 'started',
@@ -155,13 +159,13 @@ async function executeReviewedPtyCommand(input: {
           context.webContents,
           executionTabId,
           context.subterminalName,
-          executableCommand,
+          ptyCommand,
           timeoutMs,
           'wait'
         )
       : await executeCommandInTerminalWithPermissionRequest(
           context.webContents,
-          executableCommand,
+          ptyCommand,
           timeoutMs,
           executionTabId
         )
@@ -170,30 +174,37 @@ async function executeReviewedPtyCommand(input: {
       failed.add(fingerprint)
     }
 
+    const { formatted } = applyBatchOutputFormatting(batchPlan, result.output || '')
+    const formattedResult: TerminalCommandExecutionResult = {
+      ...result,
+      command: executableCommand,
+      output: batchPlan.inject ? formatted : result.output
+    }
+
     context.emit({
       type: 'command',
       phase: 'finished',
       command: executableCommand,
       result: {
-        ok: result.ok,
-        command: result.command,
-        mode: result.mode,
-        cwd: result.cwd,
-        exitCode: result.exitCode,
-        output: result.output,
-        error: result.error,
-        timedOut: result.timedOut,
-        terminalExited: result.terminalExited,
-        detached: result.detached,
-        subterminalName: result.subterminalName,
-        subterminalTabId: result.subterminalTabId
+        ok: formattedResult.ok,
+        command: executableCommand,
+        mode: formattedResult.mode,
+        cwd: formattedResult.cwd,
+        exitCode: formattedResult.exitCode,
+        output: formattedResult.output,
+        error: formattedResult.error,
+        timedOut: formattedResult.timedOut,
+        terminalExited: formattedResult.terminalExited,
+        detached: formattedResult.detached,
+        subterminalName: formattedResult.subterminalName,
+        subterminalTabId: formattedResult.subterminalTabId
       },
       elapsedMs: Date.now() - startedAt,
       runId: context.runId,
-      tabId: result.subterminalTabId || executionTabId
+      tabId: formattedResult.subterminalTabId || executionTabId
     })
 
-    return result
+    return formattedResult
   }
 
   context.emit({

@@ -37,7 +37,9 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput
+  WikiSaveInput,
+  SkillTemplate,
+  SkillTemplateSaveInput
 } from '../shared/agent-types'
 import type {
   AppUpdateActionResult,
@@ -106,6 +108,8 @@ interface TerminalAgentApi {
     getConfig: () => Promise<AgentConfig>
     getModels: () => Promise<AgentModelOption[]>
     listSkills: () => Promise<AgentSkillOption[]>
+    listSkillTemplates: () => Promise<SkillTemplate[]>
+    saveSkillTemplate: (input: SkillTemplateSaveInput) => Promise<SkillTemplate>
     searchSkills: (query: string) => Promise<AgentSkillSearchResult[]>
     installSkill: (input: {
       installSource: string
