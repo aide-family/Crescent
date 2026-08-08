@@ -113,8 +113,8 @@ Download the package for your platform from [Releases](https://github.com/aide-f
 
 | Platform | Recommended asset |
 | --- | --- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg` or Universal |
-| macOS Intel | `crescent-*-x64.dmg` or Universal |
+| macOS Apple Silicon | `crescent-*-arm64.dmg` |
+| macOS Intel | `crescent-*-x64.dmg` |
 | Windows | `crescent-*-x64-setup.exe` |
 | Linux | `.AppImage` or `.deb` |
 
