@@ -16,11 +16,11 @@ const { evaluatePackagingArtifacts } = require('../../scripts/smoke-packaging.cj
 describe('evaluatePackagingArtifacts', () => {
   it('accepts a single-platform mac build with updater metadata', () => {
     const result = evaluatePackagingArtifacts(
-      ['crescent-1.0.0-universal.dmg', 'latest-mac.yml', 'crescent-1.0.0-universal.dmg.blockmap'],
+      ['crescent-1.0.0-arm64.dmg', 'latest-mac.yml', 'crescent-1.0.0-arm64.dmg.blockmap'],
       {
-        'crescent-1.0.0-universal.dmg': 10_000_000,
+        'crescent-1.0.0-arm64.dmg': 10_000_000,
         'latest-mac.yml': 200,
-        'crescent-1.0.0-universal.dmg.blockmap': 1_000
+        'crescent-1.0.0-arm64.dmg.blockmap': 1_000
       }
     )
     expect(result.ok).toBe(true)

@@ -113,8 +113,8 @@ flowchart TD
 
 | 平台 | 推荐资产 |
 | --- | --- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg` 或 Universal |
-| macOS Intel | `crescent-*-x64.dmg` 或 Universal |
+| macOS Apple Silicon | `crescent-*-arm64.dmg` |
+| macOS Intel | `crescent-*-x64.dmg` |
 | Windows | `crescent-*-x64-setup.exe` |
 | Linux | `.AppImage` 或 `.deb` |
 

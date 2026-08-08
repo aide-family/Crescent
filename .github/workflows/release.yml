@@ -38,11 +38,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS universal
-            os: macos-latest
-            artifact_name: crescent-macos-universal
-            platform: mac
-            arch_flags: --universal
           - name: macOS arm64
             os: macos-latest
             artifact_name: crescent-macos-arm64
@@ -164,34 +159,6 @@ jobs:
               npx electron-builder --linux AppImage deb --publish=never
               ;;
           esac
-
-      - name: Verify universal native modules
-        if: matrix.name == 'macOS universal'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Allow single-arch .node (x64ArchFiles skips lipo); assert pack + readable Mach-O.
-          UNPACKED="dist/mac-universal/Crescent.app/Contents/Resources/app.asar.unpacked"
-          if [ ! -d "$UNPACKED" ]; then
-            echo "app.asar.unpacked not found at $UNPACKED"
-            exit 1
-          fi
-          NODE_COUNT=$(find "$UNPACKED" -name '*.node' | wc -l | tr -d ' ')
-          if [ "$NODE_COUNT" -eq 0 ]; then
-            echo "No .node files found in unpacked"
-            exit 1
-          fi
-          while IFS= read -r f; do
-            # Win32/linux prebuilds ship beside darwin natives; only Mach-O-check Darwin paths.
-            case "$f" in
-              *win32*|*linux*) continue ;;
-            esac
-            if ! file "$f" | grep -q 'Mach-O'; then
-              echo "$f is not a valid Mach-O binary: $(file "$f")"
-              exit 1
-            fi
-          done < <(find "$UNPACKED" -name '*.node')
-          echo "Universal pack succeeded with $NODE_COUNT valid .node files"
 
       - name: Packaging smoke check
         shell: bash
