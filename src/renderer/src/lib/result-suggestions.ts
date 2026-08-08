@@ -3,7 +3,11 @@
  * Looks for sections titled 修复建议 / 建议 / Recommendations.
  */
 export function extractResultSuggestions(resultMarkdown: string): string[] {
-  const text = resultMarkdown.trim()
+  const text = resultMarkdown
+    .replaceAll('###CRES_BATCH_SEP###', '')
+    .replace(/\[Crescent batch: \d+ readonly commands\]/g, '')
+    .replace(/^--- command \d+\/\d+: .+ ---$/gm, '')
+    .trim()
   if (!text) return []
 
   const lines = text.split(/\r?\n/)
