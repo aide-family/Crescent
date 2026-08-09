@@ -142,6 +142,8 @@ const en = {
     lowRisk: 'Low risk',
     mediumRisk: 'Medium risk',
     operationReason: 'Operation reason',
+    purposeLabel: 'Purpose',
+    purposeGenerating: 'Generating…',
     recommendation: 'Recommendation',
     reject: 'Reject',
     rejectionReason: 'Rejection reason',
@@ -817,7 +819,9 @@ const en = {
     passwordTitle: 'Terminal secret input needed',
     passwordBody: 'The terminal is waiting for a password or verification code.',
     clarifyTitle: 'Connection confirmation needed',
-    clarifyBody: 'Crescent needs you to confirm the connection target.'
+    clarifyBody: 'Crescent needs you to confirm the connection target.',
+    runCompleteTitle: 'Task complete',
+    runFailedTitle: 'Task ended (error)'
   }
 } as const
 

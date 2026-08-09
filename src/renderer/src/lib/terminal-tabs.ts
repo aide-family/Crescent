@@ -95,6 +95,9 @@ export type AgentRunStep =
       phase: 'pending' | 'approved' | 'rejected'
       auditSummary?: string
       operationReason?: string
+      /** Async human-readable purpose for HIGH cards. */
+      purposePhase?: 'loading' | 'ready' | 'omitted'
+      purpose?: string
       risk?: 'low' | 'medium' | 'high'
       riskPoints?: string[]
       impactAnalysis?: string

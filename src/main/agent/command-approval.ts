@@ -1,7 +1,14 @@
 import type { WebContents } from 'electron'
 
+import { readAgentConfig } from '../crescent-store'
 import { safeWebContentsSend } from '../safe-ipc-send'
-import type { CommandApprovalDecision, CommandApprovalRequest, CommandAuditResult } from './types'
+import { generateCommandPurpose } from './command-purpose'
+import type {
+  AgentConfig,
+  CommandApprovalDecision,
+  CommandApprovalRequest,
+  CommandAuditResult
+} from './types'
 
 export interface CommandApprovalDecisionResult {
   approved: boolean
@@ -16,6 +23,7 @@ interface PendingCommandApproval {
   webContents: WebContents
   resolve: (decision: CommandApprovalDecisionResult) => void
   timeout: NodeJS.Timeout
+  purposeAbort?: AbortController
 }
 
 const pendingCommandApprovals = new Map<string, PendingCommandApproval>()
@@ -37,6 +45,7 @@ export function settlePendingCommandApproval(
   if (!pending) return false
 
   clearTimeout(pending.timeout)
+  pending.purposeAbort?.abort()
   pendingCommandApprovals.delete(requestId)
   if (options?.dismiss !== false) {
     dismissCommandApprovalRequest(pending.webContents, requestId, pending.runId)
@@ -90,6 +99,8 @@ export function requestCommandApproval(input: {
   timeoutMs?: number
   audit: CommandAuditResult
   signal?: AbortSignal
+  locale?: string
+  config?: AgentConfig
 }): Promise<CommandApprovalDecisionResult> {
   if (input.webContents.isDestroyed()) return Promise.resolve({ approved: false })
 
@@ -122,13 +133,17 @@ export function requestCommandApproval(input: {
       })
     }
 
+    const purposeAbort =
+      input.audit.risk === 'high' ? new AbortController() : undefined
+
     pendingCommandApprovals.set(requestId, {
       runId: input.runId,
       tabId: input.tabId,
       chatTabId: input.chatTabId,
       webContents: input.webContents,
       resolve: finish,
-      timeout
+      timeout,
+      purposeAbort
     })
     input.signal?.addEventListener('abort', onAbort, { once: true })
     if (input.signal?.aborted) {
@@ -136,5 +151,42 @@ export function requestCommandApproval(input: {
       return
     }
     safeWebContentsSend(input.webContents, 'agent:command-approval-request', request)
+
+    if (purposeAbort) {
+      void fillApprovalPurpose({
+        requestId,
+        runId: input.runId,
+        command: input.command,
+        locale: input.locale,
+        config: input.config ?? readAgentConfig(),
+        webContents: input.webContents,
+        signal: purposeAbort.signal
+      })
+    }
+  })
+}
+
+async function fillApprovalPurpose(input: {
+  requestId: string
+  runId: string
+  command: string
+  locale?: string
+  config: AgentConfig
+  webContents: WebContents
+  signal: AbortSignal
+}): Promise<void> {
+  const purpose = await generateCommandPurpose({
+    command: input.command,
+    locale: input.locale,
+    config: input.config,
+    signal: input.signal
+  })
+  // Drop update if approval already settled or aborted.
+  if (input.signal.aborted || !pendingCommandApprovals.has(input.requestId)) return
+  if (input.webContents.isDestroyed()) return
+  safeWebContentsSend(input.webContents, 'agent:command-approval-purpose', {
+    requestId: input.requestId,
+    runId: input.runId,
+    purpose
   })
 }

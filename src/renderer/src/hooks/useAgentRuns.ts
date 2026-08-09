@@ -58,6 +58,11 @@ export function useAgentRuns({
   appendAgentEvent: (event: AgentEvent, tabId?: string) => void
   liveRunByLogId: Record<number, AgentRunViewState>
   attachApprovalRequest: (chatTabId: string, request: CommandApprovalRequest) => void
+  applyApprovalPurpose: (
+    chatTabId: string,
+    requestId: string,
+    purpose: string | null
+  ) => void
   resolveApprovalStep: (
     chatTabId: string,
     requestId: string,
@@ -181,6 +186,7 @@ export function useAgentRuns({
 
   const attachApprovalRequest = useCallback(
     (chatTabId: string, request: CommandApprovalRequest): void => {
+      const isHigh = request.audit.risk === 'high'
       updateAgentRun(chatTabId, (run) => {
         const steps = [...(run.steps ?? [])]
         const index = steps.findIndex(
@@ -201,7 +207,10 @@ export function useAgentRuns({
             impactAnalysis: request.audit.impactAnalysis,
             recommendation: request.audit.recommendation,
             source: request.audit.source,
-            elapsedMs: request.audit.elapsedMs
+            elapsedMs: request.audit.elapsedMs,
+            ...(isHigh
+              ? { purposePhase: 'loading' as const, purpose: undefined }
+              : {})
           }
           return { ...run, steps }
         }
@@ -222,11 +231,38 @@ export function useAgentRuns({
               impactAnalysis: request.audit.impactAnalysis,
               recommendation: request.audit.recommendation,
               source: request.audit.source,
-              elapsedMs: request.audit.elapsedMs
+              elapsedMs: request.audit.elapsedMs,
+              ...(isHigh
+                ? { purposePhase: 'loading' as const }
+                : {})
             }
           ]
         }
       })
+    },
+    [updateAgentRun]
+  )
+
+  const applyApprovalPurpose = useCallback(
+    (chatTabId: string, requestId: string, purpose: string | null): void => {
+      updateAgentRun(chatTabId, (run) => ({
+        ...run,
+        steps: (run.steps ?? []).map((step) => {
+          if (step.kind !== 'approval' || step.requestId !== requestId) return step
+          if (purpose?.trim()) {
+            return {
+              ...step,
+              purpose: purpose.trim(),
+              purposePhase: 'ready' as const
+            }
+          }
+          return {
+            ...step,
+            purpose: undefined,
+            purposePhase: 'omitted' as const
+          }
+        })
+      }))
     },
     [updateAgentRun]
   )
@@ -378,7 +414,10 @@ export function useAgentRuns({
                 ? steps[existingIndex].id
                 : createStepId('approval'),
             kind: 'approval' as const,
-            requestId: '',
+            requestId:
+              existingIndex >= 0 && steps[existingIndex].kind === 'approval'
+                ? steps[existingIndex].requestId
+                : '',
             command: event.command,
             phase: (event.audit.requiresApproval ? 'pending' : 'approved') as
               | 'pending'
@@ -391,7 +430,21 @@ export function useAgentRuns({
             impactAnalysis: event.audit.impactAnalysis,
             recommendation: event.audit.recommendation,
             source: event.audit.source,
-            elapsedMs: event.audit.elapsedMs
+            elapsedMs: event.audit.elapsedMs,
+            ...(event.audit.risk === 'high' && event.audit.requiresApproval
+              ? {
+                  purposePhase:
+                    existingIndex >= 0 &&
+                    steps[existingIndex].kind === 'approval' &&
+                    steps[existingIndex].purposePhase === 'ready'
+                      ? ('ready' as const)
+                      : ('loading' as const),
+                  purpose:
+                    existingIndex >= 0 && steps[existingIndex].kind === 'approval'
+                      ? steps[existingIndex].purpose
+                      : undefined
+                }
+              : {})
           }
           if (existingIndex >= 0) {
             steps[existingIndex] = approvalStep
@@ -639,6 +692,7 @@ export function useAgentRuns({
     appendAgentEvent,
     liveRunByLogId,
     attachApprovalRequest,
+    applyApprovalPurpose,
     resolveApprovalStep
   }
 }
