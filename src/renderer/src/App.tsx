@@ -1505,6 +1505,58 @@ function App(): React.JSX.Element {
   }, [applyApprovalPurpose])
 
   useEffect(() => {
+    return window.api.agent.onSubterminalOpened((payload) => {
+      void (async () => {
+        ensureSubterminal(payload.parentTabId, {
+          id: payload.tabId,
+          name: payload.name,
+          output: '',
+          rawOutput: '',
+          cwd: '',
+          status: 'active',
+          isSsh: payload.mode === 'ssh',
+          terminalMode: 'pty',
+          terminalReady: true
+        })
+        setSubterminalCollapsed(false)
+
+        if (payload.mode !== 'ssh' || !payload.connectionId) {
+          void window.api.agent.ackSubterminalOpened({ tabId: payload.tabId, ok: true })
+          return
+        }
+
+        try {
+          const refreshed = await window.api.connections.resolve(payload.connectionId)
+          const fallback = connectionsRef.current.find((item) => item.id === payload.connectionId)
+          const connection = refreshed
+            ? mergeConnectionInput(refreshed, fallback ?? refreshed)
+            : fallback
+          if (!connection || isLocalConnection(connection)) {
+            void window.api.agent.ackSubterminalOpened({
+              tabId: payload.tabId,
+              ok: false,
+              error: `Connection ${payload.connectionId} not found or is local-only.`
+            })
+            return
+          }
+          const ok = await executeConnectionAutomation(connection, payload.tabId, true)
+          void window.api.agent.ackSubterminalOpened({
+            tabId: payload.tabId,
+            ok,
+            error: ok ? undefined : 'SSH login automation failed.'
+          })
+        } catch (error) {
+          void window.api.agent.ackSubterminalOpened({
+            tabId: payload.tabId,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      })()
+    })
+  }, [ensureSubterminal, executeConnectionAutomation])
+
+  useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
       pendingAttentionNotifierRef.current.clear(`approval:${payload.requestId}`)
       for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {

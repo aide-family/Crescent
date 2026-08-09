@@ -1002,6 +1002,11 @@ function createTemporarySubterminalTabId(parentTabId: string, terminalName: stri
   return `${parentTabId}::subterminal::${encodeURIComponent(terminalName)}`
 }
 
+export function resolveParentTerminalTabId(tabId: string): string {
+  const parsed = parseTemporarySubterminalTabId(tabId)
+  return parsed?.parentTabId ?? tabId.trim()
+}
+
 function parseTemporarySubterminalTabId(
   tabId: string
 ): { parentTabId: string; name: string } | undefined {
