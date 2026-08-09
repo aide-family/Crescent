@@ -13,6 +13,8 @@ const zhCN = {
     shellReady: 'Shell 已就绪',
     shellStarting: 'Shell 启动中',
     shellStopped: 'Shell 已停止',
+    shellFailed: 'Shell 启动失败',
+    shellRetry: '重试启动 Shell',
     swapPanes: '交换终端和对话区域位置',
     title: 'Crescent',
     titleDescription: '终端 + SSH + AI 命令工作台',
@@ -94,7 +96,9 @@ const zhCN = {
     reset: '重置',
     zoomIn: '放大',
     zoomOut: '缩小',
-    user: '用户'
+    user: '用户',
+    saveAsSop: '存为 SOP',
+    saveAsSopTooltip: '将本轮用户目标存为知识库 SOP 文档'
   },
   confirm: {
     closeAllTabs: '关闭所有 Tab？这些终端会话都会被停止。',
@@ -238,6 +242,10 @@ const zhCN = {
       '当前没有已配置的 SSH/集群连接。请先在连接列表中添加连接，或说明是否仅在本地终端继续。',
     connectionClarifyTitle: '需要确认连接目标',
     connectionClarifyReplyPrefix: '用户补充说明：',
+    connectionNotReadyClarify:
+      '终端仍在连接或尚未就绪，暂时不能执行 Agent 命令。请确认连接目标、等待登录完成，或说明是否留在当前终端继续。',
+    clarifyManualContinue: '我已在终端手动登录，继续',
+    clarifyOpenConnections: '打开连接设置',
     clarifySelectConnection: '选择连接目标',
     clarifyConfirm: '确认',
     clarifyHintKeyboard: '↑↓ 选择，Enter 确认，Esc 取消',
@@ -253,11 +261,14 @@ const zhCN = {
     commandRunning: '正在执行终端命令',
     commandStatus: '执行状态',
     commandTimedOut: '命令执行超时',
+    commandInterrupted: '命令已中断（Ctrl+C）',
     fallbackLimited: '受限备用模式；SSH/密码提示不可用',
     failedToLoadConfig: '加载配置失败',
     failedToLoadConnections: '加载连接失败',
     failedToLoadModels: '加载模型失败',
     failedToStartShell: '启动 Shell 失败',
+    failedToStartShellReason: '启动 Shell 失败：{reason}',
+    failedToStartShellNotReady: '本地终端尚未就绪（可能因终端面板隐藏而未启动）。正在尝试启动…',
     outputSettleTimeout: '等待终端输出静默超时，自动登录动作已停止。',
     passwordPromptDescription: '密钥会直接键入对应终端，不会写入对话日志。',
     passwordPromptExpired: '终端已经不在密钥输入状态，未键入内容。请重新执行触发提示的命令。',
@@ -359,6 +370,8 @@ const zhCN = {
     toolRunning: '运行中',
     toolFinished: '已完成',
     toolFailed: '失败',
+    toolInterrupted: '已中断',
+    toolTimedOut: '已超时',
     toolCommand: '命令',
     toolCommandLabel: '终端命令',
     toolArgs: '参数',
@@ -370,6 +383,10 @@ const zhCN = {
     copyCommand: '复制命令',
     autoApprovedShort: '已自动放行',
     agentCanceled: '已手动停止本次会话。',
+    agentAlreadyProcessing: '上一轮仍在停止中，请稍候再发送。',
+    missingExecutionTerminal: '执行终端尚未就绪。请打开或启动终端面板后再试。',
+    noModelAvailable: '没有可用模型。请在设置中添加带 API Key 的 OpenAI 兼容供应商。',
+    runDocumentCorrupt: '本次运行记录无法还原。已隐藏原始存储信封，避免泄漏内部格式。',
     askPlaceholder: '询问 AI，或输入 /command 检查当前终端',
     chatNoTools: '未配置 OpenAPI 工具，也可直接对话',
     contextAdded: '已补充到当前运行上下文',
@@ -451,6 +468,7 @@ const zhCN = {
     thinkingResolvingConnection: '正在判断是否需要登录已配置的 SSH 连接…',
     routingTo: '→ {label}',
     injectSelectedSuggestions: '将选中建议加入输入框',
+    selectAllSuggestions: '全选建议',
     injectedSuggestionsCount: '已加入 {n} 条',
     approvalNotePlaceholder: '给 AI 的补充说明（可选）',
     yourApprovalNote: '你的备注：{note}',
@@ -525,7 +543,7 @@ const zhCN = {
     delete: '删除文档',
     deleted: '已删除知识库文档',
     deleteFailed: '删除知识库文档失败',
-    description: 'Markdown 文档存储在 ./wiki 中，并可被 Agent 检索使用。',
+    description: 'Markdown 文档存储在 ~/.crescent/wiki 中，并可被 Agent 检索使用。',
     editMarkdownSource: '编辑 Markdown 源码',
     edit: '编辑文档',
     empty: '暂无知识库文档。可以从历史运维记录保存生成。',
@@ -554,7 +572,7 @@ const zhCN = {
     sourceSession: '来源会话',
     searchPlaceholder: '搜索标题或摘要',
     titleLabel: '标题',
-    title: '知识库'
+    title: '知识库',
   },
   settings: {
     agentMode: 'Agent 模式',
@@ -711,9 +729,6 @@ const zhCN = {
     skillsManagement: 'Skills 管理',
     skillsManagementHint:
       '管理本机可用的 Agent Skills。系统内置 Skill 受保护不可删除，安装来源使用 skills.sh 搜索结果。',
-    skillsSopsSection: 'Skills / SOPs',
-    skillsSopsHint: '可复用的 Skill 提示词模板与标准操作流程。',
-    skillsSopsComingSoon: 'Coming in v1.1',
     skillsNoResults: '未找到匹配的 Skills。',
     skillsRefreshed: 'Skills 已刷新',
     skillsSearchComplete: 'Skills 搜索完成',
@@ -740,6 +755,14 @@ const zhCN = {
     updateInstallFailed: '安装更新失败',
     validateTools: '验证工具',
     validating: '验证中'
+  },
+  notifications: {
+    approvalTitle: '需要审批命令',
+    approvalBody: '有一条高风险命令正在等待你在 Crescent 中确认。',
+    passwordTitle: '终端需要密钥输入',
+    passwordBody: '终端正在等待密码或验证码。',
+    clarifyTitle: '需要确认连接目标',
+    clarifyBody: 'Crescent 需要你确认连接目标。'
   }
 } as const
 

@@ -16,6 +16,8 @@ import { loadPiCodingAgent, type PiCodingAgentModule } from './pi-sdk'
 import {
   clearPtyBashExecContext,
   createPtyBashToolDefinition,
+  interruptPtyCommandsForRun,
+  settlePtyInterruptsBeforeSessionAbort,
   setPtyBashExecContext
 } from './pi-terminal-bash'
 import { rejectPendingApprovalsForRun } from './command-approval'
@@ -24,7 +26,9 @@ import {
   classifyProviderError,
   isQuotaExhaustedError
 } from '../../shared/provider-error'
+import { buildPromptText } from '../../shared/agent-run-prompt'
 import type { AgentConfig, AgentEvent } from './types'
+import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-prompt'
 
 type AgentSession = Awaited<ReturnType<PiCodingAgentModule['createAgentSession']>>['session']
 
@@ -62,6 +66,8 @@ export interface PiHostRunInput {
   executionTabId: string
   terminalContext?: string
   locale?: string
+  activeWikiDocs?: SopWikiPromptPart[]
+  activeSkillDocs?: SkillPromptPart[]
   emit: (event: AgentEvent) => void
 }
 
@@ -188,6 +194,18 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     })
 
     const promptText = buildPromptText(input)
+    // Reused sessions can still be settling after abort; wait before a fresh prompt
+    // so the SDK does not throw "Agent is already processing".
+    if (hosted.session.isStreaming) {
+      try {
+        await Promise.race([
+          hosted.session.waitForIdle(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3_000))
+        ])
+      } catch {
+        // Continue; prompt may still fail and is localized in the renderer.
+      }
+    }
     await hosted.session.prompt(promptText)
 
     const active = activeRuns.get(runId)
@@ -297,11 +315,17 @@ export async function cancelPiAgentRun(runId: string): Promise<boolean> {
   const active = activeRuns.get(runId)
   if (!active) return false
   active.abortRequested = true
+  // Abort signal settles pending PTY waiters (interrupted); interrupt also writes ^C.
   active.abortController.abort()
   rejectPendingApprovalsForRun(runId, 'Agent run was canceled.')
   const hosted = hostedSessions.get(active.sessionKey)
   try {
-    await hosted?.session.abort()
+    await settlePtyInterruptsBeforeSessionAbort({
+      settleInterrupts: () => interruptPtyCommandsForRun(runId),
+      abortSession: async () => {
+        await hosted?.session.abort()
+      }
+    })
   } catch {
     // ignore abort errors
   }
@@ -381,9 +405,21 @@ async function ensureHostedSession(
         '# 批量采集硬规范',
         '- 连续信息采集必须把多个只读命令写在同一个 bash 调用中（用 `;` 分隔），系统会自动拆分并结构化回传；写操作必须独立成单独调用。',
         '',
+        '# 知识库 / SOP 存库硬规范',
+        '- 知识库/SOP 存库一律经 wiki 机制写入 ~/.crescent/wiki；禁止存到 workspace 或远程主机；',
+        '  禁止用 bash 写文件（mkdir / cat > / heredoc）或用 write/edit 工具落 SOP。',
+        '- 用户说「存成 SOP / 保存到知识库」时：不要询问保存位置、不要三选一；说明应使用结果条「存为 SOP」或 Wiki 面板；',
+        '  切勿自行在磁盘创建 SOP 文件。',
+        '',
+        '# 引用材料纪律',
+        '- 用户引用的 Skill / SOP 仅作参考材料；简单任务不要强行套完整手册流程，按目标最小必要执行。',
+        '',
+        '# SOP 执行性能',
+        '- 按 SOP 执行时，全部只读步骤合并到 ≤3 轮终端调用（多个异常对象的深钻同轮并发）；仅写操作独立。',
+        '',
         '# 集群全量巡检流程',
         '1. 一条概览命令定位异常：kubectl get pods -A --no-headers | awk \'$4!="Running"&&$4!="Completed"\'',
-        '2. 只深钻异常 Pod：每个异常 Pod 独立一次 describe + 一次 logs --tail。',
+        '2. 只深钻异常 Pod：每个异常对象独立成段，但可同一条 bash 调用并发（describe + logs --tail）。',
         '3. 健康服务按命名空间聚合为一行，不逐 Pod 列表。',
         '4. 节点资源（free -h && df -h）合并进环境确认命令。',
         '',
@@ -447,40 +483,6 @@ async function ensureHostedSession(
   const hosted: HostedSession = { sessionKey, session, cwd, toolProfile: TOOL_PROFILE }
   hostedSessions.set(sessionKey, hosted)
   return hosted
-}
-
-function buildPromptText(input: PiHostRunInput): string {
-  const parts: string[] = []
-  const languageDirective = buildLanguageDirective(input.locale)
-  if (languageDirective) parts.push(languageDirective)
-  if (input.conversationContext?.trim()) {
-    parts.push(`# Recent conversation\n${input.conversationContext.trim()}\n`)
-  }
-  if (input.terminalContext?.trim()) {
-    parts.push(`# Current terminal context\n${input.terminalContext.trim()}\n`)
-  }
-  parts.push(input.input.trim())
-  return parts.join('\n')
-}
-
-function buildLanguageDirective(locale: string | undefined): string {
-  const normalized = locale?.trim().toLowerCase() ?? ''
-  if (normalized.startsWith('zh')) {
-    return [
-      '# Language',
-      'Write all user-facing replies AND internal thinking/reasoning entirely in Simplified Chinese (简体中文).',
-      'Do not mix Chinese and English in prose.',
-      'Keep commands, paths, tool names, package names, and log identifiers in their original form.',
-      ''
-    ].join('\n')
-  }
-  return [
-    '# Language',
-    'Write all user-facing replies AND internal thinking/reasoning entirely in English.',
-    'Do not mix languages in prose.',
-    'Keep commands, paths, tool names, package names, and log identifiers in their original form.',
-    ''
-  ].join('\n')
 }
 
 function collectSkillRoots(skillRoot: string): string[] {

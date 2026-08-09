@@ -57,6 +57,7 @@ export function reassignSessionRootOnClose(
         sessionGroupId: nextRoot.id,
         agentInput: closingTab.agentInput,
         skillRefs: closingTab.skillRefs,
+        activeWikiIds: closingTab.activeWikiIds ?? [],
         pathRefs: closingTab.pathRefs,
         toolRefs: closingTab.toolRefs,
         wikiRefs: closingTab.wikiRefs,

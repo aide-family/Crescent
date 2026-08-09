@@ -7,6 +7,8 @@ import type {
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
   AgentEvent,
+  AgentGenerateSopInput,
+  AgentGenerateSopResult,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -38,9 +40,7 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput,
-  SkillTemplate,
-  SkillTemplateSaveInput
+  WikiSaveInput
 } from '../shared/agent-types'
 import type {
   AppUpdateActionResult,
@@ -50,6 +50,12 @@ import type {
 
 // Custom APIs for renderer
 const api = {
+  app: {
+    notifyAttention: (input: {
+      title: string
+      body: string
+    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:notify-attention', input)
+  },
   terminal: {
     start: (options?: {
       cols?: number
@@ -167,10 +173,6 @@ const api = {
     getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
     getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
     listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),
-    listSkillTemplates: (): Promise<SkillTemplate[]> =>
-      ipcRenderer.invoke('agent:list-skill-templates'),
-    saveSkillTemplate: (input: SkillTemplateSaveInput): Promise<SkillTemplate> =>
-      ipcRenderer.invoke('agent:save-skill-template', input),
     searchSkills: (query: string): Promise<AgentSkillSearchResult[]> =>
       ipcRenderer.invoke('agent:search-skills', query),
     installSkill: (input: {
@@ -255,6 +257,8 @@ const api = {
       input: AgentConnectionIntentInput
     ): Promise<AgentConnectionIntentResult> =>
       ipcRenderer.invoke('agent:resolve-connection-intent', input),
+    generateSop: (input: AgentGenerateSopInput): Promise<AgentGenerateSopResult> =>
+      ipcRenderer.invoke('agent:generate-sop', input),
     run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>
       ipcRenderer.invoke('agent:run', input),
     cancel: (runId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:cancel', runId),
@@ -316,6 +320,11 @@ const api = {
     updateAgentLog: (
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ): Promise<{ ok: boolean }> => ipcRenderer.invoke('storage:update-agent-log', input),
+    deleteAgentLogs: (input: {
+      tabId: string
+      logIds: number[]
+    }): Promise<{ ok: boolean; removed: number }> =>
+      ipcRenderer.invoke('storage:delete-agent-logs', input),
     saveAgentRun: (run: StoredAgentRun): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('storage:save-agent-run', run),
     getAgentRun: (runId: string): Promise<StoredAgentRun | undefined> =>

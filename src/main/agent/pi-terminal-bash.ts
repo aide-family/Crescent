@@ -5,6 +5,7 @@ import { applyBatchOutputFormatting, planReadonlyBatch } from '../../shared/read
 import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminalWithPermissionRequest,
+  interruptAndAwaitPendingTerminalCommands,
   type TerminalCommandExecutionResult
 } from '../terminal/ipc'
 import { classifyCommand } from './command-classify'
@@ -68,6 +69,38 @@ export function clearPtyBashExecContext(sessionKey: string): void {
   const existing = execContextBySessionKey.get(sessionKey)
   if (existing?.runId) clearFailedCommandFingerprints(existing.runId)
   execContextBySessionKey.delete(sessionKey)
+}
+
+/**
+ * Send Ctrl+C and settle any pending PTY command waiter for this agent run.
+ * Awaits waiter settle so callers can emit `command/finished` before session abort.
+ */
+export async function interruptPtyCommandsForRun(runId: string): Promise<void> {
+  const normalized = runId.trim()
+  if (!normalized) return
+  const waits: Promise<boolean>[] = []
+  for (const context of execContextBySessionKey.values()) {
+    if (context.runId !== normalized) continue
+    if (context.webContents.isDestroyed()) continue
+    waits.push(
+      interruptAndAwaitPendingTerminalCommands(context.webContents.id, context.executionTabId)
+    )
+  }
+  await Promise.all(waits)
+}
+
+/**
+ * Stop-button ordering helper: PTY interrupt settle (and any microtask emits) before session abort.
+ * Keeps tool-card `interrupted` events ahead of run-end/abort events.
+ */
+export async function settlePtyInterruptsBeforeSessionAbort(input: {
+  settleInterrupts: () => Promise<void>
+  abortSession: () => Promise<void>
+}): Promise<void> {
+  await input.settleInterrupts()
+  // Flush microtasks so bash exec can emit command/finished before abort events.
+  await Promise.resolve()
+  await input.abortSession()
 }
 
 export function createPtyBashToolDefinition(
@@ -161,13 +194,15 @@ async function executeReviewedPtyCommand(input: {
           context.subterminalName,
           ptyCommand,
           timeoutMs,
-          'wait'
+          'wait',
+          input.signal
         )
       : await executeCommandInTerminalWithPermissionRequest(
           context.webContents,
           ptyCommand,
           timeoutMs,
-          executionTabId
+          executionTabId,
+          input.signal
         )
 
     if (!result.ok && fingerprint) {
@@ -194,6 +229,7 @@ async function executeReviewedPtyCommand(input: {
         output: formattedResult.output,
         error: formattedResult.error,
         timedOut: formattedResult.timedOut,
+        interrupted: formattedResult.interrupted,
         terminalExited: formattedResult.terminalExited,
         detached: formattedResult.detached,
         subterminalName: formattedResult.subterminalName,
@@ -315,7 +351,7 @@ function normalizeInteractivePrivilegeCommand(command: string): string {
 
 function normalizeTimeout(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return 120_000
+    return 600_000
   }
   return Math.min(Math.max(Math.floor(timeoutMs), 1_000), 10 * 60_000)
 }

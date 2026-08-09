@@ -112,6 +112,7 @@ export function formatCommandObservation(
   const sanitized = sanitizeCommandObservation(result?.output ?? '', result?.error ?? '')
   const lines: string[] = []
 
+  if (result?.interrupted) lines.push(t.terminal.commandInterrupted)
   if (result?.timedOut) lines.push(t.terminal.commandTimedOut)
   if (result?.terminalExited) lines.push(t.terminal.terminalDisconnected)
   if (sanitized.error) lines.push(sanitized.error)
@@ -293,7 +294,22 @@ export function localizeAgentEventMessage(message: string, t: Dictionary): strin
   if (message === 'Command rejected by user.') return t.commandReview.rejected
   if (message === 'Running in chat-only terminal assistant mode.') return t.input.currentTerminal
   if (message === 'Done.') return t.input.done
-  if (message === 'Agent run canceled.') return t.input.agentCanceled
+  if (
+    message === 'Agent run canceled.' ||
+    message === 'Agent run was canceled.' ||
+    message === 'Canceled.'
+  ) {
+    return t.input.agentCanceled
+  }
+  if (/Agent is already processing/i.test(message)) {
+    return t.input.agentAlreadyProcessing
+  }
+  if (message.startsWith('Missing execution terminal tab')) {
+    return t.input.missingExecutionTerminal
+  }
+  if (message.startsWith('No model available')) {
+    return t.input.noModelAvailable
+  }
   if (message === 'Planning before execution...') return t.input.createdPlan
   if (message === 'Understanding the user request and current terminal context.') {
     return t.input.understandingRequest

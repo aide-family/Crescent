@@ -13,6 +13,8 @@ const en = {
     shellReady: 'Shell ready',
     shellStarting: 'Shell starting',
     shellStopped: 'Shell stopped',
+    shellFailed: 'Shell failed to start',
+    shellRetry: 'Retry shell start',
     swapPanes: 'Swap terminal and chat panes',
     title: 'Crescent',
     titleDescription: 'Terminal + SSH + AI command workbench',
@@ -99,7 +101,9 @@ const en = {
     reset: 'Reset',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
-    user: 'User'
+    user: 'User',
+    saveAsSop: 'Save as SOP',
+    saveAsSopTooltip: 'Save this turn’s user goal as a wiki SOP document'
   },
   confirm: {
     closeAllTabs: 'Close all tabs? All terminal sessions will be stopped.',
@@ -252,6 +256,10 @@ const en = {
       'No SSH/cluster connections are configured. Add one in the connection list, or say if you want to continue in the local terminal only.',
     connectionClarifyTitle: 'Connection target needs confirmation',
     connectionClarifyReplyPrefix: 'User clarification:',
+    connectionNotReadyClarify:
+      'The terminal is still connecting or not ready for agent commands. Confirm the connection target, wait for login to finish, or say if you want to stay in the current terminal.',
+    clarifyManualContinue: 'I already logged in manually in the terminal — continue',
+    clarifyOpenConnections: 'Open connection settings',
     clarifySelectConnection: 'Select connection target',
     clarifyConfirm: 'Confirm',
     clarifyHintKeyboard: '↑↓ to move, Enter to confirm, Esc to dismiss',
@@ -267,11 +275,15 @@ const en = {
     commandRunning: 'Running terminal command',
     commandStatus: 'Execution status',
     commandTimedOut: 'Command timed out',
+    commandInterrupted: 'Command interrupted (Ctrl+C)',
     fallbackLimited: 'limited fallback; SSH/password prompts are disabled',
     failedToLoadConfig: 'Failed to load config',
     failedToLoadConnections: 'Failed to load connections',
     failedToLoadModels: 'Failed to load models',
     failedToStartShell: 'Failed to start shell',
+    failedToStartShellReason: 'Failed to start shell: {reason}',
+    failedToStartShellNotReady:
+      'Local terminal is not ready (often because the terminal pane is hidden). Trying to start it…',
     outputSettleTimeout:
       'Timed out waiting for terminal output to settle. Automatic login actions stopped.',
     passwordPromptDescription:
@@ -384,6 +396,8 @@ const en = {
     toolRunning: 'Running',
     toolFinished: 'Finished',
     toolFailed: 'Failed',
+    toolInterrupted: 'Interrupted',
+    toolTimedOut: 'Timed out',
     toolCommand: 'Command',
     toolCommandLabel: 'Terminal command',
     toolArgs: 'Arguments',
@@ -395,6 +409,14 @@ const en = {
     copyCommand: 'Copy command',
     autoApprovedShort: 'Auto-allowed',
     agentCanceled: 'Agent run was stopped manually.',
+    agentAlreadyProcessing:
+      'The previous run is still stopping. Wait a moment, then send again.',
+    missingExecutionTerminal:
+      'No execution terminal is ready. Open or start a terminal pane, then try again.',
+    noModelAvailable:
+      'No model is available. Add an OpenAI-compatible provider with an API key in Settings.',
+    runDocumentCorrupt:
+      'This run record could not be restored. The raw storage envelope was hidden to avoid leaking internal format.',
     askPlaceholder: 'Ask AI, or type /command check the current terminal',
     chatNoTools: 'Chat works without OpenAPI tools',
     contextAdded: 'Added to current run context',
@@ -483,6 +505,7 @@ const en = {
     thinkingResolvingConnection: 'Deciding whether a configured SSH connection should be opened…',
     routingTo: '→ {label}',
     injectSelectedSuggestions: 'Add selected suggestions to input',
+    selectAllSuggestions: 'Select all suggestions',
     injectedSuggestionsCount: 'Added {n} suggestion(s)',
     approvalNotePlaceholder: 'Optional note for the AI',
     yourApprovalNote: 'Your note: {note}',
@@ -560,7 +583,7 @@ const en = {
     delete: 'Delete document',
     deleted: 'Deleted wiki document',
     deleteFailed: 'Failed to delete wiki document',
-    description: 'Markdown documents stored in ./wiki and available to Agent retrieval.',
+    description: 'Markdown documents stored in ~/.crescent/wiki and available to Agent retrieval.',
     editMarkdownSource: 'Edit Markdown source',
     edit: 'Edit document',
     empty: 'No wiki documents yet. Save an operations history item to create one.',
@@ -592,7 +615,7 @@ const en = {
     sourceSession: 'Source session',
     searchPlaceholder: 'Search title or excerpt',
     titleLabel: 'Title',
-    title: 'Knowledge base'
+    title: 'Knowledge base',
   },
   settings: {
     agentMode: 'Agent mode',
@@ -759,9 +782,6 @@ const en = {
     skillsManagement: 'Skills management',
     skillsManagementHint:
       'Manage Agent Skills available on this machine. Built-in system skills are protected; installs use skills.sh search results.',
-    skillsSopsSection: 'Skills / SOPs',
-    skillsSopsHint: 'Reusable skill prompt templates and standard operating procedures.',
-    skillsSopsComingSoon: 'Coming in v1.1',
     skillsNoResults: 'No matching skills found.',
     skillsRefreshed: 'Skills refreshed',
     skillsSearchComplete: 'Skills search complete',
@@ -790,6 +810,14 @@ const en = {
     updateInstallFailed: 'Update install failed',
     validateTools: 'Validate tools',
     validating: 'Validating'
+  },
+  notifications: {
+    approvalTitle: 'Command approval needed',
+    approvalBody: 'A high-risk command is waiting for your decision in Crescent.',
+    passwordTitle: 'Terminal secret input needed',
+    passwordBody: 'The terminal is waiting for a password or verification code.',
+    clarifyTitle: 'Connection confirmation needed',
+    clarifyBody: 'Crescent needs you to confirm the connection target.'
   }
 } as const
 

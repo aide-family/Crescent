@@ -11,10 +11,24 @@ export type AgentLogEntry =
   | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
   | {
       id: number
+      kind: 'user-supplement'
+      text: string
+      createdAt: string
+      runId: string
+    }
+  | {
+      id: number
       kind: 'status' | 'thought' | 'tool' | 'plan' | 'command'
       text: string
       createdAt: string
     }
+
+/** Distributive omit so user-supplement keeps its runId discriminant. */
+export type AgentLogEntryInput = AgentLogEntry extends infer Entry
+  ? Entry extends AgentLogEntry
+    ? Omit<Entry, 'id' | 'createdAt'>
+    : never
+  : never
 
 export interface AgentRunViewState {
   logId: number
@@ -63,7 +77,15 @@ export type AgentRunStep =
       command?: string
       resultText?: string
       isError?: boolean
+      interrupted?: boolean
+      timedOut?: boolean
       toolCallId?: string
+    }
+  | {
+      id: string
+      kind: 'user-supplement'
+      text: string
+      createdAt: string
     }
   | {
       id: string
@@ -107,11 +129,15 @@ export interface AgentTerminalTab {
   isSsh: boolean
   sessionId?: number
   terminalReady: boolean
+  /** Last local/PTY start failure; cleared on successful start. */
+  terminalStartError?: string
   terminalCwd: string
   terminalMode: 'pty' | 'pipe'
   terminalOutput: string
   agentInput: string
   skillRefs: AgentSkillOption[]
+  /** Selected wiki document ids injected as SOP guidance on the next agent run. */
+  activeWikiIds: string[]
   pathRefs: AgentPathReference[]
   toolRefs: AgentToolReference[]
   wikiRefs: AgentWikiReference[]
@@ -186,11 +212,13 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     isSsh: input?.isSsh ?? false,
     sessionId: input?.sessionId,
     terminalReady: input?.terminalReady ?? false,
+    terminalStartError: input?.terminalStartError,
     terminalCwd: input?.terminalCwd ?? '',
     terminalMode: input?.terminalMode ?? 'pty',
     terminalOutput: input?.terminalOutput ?? '',
     agentInput: input?.agentInput ?? '',
     skillRefs: input?.skillRefs ?? [],
+    activeWikiIds: input?.activeWikiIds ?? [],
     pathRefs: input?.pathRefs ?? [],
     toolRefs: input?.toolRefs ?? [],
     wikiRefs: input?.wikiRefs ?? [],
@@ -202,6 +230,18 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     subTerminals: input?.subTerminals ?? [],
     pendingClarification: input?.pendingClarification
   }
+}
+
+/** Footer / status-dot state for the local shell lifecycle. */
+export function resolveShellFooterState(tab: {
+  terminalReady: boolean
+  sessionId?: number
+  terminalStartError?: string
+}): 'ready' | 'pending' | 'not-ready' {
+  if (tab.terminalReady) return 'ready'
+  if (tab.terminalStartError?.trim()) return 'not-ready'
+  if (tab.sessionId) return 'not-ready'
+  return 'pending'
 }
 
 export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[] {

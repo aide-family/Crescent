@@ -106,6 +106,41 @@ export function extractResultFromAgentRunDocument(value: string, t: Dictionary):
   return [parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean).join('\n\n').trim()
 }
 
+/** True when text looks like a CRESCENT_RUN_V2 envelope (even if JSON is corrupt). */
+export function looksLikeAgentRunDocument(value: string): boolean {
+  const normalized = value.replace(/\r\n/g, '\n').trimStart()
+  return (
+    normalized === AGENT_RUN_DOCUMENT_MARKER ||
+    normalized.startsWith(`${AGENT_RUN_DOCUMENT_MARKER}\n`) ||
+    normalized.startsWith(`${AGENT_RUN_DOCUMENT_MARKER}{`)
+  )
+}
+
+/**
+ * Safe text for model context / copy fallbacks: never feed raw CRESCENT_RUN_V2 JSON.
+ * Returns null when the envelope is present but unparsable (caller should omit or use i18n error).
+ */
+export function sanitizeAgentLogTextForContext(value: string, t: Dictionary): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (!looksLikeAgentRunDocument(trimmed)) return trimmed
+  const parsed = parseAgentRunDocument(trimmed, t)
+  if (!parsed) return null
+  const extracted = [parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean).join('\n\n').trim()
+  if (extracted) return extracted
+  const stepHints = parsed.steps
+    .map((step) => {
+      if (step.kind === 'status') return step.title
+      if (step.kind === 'message') return step.text
+      if (step.kind === 'user-supplement') return step.text
+      if (step.kind === 'tool') return step.command || step.name
+      return ''
+    })
+    .filter(Boolean)
+    .slice(0, 8)
+  return stepHints.join('\n').trim() || null
+}
+
 export function deriveActionsFromRun(
   run: Pick<AgentRunViewState, 'steps' | 'thinkingText' | 'actions'>
 ): AgentRunAction[] {
@@ -138,6 +173,11 @@ export function deriveActionsFromSteps(
     if (step.kind === 'message') {
       if (!step.text.trim()) continue
       actions.push({ title: 'Message', detail: step.text.trim() })
+      continue
+    }
+    if (step.kind === 'user-supplement') {
+      if (!step.text.trim()) continue
+      actions.push({ title: 'User supplement', detail: step.text.trim() })
       continue
     }
     if (step.kind === 'approval') {
@@ -372,6 +412,9 @@ function isAgentRunStep(value: unknown): value is AgentRunStep {
   }
   if (step.kind === 'tool') {
     return typeof step.name === 'string' && (step.phase === 'started' || step.phase === 'finished')
+  }
+  if (step.kind === 'user-supplement') {
+    return typeof step.text === 'string' && typeof step.createdAt === 'string'
   }
   if (step.kind === 'approval') {
     return (

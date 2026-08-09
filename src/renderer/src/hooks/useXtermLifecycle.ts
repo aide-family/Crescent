@@ -13,7 +13,7 @@ import {
 import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, parseSubterminalTabId } from '../lib/terminal-text'
 import {
   resolveSessionChatTabId,
-  type AgentLogEntry,
+  type AgentLogEntryInput,
   type AgentTerminalTab
 } from '../lib/terminal-tabs'
 import type { ConnectionConfig } from '../../../shared/agent-types'
@@ -48,7 +48,7 @@ interface UseXtermLifecycleInput {
   ) => void
   executeConnectionCommands: (connection: ConnectionConfig, targetTabId: string) => Promise<void>
   abortPostConnectionTasks: (tabId: string, reason: string) => void
-  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => number | void
+  appendLog: (entry: AgentLogEntryInput, tabId?: string) => number | void
   shellExitedText: string
   failedToStartShellText: string
   postLoginTaskAbortedText: string
@@ -252,7 +252,8 @@ export function useXtermLifecycle({
         sessionId: session.sessionId,
         terminalMode: session.mode,
         terminalCwd: session.cwd,
-        terminalReady: true
+        terminalReady: true,
+        terminalStartError: undefined
       }))
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
@@ -262,7 +263,14 @@ export function useXtermLifecycle({
     }
 
     void startShell().catch((error) => {
-      terminal.writeln(`\r\n\x1b[31m${failedToStartShellText}: ${String(error)}\x1b[0m`)
+      const message = error instanceof Error ? error.message : String(error)
+      terminal.writeln(`\r\n\x1b[31m${failedToStartShellText}: ${message}\x1b[0m`)
+      updateTab(tab.id, (current) => ({
+        ...current,
+        sessionId: undefined,
+        terminalReady: false,
+        terminalStartError: message
+      }))
     })
 
     const resizeObserver = observeTerminalHostResize(host, fitAddon, tab.id)

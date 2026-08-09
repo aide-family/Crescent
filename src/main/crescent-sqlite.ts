@@ -13,12 +13,6 @@ import type {
   StoredSessionHistoryItem,
   StoredSessionTab
 } from './agent/types'
-import {
-  listSkillTemplatesFromDb,
-  saveSkillTemplateToDb,
-  type SkillTemplate,
-  type SkillTemplateSaveInput
-} from './agent/skill-templates'
 import type { CrescentMemoryFile } from './crescent-store'
 import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
 
@@ -131,14 +125,6 @@ export function initializeCrescentDatabase(): void {
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS skill_templates (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      prompt_template TEXT NOT NULL,
-      tags TEXT,
-      created_at INTEGER NOT NULL
-    );
-
     CREATE INDEX IF NOT EXISTS idx_agent_logs_tab_created_at
       ON agent_logs (tab_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_tab_updated_at
@@ -147,12 +133,11 @@ export function initializeCrescentDatabase(): void {
       ON operation_records (created_at);
     CREATE INDEX IF NOT EXISTS idx_ops_history_tab_created_at
       ON ops_history_records (tab_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_skill_templates_created_at
-      ON skill_templates (created_at);
   `)
 
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'agent_logs', 'run_id', 'TEXT')
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
   ensureColumn(db, 'agent_runs', 'trace_json', 'TEXT')
@@ -200,17 +185,19 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
 export function saveAgentLog(entry: StoredAgentLogEntry): void {
   const db = getDatabase()
   const now = new Date().toISOString()
+  const runId = entry.runId?.trim() || null
 
   db.prepare(
     `
-    INSERT INTO agent_logs (tab_id, log_id, kind, text, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO agent_logs (tab_id, log_id, kind, text, created_at, updated_at, run_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id, log_id) DO UPDATE SET
       kind = excluded.kind,
       text = excluded.text,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      run_id = excluded.run_id
   `
-  ).run(entry.tabId, entry.logId, entry.kind, entry.text, entry.createdAt, now)
+  ).run(entry.tabId, entry.logId, entry.kind, entry.text, entry.createdAt, now, runId)
 }
 
 export function updateAgentLog(input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>): void {
@@ -223,6 +210,21 @@ export function updateAgentLog(input: Pick<StoredAgentLogEntry, 'tabId' | 'logId
     `
     )
     .run(input.text, new Date().toISOString(), input.tabId, input.logId)
+}
+
+export function deleteAgentLogs(tabId: string, logIds: number[]): number {
+  const normalizedTabId = tabId.trim()
+  const ids = logIds.filter((id) => Number.isFinite(id))
+  if (!normalizedTabId || ids.length === 0) return 0
+
+  const db = getDatabase()
+  const deleteOne = db.prepare('DELETE FROM agent_logs WHERE tab_id = ? AND log_id = ?')
+  let removed = 0
+  for (const logId of ids) {
+    const result = deleteOne.run(normalizedTabId, logId)
+    removed += Number(result.changes ?? 0)
+  }
+  return removed
 }
 
 export function saveAgentRun(run: StoredAgentRun): void {
@@ -679,7 +681,8 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         log_id AS logId,
         kind,
         text,
-        created_at AS createdAt
+        created_at AS createdAt,
+        run_id AS runId
       FROM agent_logs
       WHERE tab_id = ?
       ORDER BY log_id ASC
@@ -798,7 +801,8 @@ export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] 
         log_id AS logId,
         kind,
         text,
-        created_at AS createdAt
+        created_at AS createdAt,
+        run_id AS runId
       FROM agent_logs
       WHERE tab_id = ?
       ORDER BY log_id ASC
@@ -993,14 +997,6 @@ export function writeCrescentDbFlag(key: string, value: boolean): void {
     `
     )
     .run(key, value ? 'true' : 'false', new Date().toISOString())
-}
-
-export function listSkillTemplates(): SkillTemplate[] {
-  return listSkillTemplatesFromDb(getDatabase())
-}
-
-export function saveSkillTemplate(input: SkillTemplateSaveInput): SkillTemplate {
-  return saveSkillTemplateToDb(getDatabase(), input)
 }
 
 function getDatabase(): DatabaseSync {

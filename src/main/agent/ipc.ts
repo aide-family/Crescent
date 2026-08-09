@@ -28,6 +28,7 @@ import {
   searchAgentSkills,
   startAgentSkillInstall
 } from './skills'
+import { generateAndSaveSop } from './generate-sop'
 import { cancelPiAgentRun, runPiAgent, steerPiAgentRun } from './pi-host'
 import {
   listPiAvailableModels,
@@ -54,13 +55,13 @@ import {
   writeCrescentMemory,
   normalizeAgentConfig
 } from '../crescent-store'
-import { listSkillTemplates, saveSkillTemplate } from '../crescent-sqlite'
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
 import type {
   AgentConfig,
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
+  AgentGenerateSopInput,
   AgentPathReference,
   AgentRunInput,
   CommandApprovalDecision,
@@ -70,7 +71,6 @@ import type {
   TranscriptionSupportResult,
   WikiSaveInput
 } from './types'
-import type { SkillTemplateSaveInput } from './types'
 
 const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 
@@ -85,14 +85,6 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:list-skills', () => {
     return listAgentSkills(readAgentConfig().skillRoot)
-  })
-
-  ipcMain.handle('agent:list-skill-templates', () => {
-    return listSkillTemplates()
-  })
-
-  ipcMain.handle('agent:save-skill-template', (_, input: SkillTemplateSaveInput) => {
-    return saveSkillTemplate(input ?? { name: '', promptTemplate: '' })
   })
 
   ipcMain.handle('agent:search-skills', (_, query: string) => {
@@ -170,6 +162,18 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:get-skill-content', (_, path: string) => {
     return readAgentSkillContent(path ?? '', readAgentConfig().skillRoot)
+  })
+
+  ipcMain.handle('agent:generate-sop', async (_, payload: AgentGenerateSopInput) => {
+    return generateAndSaveSop(
+      {
+        summary: payload?.summary ?? '',
+        locale: payload?.locale,
+        fallbackTitle: payload?.fallbackTitle,
+        fallbackContent: payload?.fallbackContent
+      },
+      { config: readAgentConfig() }
+    )
   })
 
   ipcMain.handle('agent:list-instruction-files', () => {
@@ -430,6 +434,34 @@ export function registerAgentIpc(): void {
     })
     const sessionKey = payload?.tabId?.trim() || 'default'
     const executionTabId = payload?.executionTabId?.trim() || payload?.tabId?.trim() || ''
+    const wikiIds = [...new Set((payload?.activeWikiIds ?? []).map((id) => id.trim()).filter(Boolean))]
+    const activeWikiDocs = (
+      await Promise.all(wikiIds.map((id) => getWikiDocument(id)))
+    )
+      .filter((doc): doc is NonNullable<typeof doc> => Boolean(doc))
+      .map((doc) => ({ title: doc.title, content: doc.content }))
+
+    const skillRoot = agentConfig.skillRoot
+    const skillPaths = [
+      ...new Set((payload?.activeSkillPaths ?? []).map((path) => path.trim()).filter(Boolean))
+    ]
+    const skillCatalog = skillPaths.length ? listAgentSkills(skillRoot) : []
+    const activeSkillDocs = skillPaths.flatMap((skillPath) => {
+      try {
+        const content = readAgentSkillContent(skillPath, skillRoot)
+        const resolved = resolve(skillPath)
+        const matched = skillCatalog.find((skill) => resolve(skill.path) === resolved)
+        return [
+          {
+            name: matched?.name ?? skillPath.split('/').filter(Boolean).slice(-2, -1)[0] ?? 'Skill',
+            path: matched?.path ?? skillPath,
+            content
+          }
+        ]
+      } catch {
+        return []
+      }
+    })
 
     const result = await runPiAgent({
       runId,
@@ -442,6 +474,8 @@ export function registerAgentIpc(): void {
       executionTabId,
       terminalContext: payload?.terminalContext,
       locale: payload?.locale,
+      activeWikiDocs,
+      activeSkillDocs,
       emit: (agentEvent) => {
         safeWebContentsSend(event.sender, 'agent:event', {
           ...agentEvent,

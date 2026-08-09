@@ -174,22 +174,6 @@ export interface WikiSaveInput {
   id?: string
 }
 
-/** Local SOP / skill prompt templates (v1.0.3 scaffold; editor in v1.1). */
-export interface SkillTemplate {
-  id: string
-  name: string
-  promptTemplate: string
-  tags: string
-  createdAt: number
-}
-
-export interface SkillTemplateSaveInput {
-  id?: string
-  name: string
-  promptTemplate: string
-  tags?: string
-}
-
 export interface OperationRecord {
   id: string
   createdAt: string
@@ -235,6 +219,29 @@ export interface AgentRunInput {
   /** Optional peer/subterminal inventory for targeting. */
   sessionTerminals?: AgentSessionTerminalRef[]
   locale?: string
+  /** Selected wiki document ids injected into the run prompt as SOP guidance. */
+  activeWikiIds?: string[]
+  /** Skill paths whose SKILL.md content is inlined into the run prompt. */
+  activeSkillPaths?: string[]
+}
+
+export interface AgentGenerateSopInput {
+  summary: string
+  locale?: string
+  /** Seed title when model generation fails (auto-prefixed SOP： on save). */
+  fallbackTitle?: string
+  /** Seed content when model generation fails. */
+  fallbackContent?: string
+}
+
+export interface AgentGenerateSopResult {
+  ok: boolean
+  title?: string
+  content?: string
+  document?: WikiDocument
+  generated?: boolean
+  error?: string
+  timedOut?: boolean
 }
 
 export interface AgentConnectionIntentInput {
@@ -283,6 +290,7 @@ export interface TerminalCommandResult {
   output: string
   error?: string
   timedOut?: boolean
+  interrupted?: boolean
   terminalExited?: boolean
   detached?: boolean
   subterminalName?: string
@@ -559,6 +567,7 @@ export interface StoredAgentLogEntry {
   kind: string
   text: string
   createdAt: string
+  runId?: string
 }
 
 export interface StoredAgentRun {

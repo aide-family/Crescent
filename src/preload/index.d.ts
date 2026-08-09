@@ -6,6 +6,8 @@ import type {
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
   AgentEvent,
+  AgentGenerateSopInput,
+  AgentGenerateSopResult,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -37,9 +39,7 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput,
-  SkillTemplate,
-  SkillTemplateSaveInput
+  WikiSaveInput
 } from '../shared/agent-types'
 import type {
   AppUpdateActionResult,
@@ -48,6 +48,9 @@ import type {
 } from '../shared/update-types'
 
 interface TerminalAgentApi {
+  app: {
+    notifyAttention: (input: { title: string; body: string }) => Promise<{ ok: boolean }>
+  }
   terminal: {
     start: (options?: {
       cols?: number
@@ -108,8 +111,6 @@ interface TerminalAgentApi {
     getConfig: () => Promise<AgentConfig>
     getModels: () => Promise<AgentModelOption[]>
     listSkills: () => Promise<AgentSkillOption[]>
-    listSkillTemplates: () => Promise<SkillTemplate[]>
-    saveSkillTemplate: (input: SkillTemplateSaveInput) => Promise<SkillTemplate>
     searchSkills: (query: string) => Promise<AgentSkillSearchResult[]>
     installSkill: (input: {
       installSource: string
@@ -166,6 +167,7 @@ interface TerminalAgentApi {
     resolveConnectionIntent: (
       input: AgentConnectionIntentInput
     ) => Promise<AgentConnectionIntentResult>
+    generateSop: (input: AgentGenerateSopInput) => Promise<AgentGenerateSopResult>
     run: (input: AgentRunInput) => Promise<{ ok: boolean; text?: string; error?: string }>
     cancel: (runId: string) => Promise<{ ok: boolean }>
     rejectApprovalsForTab: (tabId: string) => Promise<{ ok: boolean }>
@@ -190,6 +192,10 @@ interface TerminalAgentApi {
     updateAgentLog: (
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ) => Promise<{ ok: boolean }>
+    deleteAgentLogs: (input: {
+      tabId: string
+      logIds: number[]
+    }) => Promise<{ ok: boolean; removed: number }>
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
     getAgentRun: (runId: string) => Promise<StoredAgentRun | undefined>
     listAgentRuns: (input: { tabId: string; limit?: number }) => Promise<StoredAgentRun[]>

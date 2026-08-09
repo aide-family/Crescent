@@ -37,6 +37,7 @@ import {
 } from '@renderer/components/AppModals'
 import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
 import { extractResultMarkdown } from '@renderer/lib/agent-run-markdown'
+import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
 import {
@@ -94,14 +95,17 @@ import {
 import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
 import {
+  AGENT_LOG_SOFT_LIMIT,
   appendElapsedFooter,
   connectionFailureMarkers,
   formatAgentRunMarkdown,
   hydrateStoredAgentLog,
-  isConnectionFailureLog
+  isConnectionFailureLog,
+  trimAgentLogEntries
 } from '@renderer/lib/agent-log'
 import { resolveSuccessfulAgentResult } from '@renderer/lib/agent-run-finalize'
 import { closeStreamingOpenSteps } from '@renderer/lib/agent-run-document'
+import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
 import { suggestWhitelistRule } from '@renderer/lib/command-whitelist'
 import {
   buildTraceFromAgentLogEntry,
@@ -160,6 +164,7 @@ import {
   isExplicitConnectionRequest,
   isExplicitNonTerminalAgentRequest
 } from '@renderer/lib/agent-input'
+import { buildFallbackSopSeed, buildSopGenerationSummary } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
 import {
   buildConnectionCommands,
@@ -174,7 +179,19 @@ import {
   shouldDrainPostConnectionTasks
 } from '@renderer/lib/connection-automation-policy'
 import { formatConnectionTarget } from '@renderer/lib/connections'
-import { formatSuggestionsForInput, routeConnection, looksLikeRemoteOpsIntent, formatConnectionClarifyOptions, isExecutionTerminalReadyForAgent } from '@renderer/lib/connection-route'
+import { formatSuggestionsForInput, routeConnection, looksLikeRemoteOpsIntent, formatConnectionClarifyOptions } from '@renderer/lib/connection-route'
+import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
+import { buildBusySupplementArtifacts } from '@renderer/lib/busy-supplement'
+import {
+  buildTerminalNotReadyClarifyOptions,
+  CLARIFY_MANUAL_CONTINUE_ID,
+  CLARIFY_OPEN_CONNECTIONS_ID,
+  isRemoteExecutionTab,
+  isTerminalSnapshotReadyForAgent,
+  resolveTerminalReadyGateOutcome,
+  TERMINAL_READY_WAIT_MS
+} from '@renderer/lib/terminal-ready-gate'
+import { createPendingAttentionNotifier } from '@renderer/lib/pending-attention-notify'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import {
   copyFeedback,
@@ -204,8 +221,10 @@ import {
   getTerminalDisplayTitle,
   isReservedTerminalTabId,
   resolveSessionChatTabId,
+  resolveShellFooterState,
   resolveTabModelSelection,
   type AgentLogEntry,
+  type AgentLogEntryInput,
   type AgentRunViewState,
   type AgentTerminalTab,
   type AgentToolReference
@@ -335,6 +354,11 @@ function App(): React.JSX.Element {
   const activeRunCanceledRef = useRef(new Set<string>())
   const activeRunIdRef = useRef(new Map<string, string>())
   const activeRunInputRef = useRef(new Map<string, string>())
+  const pendingAttentionNotifierRef = useRef(
+    createPendingAttentionNotifier({
+      isWindowFocused: () => typeof document !== 'undefined' && document.hasFocus()
+    })
+  )
   const activeExecutionTabIdRef = useRef(new Map<string, string>())
   const [executionTerminalByChatId, setExecutionTerminalByChatId] = useState<
     Record<string, string>
@@ -709,11 +733,7 @@ function App(): React.JSX.Element {
     : modelValidationError
       ? `${t.app.aiNotReady}: ${modelValidationError}`
       : t.app.aiReady
-  const shellState: 'ready' | 'pending' | 'not-ready' = activeTab.terminalReady
-    ? 'ready'
-    : activeTab.sessionId
-      ? 'not-ready'
-      : 'pending'
+  const shellState: 'ready' | 'pending' | 'not-ready' = resolveShellFooterState(activeTab)
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const {
     displayConnections,
@@ -1233,6 +1253,11 @@ function App(): React.JSX.Element {
       setPasswordPromptValue('')
       setPasswordPromptError('')
       setPasswordPromptRequest(request)
+      pendingAttentionNotifierRef.current.notifyIfUnfocused(
+        `password:${tabId}`,
+        t.notifications.passwordTitle,
+        t.notifications.passwordBody
+      )
       return
     }
 
@@ -1459,11 +1484,17 @@ function App(): React.JSX.Element {
 
       const chatTabId = resolveSessionChatTabId(tabsRef.current, targetId ?? activeTabIdRef.current)
       attachApprovalRequest(chatTabId, request)
+      pendingAttentionNotifierRef.current.notifyIfUnfocused(
+        `approval:${request.id}`,
+        t.notifications.approvalTitle,
+        t.notifications.approvalBody
+      )
     })
-  }, [attachApprovalRequest, t.commandReview.sessionClosedRejection])
+  }, [attachApprovalRequest, t.commandReview.sessionClosedRejection, t.notifications])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
+      pendingAttentionNotifierRef.current.clear(`approval:${payload.requestId}`)
       for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {
         if (run.runId !== payload.runId) continue
         const pending = (run.steps ?? []).some(
@@ -1559,6 +1590,50 @@ function App(): React.JSX.Element {
     failedToStartShellText: t.terminal.failedToStartShell,
     postLoginTaskAbortedText: t.terminal.postLoginTaskAborted
   })
+
+  // Local tabs stay "Shell starting" if the terminal pane is hidden (xterm never mounts).
+  useEffect(() => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabId)
+    if (!tab) return
+    if (tab.connectionId || tab.sessionId || tab.terminalReady || tab.terminalStartError) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const session = await window.api.terminal.start({
+          cols: 80,
+          rows: 24,
+          tabId: tab.id
+        })
+        if (cancelled) return
+        updateTab(tab.id, (current) => ({
+          ...current,
+          sessionId: session.sessionId,
+          terminalMode: session.mode,
+          terminalCwd: session.cwd,
+          terminalReady: true,
+          terminalStartError: undefined
+        }))
+        if (tab.id === activeTabIdRef.current) {
+          terminalSessionIdRef.current = session.sessionId
+          terminalModeRef.current = session.mode
+          terminalCwdRef.current = session.cwd
+          pipePromptRef.current = formatPipePrompt(session.cwd)
+        }
+      } catch (error) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : String(error)
+        updateTab(tab.id, (current) => ({
+          ...current,
+          sessionId: undefined,
+          terminalReady: false,
+          terminalStartError: message
+        }))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTabId, updateTab])
 
   async function saveConfig(): Promise<void> {
     await saveAgentConfig({
@@ -1896,7 +1971,10 @@ function App(): React.JSX.Element {
     const connection = detail.connectionId
       ? await findConnectionById(detail.connectionId)
       : undefined
-    const restoredLogs = detail.logs.map(hydrateStoredAgentLog)
+    const restoredLogs = trimAgentLogEntries(
+      detail.logs.map(hydrateStoredAgentLog),
+      AGENT_LOG_SOFT_LIMIT
+    )
     if (detail.connectionId && !connection) {
       restoredLogs.push({
         id: Math.max(0, ...restoredLogs.map((log) => log.id)) + 1,
@@ -1941,6 +2019,55 @@ function App(): React.JSX.Element {
       if (!activeSession) {
         pendingSshRef.current.set(liveTabId, connection)
       }
+    }
+  }
+
+  async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
+    const entryIndex = log.findIndex((item) => item.id === entry.id)
+    let userText = ''
+    for (let i = entryIndex - 1; i >= 0; i--) {
+      const item = log[i]
+      if (item?.kind === 'user') {
+        userText = item.text
+        break
+      }
+    }
+    const seed = userText.trim()
+    if (!seed) return
+
+    setWikiMessage(null)
+    try {
+      const summary = buildSopGenerationSummary({
+        log,
+        entry,
+        liveRun: liveRunByLogId[entry.id],
+        t
+      })
+      const fallback = buildFallbackSopSeed(seed)
+      const generated = await window.api.agent.generateSop({
+        summary,
+        locale,
+        fallbackTitle: fallback.title,
+        fallbackContent: fallback.content
+      })
+      if (!generated.ok || !generated.document) {
+        throw new Error(generated.error || t.wiki.saveFailed)
+      }
+      const document = generated.document
+      setWikiDocuments((current) => upsertWikiSummary(current, document))
+      setSelectedWikiDocument(document)
+      setWikiEditContent(document.content)
+      setWikiEditing(true)
+      setWikiPreviewWidth(getDefaultWikiPreviewWidth())
+      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
+      setWikiOpen(true)
+    } catch (error) {
+      setWikiMessage({
+        type: 'error',
+        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
     }
   }
 
@@ -2308,7 +2435,20 @@ function App(): React.JSX.Element {
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
     if (runId) {
-      void window.api.agent.cancel(runId)
+      void settleAgentCancel(runId).finally(() => {
+        if (activeRunIdRef.current.get(chatTabId) !== runId) return
+        activeAgentRunRef.current.delete(chatTabId)
+        activeRunIdRef.current.delete(chatTabId)
+        activeRunInputRef.current.delete(chatTabId)
+        setActiveExecutionTerminal(chatTabId, null)
+        updateTab(chatTabId, (tab) => ({
+          ...tab,
+          agentBusy: false,
+          agentThinking: false,
+          thinkingMessage: undefined
+        }))
+      })
+      return
     }
     activeAgentRunRef.current.delete(chatTabId)
     activeRunIdRef.current.delete(chatTabId)
@@ -2349,12 +2489,12 @@ function App(): React.JSX.Element {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
-    if (runId) void window.api.agent.cancel(runId)
     if (runId) {
       updateAgentRun(chatTabId, (run) => ({
         ...run,
         error: t.input.agentCanceled,
-        elapsedMs: Date.now() - (run.startedAt ?? Date.now())
+        elapsedMs: Date.now() - (run.startedAt ?? Date.now()),
+        steps: settleRunningToolStepsAsInterrupted(run.steps ?? [])
       }))
       const canceledRun = activeAgentRunRef.current.get(chatTabId)
       void window.api.storage.saveAgentRun({
@@ -2378,6 +2518,19 @@ function App(): React.JSX.Element {
           error: t.input.agentCanceled
         })
       })
+      // Keep UI busy until Pi session abort settles so the next prompt cannot race
+      // into the SDK "Agent is already processing" guard on a reused session.
+      void settleAgentCancel(runId).finally(() => {
+        if (activeRunIdRef.current.get(chatTabId) !== runId) return
+        setActiveExecutionTerminal(chatTabId, null)
+        updateTab(chatTabId, (tab) => ({
+          ...tab,
+          agentBusy: false,
+          agentThinking: false,
+          thinkingMessage: undefined
+        }))
+      })
+      return
     }
     setActiveExecutionTerminal(chatTabId, null)
     updateTab(chatTabId, (tab) => ({
@@ -2404,6 +2557,7 @@ function App(): React.JSX.Element {
     passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
     passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
     passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
+    pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
     setPasswordPromptValue('')
     setPasswordPromptError('')
     showNextPasswordPrompt(passwordPromptRequest.tabId)
@@ -2414,6 +2568,7 @@ function App(): React.JSX.Element {
       passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
       passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
       passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
+      pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
     }
     setPasswordPromptValue('')
     setPasswordPromptError('')
@@ -2435,6 +2590,7 @@ function App(): React.JSX.Element {
       }
     }
     resolveApprovalStep(targetChatTabId, requestId, approved, note)
+    pendingAttentionNotifierRef.current.clear(`approval:${requestId}`)
     void window.api.agent.resolveCommandApproval({
       requestId,
       approved,
@@ -2512,7 +2668,8 @@ function App(): React.JSX.Element {
         sessionId: session.sessionId,
         terminalMode: session.mode,
         terminalCwd: session.cwd,
-        terminalReady: true
+        terminalReady: true,
+        terminalStartError: undefined
       }))
       if (tabId === activeTabIdRef.current) {
         terminalSessionIdRef.current = session.sessionId
@@ -2530,7 +2687,8 @@ function App(): React.JSX.Element {
       updateTab(tabId, (current) => ({
         ...current,
         sessionId: undefined,
-        terminalReady: false
+        terminalReady: false,
+        terminalStartError: message
       }))
       return false
     } finally {
@@ -2566,7 +2724,8 @@ function App(): React.JSX.Element {
         sessionId: session.sessionId,
         terminalMode: session.mode,
         terminalCwd: session.cwd,
-        terminalReady: true
+        terminalReady: true,
+        terminalStartError: undefined
       }))
       if (tabId === activeTabIdRef.current) {
         terminalSessionIdRef.current = session.sessionId
@@ -2591,7 +2750,8 @@ function App(): React.JSX.Element {
       updateTab(tabId, (current) => ({
         ...current,
         sessionId: undefined,
-        terminalReady: false
+        terminalReady: false,
+        terminalStartError: message
       }))
       return false
     } finally {
@@ -3202,26 +3362,20 @@ function App(): React.JSX.Element {
         wikiRefs: []
       }))
       const runId = activeRunIdRef.current.get(chatTabId)
-      if (runId) void window.api.agent.supplement({ runId, input })
-      updateAgentRun(chatTabId, (run) => ({
-        ...run,
-        steps: [
-          ...(run.steps ?? []),
-          {
-            id: `supplement-${Date.now()}`,
-            kind: 'status',
-            title: t.input.contextSupplement,
-            detail: formatVisibleInputWithReferences(
-              `${t.input.contextSupplementDetail}\n${displayInput}`,
-              skillRefs,
-              pathRefs,
-              toolRefs,
-              wikiRefs,
-              t
-            )
-          }
-        ]
-      }))
+      if (runId) {
+        const artifacts = buildBusySupplementArtifacts({
+          displayInput,
+          runId,
+          createdAt: new Date().toISOString(),
+          stepId: `supplement-${Date.now()}`
+        })
+        appendLog(artifacts.logEntry, chatTabId)
+        void window.api.agent.supplement({ runId, input })
+        updateAgentRun(chatTabId, (run) => ({
+          ...run,
+          steps: [...(run.steps ?? []), artifacts.step]
+        }))
+      }
       return
     }
 
@@ -3490,6 +3644,11 @@ function App(): React.JSX.Element {
           defaultOptionId
         }
       }))
+      pendingAttentionNotifierRef.current.notifyIfUnfocused(
+        `clarify:${chatTabId}`,
+        t.notifications.clarifyTitle,
+        t.notifications.clarifyBody
+      )
       return
     }
 
@@ -3559,6 +3718,11 @@ function App(): React.JSX.Element {
           defaultOptionId
         }
       }))
+      pendingAttentionNotifierRef.current.notifyIfUnfocused(
+        `clarify:${chatTabId}`,
+        t.notifications.clarifyTitle,
+        t.notifications.clarifyBody
+      )
       return
     }
 
@@ -3730,17 +3894,106 @@ function App(): React.JSX.Element {
     const executionTab =
       tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? terminalTab
 
-    // Gate: never dispatch agent bash before the execution PTY is ready.
-    const readyForAgent = await waitForTerminalReadyForAgent(executionTerminalId)
+    // Gate: ensure local PTY exists even when the terminal pane is hidden (xterm never mounted).
+    const ensureResult = await ensureLocalTerminalStarted({
+      tab: executionTab ?? createTerminalTab({ id: executionTerminalId, title: 'Terminal' }),
+      getContext: async () => window.api.terminal.getContext(executionTerminalId),
+      start: async () => {
+        const dimensions =
+          executionTerminalId === activeTabIdRef.current
+            ? fitAddonRef.current?.proposeDimensions()
+            : undefined
+        return window.api.terminal.start({
+          cols: dimensions?.cols ?? 80,
+          rows: dimensions?.rows ?? 24,
+          tabId: executionTerminalId
+        })
+      }
+    })
+    updateTab(executionTerminalId, () => ensureResult.tab)
+    if (executionTerminalId === activeTabIdRef.current && ensureResult.ok) {
+      terminalSessionIdRef.current = ensureResult.tab.sessionId ?? null
+      terminalModeRef.current = ensureResult.tab.terminalMode
+      terminalCwdRef.current = ensureResult.tab.terminalCwd
+      pipePromptRef.current = formatPipePrompt(ensureResult.tab.terminalCwd)
+    }
+
+    const executionTabAfterEnsure =
+      tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? ensureResult.tab
+    const isRemote = isRemoteExecutionTab(executionTabAfterEnsure)
+    // Local non-SSH: skip long SSH wait — snapshot ready check only.
+    const waitedOk = isRemote
+      ? await waitForTerminalReadyForAgent(executionTerminalId, {
+          getTab: () => tabsRef.current.find((candidate) => candidate.id === executionTerminalId)
+        })
+      : true
     const executionContext = await window.api.terminal.getContext(executionTerminalId)
-    if (
-      !readyForAgent ||
-      !isExecutionTerminalReadyForAgent({
-        tab: executionTab,
-        terminalMode: executionContext.mode
-      })
-    ) {
+    const readyTab = tabsRef.current.find((candidate) => candidate.id === executionTerminalId)
+    const gate = resolveTerminalReadyGateOutcome({
+      ensureOk: ensureResult.ok,
+      ensureError: ensureResult.error,
+      tab: readyTab,
+      terminalMode: executionContext.mode,
+      waitedOk:
+        waitedOk &&
+        isTerminalSnapshotReadyForAgent({
+          tab: readyTab,
+          terminalMode: executionContext.mode,
+          output: executionContext.output
+        }),
+      failedToStartShellNotReady: t.terminal.failedToStartShellNotReady
+    })
+    if (gate.kind !== 'ready') {
       clearThinking()
+      if (gate.kind === 'clarify') {
+        const clarifyOptions = buildTerminalNotReadyClarifyOptions({
+          connections: connections.map((c) => ({ id: c.id, label: c.name })),
+          manualContinueLabel: t.terminal.clarifyManualContinue,
+          openConnectionsLabel: t.terminal.clarifyOpenConnections
+        })
+        const question = t.terminal.connectionNotReadyClarify
+        appendLog(
+          {
+            kind: 'assistant',
+            text: formatAgentRunMarkdown(
+              {
+                logId: -1,
+                actions: [],
+                steps: [
+                  {
+                    id: 'terminal-not-ready-clarify',
+                    kind: 'status',
+                    title: t.terminal.connectionClarifyTitle,
+                    detail: question
+                  }
+                ],
+                result: question,
+                elapsedMs: Date.now() - startedAt
+              },
+              t
+            )
+          },
+          chatTabId
+        )
+        updateTab(chatTabId, (current) => ({
+          ...current,
+          pendingClarification: {
+            kind: 'connection-intent',
+            originalInput: displayInput,
+            question,
+            options: clarifyOptions,
+            defaultOptionId: CLARIFY_MANUAL_CONTINUE_ID
+          }
+        }))
+        pendingAttentionNotifierRef.current.notifyIfUnfocused(
+          `clarify:${chatTabId}`,
+          t.notifications.clarifyTitle,
+          t.notifications.clarifyBody
+        )
+        return
+      }
+
+      const reason = gate.reason
       appendLog(
         {
           kind: 'assistant',
@@ -3753,10 +4006,10 @@ function App(): React.JSX.Element {
                   id: 'terminal-not-ready',
                   kind: 'status',
                   title: t.terminal.failedToStartShell,
-                  detail: t.terminal.connectionNoActions
+                  detail: reason
                 }
               ],
-              error: t.terminal.failedToStartShell,
+              error: t.terminal.failedToStartShellReason.replace('{reason}', reason),
               elapsedMs: Date.now() - startedAt
             },
             t
@@ -3770,7 +4023,7 @@ function App(): React.JSX.Element {
     await runAgentConversation(
       runInput,
       executionTerminalId,
-      executionTab?.connectionId || terminalTab?.connectionId || undefined,
+      readyTab?.connectionId || terminalTab?.connectionId || undefined,
       displayInput,
       false,
       startedAt,
@@ -3894,7 +4147,9 @@ function App(): React.JSX.Element {
         tabId: chatTabId,
         executionTabId,
         terminalContext,
-        locale
+        locale,
+        activeWikiIds: chatTab?.activeWikiIds ?? [],
+        activeSkillPaths: (chatTab?.skillRefs ?? []).map((skill) => skill.path).filter(Boolean)
       })
 
       if (activeRunCanceledRef.current.has(chatTabId)) return
@@ -3963,10 +4218,11 @@ function App(): React.JSX.Element {
         }
       } else {
         const elapsedMs = Date.now() - startedAt
+        const humanError = localizeAgentEventMessage(result.error || t.input.failed, t)
         updateAgentRun(chatTabId, (run) => ({
           ...run,
           steps: closeStreamingOpenSteps(run.steps ?? []),
-          error: result.error || t.input.failed,
+          error: humanError,
           elapsedMs
         }))
         void window.api.storage.saveAgentRun({
@@ -3975,7 +4231,7 @@ function App(): React.JSX.Element {
           input: displayInput,
           status: 'error',
           connectionId,
-          error: result.error || t.input.failed,
+          error: humanError,
           startedAt: new Date(startedAt).toISOString(),
           elapsedMs,
           trace: buildTraceFromAgentRunView({
@@ -3986,14 +4242,15 @@ function App(): React.JSX.Element {
             connectionId,
             run: activeAgentRunRef.current.get(chatTabId),
             startedAt,
-            error: result.error || t.input.failed
+            error: humanError
           })
         })
       }
     } catch (error) {
       if (activeRunCanceledRef.current.has(chatTabId)) return
 
-      const message = error instanceof Error ? error.message : String(error)
+      const rawMessage = error instanceof Error ? error.message : String(error)
+      const message = localizeAgentEventMessage(rawMessage, t)
       const elapsedMs = Date.now() - startedAt
       updateAgentRun(chatTabId, (run) => ({
         ...run,
@@ -4022,17 +4279,20 @@ function App(): React.JSX.Element {
         })
       })
     } finally {
-      activeAgentRunRef.current.delete(chatTabId)
-      activeRunCanceledRef.current.delete(chatTabId)
-      activeRunIdRef.current.delete(chatTabId)
-      activeRunInputRef.current.delete(chatTabId)
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        agentInput: '',
-        agentBusy: false,
-        agentThinking: false,
-        thinkingMessage: undefined
-      }))
+      // Only tear down if this run is still the active one (stop→resubmit race).
+      if (activeRunIdRef.current.get(chatTabId) === runId) {
+        activeAgentRunRef.current.delete(chatTabId)
+        activeRunCanceledRef.current.delete(chatTabId)
+        activeRunIdRef.current.delete(chatTabId)
+        activeRunInputRef.current.delete(chatTabId)
+        updateTab(chatTabId, (current) => ({
+          ...current,
+          agentInput: '',
+          agentBusy: false,
+          agentThinking: false,
+          thinkingMessage: undefined
+        }))
+      }
     }
   }
 
@@ -4137,11 +4397,21 @@ function App(): React.JSX.Element {
     }
 
     if (command.wikiRef) {
-      updateTab(sessionChatTab.id, (tab) => ({
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
-        wikiRefs: addUniqueWikiRef(tab.wikiRefs, command.wikiRef as AgentWikiReference)
-      }))
+      const wikiRef = command.wikiRef as AgentWikiReference
+      updateTab(sessionChatTab.id, (tab) => {
+        const ids = tab.activeWikiIds ?? []
+        return {
+          ...tab,
+          agentInput: replaceSlashCommandInput(tab.agentInput, ''),
+          activeWikiIds: ids.includes(wikiRef.id) ? ids : [...ids, wikiRef.id],
+          wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+            id: wikiRef.id,
+            title: wikiRef.title,
+            path: wikiRef.path,
+            content: ''
+          })
+        }
+      })
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       return
@@ -4205,24 +4475,26 @@ function App(): React.JSX.Element {
   function removeWikiRef(wikiId: string): void {
     updateTab(sessionChatTab.id, (tab) => ({
       ...tab,
-      wikiRefs: tab.wikiRefs.filter((wiki) => wiki.id !== wikiId)
+      wikiRefs: tab.wikiRefs.filter((wiki) => wiki.id !== wikiId),
+      activeWikiIds: (tab.activeWikiIds ?? []).filter((id) => id !== wikiId)
     }))
   }
 
   async function addWikiReference(document: WikiDocumentSummary): Promise<void> {
-    const detail = await window.api.agent.getWikiDocument(document.id)
-    if (!detail) return
-
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      agentInput: replaceSlashCommandInput(tab.agentInput, ''),
-      wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
-        id: detail.id,
-        title: detail.title,
-        path: detail.path,
-        content: detail.content
-      })
-    }))
+    updateTab(sessionChatTab.id, (tab) => {
+      const ids = tab.activeWikiIds ?? []
+      return {
+        ...tab,
+        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
+        activeWikiIds: ids.includes(document.id) ? ids : [...ids, document.id],
+        wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+          id: document.id,
+          title: document.title,
+          path: document.path,
+          content: ''
+        })
+      }
+    })
   }
 
   async function pickPathReference(kind: AgentPathReference['kind']): Promise<void> {
@@ -5676,6 +5948,9 @@ function App(): React.JSX.Element {
             onOpenModelSettings={() => {
               setSheetOpen(true)
             }}
+            onSaveAsSop={(entry) => {
+              void saveAgentTurnAsWikiSop(entry)
+            }}
             onInjectSuggestions={(texts) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
               const block = formatSuggestionsForInput(texts)
@@ -5697,8 +5972,37 @@ function App(): React.JSX.Element {
             }}
             onClarifyConfirm={(label) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+              const clarification = tabsRef.current.find((tab) => tab.id === chatTabId)
+                ?.pendingClarification
               const trimmed = label.trim()
               if (!trimmed) return
+              pendingAttentionNotifierRef.current.clear(`clarify:${chatTabId}`)
+
+              const matched = clarification?.options?.find((option) => option.label === trimmed)
+              if (matched?.id === CLARIFY_OPEN_CONNECTIONS_ID) {
+                updateTab(chatTabId, (current) => ({
+                  ...current,
+                  pendingClarification: undefined
+                }))
+                showConnectionList()
+                return
+              }
+              if (matched?.id === CLARIFY_MANUAL_CONTINUE_ID) {
+                const originalInput = clarification?.originalInput?.trim() || trimmed
+                const executionTabId =
+                  activeExecutionTabIdRef.current.get(chatTabId) ?? activeTabIdRef.current
+                updateTab(executionTabId, (current) => ({
+                  ...current,
+                  terminalReady: true
+                }))
+                updateTab(chatTabId, (current) => ({
+                  ...current,
+                  pendingClarification: undefined
+                }))
+                void submitAgentMessage(originalInput)
+                return
+              }
+
               updateTab(chatTabId, (current) => ({
                 ...current,
                 agentInput: current.agentInput.trim()
@@ -5716,6 +6020,7 @@ function App(): React.JSX.Element {
             }}
             onClarifyDismiss={() => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+              pendingAttentionNotifierRef.current.clear(`clarify:${chatTabId}`)
               updateTab(chatTabId, (current) => ({
                 ...current,
                 pendingClarification: undefined
@@ -5848,7 +6153,15 @@ function App(): React.JSX.Element {
         }}
         onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
       />
-      <AppFooter shellState={shellState} activeTab={activeTab} agentMode={config.agentMode} t={t} />
+      <AppFooter
+        shellState={shellState}
+        activeTab={activeTab}
+        agentMode={config.agentMode}
+        t={t}
+        onRetryShell={() => {
+          void restoreLocalTerminal(activeTabIdRef.current)
+        }}
+      />
     </main>
   )
 }
@@ -5924,7 +6237,7 @@ function defaultPastedFileName(mimeType: string): string {
 async function runConnectionCommandSequence(
   commands: string[],
   tabId: string,
-  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
+  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
   t: Dictionary,
   logTabId = tabId
 ): Promise<boolean> {
@@ -5969,7 +6282,7 @@ async function runConnectionCommandSequence(
 async function runConnectionLoginActionSequence(
   loginActions: string[],
   tabId: string,
-  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => void,
+  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
   t: Dictionary,
   logTabId = tabId
 ): Promise<boolean> {
@@ -6044,18 +6357,43 @@ function waitForTerminalIdle(
   })
 }
 
-async function waitForTerminalReadyForAgent(tabId: string): Promise<boolean> {
-  const deadline = Date.now() + 15_000
+async function waitForTerminalReadyForAgent(
+  tabId: string,
+  options?: {
+    getTab?: () =>
+      | Pick<import('@renderer/lib/terminal-tabs').AgentTerminalTab, 'terminalReady' | 'connectionId' | 'isSsh'>
+      | undefined
+    timeoutMs?: number
+  }
+): Promise<boolean> {
+  const deadline = Date.now() + (options?.timeoutMs ?? TERMINAL_READY_WAIT_MS)
 
   while (Date.now() < deadline) {
     const context = await window.api.terminal.getContext(tabId)
     const output = context.output.slice(-8000)
-    if (!hasInteractivePrompt(output)) return true
+    const tab = options?.getTab?.()
+    if (
+      isTerminalSnapshotReadyForAgent({
+        tab,
+        terminalMode: context.mode,
+        output
+      })
+    ) {
+      return true
+    }
 
     await sleep(500)
   }
 
   return false
+}
+
+async function settleAgentCancel(runId: string): Promise<void> {
+  try {
+    await window.api.agent.cancel(runId)
+  } catch {
+    // Ignore cancel transport errors; UI still clears after settle.
+  }
 }
 
 function sleep(ms: number): Promise<void> {

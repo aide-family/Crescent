@@ -17,8 +17,10 @@ import {
   formatAgentRunDocument,
   syncActionsFromStructuredRun
 } from '@renderer/lib/agent-run-document'
+import { AGENT_LOG_SOFT_LIMIT, collectTrimmedAgentLogIds, trimAgentLogEntries } from '@renderer/lib/agent-log'
 import type {
   AgentLogEntry,
+  AgentLogEntryInput,
   AgentRunStep,
   AgentRunViewState,
   AgentTerminalTab
@@ -50,7 +52,7 @@ export function useAgentRuns({
   updateTab,
   t
 }: UseAgentRunsInput): {
-  appendLog: (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId?: string) => number
+  appendLog: (entry: AgentLogEntryInput, tabId?: string) => number
   updateLogEntryText: (tabId: string, logId: number, text: string) => void
   updateAgentRun: (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState) => void
   appendAgentEvent: (event: AgentEvent, tabId?: string) => void
@@ -69,21 +71,32 @@ export function useAgentRuns({
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const appendLog = useCallback(
-    (entry: Omit<AgentLogEntry, 'id' | 'createdAt'>, tabId = activeTabIdRef.current): number => {
+    (entry: AgentLogEntryInput, tabId = activeTabIdRef.current): number => {
       const id = nextLogIdRef.current
       const createdAt = new Date().toISOString()
       nextLogIdRef.current += 1
-      updateTab(tabId, (tab) => ({
-        ...tab,
-        agentLog: [...tab.agentLog, { id, ...entry, createdAt }].slice(-120)
-      }))
+      let droppedIds: number[] = []
+      const nextEntry = { ...entry, id, createdAt } as AgentLogEntry
+      updateTab(tabId, (tab) => {
+        const next = [...tab.agentLog, nextEntry]
+        const trimmed = trimAgentLogEntries(next, AGENT_LOG_SOFT_LIMIT)
+        droppedIds = collectTrimmedAgentLogIds(next, trimmed)
+        return {
+          ...tab,
+          agentLog: trimmed
+        }
+      })
       void window.api.storage.saveAgentLog({
         tabId,
         logId: id,
-        kind: entry.kind,
-        text: entry.text,
-        createdAt
+        kind: nextEntry.kind,
+        text: nextEntry.text,
+        createdAt,
+        runId: nextEntry.kind === 'user-supplement' ? nextEntry.runId : undefined
       })
+      if (droppedIds.length > 0) {
+        void window.api.storage.deleteAgentLogs({ tabId, logIds: droppedIds })
+      }
       return id
     },
     [activeTabIdRef, nextLogIdRef, updateTab]
@@ -239,7 +252,9 @@ export function useAgentRuns({
 
   const appendAgentEvent = useCallback(
     (event: AgentEvent, tabId = activeTabIdRef.current): void => {
-      if (activeRunCanceledRef.current.has(tabId)) return
+      // After Stop, drop streaming noise — but still accept finish/settle events so
+      // interrupted tool cards can update if main emits after the cancel flag.
+      if (activeRunCanceledRef.current.has(tabId) && !isPostCancelSettlingEvent(event)) return
 
       if (event.type === 'token') {
         updateAgentRun(
@@ -534,6 +549,8 @@ export function useAgentRuns({
                 phase: 'finished',
                 resultText: observation || undefined,
                 isError: event.result ? !event.result.ok : false,
+                interrupted: Boolean(event.result?.interrupted),
+                timedOut: Boolean(event.result?.timedOut),
                 command: existing.command || event.command,
                 argsText: undefined
               }
@@ -550,6 +567,9 @@ export function useAgentRuns({
               name: 'bash',
               resultText: existing.resultText || observation || undefined,
               isError: event.result ? !event.result.ok : Boolean(existing.isError),
+              interrupted:
+                Boolean(event.result?.interrupted) || Boolean(existing.interrupted),
+              timedOut: Boolean(event.result?.timedOut) || Boolean(existing.timedOut),
               command: existing.command || event.command,
               argsText: undefined
             }
@@ -563,7 +583,9 @@ export function useAgentRuns({
             phase: 'finished',
             command: event.command,
             resultText: observation || undefined,
-            isError: event.result ? !event.result.ok : false
+            isError: event.result ? !event.result.ok : false,
+            interrupted: Boolean(event.result?.interrupted),
+            timedOut: Boolean(event.result?.timedOut)
           })
           return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })
@@ -704,6 +726,8 @@ function coalesceAdjacentPtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
         toolCallId: prev.toolCallId || step.toolCallId,
         resultText: prev.resultText || step.resultText,
         isError: Boolean(prev.isError) || Boolean(step.isError),
+        interrupted: Boolean(prev.interrupted) || Boolean(step.interrupted),
+        timedOut: Boolean(prev.timedOut) || Boolean(step.timedOut),
         argsText: undefined
       }
       continue
@@ -739,4 +763,11 @@ function extractCommandFromArgsText(argsText: string): string | undefined {
     // not JSON
   }
   return undefined
+}
+
+/** Finish events that may settle tool cards after the user hits Stop. */
+function isPostCancelSettlingEvent(event: AgentEvent): boolean {
+  if (event.type === 'command' && event.phase === 'finished') return true
+  if (event.type === 'tool' && event.phase === 'finished') return true
+  return false
 }
