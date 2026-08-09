@@ -38,6 +38,7 @@ import {
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { rejectPendingApprovalsForTab, resolveCommandApprovalDecision } from './command-approval'
+import { resolveAgentSubterminalReady } from './pi-open-subterminal'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   getWikiDocument,
@@ -349,6 +350,13 @@ export function registerAgentIpc(): void {
   ipcMain.handle('agent:resolve-command-approval', (_, decision: CommandApprovalDecision) => {
     return resolveCommandApprovalDecision(decision)
   })
+
+  ipcMain.handle(
+    'agent:ack-subterminal-opened',
+    (_, payload: { tabId?: string; ok?: boolean; error?: string }) => {
+      return resolveAgentSubterminalReady(payload)
+    }
+  )
 
   ipcMain.handle('agent:generate-command', async () => {
     return {

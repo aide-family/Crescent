@@ -75,6 +75,7 @@ Edit this file to encode team or personal agent conventions.
 - Keep command allow/deny and approval rules in Settings; do not bypass them here.
 - Prefer read-only discovery before write/update/delete operations.
 - When writing local files or Wiki docs, use clear paths and confirm destinations when unsure.
+- For local /etc/hosts or client-machine edits while on a remote pane, call open_subterminal(mode=local) first, then bash.
 
 Edit this file to record preferred tools and constraints.
 `

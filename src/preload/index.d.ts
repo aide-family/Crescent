@@ -174,11 +174,26 @@ interface TerminalAgentApi {
     rejectApprovalsForTab: (tabId: string) => Promise<{ ok: boolean }>
     supplement: (input: { runId: string; input: string }) => Promise<{ ok: boolean }>
     resolveCommandApproval: (input: CommandApprovalDecision) => Promise<{ ok: boolean }>
+    ackSubterminalOpened: (payload: {
+      tabId: string
+      ok: boolean
+      error?: string
+    }) => Promise<{ ok: boolean }>
     onEvent: (callback: (event: AgentEvent) => void) => () => void
     onCommandApprovalRequest: (callback: (request: CommandApprovalRequest) => void) => () => void
     onCommandApprovalDismiss: (callback: (payload: CommandApprovalDismiss) => void) => () => void
     onCommandApprovalPurpose: (
       callback: (payload: CommandApprovalPurposeUpdate) => void
+    ) => () => void
+    onSubterminalOpened: (
+      callback: (payload: {
+        parentTabId: string
+        tabId: string
+        name: string
+        mode: 'local' | 'ssh'
+        connectionId?: string
+        chatTabId?: string
+      }) => void
     ) => () => void
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
   }

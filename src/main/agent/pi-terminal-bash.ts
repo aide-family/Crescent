@@ -65,6 +65,21 @@ export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecCo
   execContextBySessionKey.set(sessionKey, context)
 }
 
+export function getPtyBashExecContext(sessionKey: string): PtyBashExecContext | undefined {
+  return execContextBySessionKey.get(sessionKey)
+}
+
+export function updatePtyBashExecutionTabId(sessionKey: string, executionTabId: string): boolean {
+  const existing = execContextBySessionKey.get(sessionKey)
+  if (!existing) return false
+  const nextId = executionTabId.trim()
+  if (!nextId) return false
+  existing.executionTabId = nextId
+  existing.subterminalName = undefined
+  execContextBySessionKey.set(sessionKey, existing)
+  return true
+}
+
 export function clearPtyBashExecContext(sessionKey: string): void {
   const existing = execContextBySessionKey.get(sessionKey)
   if (existing?.runId) clearFailedCommandFingerprints(existing.runId)

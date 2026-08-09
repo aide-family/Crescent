@@ -4,12 +4,14 @@
 
 ### Features
 
+- Agent tool `open_subterminal` (local / SSH) docks a subterminal and routes subsequent bash there so client-machine hosts edits and new SSH targets can execute instead of analysis-only loops; include it in Pi `tools` allowlist (not only `customTools`) so the model can call it.
 - Fast “Save as SOP” path: `agent:generate-sop` drafts via AgentBrain (no tools, 30s) and **main** saves with `saveWikiDocument` to `~/.crescent/wiki`; falls back to seed text on failure.
 - Slash wiki refs activate `activeWikiIds` SOP injection without embedding full markdown in user input; Composer wiki multi-select removed.
 - Slash skill refs inline SKILL.md (≤2000 chars each) into the run prompt as “引用 Skill 内容”.
 
 ### Improvements
 
+- System prompt「本机与子终端硬规范」: local `/etc/hosts` / client-machine work must `open_subterminal(mode=local)` first; unreachable hosts prefer SSH subterminals; no analysis-only substitute.
 - Busy-path steer wraps supplements as explicit「上下文注入」context (not a new task); system prompt「叙述纪律」forbids mid-run tables/summaries and requires one final report covering all follow-ups.
 - Dev macOS notifications use Crescent’s left-slot logo via postinstall/`predev` `electron.icns` patch plus Info.plist identity (`com.crescent.app`) so Notification Center does not keep the cached Electron atom; Notification `icon` is omitted on darwin (no right inset), kept on Win/Linux.
 - HIGH approval cards asynchronously show a one-line human “purpose” (loading → fill; omit on timeout/failure).

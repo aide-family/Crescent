@@ -269,6 +269,11 @@ const api = {
       ipcRenderer.invoke('agent:supplement', input),
     resolveCommandApproval: (input: CommandApprovalDecision): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:resolve-command-approval', input),
+    ackSubterminalOpened: (payload: {
+      tabId: string
+      ok: boolean
+      error?: string
+    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:ack-subterminal-opened', payload),
     onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentEvent): void => callback(event)
 
@@ -303,6 +308,31 @@ const api = {
 
       ipcRenderer.on('agent:command-approval-purpose', listener)
       return () => ipcRenderer.removeListener('agent:command-approval-purpose', listener)
+    },
+    onSubterminalOpened: (
+      callback: (payload: {
+        parentTabId: string
+        tabId: string
+        name: string
+        mode: 'local' | 'ssh'
+        connectionId?: string
+        chatTabId?: string
+      }) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        payload: {
+          parentTabId: string
+          tabId: string
+          name: string
+          mode: 'local' | 'ssh'
+          connectionId?: string
+          chatTabId?: string
+        }
+      ): void => callback(payload)
+
+      ipcRenderer.on('agent:subterminal-opened', listener)
+      return () => ipcRenderer.removeListener('agent:subterminal-opened', listener)
     },
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentSkillInstallEvent): void =>

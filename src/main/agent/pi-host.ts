@@ -20,6 +20,10 @@ import {
   settlePtyInterruptsBeforeSessionAbort,
   setPtyBashExecContext
 } from './pi-terminal-bash'
+import {
+  createOpenSubterminalToolDefinition,
+  OPEN_SUBTERMINAL_DISCIPLINE
+} from './pi-open-subterminal'
 import { rejectPendingApprovalsForRun } from './command-approval'
 import {
   buildQuotaResetHint,
@@ -34,6 +38,8 @@ import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-
 type AgentSession = Awaited<ReturnType<PiCodingAgentModule['createAgentSession']>>['session']
 
 const DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write'] as const
+/** Pi `tools` is an allowlist — custom tools must be listed here to be model-callable. */
+const ACTIVE_TOOLS = [...DEFAULT_TOOLS, 'open_subterminal'] as const
 
 interface HostedSession {
   sessionKey: string
@@ -43,7 +49,7 @@ interface HostedSession {
   unsubscribe?: () => void
 }
 
-const TOOL_PROFILE = 'pty-bash-v1'
+const TOOL_PROFILE = 'pty-bash-open-subterminal-v2'
 
 interface ActiveRun {
   runId: string
@@ -462,12 +468,16 @@ async function ensureHostedSession(
         '# 连接与登录纪律',
         '- 目标终端/SSH/集群连接由系统路由层处理；你不要向用户询问或列举登录方式',
         '  （例如 Crescent 终端 / kubectl 直连 / SSH）。',
-        '- 目标环境未就绪时等待工具结果，不要改口问用户怎么连；直接执行任务。'
+        '- 目标环境未就绪时等待工具结果，不要改口问用户怎么连；直接执行任务。',
+        '',
+        OPEN_SUBTERMINAL_DISCIPLINE
       ]
         .filter(Boolean)
         .join('\n')
   })
   await resourceLoader.reload()
+
+  const openSubterminalTool = createOpenSubterminalToolDefinition(pi, sessionKey)
 
   const { session } = await pi.createAgentSession({
     cwd,
@@ -476,8 +486,8 @@ async function ensureHostedSession(
     thinkingLevel: resolveThinkingLevelForModel(model ?? undefined),
     modelRuntime,
     resourceLoader,
-    tools: [...DEFAULT_TOOLS],
-    customTools: [ptyBashTool as never],
+    tools: [...ACTIVE_TOOLS],
+    customTools: [ptyBashTool as never, openSubterminalTool as never],
     sessionManager: pi.SessionManager.inMemory(cwd),
     settingsManager
   })

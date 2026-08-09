@@ -43,7 +43,8 @@ export function registerConnectionIpc(): void {
   })
 }
 
-async function listConnections(options?: {
+/** Exported for agent tools (connectionId picker). */
+export async function listConnections(options?: {
   forceRefreshSecrets?: boolean
 }): Promise<ConnectionConfig[]> {
   const sshConfigConnections = loadSshConfigConnections()
