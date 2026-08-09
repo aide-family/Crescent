@@ -386,6 +386,13 @@ export interface CommandApprovalDismiss {
   runId: string
 }
 
+/** Async HIGH-approval purpose line (null = omit silently). */
+export interface CommandApprovalPurposeUpdate {
+  requestId: string
+  runId: string
+  purpose: string | null
+}
+
 export interface AgentValidationResult {
   ok: boolean
   modelOk?: boolean

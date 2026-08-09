@@ -19,6 +19,7 @@ import type {
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalDismiss,
+  CommandApprovalPurposeUpdate,
   CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
@@ -176,6 +177,9 @@ interface TerminalAgentApi {
     onEvent: (callback: (event: AgentEvent) => void) => () => void
     onCommandApprovalRequest: (callback: (request: CommandApprovalRequest) => void) => () => void
     onCommandApprovalDismiss: (callback: (payload: CommandApprovalDismiss) => void) => () => void
+    onCommandApprovalPurpose: (
+      callback: (payload: CommandApprovalPurposeUpdate) => void
+    ) => () => void
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
   }
   connections: {

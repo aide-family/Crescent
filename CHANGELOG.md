@@ -10,6 +10,11 @@
 
 ### Improvements
 
+- Busy-path steer wraps supplements as explicit「上下文注入」context (not a new task); system prompt「叙述纪律」forbids mid-run tables/summaries and requires one final report covering all follow-ups.
+- Dev macOS notifications use Crescent’s left-slot logo via postinstall/`predev` `electron.icns` patch plus Info.plist identity (`com.crescent.app`) so Notification Center does not keep the cached Electron atom; Notification `icon` is omitted on darwin (no right inset), kept on Win/Linux.
+- HIGH approval cards asynchronously show a one-line human “purpose” (loading → fill; omit on timeout/failure).
+- OS attention notifications use the Crescent app icon; macOS Dock icon is set in dev only (`!isPackaged`).
+- Unfocused windows get a one-shot run-complete / run-failed OS notification (mutually exclusive with pending approval notifies for that run).
 - Prefer conversation turns when trimming agent logs; keep the latest user message across memory and SQLite history prune.
 - Stop awaits Pi session abort/idle before clearing busy; prompt waits ≤3s for idle to avoid “already processing” races.
 - OS attention notifications for pending approval / password / connection clarify when the window is unfocused (deduped by pending id).

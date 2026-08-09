@@ -20,6 +20,7 @@ import type {
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalDismiss,
+  CommandApprovalPurposeUpdate,
   CommandApprovalRequest,
   ConnectionConfig,
   ConnectionInput,
@@ -291,6 +292,17 @@ const api = {
 
       ipcRenderer.on('agent:command-approval-dismiss', listener)
       return () => ipcRenderer.removeListener('agent:command-approval-dismiss', listener)
+    },
+    onCommandApprovalPurpose: (
+      callback: (payload: CommandApprovalPurposeUpdate) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        payload: CommandApprovalPurposeUpdate
+      ): void => callback(payload)
+
+      ipcRenderer.on('agent:command-approval-purpose', listener)
+      return () => ipcRenderer.removeListener('agent:command-approval-purpose', listener)
     },
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentSkillInstallEvent): void =>

@@ -21,6 +21,8 @@ Crescent releases are tag-driven product releases, not ad-hoc CI artifacts.
    npm run build
    ```
 
+   Dev notification branding (macOS): `postinstall` / `predev` run `scripts/patch-electron-dock-icon.cjs`, which (1) copies `build/icon.icns` over Electron’s `electron.icns`, and (2) rewrites `Electron.app` Info.plist `CFBundleName` / `CFBundleDisplayName` to `Crescent` and `CFBundleIdentifier` to `com.crescent.app` so Notification Center stops serving the cached Electron atom for `com.github.Electron`. Packaged apps are unaffected. After patching, fully quit the app once; if the left-slot icon is still stale, run `killall NotificationCenter` (or reboot) once.
+
 3. Confirm `.github/release-template.md` has any release-specific notes updated.
 4. Confirm `electron-builder.yml` targets match the platforms being announced.
 5. Create and push a version tag:

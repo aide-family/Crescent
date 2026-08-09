@@ -152,7 +152,7 @@ app.whenReady().then(async () => {
   ])
 
   app.setName('Crescent')
-  if (process.platform === 'darwin') app.dock?.setIcon(icon)
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(icon)
   app.on('child-process-gone', (_event, details) => {
     if (details.type === 'GPU') {
       console.warn('GPU process gone', details)
@@ -178,7 +178,9 @@ app.whenReady().then(async () => {
       const body = payload?.body?.trim() || ''
       if (!Notification.isSupported()) return { ok: false }
 
-      const notification = new Notification({ title, body })
+      const notification = new Notification(
+        process.platform === 'darwin' ? { title, body } : { title, body, icon }
+      )
       notification.on('click', () => {
         const target =
           BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null

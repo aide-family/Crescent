@@ -894,7 +894,25 @@ function ApprovalStepCard({
         {isTimeoutPending ? (
           <p className="text-foreground/90">{t.commandReview.timeoutManualConfirm}</p>
         ) : isHighPending || (risk === 'high' && !pending) ? (
-          <p className="text-foreground/90">{highlightRiskVerb(humanSummary, riskVerb)}</p>
+          <>
+            {step.purposePhase === 'loading' ? (
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground/80">
+                  {t.commandReview.purposeLabel}:{' '}
+                </span>
+                {t.commandReview.purposeGenerating}
+              </p>
+            ) : null}
+            {step.purposePhase === 'ready' && step.purpose?.trim() ? (
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground/80">
+                  {t.commandReview.purposeLabel}:{' '}
+                </span>
+                {step.purpose.trim()}
+              </p>
+            ) : null}
+            <p className="text-foreground/90">{highlightRiskVerb(humanSummary, riskVerb)}</p>
+          </>
         ) : (
           <>
             {step.auditSummary ? <p className="text-foreground/90">{step.auditSummary}</p> : null}

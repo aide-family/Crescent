@@ -286,7 +286,9 @@ async function executeReviewedPtyCommand(input: {
     command: executableCommand,
     timeoutMs,
     audit: classified.audit,
-    signal: input.signal
+    signal: input.signal,
+    locale: context.locale,
+    config: context.config
   })
 
   if (!approval.approved) {

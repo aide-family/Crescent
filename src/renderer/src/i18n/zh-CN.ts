@@ -134,6 +134,8 @@ const zhCN = {
     lowRisk: '低风险',
     mediumRisk: '中风险',
     operationReason: '操作原因',
+    purposeLabel: '用途',
+    purposeGenerating: '生成中…',
     recommendation: '审核建议',
     reject: '拒绝',
     rejectionReason: '拒绝原因',
@@ -762,7 +764,9 @@ const zhCN = {
     passwordTitle: '终端需要密钥输入',
     passwordBody: '终端正在等待密码或验证码。',
     clarifyTitle: '需要确认连接目标',
-    clarifyBody: 'Crescent 需要你确认连接目标。'
+    clarifyBody: 'Crescent 需要你确认连接目标。',
+    runCompleteTitle: '任务完成',
+    runFailedTitle: '任务结束（出错）'
   }
 } as const
 

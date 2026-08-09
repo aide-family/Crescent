@@ -182,6 +182,7 @@ import { formatConnectionTarget } from '@renderer/lib/connections'
 import { formatSuggestionsForInput, routeConnection, looksLikeRemoteOpsIntent, formatConnectionClarifyOptions } from '@renderer/lib/connection-route'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
 import { buildBusySupplementArtifacts } from '@renderer/lib/busy-supplement'
+import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
 import {
   buildTerminalNotReadyClarifyOptions,
   CLARIFY_MANUAL_CONTINUE_ID,
@@ -191,7 +192,7 @@ import {
   resolveTerminalReadyGateOutcome,
   TERMINAL_READY_WAIT_MS
 } from '@renderer/lib/terminal-ready-gate'
-import { createPendingAttentionNotifier } from '@renderer/lib/pending-attention-notify'
+import { createPendingAttentionNotifier, summarizeNotificationBody } from '@renderer/lib/pending-attention-notify'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import {
   copyFeedback,
@@ -654,6 +655,7 @@ function App(): React.JSX.Element {
     appendAgentEvent,
     liveRunByLogId,
     attachApprovalRequest,
+    applyApprovalPurpose,
     resolveApprovalStep
   } = useAgentRuns({
     activeTabIdRef,
@@ -1487,10 +1489,20 @@ function App(): React.JSX.Element {
       pendingAttentionNotifierRef.current.notifyIfUnfocused(
         `approval:${request.id}`,
         t.notifications.approvalTitle,
-        t.notifications.approvalBody
+        t.notifications.approvalBody,
+        { runId: request.runId }
       )
     })
   }, [attachApprovalRequest, t.commandReview.sessionClosedRejection, t.notifications])
+
+  useEffect(() => {
+    return window.api.agent.onCommandApprovalPurpose((payload) => {
+      for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {
+        if (run.runId !== payload.runId) continue
+        applyApprovalPurpose(chatTabId, payload.requestId, payload.purpose)
+      }
+    })
+  }, [applyApprovalPurpose])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
@@ -3370,7 +3382,7 @@ function App(): React.JSX.Element {
           stepId: `supplement-${Date.now()}`
         })
         appendLog(artifacts.logEntry, chatTabId)
-        void window.api.agent.supplement({ runId, input })
+        void window.api.agent.supplement({ runId, input: wrapSteerSupplementPayload(input) })
         updateAgentRun(chatTabId, (run) => ({
           ...run,
           steps: [...(run.steps ?? []), artifacts.step]
@@ -4154,6 +4166,18 @@ function App(): React.JSX.Element {
 
       if (activeRunCanceledRef.current.has(chatTabId)) return
 
+      const notifyRunOutcome = (outcome: 'success' | 'error', summaryText: string): void => {
+        if (activeRunCanceledRef.current.has(chatTabId)) return
+        const title =
+          outcome === 'success'
+            ? t.notifications.runCompleteTitle
+            : t.notifications.runFailedTitle
+        const body =
+          summarizeNotificationBody(summaryText) ||
+          (outcome === 'success' ? t.input.done : t.input.failed)
+        pendingAttentionNotifierRef.current.notifyRunComplete(runId, title, body)
+      }
+
       if (result.ok) {
         const resolved = resolveSuccessfulAgentResult({
           text: result.text,
@@ -4188,6 +4212,7 @@ function App(): React.JSX.Element {
               error: resolved.error
             })
           })
+          notifyRunOutcome('error', resolved.error)
         } else {
           updateAgentRun(chatTabId, (run) => ({
             ...run,
@@ -4215,6 +4240,7 @@ function App(): React.JSX.Element {
               output: resolved.text
             })
           })
+          notifyRunOutcome('success', resolved.text)
         }
       } else {
         const elapsedMs = Date.now() - startedAt
@@ -4245,6 +4271,7 @@ function App(): React.JSX.Element {
             error: humanError
           })
         })
+        notifyRunOutcome('error', humanError)
       }
     } catch (error) {
       if (activeRunCanceledRef.current.has(chatTabId)) return
@@ -4278,6 +4305,11 @@ function App(): React.JSX.Element {
           error: message
         })
       })
+      pendingAttentionNotifierRef.current.notifyRunComplete(
+        runId,
+        t.notifications.runFailedTitle,
+        summarizeNotificationBody(message) || t.input.failed
+      )
     } finally {
       // Only tear down if this run is still the active one (stop→resubmit race).
       if (activeRunIdRef.current.get(chatTabId) === runId) {

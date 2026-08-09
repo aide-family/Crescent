@@ -27,6 +27,7 @@ import {
   isQuotaExhaustedError
 } from '../../shared/provider-error'
 import { buildPromptText } from '../../shared/agent-run-prompt'
+import { RUNTIME_SUPPLEMENT_DISCIPLINE } from '../../shared/runtime-supplement'
 import type { AgentConfig, AgentEvent } from './types'
 import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-prompt'
 
@@ -427,6 +428,7 @@ async function ensureHostedSession(
         '- 用户可见的阶段间文字 ≤1 句（当前判断 + 下一步）；思考每轮 ≤3 句，禁止引用命令输出原文。',
         '- 禁止在中间消息用大段 bullet/标题预演或复述最终报告',
         '  （异常服务表、修复建议、架构章节、健康摘要等）；详细内容只在最终报告出现一次。',
+        `- ${RUNTIME_SUPPLEMENT_DISCIPLINE}`,
         '',
         '# 全量报告模板（问题前置，仅输出一次）',
         '## 📊 集群健康报告',
