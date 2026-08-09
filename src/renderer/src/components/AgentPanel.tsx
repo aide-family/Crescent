@@ -1,4 +1,4 @@
-import type { FormEvent, KeyboardEvent, RefObject } from 'react'
+import { type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import {
   ArrowUpIcon,
   FileIcon,
@@ -48,7 +48,10 @@ import {
   type AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import { buildModelSelectionValue } from '@renderer/lib/app-runtime'
-import type { AgentModelOption, AgentPinnedWorkflow } from '../../../shared/agent-types'
+import type {
+  AgentModelOption,
+  AgentPinnedWorkflow
+} from '../../../shared/agent-types'
 
 export function AgentPanel({
   sessionChatTab,
@@ -121,7 +124,8 @@ export function AgentPanel({
   passwordPromptInputRef,
   onPasswordPromptChange,
   onPasswordPromptCancel,
-  onPasswordPromptSubmit
+  onPasswordPromptSubmit,
+  onSaveAsSop
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -197,7 +201,25 @@ export function AgentPanel({
   onPasswordPromptChange?: (value: string) => void
   onPasswordPromptCancel?: () => void
   onPasswordPromptSubmit?: (event: FormEvent<HTMLFormElement>) => void
+  onSaveAsSop?: (entry: AgentLogEntry) => void
 }): React.JSX.Element {
+  const footerStatusText =
+    voiceInputState === 'recording'
+      ? t.input.voiceListening
+      : voiceInputState === 'transcribing'
+        ? t.input.voiceTranscribing
+        : sessionChatTab.agentThinking
+          ? sessionChatTab.thinkingMessage || t.input.thinking
+          : sessionChatTab.agentBusy
+            ? t.input.contextHint
+            : sessionTerminals.length > 1
+              ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
+              : t.input.currentTerminal
+  const showSendButton =
+    activeAgentPending ||
+    sessionChatTab.agentBusy ||
+    Boolean(sessionChatTab.agentInput.trim())
+
   return (
     <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
       <AgentLogList
@@ -223,6 +245,7 @@ export function AgentPanel({
         onRetryConnection={onRetryConnection}
         onOpenConnections={onOpenConnections}
         onOpenModelSettings={onOpenModelSettings}
+        onSaveAsSop={onSaveAsSop}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
       onClarifyConfirm &&
@@ -458,21 +481,11 @@ export function AgentPanel({
               placeholder={t.input.askPlaceholder}
               className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2 text-xs text-muted-foreground">
-              <span>
-                {voiceInputState === 'recording'
-                  ? t.input.voiceListening
-                  : voiceInputState === 'transcribing'
-                    ? t.input.voiceTranscribing
-                    : sessionChatTab.agentThinking
-                      ? sessionChatTab.thinkingMessage || t.input.thinking
-                      : sessionChatTab.agentBusy
-                        ? t.input.contextHint
-                        : sessionTerminals.length > 1
-                          ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
-                          : t.input.currentTerminal}
-              </span>
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-1 pt-2 text-xs text-muted-foreground">
+              <div className="flex min-h-5 min-w-0 flex-1 items-center">
+                <span className="truncate">{footerStatusText || '\u00a0'}</span>
+              </div>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
                 <Button
                   type="button"
                   variant="ghost"
@@ -543,41 +556,46 @@ export function AgentPanel({
                     />
                   )}
                 </Button>
-                <span>{configured ? t.input.toolsConfigured : t.input.chatNoTools}</span>
-                {sessionChatTab.agentBusy && (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="xs"
-                    className="h-5 px-2 text-[11px]"
-                    onClick={onStopAgent}
-                  >
-                    {t.common.stop}
-                  </Button>
-                )}
-                {(activeAgentPending || sessionChatTab.agentInput.trim()) && (
-                  <Button
-                    type="submit"
-                    size={activeAgentPending ? 'icon-xs' : 'icon'}
-                    aria-label={
-                      sessionChatTab.agentThinking
-                        ? t.input.thinking
-                        : sessionChatTab.agentBusy
-                          ? t.input.contextAdd
-                          : t.common.send
-                    }
-                    disabled={sessionChatTab.agentThinking}
-                  >
-                    {sessionChatTab.agentThinking ||
-                    (sessionChatTab.agentBusy && !sessionChatTab.agentInput.trim()) ? (
-                      <Loader2Icon className="animate-spin" aria-hidden="true" />
-                    ) : sessionChatTab.agentBusy ? (
-                      <PlusIcon aria-hidden="true" />
-                    ) : (
-                      <ArrowUpIcon aria-hidden="true" />
-                    )}
-                  </Button>
-                )}
+                <span className="whitespace-nowrap">
+                  {configured ? t.input.toolsConfigured : t.input.chatNoTools}
+                </span>
+                <div className="flex h-5 w-[3.75rem] shrink-0 items-center justify-end">
+                  {sessionChatTab.agentBusy ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="xs"
+                      className="h-5 px-2 text-[11px]"
+                      onClick={onStopAgent}
+                    >
+                      {t.common.stop}
+                    </Button>
+                  ) : null}
+                </div>
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={showSendButton ? undefined : 'invisible'}
+                  tabIndex={showSendButton ? undefined : -1}
+                  aria-hidden={showSendButton ? undefined : true}
+                  aria-label={
+                    sessionChatTab.agentThinking
+                      ? t.input.thinking
+                      : sessionChatTab.agentBusy
+                        ? t.input.contextAdd
+                        : t.common.send
+                  }
+                  disabled={!showSendButton || sessionChatTab.agentThinking}
+                >
+                  {sessionChatTab.agentThinking ||
+                  (sessionChatTab.agentBusy && !sessionChatTab.agentInput.trim()) ? (
+                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                  ) : sessionChatTab.agentBusy ? (
+                    <PlusIcon aria-hidden="true" />
+                  ) : (
+                    <ArrowUpIcon aria-hidden="true" />
+                  )}
+                </Button>
               </div>
             </div>
           </div>

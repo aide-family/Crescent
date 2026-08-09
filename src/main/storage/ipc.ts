@@ -1,6 +1,7 @@
 import { ipcMain, type WebContents } from 'electron'
 
 import {
+  deleteAgentLogs,
   deleteOpsHistoryRecord,
   deleteSessionHistory,
   getAgentRun,
@@ -56,6 +57,17 @@ export function registerStorageIpc(): void {
       updateAgentLog(input)
       scheduleSessionSummary(input.tabId, event.sender)
       return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'storage:delete-agent-logs',
+    (event, input: { tabId?: string; logIds?: number[] }) => {
+      const tabId = input?.tabId?.trim() ?? ''
+      const logIds = Array.isArray(input?.logIds) ? input.logIds : []
+      const removed = deleteAgentLogs(tabId, logIds)
+      if (removed > 0 && tabId) scheduleSessionSummary(tabId, event.sender)
+      return { ok: true, removed }
     }
   )
 

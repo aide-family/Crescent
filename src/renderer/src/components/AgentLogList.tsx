@@ -37,7 +37,8 @@ export function AgentLogList({
   onOpenConnections,
   onAddCommandToWhitelist,
   onInjectSuggestions,
-  onOpenModelSettings
+  onOpenModelSettings,
+  onSaveAsSop
 }: {
   logRef: RefObject<HTMLDivElement | null>
   entries: AgentLogEntry[]
@@ -60,6 +61,7 @@ export function AgentLogList({
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
+  onSaveAsSop?: (entry: AgentLogEntry) => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
   onRetryConnection?: () => void
@@ -87,8 +89,10 @@ export function AgentLogList({
         </div>
       ) : null}
 
-      {entries.map((entry, entryIndex) => {
-        const previousKind = entryIndex > 0 ? entries[entryIndex - 1]?.kind : undefined
+      {entries
+        .filter((entry) => entry.kind !== 'user-supplement')
+        .map((entry, entryIndex, visibleEntries) => {
+        const previousKind = entryIndex > 0 ? visibleEntries[entryIndex - 1]?.kind : undefined
         const conversation = isConversationLog(entry.kind)
         const spacing = logListItemSpacingClass(entry.kind, previousKind, entryIndex === 0)
 
@@ -143,6 +147,7 @@ export function AgentLogList({
                   onAddCommandToWhitelist={onAddCommandToWhitelist}
                   onInjectSuggestions={onInjectSuggestions}
                   onOpenModelSettings={onOpenModelSettings}
+                  onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
                 />
               </>
             ) : (

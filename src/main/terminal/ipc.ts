@@ -7,6 +7,7 @@ import { spawn as spawnPty } from 'node-pty'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
+import { createPendingCommandController } from './pending-command'
 
 interface TerminalSession {
   id: number
@@ -43,6 +44,7 @@ export interface TerminalCommandExecutionResult {
   output: string
   error?: string
   timedOut?: boolean
+  interrupted?: boolean
   terminalExited?: boolean
   detached?: boolean
   subterminalName?: string
@@ -92,7 +94,7 @@ const sessions = new Map<string, TerminalSession>()
 let nextSessionId = 1
 const PIPE_PROMPT_PREFIX = '__TERMINAL_AGENT_PROMPT__'
 const MAX_CONTEXT_BUFFER = 24_000
-const TERMINAL_COMMAND_TIMEOUT_MS = 120_000
+const TERMINAL_COMMAND_TIMEOUT_MS = 600_000
 const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
 const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const TERMINAL_COMMAND_INTERRUPT_GRACE_MS = 2_000
@@ -103,6 +105,9 @@ const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
+const terminalUserInterruptNotifiers = new Map<string, Set<() => void>>()
+/** In-flight automated command waiters (Stop / Ctrl+C can await settle). */
+const pendingCommandPromises = new Map<string, Promise<TerminalCommandExecutionResult>>()
 const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
 const MAX_TEMPORARY_SUBTERMINALS = 3
 const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
@@ -111,7 +116,8 @@ export function executeCommandInTerminal(
   senderId: number,
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
-  tabId?: string
+  tabId?: string,
+  signal?: AbortSignal
 ): Promise<TerminalCommandExecutionResult> {
   const normalizedTabId = normalizeTabId(tabId)
   const normalizedCommand = command.trim()
@@ -167,191 +173,138 @@ export function executeCommandInTerminal(
     })
   }
 
-  return new Promise((resolve) => {
-    const commandId = `${Date.now()}_${Math.random().toString(36).slice(2)}`
-    const startMarker = `__CRESCENT_CMD_START_${commandId}__`
-    const endMarker = `__CRESCENT_CMD_END_${commandId}__`
-    let buffer = ''
-    let settled = false
-    let timeoutTriggered = false
-    let commandStarted = false
-    let interruptGraceTimeout: NodeJS.Timeout | undefined
-    let continuationPromptTimeout: NodeJS.Timeout | undefined
-    let timeout: NodeJS.Timeout | undefined
-    let startTimeout: NodeJS.Timeout | undefined
-    let waitingForSecretPrompt = false
+  const commandId = `${Date.now()}_${Math.random().toString(36).slice(2)}`
+  const startMarker = `__CRESCENT_CMD_START_${commandId}__`
+  const endMarker = `__CRESCENT_CMD_END_${commandId}__`
 
-    const settle = (result: TerminalCommandExecutionResult): void => {
-      if (settled) return
+  const pending = createPendingCommandController({
+    command: normalizedCommand,
+    mode: session.mode,
+    cwd: session.cwd,
+    startMarker,
+    endMarker,
+    timeoutMs: effectiveTimeoutMs,
+    signal,
+    interruptGraceMs: TERMINAL_COMMAND_INTERRUPT_GRACE_MS,
+    startTimeoutMs: TERMINAL_COMMAND_START_TIMEOUT_MS,
+    continuationPromptTimeoutMs: TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS,
+    secretPromptTimeoutMs: TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS,
+    interruptSession: () => interruptCommandSession(key, session),
+    display: (message) => session.display(message),
+    hasUnterminatedSecretPrompt,
+    hasShellContinuationPrompt,
+    parseCommandBuffer,
+    extractPartialCommandOutput
+  })
 
-      settled = true
-      if (timeout) clearTimeout(timeout)
-      if (startTimeout) clearTimeout(startTimeout)
-      if (interruptGraceTimeout) clearTimeout(interruptGraceTimeout)
-      if (continuationPromptTimeout) clearTimeout(continuationPromptTimeout)
-      const waiters = terminalDataWaiters.get(key)
-      waiters?.delete(onData)
-      if (waiters?.size === 0) terminalDataWaiters.delete(key)
-      const exitWaiters = terminalExitWaiters.get(key)
-      exitWaiters?.delete(onExit)
-      if (exitWaiters?.size === 0) terminalExitWaiters.delete(key)
-      terminalAutomationFilterStates.delete(key)
-      const readableResult = formatReadableCommandResult(result)
-      if (readableResult) session.display(readableResult)
-      resolve(result)
+  const onData = (data: string): void => {
+    pending.onData(data)
+  }
+  const onExit = (event: TerminalExitNotification): void => {
+    pending.onExit(event)
+  }
+  const onUserInterrupt = (): void => {
+    pending.notifyUserInterrupt()
+  }
+
+  const waiters = terminalDataWaiters.get(key) ?? new Set<(data: string) => void>()
+  waiters.add(onData)
+  terminalDataWaiters.set(key, waiters)
+  const exitWaiters =
+    terminalExitWaiters.get(key) ?? new Set<(event: TerminalExitNotification) => void>()
+  exitWaiters.add(onExit)
+  terminalExitWaiters.set(key, exitWaiters)
+  const interruptNotifiers = terminalUserInterruptNotifiers.get(key) ?? new Set<() => void>()
+  interruptNotifiers.add(onUserInterrupt)
+  terminalUserInterruptNotifiers.set(key, interruptNotifiers)
+
+  pendingCommandPromises.set(key, pending.promise)
+
+  void pending.promise.finally(() => {
+    if (pendingCommandPromises.get(key) === pending.promise) {
+      pendingCommandPromises.delete(key)
     }
+    const dataWaiters = terminalDataWaiters.get(key)
+    dataWaiters?.delete(onData)
+    if (dataWaiters?.size === 0) terminalDataWaiters.delete(key)
+    const exits = terminalExitWaiters.get(key)
+    exits?.delete(onExit)
+    if (exits?.size === 0) terminalExitWaiters.delete(key)
+    const interrupts = terminalUserInterruptNotifiers.get(key)
+    interrupts?.delete(onUserInterrupt)
+    if (interrupts?.size === 0) terminalUserInterruptNotifiers.delete(key)
+    terminalAutomationFilterStates.delete(key)
+  })
 
-    const interruptForTimeout = (message: string, display: string): void => {
-      if (settled) return
-      timeoutTriggered = true
-      session.display(display)
-      interruptCommandSession(key, session)
-      interruptGraceTimeout = setTimeout(() => {
-        settle({
-          ok: false,
-          command: normalizedCommand,
-          mode: session.mode,
-          cwd: session.cwd,
-          output: extractPartialCommandOutput(buffer, startMarker),
-          error: message,
-          timedOut: true
-        })
-      }, TERMINAL_COMMAND_INTERRUPT_GRACE_MS)
-    }
+  void pending.promise.then((result) => {
+    const readableResult = formatReadableCommandResult(result)
+    if (readableResult) session.display(readableResult)
+  })
 
-    const armCommandTimeout = (ms: number): void => {
-      if (timeout) clearTimeout(timeout)
-      timeout = setTimeout(() => {
-        interruptForTimeout(
-          `Command exceeded ${ms}ms and did not finish after Ctrl+C.`,
-          formatReadableCommandInterrupt(ms)
-        )
-      }, ms)
-    }
-
-    const armStartTimeout = (): void => {
-      if (startTimeout) clearTimeout(startTimeout)
-      startTimeout = setTimeout(() => {
-        if (commandStarted || settled || waitingForSecretPrompt) return
-        interruptForTimeout(
-          'Command did not reach the execution start marker. The shell may be waiting for an unfinished quote or continuation prompt; Crescent sent Ctrl+C to recover.',
-          formatReadableCommandStartFailure(TERMINAL_COMMAND_START_TIMEOUT_MS)
-        )
-      }, TERMINAL_COMMAND_START_TIMEOUT_MS)
-    }
-
-    const interruptStalledContinuationPrompt = (): void => {
-      if (!commandStarted || settled || waitingForSecretPrompt) return
-
-      interruptForTimeout(
-        'Command appears stuck at a shell continuation prompt; Crescent sent Ctrl+C to recover.',
-        formatReadableContinuationPromptFailure(TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS)
-      )
-    }
-
-    const onData = (data: string): void => {
-      buffer += data
-      if (buffer.includes(startMarker)) commandStarted = true
-      const parsed = parseCommandBuffer(buffer, startMarker, endMarker)
-
-      if (!parsed.done) {
-        const atSecretPrompt = hasUnterminatedSecretPrompt(buffer)
-        if (atSecretPrompt && !waitingForSecretPrompt) {
-          waitingForSecretPrompt = true
-          if (startTimeout) clearTimeout(startTimeout)
-          if (continuationPromptTimeout) {
-            clearTimeout(continuationPromptTimeout)
-            continuationPromptTimeout = undefined
-          }
-          armCommandTimeout(TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS)
-        } else if (!atSecretPrompt && waitingForSecretPrompt) {
-          waitingForSecretPrompt = false
-          armCommandTimeout(effectiveTimeoutMs)
-          if (!commandStarted) armStartTimeout()
-        }
-
-        if (
-          commandStarted &&
-          !timeoutTriggered &&
-          !continuationPromptTimeout &&
-          !waitingForSecretPrompt &&
-          hasShellContinuationPrompt(buffer)
-        ) {
-          continuationPromptTimeout = setTimeout(
-            interruptStalledContinuationPrompt,
-            TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS
-          )
-        }
-        return
-      }
-
-      settle({
-        ok: !timeoutTriggered && parsed.exitCode === 0,
-        command: normalizedCommand,
-        mode: session.mode,
-        cwd: session.cwd,
-        exitCode: parsed.exitCode,
-        output: parsed.output,
-        error: timeoutTriggered
-          ? `Command exceeded ${effectiveTimeoutMs}ms and was interrupted with Ctrl+C.`
-          : undefined,
-        timedOut: timeoutTriggered || undefined
-      })
-    }
-
-    armCommandTimeout(effectiveTimeoutMs)
-    armStartTimeout()
-
-    const onExit = (event: TerminalExitNotification): void => {
-      settle({
-        ok: false,
-        command: normalizedCommand,
-        mode: session.mode,
-        cwd: session.cwd,
-        exitCode: event.exitCode,
-        output: extractPartialCommandOutput(buffer, startMarker),
-        error: timeoutTriggered
-          ? `Command exceeded ${effectiveTimeoutMs}ms and the terminal exited after Ctrl+C. Exit code: ${event.exitCode}.`
-          : `Terminal session exited while the command was running. Exit code: ${event.exitCode}.`,
-        timedOut: timeoutTriggered || undefined,
-        terminalExited: true
-      })
-    }
-
-    const waiters = terminalDataWaiters.get(key) ?? new Set<(data: string) => void>()
-    waiters.add(onData)
-    terminalDataWaiters.set(key, waiters)
-    const exitWaiters =
-      terminalExitWaiters.get(key) ?? new Set<(event: TerminalExitNotification) => void>()
-    exitWaiters.add(onExit)
-    terminalExitWaiters.set(key, exitWaiters)
-
-    if (session.mode === 'pty') {
-      terminalAutomationFilterStates.set(key, {
-        startMarker,
-        endMarker,
-        phase: 'before-start',
-        pending: ''
-      })
-      session.display(formatReadableCommandInput(normalizedCommand))
-      session.write(
-        createPtyScriptRunner(createCommandWrapper(normalizedCommand, startMarker, endMarker))
-      )
-      return
-    }
-
+  if (session.mode === 'pty') {
+    terminalAutomationFilterStates.set(key, {
+      startMarker,
+      endMarker,
+      phase: 'before-start',
+      pending: ''
+    })
+    session.display(formatReadableCommandInput(normalizedCommand))
+    session.write(
+      createPtyScriptRunner(createCommandWrapper(normalizedCommand, startMarker, endMarker))
+    )
+  } else {
     session.display(formatReadableCommandInput(normalizedCommand))
     session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
-  })
+  }
+
+  return pending.promise
+}
+
+/** Interrupt any in-flight automated command on a tab (Ctrl+C + settle interrupted). */
+export function interruptPendingTerminalCommands(senderId: number, tabId?: string): boolean {
+  const normalizedTabId = normalizeTabId(tabId)
+  if (!normalizedTabId) return false
+  const key = getSessionKey(senderId, normalizedTabId)
+  const session = sessions.get(key)
+  if (!session) return false
+  interruptCommandSession(key, session)
+  const notifiers = terminalUserInterruptNotifiers.get(key)
+  if (!notifiers || notifiers.size === 0) return false
+  ;[...notifiers].forEach((notify) => notify())
+  return true
+}
+
+/**
+ * Interrupt in-flight automated commands and wait until the pending waiter settles.
+ * Callers that emit agent `command/finished` after the waiter can then flush before run abort.
+ */
+export async function interruptAndAwaitPendingTerminalCommands(
+  senderId: number,
+  tabId?: string
+): Promise<boolean> {
+  const normalizedTabId = normalizeTabId(tabId)
+  if (!normalizedTabId) return false
+  const key = getSessionKey(senderId, normalizedTabId)
+  const pending = pendingCommandPromises.get(key)
+  const interrupted = interruptPendingTerminalCommands(senderId, normalizedTabId)
+  if (pending) {
+    try {
+      await pending
+    } catch {
+      // settle errors are surfaced via the command result / agent emit path
+    }
+  }
+  return interrupted || Boolean(pending)
 }
 
 export async function executeCommandInTerminalWithPermissionRequest(
   webContents: WebContents,
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
-  tabId?: string
+  tabId?: string,
+  signal?: AbortSignal
 ): Promise<TerminalCommandExecutionResult> {
-  let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, tabId)
+  let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, tabId, signal)
 
   if (isLocalFilePermissionFailure(result)) {
     result = await requestLocalFileAccessAndAnnotateResult(webContents, command, result)
@@ -366,7 +319,8 @@ export async function executeCommandInTemporaryTerminal(
   terminalName: string,
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
-  mode: 'wait' | 'detach' = 'wait'
+  mode: 'wait' | 'detach' = 'wait',
+  signal?: AbortSignal
 ): Promise<TerminalCommandExecutionResult> {
   const parent = normalizeTabId(parentTabId)
   const normalizedCommand = command.trim()
@@ -418,7 +372,13 @@ export async function executeCommandInTemporaryTerminal(
   entry.lastUsedAt = Date.now()
 
   try {
-    let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, entry.tabId)
+    let result = await executeCommandInTerminal(
+      webContents.id,
+      command,
+      timeoutMs,
+      entry.tabId,
+      signal
+    )
 
     if (isLocalFilePermissionFailure(result)) {
       result = await requestLocalFileAccessAndAnnotateResult(webContents, command, result)
@@ -813,6 +773,11 @@ export function registerTerminalIpc(): void {
     session.write(data)
     if (data.includes('\x03')) {
       clearTemporarySubterminalDetached(event.sender.id, tabId)
+      const key = getSessionKey(event.sender.id, tabId)
+      const notifiers = terminalUserInterruptNotifiers.get(key)
+      if (notifiers) {
+        ;[...notifiers].forEach((notify) => notify())
+      }
     }
   })
 
@@ -1537,33 +1502,18 @@ function stripPromptPrefix(value: string): string {
     .replace(/^\s*(?:>\s*)+/, '')
 }
 
-function formatReadableCommandInterrupt(timeoutMs: number): string {
-  return `\r\n\x1b[33m[Crescent] command exceeded ${formatDuration(timeoutMs)}; sending Ctrl+C.\x1b[0m\r\n`
-}
-
-function formatReadableCommandStartFailure(timeoutMs: number): string {
-  return `\r\n\x1b[33m[Crescent] command did not start within ${formatDuration(timeoutMs)}; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
-}
-
-function formatReadableContinuationPromptFailure(timeoutMs: number): string {
-  return `\r\n\x1b[33m[Crescent] shell continuation prompt persisted for ${formatDuration(timeoutMs)}; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
-}
-
 function formatReadableCommandResult(result: TerminalCommandExecutionResult): string {
-  if (result.ok && !result.timedOut && !result.terminalExited) return ''
+  if (result.ok && !result.timedOut && !result.interrupted && !result.terminalExited) return ''
 
-  const status = result.timedOut
-    ? 'timeout'
-    : result.terminalExited
-      ? `terminal exited: ${result.exitCode ?? 'unknown'}`
-      : `command failed: exit code ${result.exitCode ?? 'unknown'}`
+  const status = result.interrupted
+    ? 'interrupted (Ctrl+C)'
+    : result.timedOut
+      ? 'timeout'
+      : result.terminalExited
+        ? `terminal exited: ${result.exitCode ?? 'unknown'}`
+        : `command failed: exit code ${result.exitCode ?? 'unknown'}`
 
   return `\r\n\x1b[33m[Crescent] ${status}\x1b[0m\r\n`
-}
-
-function formatDuration(milliseconds: number): string {
-  if (milliseconds >= 1000 && milliseconds % 1000 === 0) return `${milliseconds / 1000}s`
-  return `${milliseconds}ms`
 }
 
 function formatPipePrompt(cwd: string): string {

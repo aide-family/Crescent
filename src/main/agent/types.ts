@@ -27,6 +27,8 @@ export type {
   AgentPathReference,
   AgentProviderConfig,
   AgentProviderModelConfig,
+  AgentGenerateSopInput,
+  AgentGenerateSopResult,
   AgentRunInput,
   AgentSkillContext,
   AgentSkillInstallResult,
@@ -67,7 +69,5 @@ export type {
   ToolCatalogEntry,
   WikiDocument,
   WikiDocumentSummary,
-  WikiSaveInput,
-  SkillTemplate,
-  SkillTemplateSaveInput
+  WikiSaveInput
 } from '../../shared/agent-types'

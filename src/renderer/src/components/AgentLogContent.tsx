@@ -7,7 +7,7 @@ import {
   logRoleLabel,
   summarizeBehaviorLog
 } from '@renderer/lib/agent-log'
-import { agentRunViewToDocument, parseAgentRunDocument } from '@renderer/lib/agent-run-document'
+import { agentRunViewToDocument, looksLikeAgentRunDocument, parseAgentRunDocument } from '@renderer/lib/agent-run-document'
 import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
 
 export function ActionLogRow({
@@ -54,7 +54,8 @@ export function AgentLogContent({
   onResolveApproval,
   onAddCommandToWhitelist,
   onInjectSuggestions,
-  onOpenModelSettings
+  onOpenModelSettings,
+  onSaveAsSop
 }: {
   entry: AgentLogEntry
   liveRun?: AgentRunViewState | null
@@ -71,6 +72,7 @@ export function AgentLogContent({
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
+  onSaveAsSop?: () => void
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -104,7 +106,17 @@ export function AgentLogContent({
           onAddCommandToWhitelist={onAddCommandToWhitelist}
           onInjectSuggestions={onInjectSuggestions}
           onOpenModelSettings={onOpenModelSettings}
+          onSaveAsSop={onSaveAsSop}
         />
+      )
+    }
+
+    if (entry.kind === 'assistant' && looksLikeAgentRunDocument(entry.text)) {
+      console.warn('[crescent] CRESCENT_RUN_V2 envelope failed to parse; suppressing raw render')
+      return (
+        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {t.input.runDocumentCorrupt}
+        </div>
       )
     }
 

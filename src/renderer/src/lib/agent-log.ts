@@ -26,6 +26,90 @@ export function isConversationLog(kind: AgentLogEntry['kind']): boolean {
   return kind === 'user' || kind === 'assistant' || kind === 'error'
 }
 
+export const AGENT_LOG_SOFT_LIMIT = 120
+
+function isUserLikeLog(kind: AgentLogEntry['kind']): boolean {
+  return kind === 'user' || kind === 'user-supplement'
+}
+
+/**
+ * Trim agent log for memory while preferring conversation turns.
+ * 1) Drop non-conversation / non-user-supplement rows first.
+ * 2) If still over limit, drop oldest user / user-supplement rows.
+ * 3) Never drop the newest user-like entry.
+ * 4) Only then drop other oldest conversation rows if still over.
+ */
+export function trimAgentLogEntries(
+  entries: AgentLogEntry[],
+  limit = AGENT_LOG_SOFT_LIMIT
+): AgentLogEntry[] {
+  if (entries.length <= limit) return entries
+  if (limit <= 0) return []
+
+  const latestUserLikeIndex = findLastIndex(entries, (entry) => isUserLikeLog(entry.kind))
+  const keepLatestUserLike = latestUserLikeIndex >= 0
+
+  const droppable = entries.map((entry, index) => ({ entry, index }))
+  const dropSet = new Set<number>()
+  let remaining = entries.length - limit
+
+  for (const item of droppable) {
+    if (remaining <= 0) break
+    if (isConversationLog(item.entry.kind) || isUserLikeLog(item.entry.kind)) continue
+    dropSet.add(item.index)
+    remaining -= 1
+  }
+
+  // Overflow: drop oldest user-like first (never the latest).
+  for (const item of droppable) {
+    if (remaining <= 0) break
+    if (!isUserLikeLog(item.entry.kind)) continue
+    if (keepLatestUserLike && item.index === latestUserLikeIndex) continue
+    if (dropSet.has(item.index)) continue
+    dropSet.add(item.index)
+    remaining -= 1
+  }
+
+  // Still over: drop oldest remaining conversation (assistant/error), never latest user-like.
+  for (const item of droppable) {
+    if (remaining <= 0) break
+    if (dropSet.has(item.index)) continue
+    if (keepLatestUserLike && item.index === latestUserLikeIndex) continue
+    if (!isConversationLog(item.entry.kind)) continue
+    dropSet.add(item.index)
+    remaining -= 1
+  }
+
+  // Last resort (tiny limit): drop anything except the pinned latest user-like.
+  if (remaining > 0) {
+    for (const item of droppable) {
+      if (remaining <= 0) break
+      if (dropSet.has(item.index)) continue
+      if (keepLatestUserLike && item.index === latestUserLikeIndex) continue
+      dropSet.add(item.index)
+      remaining -= 1
+    }
+  }
+
+  return entries.filter((_, index) => !dropSet.has(index))
+}
+
+/** Ids removed by trim — used to keep SQLite history in sync with in-memory log. */
+export function collectTrimmedAgentLogIds(
+  before: AgentLogEntry[],
+  after: AgentLogEntry[]
+): number[] {
+  const keep = new Set(after.map((entry) => entry.id))
+  return before.filter((entry) => !keep.has(entry.id)).map((entry) => entry.id)
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index
+  }
+  return -1
+}
+
 /** Quieter treatment for tool/command/status rows so conversation stays primary. */
 export function actionLogClassName(kind: AgentLogEntry['kind']): string {
   switch (kind) {
@@ -102,6 +186,8 @@ export function logRoleLabel(kind: AgentLogEntry['kind'], t: Dictionary): string
   switch (kind) {
     case 'user':
       return t.roles.user
+    case 'user-supplement':
+      return t.roles.user
     case 'assistant':
       return t.roles.assistant
     case 'error':
@@ -143,9 +229,19 @@ export function formatHistoryTime(value: string): string {
 }
 
 export function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry {
+  const kind = normalizeStoredAgentLogKind(entry.kind)
+  if (kind === 'user-supplement') {
+    return {
+      id: entry.logId,
+      kind: 'user-supplement',
+      text: entry.text,
+      createdAt: entry.createdAt,
+      runId: entry.runId?.trim() || ''
+    }
+  }
   return {
     id: entry.logId,
-    kind: normalizeStoredAgentLogKind(entry.kind),
+    kind,
     text: entry.text,
     createdAt: entry.createdAt
   }
@@ -154,6 +250,7 @@ export function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry
 export function normalizeStoredAgentLogKind(kind: string): AgentLogEntry['kind'] {
   if (
     kind === 'user' ||
+    kind === 'user-supplement' ||
     kind === 'assistant' ||
     kind === 'error' ||
     kind === 'status' ||

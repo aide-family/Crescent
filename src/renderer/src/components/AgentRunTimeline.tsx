@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CheckIcon,
@@ -15,7 +15,8 @@ import {
   ThumbsDownIcon,
   ThumbsUpIcon,
   TriangleAlertIcon,
-  XIcon
+  XIcon,
+  BookMarkedIcon
 } from 'lucide-react'
 
 import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
@@ -28,6 +29,7 @@ import type { Dictionary } from '@renderer/i18n'
 import type { ParsedAgentRunDocument } from '@renderer/lib/agent-run-document'
 import { shouldShowAgentRunResult, omitDuplicateTrailingMessage } from '@renderer/lib/agent-run-document'
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
+import { formatLogTime } from '@renderer/lib/agent-log'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 import { extractRiskVerb, isStaticallyReadonly, shouldShowWhitelistEntry } from '../../../shared/command-guard'
@@ -53,7 +55,8 @@ export function AgentRunTimeline({
   onResolveApproval,
   onAddCommandToWhitelist,
   onInjectSuggestions,
-  onOpenModelSettings
+  onOpenModelSettings,
+  onSaveAsSop
 }: {
   document: ParsedAgentRunDocument
   t: Dictionary
@@ -69,6 +72,7 @@ export function AgentRunTimeline({
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
+  onSaveAsSop?: () => void
 }): React.JSX.Element {
   const [resultExpanded, setResultExpanded] = useState(false)
   const resultPreviewMarkdown = document.resultMarkdown || document.errorMarkdown
@@ -135,6 +139,9 @@ export function AgentRunTimeline({
                   {step.title}
                 </div>
               )
+            }
+            if (step.kind === 'user-supplement') {
+              return <UserSupplementStepRow key={step.id} step={step} t={t} />
             }
             if (step.kind === 'tool') {
               const previous = visibleSteps[index - 1]
@@ -217,6 +224,18 @@ export function AgentRunTimeline({
             >
               {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
             </Button>
+            {onSaveAsSop ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.saveAsSopTooltip}
+                title={t.common.saveAsSopTooltip}
+                onClick={onSaveAsSop}
+              >
+                <BookMarkedIcon aria-hidden="true" />
+              </Button>
+            ) : null}
             {onOpsFeedback ? (
               <>
                 <Button
@@ -423,6 +442,29 @@ function MessageStepRow({
   )
 }
 
+function UserSupplementStepRow({
+  step,
+  t
+}: {
+  step: Extract<AgentRunStep, { kind: 'user-supplement' }>
+  t: Dictionary
+}): React.JSX.Element {
+  return (
+    <div className="min-w-0 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="font-semibold tracking-wide text-foreground/80">{t.roles.user}</span>
+        <span className="rounded border border-border/60 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {t.input.contextSupplement}
+        </span>
+        <time dateTime={step.createdAt}>{formatLogTime(step.createdAt)}</time>
+      </div>
+      <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+        {step.text}
+      </pre>
+    </div>
+  )
+}
+
 function ToolCallRow({
   step,
   t,
@@ -443,9 +485,14 @@ function ToolCallRow({
   const toolLabel = isPtyCommand ? t.input.toolCommandLabel : step.name
   const statusLabel = running
     ? t.input.toolRunning
-    : step.isError
-      ? t.input.toolFailed
-      : t.input.toolFinished
+    : step.interrupted
+      ? t.input.toolInterrupted
+      : step.timedOut
+        ? t.input.toolTimedOut
+        : step.isError
+          ? t.input.toolFailed
+          : t.input.toolFinished
+  const warnFinish = Boolean(step.interrupted || step.timedOut)
 
   return (
     <div className="min-w-0 space-y-1.5">
@@ -453,6 +500,11 @@ function ToolCallRow({
         {running ? (
           <Loader2Icon
             className="mt-0.5 size-3 shrink-0 animate-spin text-sky-500"
+            aria-hidden="true"
+          />
+        ) : warnFinish ? (
+          <TriangleAlertIcon
+            className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
             aria-hidden="true"
           />
         ) : (
@@ -883,7 +935,7 @@ function ApprovalStepCard({
               placeholder={t.input.approvalNotePlaceholder}
               className="min-h-14 resize-y text-xs"
             />
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -929,6 +981,20 @@ function ResultSuggestionsPicker({
   const suggestions = useMemo(() => extractResultSuggestions(resultMarkdown), [resultMarkdown])
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [status, setStatus] = useState<string | null>(null)
+  const selectAllRef = useRef<HTMLInputElement | null>(null)
+
+  const selectedCount = suggestions.reduce(
+    (count, _, index) => count + (selected[index] ? 1 : 0),
+    0
+  )
+  const allSelected = suggestions.length > 0 && selectedCount === suggestions.length
+  const someSelected = selectedCount > 0 && !allSelected
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected
+    }
+  }, [someSelected])
 
   if (suggestions.length === 0) return null
 
@@ -936,7 +1002,28 @@ function ResultSuggestionsPicker({
 
   return (
     <div className="mt-2 space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
-      <div className="text-[11px] font-medium text-foreground/80">{t.input.injectSelectedSuggestions}</div>
+      <label className="flex items-center gap-2 text-[11px] font-medium text-foreground/80">
+        <input
+          ref={selectAllRef}
+          type="checkbox"
+          className="size-3.5"
+          checked={allSelected}
+          aria-label={t.input.selectAllSuggestions}
+          onChange={() => {
+            if (allSelected) {
+              setSelected({})
+              return
+            }
+            const next: Record<number, boolean> = {}
+            for (let index = 0; index < suggestions.length; index += 1) next[index] = true
+            setSelected(next)
+          }}
+        />
+        <span>{t.input.injectSelectedSuggestions}</span>
+        <span className="font-normal text-muted-foreground">
+          ({selectedCount}/{suggestions.length})
+        </span>
+      </label>
       <ul className="space-y-1.5">
         {suggestions.map((item, index) => (
           <li key={`${index}-${item.slice(0, 24)}`} className="flex items-start gap-2 text-[12px]">
@@ -952,7 +1039,8 @@ function ResultSuggestionsPicker({
           </li>
         ))}
       </ul>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {status ? <span className="mr-auto text-[10px] text-muted-foreground">{status}</span> : null}
         <Button
           type="button"
           size="sm"
@@ -968,7 +1056,6 @@ function ResultSuggestionsPicker({
         >
           {t.input.injectSelectedSuggestions}
         </Button>
-        {status ? <span className="text-[10px] text-muted-foreground">{status}</span> : null}
       </div>
     </div>
   )

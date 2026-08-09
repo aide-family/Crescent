@@ -1,5 +1,6 @@
 import type { Dictionary } from '../i18n'
 import { logRoleLabel } from './agent-log'
+import { sanitizeAgentLogTextForContext } from './agent-run-document'
 import { formatConnectionTarget } from './connections'
 import { normalizeTerminalControlText } from './terminal-text'
 import type { AgentLogEntry, AgentTerminalTab, AgentToolReference } from './terminal-tabs'
@@ -227,7 +228,9 @@ export function formatRecentConversationEntry(
   maxChars: number
 ): string {
   const role = logRoleLabel(entry.kind, t)
-  const text = entry.text.trim()
+  const sanitized = sanitizeAgentLogTextForContext(entry.text, t)
+  if (sanitized == null) return ''
+  const text = sanitized.trim()
   if (!text) return ''
 
   return `[${role}] ${text.length > maxChars ? text.slice(-maxChars) : text}`
@@ -235,7 +238,9 @@ export function formatRecentConversationEntry(
 
 export function formatResumeContextEntry(entry: AgentLogEntry, t: Dictionary): string {
   const role = logRoleLabel(entry.kind, t)
-  const text = entry.text.trim()
+  const sanitized = sanitizeAgentLogTextForContext(entry.text, t)
+  if (sanitized == null) return ''
+  const text = sanitized.trim()
   if (!text) return ''
 
   return `[${role}] ${text.slice(-1800)}`
@@ -303,12 +308,10 @@ export function buildAgentInputWithReferences(
       reference.kind === 'directory' ? t.input.referencedDirectory : t.input.referencedFile
     return `- ${label}: ${reference.path}`
   })
+  // Wiki full text is injected via activeWikiIds → buildActiveSopGuidance; keep metadata only.
   const wikiLines = wikiRefs.flatMap((wiki) => [
     `- ${t.input.slashWikiUseLabel}: ${wiki.title}`,
-    `  ${t.input.slashSkillPathLabel}: ${wiki.path}`,
-    '  ```markdown',
-    wiki.content,
-    '  ```'
+    `  ${t.input.slashSkillPathLabel}: ${wiki.path}`
   ])
 
   const referenceSections = [
