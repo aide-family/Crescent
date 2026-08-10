@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.3 (Unreleased)
+## v1.0.3 (2026-08-11)
 
 ### Features
 
@@ -37,6 +37,14 @@
 - Expand READONLY classification for common kubectl/docker/linux/systemctl inspection commands.
 - System prompt: referenced Skills/SOP are reference-only; don’t force full playbooks on simple tasks.
 - Wiki sheet description points to `~/.crescent/wiki`.
+- Connection/terminal state now has a single source of truth per terminal (mode, expected host, learned prompt-host aliases, alignment, ready); gate, recovery, status bar, route and model context all read the same state. IP-expected / hostname-observed sessions (e.g. expected `192.0.2.10`, prompt `node-1`) are recognized as aligned after login.
+- Recovery brakes: at most one re-login attempt per drift event and two per 60 s window; already-connected terminals are never stopped and re-logged; when attempts are exhausted a single recovery card is shown.
+- Subterminal SSH logins write the result back to the parent terminal (learned alias + aligned/ready), clearing stale “disconnected” state.
+- PIPE fallback allows one-shot non-interactive ssh (BatchMode or a remote command without `-t`) while interactive login keeps its accurate PTY-required copy; node-pty failure auto-reinitializes once before settling on PIPE.
+- Exit-to-local detection uses the newest prompt signal, so a local `➜ ~` prompt is recognized as drifted even when older remote prompts remain in the buffer; pending password prompts yield no alignment verdict.
+- Run settle copy distinguishes user stop from system recovery / gate interrupt / timeout; only a real user stop says “manually stopped”.
+- System entries (reconnect, login actions, connection switching) merge into the run timeline in monotonic order; streaming/thinking indicators render at the newest content position with auto-follow scroll (paused only while the user actively scrolls).
+- Toast policy: messages needing user intervention (errors) stay twice as long as plain result notifications.
 
 ### Fixes
 
@@ -44,6 +52,8 @@
 - Busy-path follow-ups render as inline `user-supplement` blocks inside the active run card (no top-level user bubble).
 - CRESCENT_RUN_V2 envelopes never render as raw markdown; corrupt envelopes show an error card and are stripped from model context.
 - SSH terminal not-ready waits for ready (≤15s) or opens a clarification card with “manual login continue” / “open connections”; local shells skip the SSH wait.
+- Login continuation no longer fails with “登录后任务未启动” after a successful password login: readiness checks only the newest line, so an answered password prompt no longer blocks the run.
+- Re-login no longer aborts on the fresh terminal’s transient local prompt before ssh connects.
 
 ## v1.0.2
 
