@@ -5,10 +5,7 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import { openTemporarySubterminal, resolveParentTerminalTabId } from '../terminal/ipc'
 import { listConnections } from '../connections/ipc'
 import type { PiCodingAgentModule } from './pi-sdk'
-import {
-  getPtyBashExecContext,
-  updatePtyBashExecutionTabId
-} from './pi-terminal-bash'
+import { getPtyBashExecContext, updatePtyBashExecutionTabId } from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
@@ -31,6 +28,7 @@ export interface AgentSubterminalOpenedPayload {
   tabId: string
   name: string
   mode: 'local' | 'ssh'
+  terminalMode: 'pty' | 'pipe'
   connectionId?: string
   chatTabId?: string
 }
@@ -57,7 +55,10 @@ export function resolveAgentSubterminalReady(payload: {
   return { ok: true }
 }
 
-function waitForRendererReady(tabId: string, timeoutMs = 20_000): Promise<{ ok: boolean; error?: string }> {
+function waitForRendererReady(
+  tabId: string,
+  timeoutMs = 20_000
+): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     const existing = readyWaiters.get(tabId)
     if (existing) {
@@ -165,6 +166,7 @@ export async function openAgentSubterminal(input: {
     tabId: opened.tabId,
     name: opened.name || name,
     mode,
+    terminalMode: opened.mode ?? 'pipe',
     connectionId: mode === 'ssh' ? connectionId : undefined,
     chatTabId: context.chatTabId
   }

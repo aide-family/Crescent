@@ -1,4 +1,6 @@
 /** How many trailing lines to scan for shell prompt hosts. */
+import { isPasswordPromptLine } from './terminal-password-prompt'
+
 const PROMPT_HOST_SCAN_LINES = 40
 
 /**
@@ -27,6 +29,66 @@ export function extractRecentPromptHosts(
   }
 
   return hosts
+}
+
+export type PromptSignal =
+  | { kind: 'host'; host: string }
+  | { kind: 'local' }
+  /** Interactive secret / host-key prompt — terminal is waiting for input. */
+  | { kind: 'waiting' }
+
+/**
+ * Newest prompt signal in a PTY buffer, scanning lines from bottom to top:
+ * - a local-style prompt (`➜ ~`, bare `$`/`%`, `~ $`) -> 'local'
+ * - a hostname prompt (`user@host:…`) -> { host }
+ * - no prompt signal -> undefined
+ *
+ * This fixes exit-to-local detection: after the remote shell exits, the local
+ * prompt is the newest line even when older remote `user@host` prompts remain
+ * inside the scan window.
+ */
+export function findNewestPromptSignal(
+  output: string,
+  maxLines = PROMPT_HOST_SCAN_LINES
+): PromptSignal | undefined {
+  if (!output.trim()) return undefined
+  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const recent = lines.slice(-Math.max(1, maxLines))
+
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const trimmed = stripAnsi(recent[index]).trim()
+    if (!trimmed) continue
+
+    if (
+      isPasswordPromptLine(trimmed) ||
+      /(?:yes\/no|continue connecting)\s*[:?]?\s*$/i.test(trimmed)
+    ) {
+      return { kind: 'waiting' }
+    }
+    if (isLocalPromptLine(trimmed)) return { kind: 'local' }
+    if (!looksLikePromptLine(trimmed)) continue
+
+    const hosts = matchPromptHostsInLine(trimmed)
+    const latest = hosts[hosts.length - 1]
+    if (latest) return { kind: 'host', host: normalizeHostToken(latest) }
+  }
+
+  return undefined
+}
+
+function isLocalPromptLine(line: string): boolean {
+  // oh-my-zsh / powerlevel10k arrows, bare `$`/`%` and `~ $` style prompts.
+  if (/^➜\s+\S/.test(line)) return true
+  if (/^❯\s/.test(line)) return true
+  if (/^[%$]\s*$/.test(line)) return true
+  if (/^~\s+[%$]\s*$/.test(line)) return true
+  return false
+}
+
+function looksLikePromptLine(line: string): boolean {
+  return (
+    /[@].*[:#$]/.test(line) || /\[[\w.-]+@[\w.-]+/.test(line) || /[\w.-]+@[\w.-]+\s*[#$]/.test(line)
+  )
 }
 
 /**

@@ -69,11 +69,7 @@ export function useAgentRuns({
   liveRunByLogId: Record<number, AgentRunViewState>
   pruneLiveRuns: (logIds: number[]) => void
   attachApprovalRequest: (chatTabId: string, request: CommandApprovalRequest) => void
-  applyApprovalPurpose: (
-    chatTabId: string,
-    requestId: string,
-    purpose: string | null
-  ) => void
+  applyApprovalPurpose: (chatTabId: string, requestId: string, purpose: string | null) => void
   resolveApprovalStep: (
     chatTabId: string,
     requestId: string,
@@ -207,7 +203,11 @@ export function useAgentRuns({
       if (!run) return
 
       // Keep actions on the ref for export/trace; React live map uses toLiveRunView (no actions).
-      const nextRun = syncActionsFromStructuredRun(updater(run))
+      const updated = updater(run)
+      const nextRun = {
+        ...syncActionsFromStructuredRun(updated),
+        steps: stampMissingStepSeq(updated.steps ?? [])
+      }
       activeAgentRunRef.current.set(tabId, nextRun)
 
       if (options?.streaming) {
@@ -250,9 +250,7 @@ export function useAgentRuns({
             recommendation: request.audit.recommendation,
             source: request.audit.source,
             elapsedMs: request.audit.elapsedMs,
-            ...(isHigh
-              ? { purposePhase: 'loading' as const, purpose: undefined }
-              : {})
+            ...(isHigh ? { purposePhase: 'loading' as const, purpose: undefined } : {})
           }
           return { ...run, steps }
         }
@@ -274,9 +272,7 @@ export function useAgentRuns({
               recommendation: request.audit.recommendation,
               source: request.audit.source,
               elapsedMs: request.audit.elapsedMs,
-              ...(isHigh
-                ? { purposePhase: 'loading' as const }
-                : {})
+              ...(isHigh ? { purposePhase: 'loading' as const } : {})
             }
           ]
         }
@@ -542,12 +538,7 @@ export function useAgentRuns({
             // Reuse an open PTY step (command may have arrived first) so we never
             // render bash + terminal as two identical command rows.
             if (isPty) {
-              const openIndex = findOpenPtyToolStepIndex(
-                steps,
-                toolName,
-                event.toolCallId,
-                command
-              )
+              const openIndex = findOpenPtyToolStepIndex(steps, toolName, event.toolCallId, command)
               const openStep = openIndex >= 0 ? steps[openIndex] : undefined
               if (openStep?.kind === 'tool' && openStep.phase === 'started') {
                 steps[openIndex] = {
@@ -556,8 +547,7 @@ export function useAgentRuns({
                   toolCallId: event.toolCallId || openStep.toolCallId,
                   command: command || openStep.command,
                   // Prefer plain command over JSON args for display.
-                  argsText:
-                    command || openStep.command ? undefined : argsOrResult || undefined
+                  argsText: command || openStep.command ? undefined : argsOrResult || undefined
                 }
                 return { ...run, steps }
               }
@@ -671,8 +661,7 @@ export function useAgentRuns({
               name: 'bash',
               resultText: existing.resultText || observation || undefined,
               isError: event.result ? !event.result.ok : Boolean(existing.isError),
-              interrupted:
-                Boolean(event.result?.interrupted) || Boolean(existing.interrupted),
+              interrupted: Boolean(event.result?.interrupted) || Boolean(existing.interrupted),
               timedOut: Boolean(event.result?.timedOut) || Boolean(existing.timedOut),
               command: existing.command || event.command,
               argsText: undefined
@@ -749,6 +738,17 @@ export function useAgentRuns({
   }
 }
 
+/** Stamp monotonic seq on steps that do not carry one yet (append order). */
+function stampMissingStepSeq(steps: AgentRunStep[]): AgentRunStep[] {
+  let changed = false
+  const next = steps.map((step, index) => {
+    if (typeof step.seq === 'number') return step
+    changed = true
+    return { ...step, seq: index }
+  })
+  return changed ? next : steps
+}
+
 function findOpenToolStepIndex(steps: AgentRunStep[], name: string, toolCallId?: string): number {
   for (let index = steps.length - 1; index >= 0; index -= 1) {
     const step = steps[index]
@@ -759,10 +759,7 @@ function findOpenToolStepIndex(steps: AgentRunStep[], name: string, toolCallId?:
   return -1
 }
 
-function isClassifyingStatusStep(
-  step: AgentRunStep,
-  t: Dictionary
-): boolean {
+function isClassifyingStatusStep(step: AgentRunStep, t: Dictionary): boolean {
   if (step.kind !== 'status') return false
   return (
     isClassifyingStatusMessage(step.title, t) ||

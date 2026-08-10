@@ -8,10 +8,16 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
 import {
-  findEnvironmentDriftHost,
-  isLocalShellPromptVisible,
-  resolvePromptEnvironmentState
-} from '../../shared/terminal-prompt-host'
+  autoLearnUnverifiedLogin,
+  classifyPipeCommand,
+  confirmLoginState,
+  createConnectionState,
+  promoteSubterminalLogin,
+  resolveGateAlignment,
+  resolveSessionAlignment,
+  setConnectionExpectedHost,
+  type ConnectionState
+} from '../../shared/connection-state'
 import { createPendingCommandController } from './pending-command'
 
 interface TerminalSession {
@@ -55,6 +61,8 @@ export interface TerminalCommandExecutionResult {
   environmentDrift?: boolean
   observedHost?: string
   expectedHost?: string
+  /** Stable key for the same drift event (expected|observed), used for recovery brakes. */
+  driftKey?: string
   subterminalName?: string
   subterminalTabId?: string
 }
@@ -111,15 +119,26 @@ const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 /** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
 const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
-/** Connection host expected for this PTY (set on SSH connect; cleared on tab stop). */
-const sessionExpectedHosts = new Map<string, string>()
+/**
+ * Per-tab connection state SSOT. Written ONLY by: prompt observations,
+ * ready/login confirmation, expected-host updates, subterminal ssh results and
+ * PTY/PIPE events. Everything else reads through this map.
+ */
+const connectionStates = new Map<string, ConnectionState>()
 /** Owning renderer for drift notifications (kept across soft restarts). */
 const sessionWebContents = new Map<string, WebContents>()
+/** Raw echo lines of automation-pasted commands, suppressed from display by default. */
+const automationEchoSuppressions = new Map<string, { echo: string; until: number }>()
 /** Coalesce visible PTY→renderer frames (~16–32ms) to cut IPC/re-render pressure. */
 const TERMINAL_DATA_COALESCE_MS = 24
 const pendingVisibleTerminalData = new Map<
   string,
-  { webContents: WebContents; tabId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> }
+  {
+    webContents: WebContents
+    tabId: string
+    chunks: string[]
+    timer: ReturnType<typeof setTimeout>
+  }
 >()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
@@ -129,6 +148,39 @@ const pendingCommandPromises = new Map<string, Promise<TerminalCommandExecutionR
 const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
 const MAX_TEMPORARY_SUBTERMINALS = 3
 const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
+
+/** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs and raw terminal echo. */
+function debugConnEnabled(): boolean {
+  return process.env.CRESCENT_DEBUG_CONN === '1'
+}
+
+function connTrace(...parts: unknown[]): void {
+  if (!debugConnEnabled()) return
+  console.info('[conn-trace]', ...parts)
+}
+
+function getConnectionState(key: string, mode: ConnectionState['mode'] = 'none'): ConnectionState {
+  const existing = connectionStates.get(key)
+  if (existing) return existing
+  const created = createConnectionState(mode)
+  connectionStates.set(key, created)
+  return created
+}
+
+function setSessionExpectedHost(key: string, host: string | null | undefined): void {
+  const state = getConnectionState(key)
+  connectionStates.set(key, setConnectionExpectedHost(state, host))
+}
+
+/** Sync SSOT mode when a session is created (PTY/PIPE event). */
+function noteSessionMode(key: string, mode: 'pty' | 'pipe'): void {
+  const state = connectionStates.get(key)
+  if (state) {
+    connectionStates.set(key, { ...state, mode })
+    return
+  }
+  connectionStates.set(key, createConnectionState(mode))
+}
 
 export function executeCommandInTerminal(
   senderId: number,
@@ -181,13 +233,16 @@ export function executeCommandInTerminal(
 
   const drift = detectEnvironmentDriftForSession(key, normalizedTabId, normalizedCommand, session)
   if (drift) {
-    console.info(
-      `[conn-trace] gate-block tab=${normalizedTabId} drift=${drift.observedHost} expected=${drift.expectedHost ?? '-'}`
+    connTrace(
+      'gate-block',
+      `tab=${normalizedTabId}`,
+      `drift=${drift.observedHost}`,
+      `expected=${drift.expectedHost ?? '-'}`
     )
     return Promise.resolve(drift)
   }
 
-  if (session.mode === 'pipe' && isInteractiveCommand(normalizedCommand)) {
+  if (session.mode === 'pipe' && classifyPipeCommand(normalizedCommand) === 'interactive') {
     return Promise.resolve({
       ok: false,
       command: normalizedCommand,
@@ -195,7 +250,7 @@ export function executeCommandInTerminal(
       cwd: session.cwd,
       output: '',
       error:
-        'Interactive commands such as ssh require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. Restart the app or rebuild node-pty.'
+        'Interactive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. One-shot non-interactive ssh (BatchMode or a remote command without -t) is still allowed. Restart the app or rebuild node-pty for interactive sessions.'
     })
   }
 
@@ -584,7 +639,7 @@ function executeDetachedCommandInTemporaryTerminal(
     }
   }
 
-  if (session.mode === 'pipe' && isInteractiveCommand(command)) {
+  if (session.mode === 'pipe' && classifyPipeCommand(command) === 'interactive') {
     return {
       ok: false,
       command,
@@ -592,7 +647,7 @@ function executeDetachedCommandInTemporaryTerminal(
       cwd: session.cwd,
       output: '',
       error:
-        'Interactive commands such as ssh require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. Restart the app or rebuild node-pty.',
+        'Interactive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. One-shot non-interactive ssh (BatchMode or a remote command without -t) is still allowed. Restart the app or rebuild node-pty for interactive sessions.',
       subterminalName: name,
       subterminalTabId: entry.tabId
     }
@@ -707,6 +762,7 @@ export function registerTerminalIpc(): void {
       terminalOutputBuffers.set(key, '')
       terminalAutomationFilterStates.delete(key)
       sessions.set(key, session)
+      noteSessionMode(key, session.mode)
 
       return {
         sessionId: session.id,
@@ -729,12 +785,112 @@ export function registerTerminalIpc(): void {
       const key = getSessionKey(event.sender.id, tabId)
       sessionWebContents.set(key, event.sender)
       const host = typeof payload?.host === 'string' ? payload.host.trim() : ''
-      if (!host) {
-        sessionExpectedHosts.delete(key)
-        return { ok: true as const, host: undefined }
+      setSessionExpectedHost(key, host || null)
+      return { ok: true as const, host: host || undefined }
+    }
+  )
+
+  /**
+   * Verified-login write-back (SSOT write source). Called after a login
+   * automation sequence or a successful subterminal ssh. Learns the observed
+   * prompt host as an alias and marks the tab ready/aligned. With sourceTabId,
+   * confirmation first runs on the subterminal, then aliases/ready are
+   * promoted to the parent tab (subterminal ssh result write-back).
+   */
+  ipcMain.handle(
+    'terminal:confirm-login',
+    (
+      event,
+      payload?: { tabId?: string; sourceTabId?: string; localHost?: string }
+    ): {
+      ok: boolean
+      tabId?: string
+      promptHost?: string
+      learned?: boolean
+      alignment?: 'unknown' | 'aligned' | 'drifted'
+      ready?: boolean
+      aliases?: string[]
+      error?: string
+    } => {
+      const tabId = normalizeTabId(payload?.tabId)
+      const sourceTabId = normalizeTabId(payload?.sourceTabId)
+      if (!tabId || !isUsableTerminalTabId(tabId)) {
+        return { ok: false, error: 'Missing or reserved terminal tab id.' }
       }
-      sessionExpectedHosts.set(key, host)
-      return { ok: true as const, host }
+      const key = getSessionKey(event.sender.id, tabId)
+      sessionWebContents.set(key, event.sender)
+      const localHost = payload?.localHost?.trim() || hostname()
+
+      const confirmOn = (targetTabId: string): ConnectionState | undefined => {
+        const targetKey = getSessionKey(event.sender.id, targetTabId)
+        const state =
+          connectionStates.get(targetKey) ??
+          createConnectionState(sessions.get(targetKey)?.mode ?? 'none')
+        const buffer = terminalOutputBuffers.get(targetKey) ?? ''
+        const promptHost = resolveSessionAlignment({
+          output: buffer,
+          expectedHost: state.expectedHost,
+          aliases: state.aliases
+        }).promptHost
+        const result = confirmLoginState(state, promptHost, { localHost })
+        connectionStates.set(targetKey, result.state)
+        return result.ok ? result.state : undefined
+      }
+
+      const isSubterminalOfParent = (parent: string, candidate: string): boolean => {
+        const marker = '::subterminal::'
+        return candidate.startsWith(`${parent}${marker}`)
+      }
+
+      if (sourceTabId && isSubterminalOfParent(tabId, sourceTabId)) {
+        const sourceOk = confirmOn(sourceTabId)
+        if (!sourceOk) {
+          return {
+            ok: false,
+            tabId,
+            error: 'Subterminal SSH did not reach the target; nothing promoted.'
+          }
+        }
+        const sourceKey = getSessionKey(event.sender.id, sourceTabId)
+        const sourceState = connectionStates.get(sourceKey)
+        const parentState = connectionStates.get(key)
+        if (sourceState && parentState) {
+          const promoted = promoteSubterminalLogin(parentState, sourceState)
+          connectionStates.set(key, promoted)
+          return {
+            ok: true,
+            tabId,
+            promptHost: promoted.promptHost,
+            learned: true,
+            alignment: promoted.alignment,
+            ready: promoted.ready,
+            aliases: promoted.aliases
+          }
+        }
+      }
+
+      const confirmed = confirmOn(tabId)
+      if (!confirmed) {
+        return {
+          ok: false,
+          tabId,
+          promptHost: connectionStates.get(key)?.promptHost,
+          alignment: connectionStates.get(key)?.alignment,
+          ready: connectionStates.get(key)?.ready,
+          aliases: connectionStates.get(key)?.aliases,
+          error: 'Login could not be verified (terminal still shows the local prompt).'
+        }
+      }
+      const state = connectionStates.get(key)
+      return {
+        ok: true,
+        tabId,
+        promptHost: state?.promptHost,
+        learned: Boolean(state?.aliases.length),
+        alignment: state?.alignment,
+        ready: state?.ready,
+        aliases: state?.aliases
+      }
     }
   )
 
@@ -804,13 +960,13 @@ export function registerTerminalIpc(): void {
       return
     }
 
-    if (session.mode === 'pipe' && isInteractiveCommand(data)) {
+    if (session.mode === 'pipe' && classifyPipeCommand(data) === 'interactive') {
       sendIfAlive(
         event.sender,
         tabId,
         getSessionKey(event.sender.id, tabId),
         'terminal:data',
-        '\r\n\x1b[31mInteractive commands such as ssh require PTY mode. Current terminal is pipe fallback, so this command was blocked to avoid corrupting password input. Restart the app or rebuild node-pty.\x1b[0m\r\n'
+        '\r\n\x1b[31mInteractive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback; command blocked. One-shot non-interactive ssh (BatchMode or remote command without -t) is still allowed.\x1b[0m\r\n'
       )
       return
     }
@@ -858,15 +1014,23 @@ export function registerTerminalIpc(): void {
         return
       }
 
-      if (session.mode === 'pipe' && isInteractiveCommand(command)) {
+      if (session.mode === 'pipe' && classifyPipeCommand(command) === 'interactive') {
         sendIfAlive(
           event.sender,
           tabId,
           key,
           'terminal:data',
-          '\r\n\x1b[31mSSH and other interactive commands require PTY mode. Current terminal is pipe fallback; command not executed.\x1b[0m\r\n'
+          '\r\n\x1b[31mInteractive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback; command not executed. One-shot non-interactive ssh (BatchMode or remote command without -t) is still allowed.\x1b[0m\r\n'
         )
         return
+      }
+
+      if (payload?.execute) {
+        // Raw echo of automation-pasted commands is suppressed by default so
+        // the terminal never shows a repeated ssh/.zshrc noise wall; the command
+        // is displayed exactly once. CRESCENT_DEBUG_CONN=1 shows the raw echo.
+        automationEchoSuppressions.set(key, { echo: command, until: Date.now() + 15_000 })
+        session.display(formatReadableCommandInput(command))
       }
 
       session.write(`${command}${payload?.execute ? '\r' : ''}`)
@@ -876,13 +1040,25 @@ export function registerTerminalIpc(): void {
   ipcMain.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     const key = tabId ? getSessionKey(event.sender.id, tabId) : ''
-    const expectedHost = key ? (sessionExpectedHosts.get(key)?.trim() ?? '') : ''
+    const state = key ? connectionStates.get(key) : undefined
+    const expectedHost = state?.expectedHost ?? ''
     const output = key ? (terminalOutputBuffers.get(key) ?? '') : ''
-    const sessionAligned = expectedHost
-      ? resolvePromptEnvironmentState(output, expectedHost)
+    const alignment = state
+      ? resolveSessionAlignment({
+          output,
+          expectedHost: state.expectedHost,
+          aliases: state.aliases
+        }).alignment
       : 'unknown'
-    console.info(
-      `[conn-trace] getContext tab=${tabId} aligned=${sessionAligned} expected=${expectedHost || '-'} tail=${output.slice(-120).replace(/\n/g, '\\n')}`
+    const sessionAligned = expectedHost ? alignment : 'unknown'
+    connTrace(
+      'getContext',
+      `tab=${tabId}`,
+      `aligned=${alignment}`,
+      `expected=${expectedHost || '-'}`,
+      `aliases=${state?.aliases.join(',') || '-'}`,
+      `ready=${state?.ready ? 'yes' : 'no'}`,
+      `tail=${output.slice(-120).replace(/\n/g, '\\n')}`
     )
 
     if (!tabId) {
@@ -896,7 +1072,11 @@ export function registerTerminalIpc(): void {
         cwd: '',
         shell: '',
         expectedHost: expectedHost || undefined,
-        sessionAligned
+        sessionAligned,
+        alignment,
+        promptHost: state?.promptHost,
+        aliases: state?.aliases ?? [],
+        ready: Boolean(state?.ready)
       }
     }
 
@@ -907,7 +1087,11 @@ export function registerTerminalIpc(): void {
       shell: session.shell,
       output,
       expectedHost: expectedHost || undefined,
-      sessionAligned
+      sessionAligned,
+      alignment,
+      promptHost: state?.promptHost,
+      aliases: state?.aliases ?? [],
+      ready: Boolean(state?.ready)
     }
   })
 
@@ -931,7 +1115,7 @@ export function registerTerminalIpc(): void {
     if (!tabId) return
     const key = getSessionKey(event.sender.id, tabId)
     stopSession(key)
-    sessionExpectedHosts.delete(key)
+    connectionStates.delete(key)
     sessionWebContents.delete(key)
     releaseTemporarySubterminalByTabId(event.sender.id, tabId)
   })
@@ -947,8 +1131,9 @@ export function stopAllTerminalSessions(): void {
   for (const key of sessions.keys()) {
     stopSession(key)
   }
-  sessionExpectedHosts.clear()
+  connectionStates.clear()
   sessionWebContents.clear()
+  automationEchoSuppressions.clear()
   temporarySubterminals.clear()
 }
 
@@ -963,7 +1148,8 @@ function stopSession(key: string): void {
   terminalExitWaiters.delete(key)
   terminalOutputBuffers.delete(key)
   terminalAutomationFilterStates.delete(key)
-  // Keep sessionExpectedHosts / sessionWebContents across soft PTY restarts
+  automationEchoSuppressions.delete(key)
+  // Keep connectionStates / sessionWebContents across soft PTY restarts
   // so reconnect can re-gate before automation re-sets the host.
 }
 
@@ -973,24 +1159,47 @@ function detectEnvironmentDriftForSession(
   command: string,
   session: TerminalSession
 ): TerminalCommandExecutionResult | undefined {
-  const expectedHost = sessionExpectedHosts.get(key)?.trim()
+  const state = connectionStates.get(key)
+  const expectedHost = state?.expectedHost
   if (!expectedHost) return undefined
 
   const buffer = terminalOutputBuffers.get(key) ?? ''
-  let observedHost = findEnvironmentDriftHost(buffer, expectedHost)
-  // The remote side may have closed the SSH session while the outer PTY stayed
-  // alive; the local shell prompt (e.g. `➜ ~`) carries no hostname, so the
-  // host-mismatch check alone would miss it. Treat a visible local prompt as
-  // drift as well so the agent never injects into the wrong environment.
-  if (!observedHost && isLocalShellPromptVisible(buffer)) observedHost = 'local-shell'
+  const resolved = resolveSessionAlignment({
+    output: buffer,
+    expectedHost,
+    aliases: state?.aliases ?? []
+  })
+  // A hostless prompt is ambiguous; the gate only treats it as drift when the
+  // session was previously verified with a hostname prompt (exit-to-local).
+  const effectiveAlignment = state ? resolveGateAlignment(state, buffer) : resolved.alignment
+  const observedHost = effectiveAlignment === 'drifted' ? resolved.promptHost : undefined
   if (!observedHost) return undefined
+
+  // Auto-learn on an unverified session: the first non-local prompt observed
+  // after login is treated as the target host (covers password/manual logins
+  // where confirm-login had no prompt host yet). A local prompt is never
+  // learned, so a failed ssh that dropped back to the local shell still gates.
+  const autoLearned = state
+    ? autoLearnUnverifiedLogin(state, observedHost, { localHost: hostname() })
+    : undefined
+  if (autoLearned) {
+    connectionStates.set(key, autoLearned)
+    connTrace('auto-learn', `tab=${tabId}`, `alias=${observedHost}`)
+    return undefined
+  }
+
+  // Learned aliases make an IP-expected / hostname-observed session aligned;
+  // only a genuinely off-target prompt reaches here.
+  connectionStates.set(key, { ...state, promptHost: observedHost, ready: false })
+  const driftKey = `${expectedHost}|${observedHost}`
 
   const webContents = sessionWebContents.get(key)
   if (webContents && !webContents.isDestroyed()) {
     sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
       tabId,
       observedHost,
-      expectedHost
+      expectedHost,
+      driftKey
     })
   }
 
@@ -1003,6 +1212,7 @@ function detectEnvironmentDriftForSession(
     environmentDrift: true,
     observedHost,
     expectedHost,
+    driftKey,
     error: `Terminal left target environment (expected ${expectedHost}, observed ${observedHost}). Command was not injected.`
   }
 }
@@ -1077,6 +1287,7 @@ function startTemporaryTerminalSession(
   terminalOutputBuffers.set(key, '')
   terminalAutomationFilterStates.delete(key)
   sessions.set(key, session)
+  noteSessionMode(key, session.mode)
 }
 
 function releaseTemporarySubterminalByTabId(senderId: number, tabId: string): void {
@@ -1361,11 +1572,7 @@ function normalizeCommandTimeout(timeoutMs: number): number {
 }
 
 export function isInteractiveCommand(data: string): boolean {
-  const command = data.trim()
-
-  if (/^sudo\s*(?:$|-i\b|-s\b|su\b)/.test(command)) return true
-
-  return /^(ssh|sftp|scp|su\b|passwd\b|mysql\b|psql\b)/.test(command)
+  return classifyPipeCommand(data) === 'interactive'
 }
 
 function sanitizeCommand(value: unknown): string {
@@ -1538,9 +1745,55 @@ function sendIfAlive(
 
 function filterAutomationControlOutput(key: string, data: string): string {
   const state = terminalAutomationFilterStates.get(key)
-  if (state) return filterAutomationControlOutputWithState(data, state)
+  const filtered = state
+    ? filterAutomationControlOutputWithState(data, state)
+    : filterAutomationControlLines(data)
 
-  return filterAutomationControlLines(data)
+  return suppressAutomationEcho(key, filtered)
+}
+
+/**
+ * Drop the raw echo line of an automation-pasted command from the visible
+ * terminal (the command is displayed once via session.display). Enabled by
+ * default; CRESCENT_DEBUG_CONN=1 keeps the raw echo for debugging.
+ */
+function suppressAutomationEcho(key: string, data: string): string {
+  const suppression = automationEchoSuppressions.get(key)
+  if (!suppression || debugConnEnabled()) return data
+  if (Date.now() > suppression.until) {
+    automationEchoSuppressions.delete(key)
+    return data
+  }
+
+  const compactEcho = compactForEcho(suppression.echo)
+  if (!compactEcho) return data
+
+  const parts = data.split(/(\r?\n)/)
+  let output = ''
+  let skipNewline = false
+
+  for (const part of parts) {
+    if (/^\r?\n$/.test(part)) {
+      if (!skipNewline) output += part
+      skipNewline = false
+      continue
+    }
+
+    const stripped = stripPromptPrefix(part.trim())
+    if (stripped && compactForEcho(stripped) === compactEcho) {
+      skipNewline = true
+      continue
+    }
+
+    skipNewline = false
+    output += part
+  }
+
+  return output
+}
+
+function compactForEcho(value: string): string {
+  return stripAnsi(value).replace(/\s+/g, '')
 }
 
 function filterAutomationControlLines(data: string): string {

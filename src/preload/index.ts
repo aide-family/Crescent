@@ -52,10 +52,8 @@ import type {
 // Custom APIs for renderer
 const api = {
   app: {
-    notifyAttention: (input: {
-      title: string
-      body: string
-    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:notify-attention', input),
+    notifyAttention: (input: { title: string; body: string }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('app:notify-attention', input),
     getRendererRecoveryMode: (): Promise<{ mode: 'none' | 'pending' | 'crash-loop' }> =>
       ipcRenderer.invoke('app:get-renderer-recovery-mode'),
     clearRendererRecovery: (): Promise<{ ok: boolean }> =>
@@ -96,6 +94,10 @@ const api = {
       output: string
       expectedHost?: string
       sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+      alignment?: 'aligned' | 'drifted' | 'unknown'
+      promptHost?: string
+      aliases?: string[]
+      ready?: boolean
     }> => ipcRenderer.invoke('terminal:get-context', { tabId }),
     resize: (dimensions: { cols: number; rows: number; tabId?: string }): void => {
       ipcRenderer.send('terminal:resize', dimensions)
@@ -111,6 +113,20 @@ const api = {
       host?: string | null
     }): Promise<{ ok: boolean; host?: string; error?: string }> =>
       ipcRenderer.invoke('terminal:set-expected-host', options),
+    confirmLogin: (options: {
+      tabId: string
+      sourceTabId?: string
+      localHost?: string
+    }): Promise<{
+      ok: boolean
+      tabId?: string
+      promptHost?: string
+      learned?: boolean
+      alignment?: 'aligned' | 'drifted' | 'unknown'
+      ready?: boolean
+      aliases?: string[]
+      error?: string
+    }> => ipcRenderer.invoke('terminal:confirm-login', options),
     openSubterminal: (options: {
       parentTabId: string
       terminalName: string
@@ -190,11 +206,12 @@ const api = {
         tabId: string
         observedHost: string
         expectedHost: string
+        driftKey?: string
       }) => void
     ): (() => void) => {
       const listener = (
         _: Electron.IpcRendererEvent,
-        event: { tabId: string; observedHost: string; expectedHost: string }
+        event: { tabId: string; observedHost: string; expectedHost: string; driftKey?: string }
       ): void => callback(event)
 
       ipcRenderer.on('terminal:environment-drift', listener)
@@ -346,6 +363,7 @@ const api = {
         tabId: string
         name: string
         mode: 'local' | 'ssh'
+        terminalMode: 'pty' | 'pipe'
         connectionId?: string
         chatTabId?: string
       }) => void
@@ -357,6 +375,7 @@ const api = {
           tabId: string
           name: string
           mode: 'local' | 'ssh'
+          terminalMode: 'pty' | 'pipe'
           connectionId?: string
           chatTabId?: string
         }

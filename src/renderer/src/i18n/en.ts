@@ -304,6 +304,11 @@ const en = {
       'Terminal session disconnected. Command injection to this terminal stopped.',
     terminalEnvironmentDrift:
       'Terminal left the target environment (expected {expected}, now {observed}). Troubleshooting stopped and connection restore started.',
+    localShellLabel: 'local shell',
+    terminalConnectionRecovered: 'Reconnected. Continuing the original task: {input}',
+    terminalRecoveryCapReached:
+      'Automatic restore exhausted its attempts. Retry manually or pick another connection.',
+    terminalSubterminalLoginDone: 'Logged in via sub-terminal: {name}',
     terminalReconnectFailed: 'Terminal auto-restore failed',
     terminalReconnecting: 'Terminal connection disconnected. Restoring it automatically.',
     terminalReconnectUnavailable:
@@ -317,7 +322,8 @@ const en = {
     reinitializingTerminal: 'Reinitializing terminal…',
     reinitTerminalReady: 'Terminal reinitialized. You can retry the connection.',
     connectionDriftedReconnecting: 'Session left the target host; reconnecting automatically.',
-    connectionLoginTimeout: 'Connection login timed out ({ms}s). This retry stopped. You can retry.',
+    connectionLoginTimeout:
+      'Connection login timed out ({ms}s). This retry stopped. You can retry.',
     terminalSpawnTimeout: 'Terminal start timed out (10s).',
     postLoginAgentInstruction:
       'The current terminal has already completed the Crescent target connection login. Do not rematch a Crescent connection; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
@@ -427,6 +433,10 @@ const en = {
     copyCommand: 'Copy command',
     autoApprovedShort: 'Auto-allowed',
     agentCanceled: 'Agent run was stopped manually.',
+    systemRecoveryStopped: 'Connection interrupted; troubleshooting stopped and restore started.',
+    gateInterruptStopped:
+      'Command not injected: terminal left the target environment (expected {expected}, now {observed}).',
+    timeoutStopped: 'Operation timed out; this attempt stopped. You can retry.',
     agentAlreadyProcessing: 'The previous run is still stopping. Wait a moment, then send again.',
     missingExecutionTerminal:
       'No execution terminal is ready. Open or start a terminal pane, then try again.',
@@ -476,8 +486,9 @@ const en = {
     retryConnecting: 'Reconnecting…',
     reinitTerminal: 'Reinitialize terminal',
     reinitTerminalHint:
-      'The terminal is in PIPE fallback mode, which cannot run SSH (PTY required); retrying would fail. Reinitialize the terminal to restore PTY, or pick a local shell connection.',
-    pipeRetryUnavailable: 'PIPE mode cannot retry SSH login.',
+      'The terminal is in fallback (PIPE) mode. Interactive login (password / interactive shell) requires a PTY; one-shot passwordless ssh (BatchMode or a remote command without -t) still works. Reinitialize the terminal to restore PTY before retrying.',
+    pipeRetryUnavailable:
+      'Interactive login requires a PTY; the terminal is in fallback (PIPE) mode. Reinitialize the terminal first, or use one-shot passwordless ssh.',
     openConnections: 'Open connections',
     createdPlan: 'Created execution plan',
     done: 'Done.',

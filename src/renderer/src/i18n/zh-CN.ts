@@ -284,6 +284,10 @@ const zhCN = {
     terminalDisconnected: '终端会话已断开，已停止向该终端注入命令。',
     terminalEnvironmentDrift:
       '终端已离开目标环境（期望 {expected}，当前 {observed}）。已停止排查并开始恢复连接。',
+    localShellLabel: '本机',
+    terminalConnectionRecovered: '重连成功，继续执行原任务：{input}',
+    terminalRecoveryCapReached: '已多次尝试仍无法自动恢复，请手动重试或选择其他连接。',
+    terminalSubterminalLoginDone: '已通过子终端完成登录：{name}',
     terminalReconnectFailed: '终端自动恢复失败',
     terminalReconnecting: '终端连接已断开，正在自动恢复。',
     terminalReconnectUnavailable: '终端异常，当前会话无法自动恢复，已停止自动命令执行。',
@@ -400,6 +404,9 @@ const zhCN = {
     copyCommand: '复制命令',
     autoApprovedShort: '已自动放行',
     agentCanceled: '已手动停止本次会话。',
+    systemRecoveryStopped: '连接中断，已停止排查并开始恢复。',
+    gateInterruptStopped: '命令未注入：终端已离开目标环境（期望 {expected}，当前 {observed}）。',
+    timeoutStopped: '操作超时，已停止本轮执行。可重试。',
     agentAlreadyProcessing: '上一轮仍在停止中，请稍候再发送。',
     missingExecutionTerminal: '执行终端尚未就绪。请打开或启动终端面板后再试。',
     noModelAvailable: '没有可用模型。请在设置中添加带 API Key 的 OpenAI 兼容供应商。',
@@ -443,8 +450,9 @@ const zhCN = {
     retryConnecting: '正在重连…',
     reinitTerminal: '重新初始化终端',
     reinitTerminalHint:
-      '当前为 PIPE 模式，SSH 需要 PTY，重试必然失败。可重新初始化终端恢复 PTY 后重试，或选择本地 shell 连接。',
-    pipeRetryUnavailable: '当前为 PIPE 模式，无法重试 SSH 登录。',
+      '当前为备用（PIPE）模式，交互式登录（密码/交互 shell）需要 PTY；一发式免密 ssh（BatchMode 或带远程命令）仍可直接执行。可重新初始化终端恢复 PTY 后重试。',
+    pipeRetryUnavailable:
+      '交互式登录需要 PTY；当前为备用（PIPE）模式。可先重新初始化终端，或改用一发式免密 ssh。',
     openConnections: '打开连接列表',
     createdPlan: '已生成执行计划',
     done: '已完成。',

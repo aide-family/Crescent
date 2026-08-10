@@ -80,6 +80,10 @@ interface TerminalAgentApi {
       output: string
       expectedHost?: string
       sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+      alignment?: 'aligned' | 'drifted' | 'unknown'
+      promptHost?: string
+      aliases?: string[]
+      ready?: boolean
     }>
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
@@ -88,6 +92,20 @@ interface TerminalAgentApi {
       tabId: string
       host?: string | null
     }) => Promise<{ ok: boolean; host?: string; error?: string }>
+    confirmLogin: (options: {
+      tabId: string
+      sourceTabId?: string
+      localHost?: string
+    }) => Promise<{
+      ok: boolean
+      tabId?: string
+      promptHost?: string
+      learned?: boolean
+      alignment?: 'aligned' | 'drifted' | 'unknown'
+      ready?: boolean
+      aliases?: string[]
+      error?: string
+    }>
     openSubterminal: (options: {
       parentTabId: string
       terminalName: string
@@ -122,6 +140,7 @@ interface TerminalAgentApi {
         tabId: string
         observedHost: string
         expectedHost: string
+        driftKey?: string
       }) => void
     ) => () => void
   }
@@ -208,6 +227,7 @@ interface TerminalAgentApi {
         tabId: string
         name: string
         mode: 'local' | 'ssh'
+        terminalMode: 'pty' | 'pipe'
         connectionId?: string
         chatTabId?: string
       }) => void

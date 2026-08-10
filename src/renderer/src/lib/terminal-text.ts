@@ -130,12 +130,14 @@ export function hasInteractivePrompt(output: string): boolean {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(-6)
 
-  return lines.some((line) => {
-    if (/(yes\/no|continue connecting)/i.test(line)) return true
-    return isSharedPasswordPromptLine(line)
-  })
+  // Only the NEWEST non-empty line decides: a password/yes-no prompt that was
+  // answered still stays in older lines, so scanning the whole tail would keep
+  // a logged-in terminal looking interactive forever.
+  const lastLine = lines[lines.length - 1] ?? ''
+  if (!lastLine) return false
+  if (/(yes\/no|continue connecting)/i.test(lastLine)) return true
+  return isSharedPasswordPromptLine(lastLine)
 }
 
 export function hasOutputBeyondEcho(output: string, echo: string): boolean {

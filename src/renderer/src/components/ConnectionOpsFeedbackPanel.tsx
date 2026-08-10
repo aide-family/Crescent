@@ -16,6 +16,7 @@ import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
 import type { OpsHistoryRating, OpsHistoryRecord } from '../../../shared/agent-types'
+import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 import { resolveOpsConnectionId } from '../../../shared/local-connection'
 
 interface ConnectionOpsFeedbackPanelProps {
@@ -54,7 +55,10 @@ export function ConnectionOpsFeedbackPanel({
         if (!cancelled) setRecords(next)
       } catch (error) {
         if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : t.connections.opsFeedbackLoadFailed)
+          toast.error(
+            error instanceof Error ? error.message : t.connections.opsFeedbackLoadFailed,
+            { duration: TOAST_INTERVENTION_DURATION_MS }
+          )
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -86,7 +90,9 @@ export function ConnectionOpsFeedbackPanel({
     const userGoal = draft.userGoal.trim()
     const pathSummary = draft.pathSummary.trim()
     if (!userGoal || !pathSummary) {
-      toast.error(t.connections.opsFeedbackInvalid)
+      toast.error(t.connections.opsFeedbackInvalid, {
+        duration: TOAST_INTERVENTION_DURATION_MS
+      })
       return
     }
 
@@ -100,7 +106,9 @@ export function ConnectionOpsFeedbackPanel({
         lesson: draft.lesson.trim()
       })
       if (!result.ok || !result.record) {
-        toast.error(result.error || t.connections.opsFeedbackSaveFailed)
+        toast.error(result.error || t.connections.opsFeedbackSaveFailed, {
+          duration: TOAST_INTERVENTION_DURATION_MS
+        })
         return
       }
       setRecords((current) =>
@@ -109,7 +117,9 @@ export function ConnectionOpsFeedbackPanel({
       cancelEdit()
       toast.success(t.connections.opsFeedbackSaveSucceeded)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t.connections.opsFeedbackSaveFailed)
+      toast.error(error instanceof Error ? error.message : t.connections.opsFeedbackSaveFailed, {
+        duration: TOAST_INTERVENTION_DURATION_MS
+      })
     } finally {
       setSavingId(null)
     }
@@ -122,7 +132,9 @@ export function ConnectionOpsFeedbackPanel({
     try {
       const result = await window.api.storage.deleteOpsFeedback(record.id)
       if (!result.ok) {
-        toast.error(t.connections.opsFeedbackDeleteFailed)
+        toast.error(t.connections.opsFeedbackDeleteFailed, {
+          duration: TOAST_INTERVENTION_DURATION_MS
+        })
         return
       }
       setRecords((current) => current.filter((item) => item.id !== record.id))

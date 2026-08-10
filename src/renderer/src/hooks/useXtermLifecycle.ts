@@ -10,11 +10,12 @@ import {
   observeTerminalHostResize,
   type PipeTerminalState
 } from '../lib/pipe-terminal'
-import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, parseSubterminalTabId } from '../lib/terminal-text'
 import {
-  appendTerminalOutputRing,
-  readTerminalOutputRing
-} from '../lib/terminal-output-ring'
+  createCrescentBootstrapFilter,
+  filterCrescentBootstrapOutput,
+  parseSubterminalTabId
+} from '../lib/terminal-text'
+import { appendTerminalOutputRing, readTerminalOutputRing } from '../lib/terminal-output-ring'
 import {
   resolveSessionChatTabId,
   type AgentLogEntryInput,
@@ -40,6 +41,7 @@ interface UseXtermLifecycleInput {
   automatedLoginTabsRef: MutableRefObject<Set<string>>
   passwordPromptBuffersRef: MutableRefObject<Map<string, string>>
   skipConnectionReconnectRef: MutableRefObject<Set<string>>
+  ptyRetryTriedRef: MutableRefObject<Set<string>>
   restoreTerminalSessionRef: MutableRefObject<((tabId: string) => Promise<boolean>) | null>
   updateTab: (tabId: string, updater: (tab: AgentTerminalTab) => AgentTerminalTab) => void
   updateSubterminalOutput: (parentTabId: string, name: string, id: string, data: string) => void
@@ -76,6 +78,7 @@ export function useXtermLifecycle({
   automatedLoginTabsRef,
   passwordPromptBuffersRef,
   skipConnectionReconnectRef,
+  ptyRetryTriedRef,
   restoreTerminalSessionRef,
   updateTab,
   updateSubterminalOutput: _updateSubterminalOutput,
@@ -244,14 +247,29 @@ export function useXtermLifecycle({
 
       const dimensions = fitAddon.proposeDimensions()
       const pendingConnection = pendingSshRef.current.get(tab.id)
-      console.info(
-        `[conn-trace] lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingConnection)}`
-      )
-      const session = await window.api.terminal.start({
+      if (typeof process !== 'undefined' && process.env?.CRESCENT_DEBUG_CONN === '1') {
+        console.info(
+          '[conn-trace]',
+          `lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingConnection)}`
+        )
+      }
+      let session = await window.api.terminal.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
         tabId: tab.id
       })
+
+      // node-pty failure falls back to PIPE; auto-reinit once before settling
+      // on the fallback so transient PTY failures self-heal.
+      if (session.mode === 'pipe' && !ptyRetryTriedRef.current.has(tab.id)) {
+        ptyRetryTriedRef.current.add(tab.id)
+        window.api.terminal.stop(tab.id)
+        session = await window.api.terminal.start({
+          cols: dimensions?.cols ?? 80,
+          rows: dimensions?.rows ?? 24,
+          tabId: tab.id
+        })
+      }
 
       terminalSessionIdRef.current = session.sessionId
       terminalModeRef.current = session.mode
@@ -314,6 +332,7 @@ export function useXtermLifecycle({
     pendingSshRef,
     pipePromptRef,
     postLoginTaskAbortedText,
+    ptyRetryTriedRef,
     restoreTerminalSessionRef,
     shellExitedText,
     skipConnectionReconnectRef,
