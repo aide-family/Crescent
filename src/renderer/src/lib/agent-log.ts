@@ -1,7 +1,18 @@
 import type { Dictionary } from '@renderer/i18n'
 import type { StoredAgentLogEntry } from '../../../shared/agent-types'
-import { formatAgentRunDocument } from './agent-run-document'
+import {
+  clampAgentRunEnvelopeText,
+  formatAgentRunDocument,
+  formatAgentRunDocumentParseStub
+} from './agent-run-document'
+import { AGENT_LOG_ENTRY_MAX_CHARS } from './agent-text-limits'
 import type { AgentLogEntry, AgentRunAction, AgentRunViewState } from './terminal-tabs'
+
+export {
+  AGENT_LOG_ENTRY_MAX_CHARS,
+  AGENT_RUN_STREAM_MAX_CHARS,
+  clampAgentText
+} from './agent-text-limits'
 
 export function logClassName(kind: AgentLogEntry['kind']): string {
   switch (kind) {
@@ -27,6 +38,20 @@ export function isConversationLog(kind: AgentLogEntry['kind']): boolean {
 }
 
 export const AGENT_LOG_SOFT_LIMIT = 120
+
+/**
+ * Clamp a single log entry's text for renderer memory.
+ * CRESCENT_RUN_V2 envelopes are structure-shrunk or replaced with a parseable stub
+ * (never mid-JSON sliced). SQLite may still hold longer text from prior saves.
+ */
+export function clampAgentLogEntryText<T extends { text: string }>(
+  entry: T,
+  maxChars = AGENT_LOG_ENTRY_MAX_CHARS
+): T {
+  const text = clampAgentRunEnvelopeText(entry.text, maxChars)
+  if (text === entry.text) return entry
+  return { ...entry, text }
+}
 
 function isUserLikeLog(kind: AgentLogEntry['kind']): boolean {
   return kind === 'user' || kind === 'user-supplement'
@@ -94,7 +119,10 @@ export function trimAgentLogEntries(
   return entries.filter((_, index) => !dropSet.has(index))
 }
 
-/** Ids removed by trim — used to keep SQLite history in sync with in-memory log. */
+/**
+ * Ids removed from the in-memory window by trim.
+ * Callers must NOT delete these from SQLite — persistence stays complete for lazy reload.
+ */
 export function collectTrimmedAgentLogIds(
   before: AgentLogEntry[],
   after: AgentLogEntry[]
@@ -156,6 +184,12 @@ export function connectionFailureMarkers(t: Dictionary): string[] {
     t.terminal.terminalReconnectUnavailable,
     t.terminal.shellExited,
     t.connections.passwordEnvVarMissing,
+    '连接登录超时',
+    '终端启动超时',
+    '等待终端输出静默超时',
+    'Connection login timed out',
+    'Terminal start timed out',
+    'Waiting for terminal output to settle timed out',
     'SSH requires PTY'
   ]
 }
@@ -229,21 +263,42 @@ export function formatHistoryTime(value: string): string {
 }
 
 export function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry {
-  const kind = normalizeStoredAgentLogKind(entry.kind)
-  if (kind === 'user-supplement') {
+  try {
+    const kind = normalizeStoredAgentLogKind(entry.kind)
+    if (kind === 'user-supplement') {
+      return clampAgentLogEntryText({
+        id: entry.logId,
+        kind: 'user-supplement',
+        text: entry.text,
+        createdAt: entry.createdAt,
+        runId: entry.runId?.trim() || ''
+      })
+    }
+    return clampAgentLogEntryText({
+      id: entry.logId,
+      kind,
+      text: entry.text,
+      createdAt: entry.createdAt
+    })
+  } catch (error) {
+    console.warn('[crescent] hydrateStoredAgentLog failed; using parse stub', error)
+    const kind = normalizeStoredAgentLogKind(entry.kind ?? 'assistant')
+    const stubText = formatAgentRunDocumentParseStub()
+    if (kind === 'user-supplement') {
+      return {
+        id: entry.logId,
+        kind: 'user-supplement',
+        text: stubText,
+        createdAt: entry.createdAt || new Date().toISOString(),
+        runId: entry.runId?.trim() || ''
+      }
+    }
     return {
       id: entry.logId,
-      kind: 'user-supplement',
-      text: entry.text,
-      createdAt: entry.createdAt,
-      runId: entry.runId?.trim() || ''
+      kind: kind === 'user' ? 'assistant' : kind,
+      text: stubText,
+      createdAt: entry.createdAt || new Date().toISOString()
     }
-  }
-  return {
-    id: entry.logId,
-    kind,
-    text: entry.text,
-    createdAt: entry.createdAt
   }
 }
 

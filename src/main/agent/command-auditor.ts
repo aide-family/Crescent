@@ -8,9 +8,10 @@ export const COMMAND_AUDIT_TIMEOUT_MS = 10_000
 
 const AUDIT_SYSTEM_PROMPT = [
   '你是命令安全审核器，只判断不执行。严格输出一行 JSON，无解释：',
-  '{"level":"low|high","reason":"≤15字"}',
+  '{"level":"low|high","reason":"一句话说明执行后果（≤80字）"}',
   'low：纯只读查询/读日志/网络 GET，及其 && 与 | 组合。',
-  'high：含任何写、删、改状态、改权限、输出重定向；读写混合；不确定。'
+  'high：含任何写、删、改状态、改权限、输出重定向；读写混合；不确定。',
+  'high 的 reason 必须写明具体影响：会修改/删除/覆盖什么，影响哪些主机、路径或数据。'
 ].join('\n')
 
 export class CommandAuditTimeoutError extends Error {
@@ -101,7 +102,7 @@ export class CommandAuditor {
     const completion = await this.brain.chat(
       {
         temperature: 0,
-        max_tokens: 60,
+        max_tokens: 200,
         messages: [
           { role: 'system', content: AUDIT_SYSTEM_PROMPT },
           { role: 'user', content: command }
@@ -158,7 +159,7 @@ export function tryParseAuditLevel(content: string): { level: 'low' | 'high'; re
     const raw = parsed.level ?? parsed.risk
     const level = normalizeAuditLevel(raw)
     if (!level) return null
-    const reason = typeof parsed.reason === 'string' ? parsed.reason.trim().slice(0, 15) : ''
+    const reason = typeof parsed.reason === 'string' ? parsed.reason.trim().slice(0, 160) : ''
     return { level, reason }
   } catch {
     return null
@@ -197,9 +198,13 @@ function buildAuditFromLevel(
         ? language === 'zh-CN'
           ? '预计不会产生系统变更影响。'
           : 'No system-changing impact is expected.'
-        : language === 'zh-CN'
-          ? '该命令存在潜在影响，执行前需要用户审核。'
-          : 'Potential impact requires user review before execution.',
+        : reason
+          ? language === 'zh-CN'
+            ? `该命令会产生实际影响：${reason}。执行前请确认目标主机、路径与影响范围。`
+            : `This command changes system state: ${reason}. Confirm the target host, path, and blast radius before approving.`
+          : language === 'zh-CN'
+            ? '该命令存在潜在影响，执行前需要用户审核。'
+            : 'Potential impact requires user review before execution.',
     recommendation:
       level === 'low'
         ? language === 'zh-CN'

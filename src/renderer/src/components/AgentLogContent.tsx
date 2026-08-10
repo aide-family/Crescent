@@ -7,7 +7,13 @@ import {
   logRoleLabel,
   summarizeBehaviorLog
 } from '@renderer/lib/agent-log'
-import { agentRunViewToDocument, looksLikeAgentRunDocument, parseAgentRunDocument } from '@renderer/lib/agent-run-document'
+import {
+  agentRunViewToDocument,
+  isAgentRunDocumentParseStub,
+  looksLikeAgentRunDocument,
+  safeParseAgentRunDocument
+} from '@renderer/lib/agent-run-document'
+import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
 import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
 
 export function ActionLogRow({
@@ -42,6 +48,7 @@ export function ActionLogRow({
 export function AgentLogContent({
   entry,
   liveRun,
+  tabId,
   t,
   copied,
   feedbackRating,
@@ -59,6 +66,7 @@ export function AgentLogContent({
 }: {
   entry: AgentLogEntry
   liveRun?: AgentRunViewState | null
+  tabId?: string
   t: Dictionary
   copied?: boolean
   feedbackRating?: 'like' | 'dislike' | null
@@ -78,17 +86,34 @@ export function AgentLogContent({
     if (entry.kind === 'user') {
       return (
         <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-          {entry.text}
+          {clampAgentText(entry.text)}
         </pre>
       )
     }
 
-    const parsedRun =
-      entry.kind === 'assistant'
-        ? liveRun
-          ? agentRunViewToDocument(liveRun)
-          : parseAgentRunDocument(entry.text, t)
-        : null
+    // Prefer liveRun while streaming — do not re-parse a potentially huge entry.text snapshot.
+    // Isolate parse failures to this entry only; never throw into the chat tree / new-turn path.
+    let parsedRun: ReturnType<typeof safeParseAgentRunDocument> = null
+    let showParseStub = false
+    if (entry.kind === 'assistant') {
+      try {
+        if (liveRun) {
+          parsedRun = agentRunViewToDocument(liveRun)
+        } else if (isAgentRunDocumentParseStub(entry.text)) {
+          showParseStub = true
+        } else {
+          parsedRun = safeParseAgentRunDocument(entry.text, t)
+          if (!parsedRun && looksLikeAgentRunDocument(entry.text)) {
+            showParseStub = true
+          }
+        }
+      } catch (error) {
+        console.warn('[crescent] AgentLogContent parse isolated; showing stub', error)
+        parsedRun = null
+        showParseStub = true
+      }
+    }
+
     if (parsedRun) {
       return (
         <AgentRunTimeline
@@ -97,6 +122,15 @@ export function AgentLogContent({
           copied={Boolean(copied)}
           feedbackRating={feedbackRating}
           feedbackBusy={feedbackBusy}
+          storageRef={
+            tabId
+              ? {
+                  tabId,
+                  logId: entry.id,
+                  runId: liveRun?.runId
+                }
+              : undefined
+          }
           onCopyResult={onCopyResult}
           onExportResult={onExportResult}
           onExportFull={onExportFull}
@@ -111,16 +145,23 @@ export function AgentLogContent({
       )
     }
 
-    if (entry.kind === 'assistant' && looksLikeAgentRunDocument(entry.text)) {
-      console.warn('[crescent] CRESCENT_RUN_V2 envelope failed to parse; suppressing raw render')
+    if (!liveRun && entry.kind === 'assistant' && showParseStub) {
       return (
-        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div
+          className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          data-testid="agent-run-document-stub"
+        >
           {t.input.runDocumentCorrupt}
         </div>
       )
     }
 
-    return <MarkdownContent value={entry.text} t={t} />
+    return (
+      <MarkdownContent
+        value={clampAgentText(entry.text, AGENT_RUN_STREAM_MAX_CHARS)}
+        t={t}
+      />
+    )
   }
 
   const summary = summarizeBehaviorLog(entry.text, entry.kind, t)

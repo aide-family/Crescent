@@ -17,10 +17,14 @@ import {
 import { AgentLogList } from '@renderer/components/AgentLogList'
 import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
 import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
-import { PasswordPromptInlineCard, type PasswordPromptRequest } from '@renderer/components/AppModals'
+import {
+  PasswordPromptInlineCard,
+  type PasswordPromptRequest
+} from '@renderer/components/AppModals'
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
 import { StatusDot, TerminalActivityDot } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
+import type { ConnectionClarifyConfirmPayload } from '@renderer/lib/connection-route'
 import {
   Select,
   SelectContent,
@@ -48,10 +52,7 @@ import {
   type AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import { buildModelSelectionValue } from '@renderer/lib/app-runtime'
-import type {
-  AgentModelOption,
-  AgentPinnedWorkflow
-} from '../../../shared/agent-types'
+import type { AgentModelOption, AgentPinnedWorkflow } from '../../../shared/agent-types'
 
 export function AgentPanel({
   sessionChatTab,
@@ -117,6 +118,7 @@ export function AgentPanel({
   voiceWhisperSupported = true,
   onStopAgent,
   onRetryConnection,
+  onReinitTerminal,
   onOpenConnections,
   passwordPromptRequest = null,
   passwordPromptValue = '',
@@ -125,7 +127,10 @@ export function AgentPanel({
   onPasswordPromptChange,
   onPasswordPromptCancel,
   onPasswordPromptSubmit,
-  onSaveAsSop
+  onSaveAsSop,
+  hasEarlierLogs,
+  loadingEarlier,
+  onLoadEarlier
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -154,6 +159,9 @@ export function AgentPanel({
   connectionRecovery?: {
     visible: boolean
     canRetry: boolean
+    connecting?: boolean
+    pipeFallback?: boolean
+    reason?: string
   }
   t: Dictionary
   onCopyEntry: (entry: AgentLogEntry) => void
@@ -169,7 +177,7 @@ export function AgentPanel({
   onAddCommandToWhitelist?: (command: string) => void
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
-  onClarifyConfirm?: (label: string) => void
+  onClarifyConfirm?: (payload: ConnectionClarifyConfirmPayload) => void
   onClarifyDismiss?: () => void
   onToggleTerminalPane: () => void
   onSelectSession: (groupId: string) => void
@@ -193,6 +201,7 @@ export function AgentPanel({
   voiceWhisperSupported?: boolean
   onStopAgent: () => void
   onRetryConnection?: () => void
+  onReinitTerminal?: () => void
   onOpenConnections?: () => void
   passwordPromptRequest?: PasswordPromptRequest | null
   passwordPromptValue?: string
@@ -202,6 +211,9 @@ export function AgentPanel({
   onPasswordPromptCancel?: () => void
   onPasswordPromptSubmit?: (event: FormEvent<HTMLFormElement>) => void
   onSaveAsSop?: (entry: AgentLogEntry) => void
+  hasEarlierLogs?: boolean
+  loadingEarlier?: boolean
+  onLoadEarlier?: () => void | Promise<void>
 }): React.JSX.Element {
   const footerStatusText =
     voiceInputState === 'recording'
@@ -216,15 +228,14 @@ export function AgentPanel({
               ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
               : t.input.currentTerminal
   const showSendButton =
-    activeAgentPending ||
-    sessionChatTab.agentBusy ||
-    Boolean(sessionChatTab.agentInput.trim())
+    activeAgentPending || sessionChatTab.agentBusy || Boolean(sessionChatTab.agentInput.trim())
 
   return (
     <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
       <AgentLogList
         logRef={agentLogRef}
         entries={sessionChatTab.agentLog}
+        tabId={sessionChatTab.id}
         liveRunByLogId={liveRunByLogId}
         copiedLogId={sessionChatTab.copiedLogId}
         thinking={sessionChatTab.agentThinking}
@@ -243,9 +254,13 @@ export function AgentPanel({
         feedbackByLogId={feedbackByLogId}
         feedbackBusyLogId={feedbackBusyLogId}
         onRetryConnection={onRetryConnection}
+        onReinitTerminal={onReinitTerminal}
         onOpenConnections={onOpenConnections}
         onOpenModelSettings={onOpenModelSettings}
         onSaveAsSop={onSaveAsSop}
+        hasEarlierLogs={hasEarlierLogs}
+        loadingEarlier={loadingEarlier}
+        onLoadEarlier={onLoadEarlier}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
       onClarifyConfirm &&
@@ -309,7 +324,9 @@ export function AgentPanel({
               <SelectTrigger className="h-8 min-w-0 flex-1 gap-1.5" title={t.input.sessionLabel}>
                 <SelectValue aria-label={t.input.sessionLabel}>
                   <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate">{getSessionDisplayTitle(sessionChatTab, tabs)}</span>
+                    <span className="truncate">
+                      {getSessionDisplayTitle(sessionChatTab, tabs, activeTab.id)}
+                    </span>
                     {sessionTerminals.length > 1 && (
                       <span className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
                         {t.input.sessionPeerCount.replace(

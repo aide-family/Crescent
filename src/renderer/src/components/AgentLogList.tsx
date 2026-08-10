@@ -1,5 +1,12 @@
 import type { RefObject } from 'react'
-import { CheckIcon, CopyIcon, RefreshCwIcon, ServerIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  CopyIcon,
+  Loader2Icon,
+  RefreshCwIcon,
+  ServerIcon,
+  TriangleAlertIcon
+} from 'lucide-react'
 
 import { ActionLogRow, AgentLogContent } from '@renderer/components/AgentLogContent'
 import { Button } from '@renderer/components/ui/button'
@@ -18,6 +25,7 @@ import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-ta
 export function AgentLogList({
   logRef,
   entries,
+  tabId,
   liveRunByLogId,
   copiedLogId,
   thinking,
@@ -34,14 +42,19 @@ export function AgentLogList({
   feedbackByLogId,
   feedbackBusyLogId,
   onRetryConnection,
+  onReinitTerminal,
   onOpenConnections,
   onAddCommandToWhitelist,
   onInjectSuggestions,
   onOpenModelSettings,
-  onSaveAsSop
+  onSaveAsSop,
+  hasEarlierLogs,
+  loadingEarlier,
+  onLoadEarlier
 }: {
   logRef: RefObject<HTMLDivElement | null>
   entries: AgentLogEntry[]
+  tabId?: string
   liveRunByLogId?: Record<number, AgentRunViewState>
   copiedLogId?: number | null
   thinking?: boolean
@@ -49,6 +62,9 @@ export function AgentLogList({
   connectionRecovery?: {
     visible: boolean
     canRetry: boolean
+    connecting?: boolean
+    pipeFallback?: boolean
+    reason?: string
   }
   t: Dictionary
   onCopyEntry: (entry: AgentLogEntry) => void
@@ -65,7 +81,11 @@ export function AgentLogList({
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
   onRetryConnection?: () => void
+  onReinitTerminal?: () => void
   onOpenConnections?: () => void
+  hasEarlierLogs?: boolean
+  loadingEarlier?: boolean
+  onLoadEarlier?: () => void | Promise<void>
 }): React.JSX.Element {
   const markers = connectionFailureMarkers(t)
   const latestFailure = [...entries]
@@ -78,6 +98,20 @@ export function AgentLogList({
       ref={logRef}
       className="relative z-0 min-h-0 min-w-0 flex-1 overflow-auto px-4 pb-4 text-sm"
     >
+      {onLoadEarlier && hasEarlierLogs ? (
+        <div className="mb-3 flex justify-center pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px]"
+            disabled={loadingEarlier}
+            onClick={() => void onLoadEarlier()}
+          >
+            {loadingEarlier ? t.input.loadingEarlierLogs : t.input.loadEarlierLogs}
+          </Button>
+        </div>
+      ) : null}
       {entries.length === 0 && !thinking ? (
         <div className="mt-8 rounded-lg border border-dashed border-border/70 bg-muted/15 px-4 py-6 text-center">
           <div className="text-sm font-medium text-foreground">
@@ -134,6 +168,7 @@ export function AgentLogList({
                 <AgentLogContent
                   entry={entry}
                   liveRun={liveRunByLogId?.[entry.id]}
+                  tabId={tabId}
                   t={t}
                   copied={copiedLogId === entry.id}
                   feedbackRating={feedbackByLogId?.[entry.id] ?? null}
@@ -159,21 +194,59 @@ export function AgentLogList({
 
       {showRecovery ? (
         <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-3">
-          <div className="text-sm font-medium text-foreground">
-            {t.input.connectionRecoveryTitle}
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            {connectionRecovery?.connecting ? (
+              <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <TriangleAlertIcon className="size-3.5 text-amber-500" aria-hidden="true" />
+            )}
+            <span>{t.input.connectionRecoveryTitle}</span>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {t.input.connectionRecoveryHint}
-          </p>
+          {connectionRecovery?.connecting ? (
+            <p className="mt-1 text-xs text-muted-foreground">{t.input.retryConnecting}</p>
+          ) : connectionRecovery?.pipeFallback ? (
+            <>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {t.input.reinitTerminalHint}
+              </p>
+              {connectionRecovery.reason ? (
+                <p className="mt-1 break-words text-[11px] leading-relaxed text-muted-foreground/80">
+                  {connectionRecovery.reason}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {t.input.connectionRecoveryHint}
+              </p>
+              {connectionRecovery?.reason ? (
+                <p className="mt-1 break-words text-[11px] leading-relaxed text-muted-foreground/80">
+                  {connectionRecovery.reason}
+                </p>
+              ) : null}
+            </>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
-            {connectionRecovery?.canRetry && onRetryConnection ? (
+            {connectionRecovery?.connecting ? null : connectionRecovery?.pipeFallback ? (
+              <Button type="button" size="sm" onClick={onReinitTerminal}>
+                <RefreshCwIcon data-icon="inline-start" />
+                {t.input.reinitTerminal}
+              </Button>
+            ) : connectionRecovery?.canRetry && onRetryConnection ? (
               <Button type="button" size="sm" onClick={onRetryConnection}>
                 <RefreshCwIcon data-icon="inline-start" />
                 {t.input.retryConnection}
               </Button>
             ) : null}
             {onOpenConnections ? (
-              <Button type="button" size="sm" variant="outline" onClick={onOpenConnections}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onOpenConnections}
+                disabled={connectionRecovery?.connecting}
+              >
                 <ServerIcon data-icon="inline-start" />
                 {t.input.openConnections}
               </Button>

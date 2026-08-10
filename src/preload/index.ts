@@ -55,7 +55,16 @@ const api = {
     notifyAttention: (input: {
       title: string
       body: string
-    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:notify-attention', input)
+    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:notify-attention', input),
+    getRendererRecoveryMode: (): Promise<{ mode: 'none' | 'pending' | 'crash-loop' }> =>
+      ipcRenderer.invoke('app:get-renderer-recovery-mode'),
+    clearRendererRecovery: (): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('app:clear-renderer-recovery'),
+    exportRendererDiagnostics: (): Promise<{ ok: boolean; canceled?: boolean; path?: string }> =>
+      ipcRenderer.invoke('app:export-renderer-diagnostics'),
+    reportDiagnosticError: (message: string): void => {
+      ipcRenderer.send('renderer:diagnostic-error', { message: message.slice(0, 2048) })
+    }
   },
   terminal: {
     start: (options?: {
@@ -85,6 +94,8 @@ const api = {
       cwd: string
       shell: string
       output: string
+      expectedHost?: string
+      sessionAligned?: 'aligned' | 'drifted' | 'unknown'
     }> => ipcRenderer.invoke('terminal:get-context', { tabId }),
     resize: (dimensions: { cols: number; rows: number; tabId?: string }): void => {
       ipcRenderer.send('terminal:resize', dimensions)
@@ -95,6 +106,11 @@ const api = {
     clear: (tabId?: string): void => {
       ipcRenderer.send('terminal:clear', { tabId })
     },
+    setExpectedHost: (options: {
+      tabId: string
+      host?: string | null
+    }): Promise<{ ok: boolean; host?: string; error?: string }> =>
+      ipcRenderer.invoke('terminal:set-expected-host', options),
     openSubterminal: (options: {
       parentTabId: string
       terminalName: string
@@ -168,6 +184,21 @@ const api = {
 
       ipcRenderer.on('terminal:exit', listener)
       return () => ipcRenderer.removeListener('terminal:exit', listener)
+    },
+    onEnvironmentDrift: (
+      callback: (event: {
+        tabId: string
+        observedHost: string
+        expectedHost: string
+      }) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        event: { tabId: string; observedHost: string; expectedHost: string }
+      ): void => callback(event)
+
+      ipcRenderer.on('terminal:environment-drift', listener)
+      return () => ipcRenderer.removeListener('terminal:environment-drift', listener)
     }
   },
   agent: {
@@ -362,6 +393,11 @@ const api = {
     updateAgentLog: (
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ): Promise<{ ok: boolean }> => ipcRenderer.invoke('storage:update-agent-log', input),
+    getAgentLog: (input: {
+      tabId: string
+      logId: number
+    }): Promise<StoredAgentLogEntry | undefined> =>
+      ipcRenderer.invoke('storage:get-agent-log', input),
     deleteAgentLogs: (input: {
       tabId: string
       logIds: number[]
@@ -373,6 +409,13 @@ const api = {
       ipcRenderer.invoke('storage:get-agent-run', runId),
     listAgentRuns: (input: { tabId: string; limit?: number }): Promise<StoredAgentRun[]> =>
       ipcRenderer.invoke('storage:list-agent-runs', input),
+    listAgentLogs: (input: {
+      tabId: string
+      beforeLogId?: number
+      limit?: number
+    }): Promise<StoredAgentLogEntry[]> => ipcRenderer.invoke('storage:list-agent-logs', input),
+    countAgentLogs: (tabId: string): Promise<number> =>
+      ipcRenderer.invoke('storage:count-agent-logs', tabId),
     listSessionHistory: (limit?: number): Promise<StoredSessionHistoryItem[]> =>
       ipcRenderer.invoke('storage:list-session-history', limit),
     getSessionHistory: (tabId: string): Promise<StoredSessionHistoryDetail | undefined> =>

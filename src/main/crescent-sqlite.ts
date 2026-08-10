@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'fs'
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from 'node:sqlite'
 
 import { getCrescentDatabasePath, getCrescentDir } from './crescent-paths'
 import type {
@@ -210,6 +210,27 @@ export function updateAgentLog(input: Pick<StoredAgentLogEntry, 'tabId' | 'logId
     `
     )
     .run(input.text, new Date().toISOString(), input.tabId, input.logId)
+}
+
+export function getAgentLog(tabId: string, logId: number): StoredAgentLogEntry | undefined {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId || !Number.isFinite(logId)) return undefined
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT
+        tab_id AS tabId,
+        log_id AS logId,
+        kind,
+        text,
+        created_at AS createdAt,
+        run_id AS runId
+      FROM agent_logs
+      WHERE tab_id = ? AND log_id = ?
+    `
+    )
+    .get(normalizedTabId, logId) as StoredAgentLogEntry | undefined
+  return row
 }
 
 export function deleteAgentLogs(tabId: string, logIds: number[]): number {
@@ -709,6 +730,69 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
   }
 }
 
+/** Page older agent logs for a tab (exclusive beforeLogId). Newest-first page then reversed. */
+export function listAgentLogs(
+  tabId: string,
+  options?: { beforeLogId?: number; limit?: number }
+): StoredAgentLogEntry[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+  const limit = Math.max(1, Math.min(200, Math.floor(options?.limit ?? 40)))
+  const beforeLogId =
+    typeof options?.beforeLogId === 'number' && Number.isFinite(options.beforeLogId)
+      ? options.beforeLogId
+      : undefined
+
+  const rows = (
+    beforeLogId == null
+      ? (getDatabase()
+          .prepare(
+            `
+        SELECT
+          tab_id AS tabId,
+          log_id AS logId,
+          kind,
+          text,
+          created_at AS createdAt,
+          run_id AS runId
+        FROM agent_logs
+        WHERE tab_id = ?
+        ORDER BY log_id DESC
+        LIMIT ?
+      `
+          )
+          .all(normalizedTabId, limit) as unknown as StoredAgentLogEntry[])
+      : (getDatabase()
+          .prepare(
+            `
+        SELECT
+          tab_id AS tabId,
+          log_id AS logId,
+          kind,
+          text,
+          created_at AS createdAt,
+          run_id AS runId
+        FROM agent_logs
+        WHERE tab_id = ? AND log_id < ?
+        ORDER BY log_id DESC
+        LIMIT ?
+      `
+          )
+          .all(normalizedTabId, beforeLogId, limit) as unknown as StoredAgentLogEntry[])
+  ).slice()
+
+  return rows.reverse()
+}
+
+export function countAgentLogs(tabId: string): number {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return 0
+  const row = getDatabase()
+    .prepare(`SELECT COUNT(*) AS count FROM agent_logs WHERE tab_id = ?`)
+    .get(normalizedTabId) as { count?: number } | undefined
+  return Number(row?.count ?? 0)
+}
+
 export function deleteSessionHistory(tabId: string): boolean {
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId) return false
@@ -1005,7 +1089,12 @@ function getDatabase(): DatabaseSync {
   const dir = getCrescentDir()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-  database = new DatabaseSync(getCrescentDatabasePath())
+  // Lazy-load node:sqlite so its ExperimentalWarning fires only after
+  // main/index.ts has installed the warning filter. A static top-level import
+  // would emit the warning before the filter exists.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const sqlite = require('node:sqlite') as typeof import('node:sqlite')
+  database = new sqlite.DatabaseSync(getCrescentDatabasePath())
   initializeCrescentDatabase()
   return database
 }

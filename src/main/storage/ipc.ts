@@ -4,9 +4,12 @@ import {
   deleteAgentLogs,
   deleteOpsHistoryRecord,
   deleteSessionHistory,
+  getAgentLog,
   getAgentRun,
   getOpsHistoryByRunId,
   listAgentRunsForTab,
+  listAgentLogs,
+  countAgentLogs,
   listOpsHistoryForConnection,
   listSessionHistory,
   readSessionLogsForSummary,
@@ -82,6 +85,29 @@ export function registerStorageIpc(): void {
 
   ipcMain.handle('storage:list-agent-runs', (_, payload?: { tabId?: string; limit?: number }) => {
     return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
+  })
+
+  ipcMain.handle(
+    'storage:get-agent-log',
+    (_, payload?: { tabId?: string; logId?: number }) => {
+      const tabId = payload?.tabId?.trim() ?? ''
+      const logId = typeof payload?.logId === 'number' ? payload.logId : Number.NaN
+      return getAgentLog(tabId, logId)
+    }
+  )
+
+  ipcMain.handle(
+    'storage:list-agent-logs',
+    (_, payload?: { tabId?: string; beforeLogId?: number; limit?: number }) => {
+      return listAgentLogs(payload?.tabId ?? '', {
+        beforeLogId: payload?.beforeLogId,
+        limit: payload?.limit
+      })
+    }
+  )
+
+  ipcMain.handle('storage:count-agent-logs', (_, tabId?: string) => {
+    return countAgentLogs(tabId ?? '')
   })
 
   ipcMain.handle('storage:list-session-history', (_, limit?: number) => {

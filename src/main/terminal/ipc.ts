@@ -7,6 +7,11 @@ import { spawn as spawnPty } from 'node-pty'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
+import {
+  findEnvironmentDriftHost,
+  isLocalShellPromptVisible,
+  resolvePromptEnvironmentState
+} from '../../shared/terminal-prompt-host'
 import { createPendingCommandController } from './pending-command'
 
 interface TerminalSession {
@@ -47,6 +52,9 @@ export interface TerminalCommandExecutionResult {
   interrupted?: boolean
   terminalExited?: boolean
   detached?: boolean
+  environmentDrift?: boolean
+  observedHost?: string
+  expectedHost?: string
   subterminalName?: string
   subterminalTabId?: string
 }
@@ -103,6 +111,16 @@ const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 /** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
 const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
+/** Connection host expected for this PTY (set on SSH connect; cleared on tab stop). */
+const sessionExpectedHosts = new Map<string, string>()
+/** Owning renderer for drift notifications (kept across soft restarts). */
+const sessionWebContents = new Map<string, WebContents>()
+/** Coalesce visible PTY→renderer frames (~16–32ms) to cut IPC/re-render pressure. */
+const TERMINAL_DATA_COALESCE_MS = 24
+const pendingVisibleTerminalData = new Map<
+  string,
+  { webContents: WebContents; tabId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> }
+>()
 const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
 const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
 const terminalUserInterruptNotifiers = new Map<string, Set<() => void>>()
@@ -159,6 +177,14 @@ export function executeCommandInTerminal(
       output: '',
       error: 'Command is empty.'
     })
+  }
+
+  const drift = detectEnvironmentDriftForSession(key, normalizedTabId, normalizedCommand, session)
+  if (drift) {
+    console.info(
+      `[conn-trace] gate-block tab=${normalizedTabId} drift=${drift.observedHost} expected=${drift.expectedHost ?? '-'}`
+    )
+    return Promise.resolve(drift)
   }
 
   if (session.mode === 'pipe' && isInteractiveCommand(normalizedCommand)) {
@@ -694,6 +720,25 @@ export function registerTerminalIpc(): void {
   )
 
   ipcMain.handle(
+    'terminal:set-expected-host',
+    (event, payload?: { tabId?: string; host?: string | null }) => {
+      const tabId = normalizeTabId(payload?.tabId)
+      if (!tabId || !isUsableTerminalTabId(tabId)) {
+        return { ok: false as const, error: 'Missing or reserved terminal tab id.' }
+      }
+      const key = getSessionKey(event.sender.id, tabId)
+      sessionWebContents.set(key, event.sender)
+      const host = typeof payload?.host === 'string' ? payload.host.trim() : ''
+      if (!host) {
+        sessionExpectedHosts.delete(key)
+        return { ok: true as const, host: undefined }
+      }
+      sessionExpectedHosts.set(key, host)
+      return { ok: true as const, host }
+    }
+  )
+
+  ipcMain.handle(
     'terminal:open-subterminal',
     (
       event,
@@ -830,13 +875,29 @@ export function registerTerminalIpc(): void {
 
   ipcMain.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
+    const key = tabId ? getSessionKey(event.sender.id, tabId) : ''
+    const expectedHost = key ? (sessionExpectedHosts.get(key)?.trim() ?? '') : ''
+    const output = key ? (terminalOutputBuffers.get(key) ?? '') : ''
+    const sessionAligned = expectedHost
+      ? resolvePromptEnvironmentState(output, expectedHost)
+      : 'unknown'
+    console.info(
+      `[conn-trace] getContext tab=${tabId} aligned=${sessionAligned} expected=${expectedHost || '-'} tail=${output.slice(-120).replace(/\n/g, '\\n')}`
+    )
+
     if (!tabId) {
       return { mode: 'none', output: '', cwd: '', shell: '' }
     }
-    const key = getSessionKey(event.sender.id, tabId)
     const session = sessions.get(key)
     if (!session) {
-      return { mode: 'none', output: terminalOutputBuffers.get(key) ?? '', cwd: '', shell: '' }
+      return {
+        mode: 'none',
+        output,
+        cwd: '',
+        shell: '',
+        expectedHost: expectedHost || undefined,
+        sessionAligned
+      }
     }
 
     return {
@@ -844,7 +905,9 @@ export function registerTerminalIpc(): void {
       pid: session.pid,
       cwd: session.cwd,
       shell: session.shell,
-      output: terminalOutputBuffers.get(key) ?? ''
+      output,
+      expectedHost: expectedHost || undefined,
+      sessionAligned
     }
   })
 
@@ -866,7 +929,10 @@ export function registerTerminalIpc(): void {
   ipcMain.on('terminal:stop', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return
-    stopSession(getSessionKey(event.sender.id, tabId))
+    const key = getSessionKey(event.sender.id, tabId)
+    stopSession(key)
+    sessionExpectedHosts.delete(key)
+    sessionWebContents.delete(key)
     releaseTemporarySubterminalByTabId(event.sender.id, tabId)
   })
 
@@ -881,6 +947,8 @@ export function stopAllTerminalSessions(): void {
   for (const key of sessions.keys()) {
     stopSession(key)
   }
+  sessionExpectedHosts.clear()
+  sessionWebContents.clear()
   temporarySubterminals.clear()
 }
 
@@ -888,12 +956,55 @@ function stopSession(key: string): void {
   const session = sessions.get(key)
   if (!session) return
 
+  flushVisibleTerminalData(key)
   session.kill()
   sessions.delete(key)
   terminalDataWaiters.delete(key)
   terminalExitWaiters.delete(key)
   terminalOutputBuffers.delete(key)
   terminalAutomationFilterStates.delete(key)
+  // Keep sessionExpectedHosts / sessionWebContents across soft PTY restarts
+  // so reconnect can re-gate before automation re-sets the host.
+}
+
+function detectEnvironmentDriftForSession(
+  key: string,
+  tabId: string,
+  command: string,
+  session: TerminalSession
+): TerminalCommandExecutionResult | undefined {
+  const expectedHost = sessionExpectedHosts.get(key)?.trim()
+  if (!expectedHost) return undefined
+
+  const buffer = terminalOutputBuffers.get(key) ?? ''
+  let observedHost = findEnvironmentDriftHost(buffer, expectedHost)
+  // The remote side may have closed the SSH session while the outer PTY stayed
+  // alive; the local shell prompt (e.g. `➜ ~`) carries no hostname, so the
+  // host-mismatch check alone would miss it. Treat a visible local prompt as
+  // drift as well so the agent never injects into the wrong environment.
+  if (!observedHost && isLocalShellPromptVisible(buffer)) observedHost = 'local-shell'
+  if (!observedHost) return undefined
+
+  const webContents = sessionWebContents.get(key)
+  if (webContents && !webContents.isDestroyed()) {
+    sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
+      tabId,
+      observedHost,
+      expectedHost
+    })
+  }
+
+  return {
+    ok: false,
+    command,
+    mode: session.mode,
+    cwd: session.cwd,
+    output: '',
+    environmentDrift: true,
+    observedHost,
+    expectedHost,
+    error: `Terminal left target environment (expected ${expectedHost}, observed ${observedHost}). Command was not injected.`
+  }
 }
 
 function ensureTemporarySubterminal(
@@ -1035,6 +1146,7 @@ function createTerminalSession(input: {
   tabId: string
   key: string
 }): TerminalSession {
+  sessionWebContents.set(input.key, input.webContents)
   try {
     return createPtySession(input)
   } catch (error) {
@@ -1367,6 +1479,16 @@ function appendTerminalContext(key: string, data: string): void {
   terminalOutputBuffers.set(key, next.slice(-MAX_CONTEXT_BUFFER))
 }
 
+function flushVisibleTerminalData(key: string): void {
+  const pending = pendingVisibleTerminalData.get(key)
+  if (!pending) return
+  pendingVisibleTerminalData.delete(key)
+  clearTimeout(pending.timer)
+  const data = pending.chunks.join('')
+  if (!data) return
+  safeWebContentsSend(pending.webContents, 'terminal:data', { tabId: pending.tabId, data })
+}
+
 function sendVisibleTerminalData(
   webContents: WebContents,
   tabId: string,
@@ -1376,7 +1498,24 @@ function sendVisibleTerminalData(
   if (!data) return
 
   appendTerminalContext(key, data)
-  safeWebContentsSend(webContents, 'terminal:data', { tabId, data })
+
+  const existing = pendingVisibleTerminalData.get(key)
+  if (existing) {
+    existing.chunks.push(data)
+    existing.webContents = webContents
+    existing.tabId = tabId
+    return
+  }
+
+  const timer = setTimeout(() => {
+    flushVisibleTerminalData(key)
+  }, TERMINAL_DATA_COALESCE_MS)
+  pendingVisibleTerminalData.set(key, {
+    webContents,
+    tabId,
+    chunks: [data],
+    timer
+  })
 }
 
 function sendIfAlive(

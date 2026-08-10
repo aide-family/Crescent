@@ -51,6 +51,10 @@ import type {
 interface TerminalAgentApi {
   app: {
     notifyAttention: (input: { title: string; body: string }) => Promise<{ ok: boolean }>
+    getRendererRecoveryMode: () => Promise<{ mode: 'none' | 'pending' | 'crash-loop' }>
+    clearRendererRecovery: () => Promise<{ ok: boolean }>
+    exportRendererDiagnostics: () => Promise<{ ok: boolean; canceled?: boolean; path?: string }>
+    reportDiagnosticError: (message: string) => void
   }
   terminal: {
     start: (options?: {
@@ -74,10 +78,16 @@ interface TerminalAgentApi {
       cwd: string
       shell: string
       output: string
+      expectedHost?: string
+      sessionAligned?: 'aligned' | 'drifted' | 'unknown'
     }>
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
     clear: (tabId?: string) => void
+    setExpectedHost: (options: {
+      tabId: string
+      host?: string | null
+    }) => Promise<{ ok: boolean; host?: string; error?: string }>
     openSubterminal: (options: {
       parentTabId: string
       terminalName: string
@@ -105,6 +115,13 @@ interface TerminalAgentApi {
         sessionId: number
         exitCode: number
         signal?: number | string
+      }) => void
+    ) => () => void
+    onEnvironmentDrift: (
+      callback: (event: {
+        tabId: string
+        observedHost: string
+        expectedHost: string
       }) => void
     ) => () => void
   }
@@ -211,6 +228,10 @@ interface TerminalAgentApi {
     updateAgentLog: (
       input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>
     ) => Promise<{ ok: boolean }>
+    getAgentLog: (input: {
+      tabId: string
+      logId: number
+    }) => Promise<StoredAgentLogEntry | undefined>
     deleteAgentLogs: (input: {
       tabId: string
       logIds: number[]
@@ -218,6 +239,12 @@ interface TerminalAgentApi {
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
     getAgentRun: (runId: string) => Promise<StoredAgentRun | undefined>
     listAgentRuns: (input: { tabId: string; limit?: number }) => Promise<StoredAgentRun[]>
+    listAgentLogs: (input: {
+      tabId: string
+      beforeLogId?: number
+      limit?: number
+    }) => Promise<StoredAgentLogEntry[]>
+    countAgentLogs: (tabId: string) => Promise<number>
     listSessionHistory: (limit?: number) => Promise<StoredSessionHistoryItem[]>
     getSessionHistory: (tabId: string) => Promise<StoredSessionHistoryDetail | undefined>
     renameSessionHistory: (input: { tabId: string; title: string }) => Promise<{ ok: boolean }>

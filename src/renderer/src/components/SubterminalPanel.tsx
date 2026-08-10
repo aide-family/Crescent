@@ -8,6 +8,10 @@ import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { appTerminalTheme } from '@renderer/lib/design-system'
 import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, getSubterminalWidths } from '@renderer/lib/terminal-text'
+import {
+  appendTerminalOutputRing,
+  readTerminalOutputRing
+} from '@renderer/lib/terminal-output-ring'
 import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
 
 export interface SubterminalResizeState {
@@ -55,6 +59,9 @@ function SubterminalXtermPane({
 
     if (subterminal.rawOutput) {
       terminal.write(filterCrescentBootstrapOutput(subterminal.rawOutput))
+    } else {
+      const ring = readTerminalOutputRing(subterminal.id)
+      if (ring) terminal.write(filterCrescentBootstrapOutput(ring))
     }
 
     const bootstrapFilter = createCrescentBootstrapFilter()
@@ -65,7 +72,10 @@ function SubterminalXtermPane({
     const stopData = window.api.terminal.onData((event) => {
       if (event.tabId !== subterminal.id) return
       const filtered = bootstrapFilter.push(event.data)
-      if (filtered) terminal.write(filtered)
+      if (filtered) {
+        appendTerminalOutputRing(subterminal.id, filtered)
+        terminal.write(filtered)
+      }
     })
 
     const stopExit = window.api.terminal.onExit((event) => {

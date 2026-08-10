@@ -7,12 +7,14 @@ import { RefreshCwIcon } from 'lucide-react'
 
 export function AppFooter({
   shellState,
+  disconnected = false,
   activeTab,
   agentMode,
   t,
   onRetryShell
 }: {
   shellState: 'ready' | 'pending' | 'not-ready'
+  disconnected?: boolean
   activeTab: AgentTerminalTab
   agentMode: AgentConfig['agentMode']
   t: Dictionary
@@ -20,18 +22,21 @@ export function AppFooter({
 }): React.JSX.Element {
   const modeLabel = agentMode === 'plan-execute' ? 'Plan-and-Execute' : 'ReAct'
   const failed = shellState === 'not-ready' && Boolean(activeTab.terminalStartError?.trim())
-  const statusLabel = shellState === 'ready'
-    ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
-    : shellState === 'pending'
-      ? t.app.shellStarting
-      : failed
-        ? t.app.shellFailed
-        : t.app.shellStopped
+  const statusLabel = disconnected
+    ? t.app.shellDisconnected
+    : shellState === 'ready'
+      ? `${t.app.shellReady} · ${activeTab.terminalMode.toUpperCase()}`
+      : shellState === 'pending'
+        ? t.app.shellStarting
+        : failed
+          ? t.app.shellFailed
+          : t.app.shellStopped
+  const dotState: 'ready' | 'pending' | 'not-ready' = disconnected ? 'pending' : shellState
 
   return (
     <footer className="app-footer flex h-9 shrink-0 items-center justify-between gap-3 px-4 text-xs text-muted-foreground">
       <span className="inline-flex min-w-0 items-center gap-2 truncate">
-        <StatusDot state={shellState} />
+        <StatusDot state={dotState} />
         <span className="truncate" title={activeTab.terminalStartError || undefined}>
           {statusLabel}
           {failed && activeTab.terminalStartError

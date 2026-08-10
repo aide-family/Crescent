@@ -12,6 +12,10 @@ import {
 } from '../lib/pipe-terminal'
 import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, parseSubterminalTabId } from '../lib/terminal-text'
 import {
+  appendTerminalOutputRing,
+  readTerminalOutputRing
+} from '../lib/terminal-output-ring'
+import {
   resolveSessionChatTabId,
   type AgentLogEntryInput,
   type AgentTerminalTab
@@ -74,7 +78,7 @@ export function useXtermLifecycle({
   skipConnectionReconnectRef,
   restoreTerminalSessionRef,
   updateTab,
-  updateSubterminalOutput,
+  updateSubterminalOutput: _updateSubterminalOutput,
   updateSubterminalCwd,
   updateSubterminalStatus,
   executeConnectionCommands,
@@ -139,7 +143,12 @@ export function useXtermLifecycle({
     terminal.open(host)
     fitAddon.fit()
 
-    if (tab.terminalOutput) terminal.write(filterCrescentBootstrapOutput(tab.terminalOutput))
+    if (tab.terminalOutput) {
+      terminal.write(filterCrescentBootstrapOutput(tab.terminalOutput))
+    } else {
+      const ring = readTerminalOutputRing(tab.id)
+      if (ring) terminal.write(filterCrescentBootstrapOutput(ring))
+    }
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
@@ -153,17 +162,15 @@ export function useXtermLifecycle({
     const stopTerminalData = window.api.terminal.onData((event) => {
       const subterminal = parseSubterminalTabId(event.tabId)
       if (subterminal) {
-        updateSubterminalOutput(subterminal.parentTabId, subterminal.name, event.tabId, event.data)
+        // Subterminal xterm pane owns display; keep a ring only (no React concat).
+        appendTerminalOutputRing(event.tabId, event.data)
         return
       }
 
       const filtered = bootstrapFilter.push(event.data)
       if (!filtered) return
 
-      updateTab(event.tabId, (current) => ({
-        ...current,
-        terminalOutput: `${current.terminalOutput}${filtered}`.slice(-200_000)
-      }))
+      appendTerminalOutputRing(event.tabId, filtered)
       if (event.tabId === activeTabIdRef.current) terminal.write(filtered)
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
@@ -237,6 +244,9 @@ export function useXtermLifecycle({
 
       const dimensions = fitAddon.proposeDimensions()
       const pendingConnection = pendingSshRef.current.get(tab.id)
+      console.info(
+        `[conn-trace] lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingConnection)}`
+      )
       const session = await window.api.terminal.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
@@ -316,7 +326,6 @@ export function useXtermLifecycle({
     terminalSessionIdRef,
     terminalVisible,
     updateSubterminalCwd,
-    updateSubterminalOutput,
     updateSubterminalStatus,
     updateTab
   ])

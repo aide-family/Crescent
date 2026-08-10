@@ -1,5 +1,5 @@
 import type { RefObject } from 'react'
-import { RefreshCwIcon, ServerIcon } from 'lucide-react'
+import { ServerIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 
 import { ConnectionList } from '@renderer/components/ConnectionList'
 import {
@@ -48,7 +48,8 @@ export function TerminalPane({
   onCloseSubterminal,
   onCloseAllSubterminals,
   onOpenLocalSubterminal,
-  onRetryConnection
+  onViewRecovery,
+  onDismissRecovery
 }: {
   widthPercent: number
   fillWidth: boolean
@@ -71,6 +72,10 @@ export function TerminalPane({
   connectionRecovery?: {
     visible: boolean
     canRetry: boolean
+    connecting?: boolean
+    pipeFallback?: boolean
+    reason?: string
+    dismissed?: boolean
   }
   t: Dictionary
   formatConnectionTarget: (connection: ConnectionConfig) => string
@@ -87,7 +92,8 @@ export function TerminalPane({
   onCloseSubterminal: (parentTabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (parentTabId: string) => void
   onOpenLocalSubterminal?: () => void
-  onRetryConnection?: () => void
+  onViewRecovery?: () => void
+  onDismissRecovery?: () => void
 }): React.JSX.Element {
   const showTerminalRecovery = Boolean(
     connectionRecovery?.visible && terminalTabs.length > 0 && !activeTab.terminalReady
@@ -145,30 +151,41 @@ export function TerminalPane({
             />
           </div>
         ) : (
-          <div className="relative min-h-0 flex-1">
-            <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
-            {showTerminalRecovery ? (
-              <div className="absolute inset-x-3 bottom-3 z-10 rounded-md border border-destructive/30 bg-background/95 px-3 py-3 shadow-sm backdrop-blur">
-                <div className="text-sm font-medium text-foreground">
-                  {t.terminal.connectionRecoveryTitle}
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t.terminal.connectionRecoveryHint}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {connectionRecovery?.canRetry && onRetryConnection ? (
-                    <Button type="button" size="sm" onClick={onRetryConnection}>
-                      <RefreshCwIcon data-icon="inline-start" />
-                      {t.input.retryConnection}
-                    </Button>
-                  ) : null}
-                  <Button type="button" size="sm" variant="outline" onClick={onShowConnectionList}>
-                    <ServerIcon data-icon="inline-start" />
-                    {t.input.openConnections}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {showTerminalRecovery && !connectionRecovery?.dismissed ? (
+              <div className="flex shrink-0 items-center gap-2 border-b bg-background/95 px-3 py-1.5 text-xs">
+                <TriangleAlertIcon className="size-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  {t.terminal.terminalRecoveryBanner}
+                </span>
+                {onViewRecovery ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={onViewRecovery}
+                  >
+                    {t.terminal.terminalRecoveryView}
                   </Button>
-                </div>
+                ) : null}
+                {onDismissRecovery ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.terminal.terminalRecoveryDismiss}
+                    title={t.terminal.terminalRecoveryDismiss}
+                    onClick={onDismissRecovery}
+                  >
+                    <XIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
               </div>
             ) : null}
+            <div className="relative min-h-0 flex-1">
+              <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
+            </div>
           </div>
         )}
         <SubterminalPanel

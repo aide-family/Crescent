@@ -155,10 +155,60 @@ export interface AgentTerminalTab {
 
 export interface PendingAgentClarification {
   kind: 'connection-intent'
+  /** Stable id for this clarify prompt; used by confirm payload. */
+  routeId?: string
   originalInput: string
   question: string
   options?: Array<{ id: string; label: string }>
   defaultOptionId?: string
+  /** After confirm/Esc the card stays visible in a settled state (idempotent). */
+  settled?: {
+    status: 'confirmed' | 'cancelled'
+    label?: string
+  }
+}
+
+/** Keep settled clarify cards visible across agent resume; drop unsettled prompts. */
+export function retainSettledClarification(
+  clarification: PendingAgentClarification | undefined
+): PendingAgentClarification | undefined {
+  return clarification?.settled ? clarification : undefined
+}
+
+export type ConnectTargetResolution =
+  | { kind: 'reuse'; tab: AgentTerminalTab; forceFreshLogin: boolean }
+  | { kind: 'create-peer'; sessionGroupId: string }
+  | { kind: 'convert-current'; tab: AgentTerminalTab }
+  | { kind: 'create-new' }
+
+/**
+ * Decide how /connect (or forced connect) should bind a connection to tabs
+ * within the current session group — reuse existing peer when possible.
+ */
+export function resolveConnectTargetTab(input: {
+  currentTab: AgentTerminalTab | undefined
+  connectionId: string
+  tabs: AgentTerminalTab[]
+}): ConnectTargetResolution {
+  const { currentTab, connectionId, tabs } = input
+  if (!currentTab) return { kind: 'create-new' }
+
+  if (currentTab.isSsh && currentTab.connectionId === connectionId) {
+    return { kind: 'reuse', tab: currentTab, forceFreshLogin: true }
+  }
+
+  if (currentTab.isSsh) {
+    const groupId = getSessionGroupId(currentTab)
+    const existingPeer = getSessionTerminals(tabs, groupId).find(
+      (tab) => tab.connectionId === connectionId
+    )
+    if (existingPeer) {
+      return { kind: 'reuse', tab: existingPeer, forceFreshLogin: true }
+    }
+    return { kind: 'create-peer', sessionGroupId: groupId }
+  }
+
+  return { kind: 'convert-current', tab: currentTab }
 }
 
 export interface TemporarySubterminal {
@@ -305,11 +355,19 @@ export function listSessionChatTabs(tabs: AgentTerminalTab[]): AgentTerminalTab[
   return sessions
 }
 
-export function getSessionDisplayTitle(tab: AgentTerminalTab, tabs: AgentTerminalTab[]): string {
+export function getSessionDisplayTitle(
+  tab: AgentTerminalTab,
+  tabs: AgentTerminalTab[],
+  activeTabId?: string
+): string {
   const groupId = getSessionGroupId(tab)
   const peers = getSessionTerminals(tabs, groupId)
-  const chatTab = getSessionChatTab(tabs, groupId) ?? tab
-  const base = getTerminalDisplayTitle(chatTab, tabs)
+  const focused =
+    activeTabId != null && activeTabId.length > 0
+      ? peers.find((peer) => peer.id === activeTabId)
+      : undefined
+  const baseTab = focused ?? getSessionChatTab(tabs, groupId) ?? tab
+  const base = getTerminalDisplayTitle(baseTab, tabs)
   if (peers.length <= 1) return base
   return `${base} · ${peers.length}`
 }

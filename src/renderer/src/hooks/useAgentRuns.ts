@@ -11,13 +11,23 @@ import {
   localizeAgentEventMessage
 } from '@renderer/lib/agent-event-formatters'
 import {
+  clampAgentRunEnvelopeText,
   closeStreamingMessages,
   closeStreamingOpenSteps,
   closeStreamingThoughts,
-  formatAgentRunDocument,
-  syncActionsFromStructuredRun
+  formatAgentRunDocumentCompact,
+  syncActionsFromStructuredRun,
+  toLiveRunView
 } from '@renderer/lib/agent-run-document'
-import { AGENT_LOG_SOFT_LIMIT, collectTrimmedAgentLogIds, trimAgentLogEntries } from '@renderer/lib/agent-log'
+import {
+  AGENT_LOG_SOFT_LIMIT,
+  AGENT_RUN_STREAM_MAX_CHARS,
+  clampAgentLogEntryText,
+  clampAgentText,
+  collectTrimmedAgentLogIds,
+  trimAgentLogEntries
+} from '@renderer/lib/agent-log'
+import { AGENT_STREAM_LIVE_FLUSH } from '@renderer/lib/agent-text-limits'
 import type {
   AgentLogEntry,
   AgentLogEntryInput,
@@ -57,6 +67,7 @@ export function useAgentRuns({
   updateAgentRun: (tabId: string, updater: (run: AgentRunViewState) => AgentRunViewState) => void
   appendAgentEvent: (event: AgentEvent, tabId?: string) => void
   liveRunByLogId: Record<number, AgentRunViewState>
+  pruneLiveRuns: (logIds: number[]) => void
   attachApprovalRequest: (chatTabId: string, request: CommandApprovalRequest) => void
   applyApprovalPurpose: (
     chatTabId: string,
@@ -73,7 +84,26 @@ export function useAgentRuns({
   const [liveRunByLogId, setLiveRunByLogId] = useState<Record<number, AgentRunViewState>>({})
   const rafFlushRef = useRef<number | null>(null)
   const dirtyTabIdsRef = useRef(new Set<string>())
+  const persistDirtyTabIdsRef = useRef(new Set<string>())
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const pruneLiveRuns = useCallback((logIds: number[]): void => {
+    if (logIds.length === 0) return
+    const drop = new Set(logIds)
+    setLiveRunByLogId((current) => {
+      let changed = false
+      const next: Record<number, AgentRunViewState> = {}
+      for (const [key, value] of Object.entries(current)) {
+        const id = Number(key)
+        if (drop.has(id)) {
+          changed = true
+          continue
+        }
+        next[id] = value
+      }
+      return changed ? next : current
+    })
+  }, [])
 
   const appendLog = useCallback(
     (entry: AgentLogEntryInput, tabId = activeTabIdRef.current): number => {
@@ -81,10 +111,12 @@ export function useAgentRuns({
       const createdAt = new Date().toISOString()
       nextLogIdRef.current += 1
       let droppedIds: number[] = []
-      const nextEntry = { ...entry, id, createdAt } as AgentLogEntry
+      const nextEntry = clampAgentLogEntryText({ ...entry, id, createdAt } as AgentLogEntry)
       updateTab(tabId, (tab) => {
         const next = [...tab.agentLog, nextEntry]
-        const trimmed = trimAgentLogEntries(next, AGENT_LOG_SOFT_LIMIT)
+        const trimmed = trimAgentLogEntries(next, AGENT_LOG_SOFT_LIMIT).map((item) =>
+          clampAgentLogEntryText(item)
+        )
         droppedIds = collectTrimmedAgentLogIds(next, trimmed)
         return {
           ...tab,
@@ -95,25 +127,30 @@ export function useAgentRuns({
         tabId,
         logId: id,
         kind: nextEntry.kind,
-        text: nextEntry.text,
+        text: entry.text,
         createdAt,
         runId: nextEntry.kind === 'user-supplement' ? nextEntry.runId : undefined
       })
+      // Memory-only trim: keep SQLite rows for lazy reload of earlier entries.
       if (droppedIds.length > 0) {
-        void window.api.storage.deleteAgentLogs({ tabId, logIds: droppedIds })
+        pruneLiveRuns(droppedIds)
       }
       return id
     },
-    [activeTabIdRef, nextLogIdRef, updateTab]
+    [activeTabIdRef, nextLogIdRef, pruneLiveRuns, updateTab]
   )
 
   const updateLogEntryText = useCallback(
     (tabId: string, logId: number, text: string, persist = true): void => {
+      const memoryText = clampAgentRunEnvelopeText(text)
       updateTab(tabId, (tab) => ({
         ...tab,
-        agentLog: tab.agentLog.map((entry) => (entry.id === logId ? { ...entry, text } : entry))
+        agentLog: tab.agentLog.map((entry) =>
+          entry.id === logId ? { ...entry, text: memoryText } : entry
+        )
       }))
       if (persist) {
+        // Persist the full compact document; renderer memory stays structure-clamped.
         void window.api.storage.updateAgentLog({ tabId, logId, text })
       }
     },
@@ -121,9 +158,10 @@ export function useAgentRuns({
   )
 
   const publishLiveRun = useCallback((run: AgentRunViewState): void => {
+    const slim = toLiveRunView(run)
     setLiveRunByLogId((current) => {
-      if (current[run.logId] === run) return current
-      return { ...current, [run.logId]: run }
+      if (current[slim.logId] === slim) return current
+      return { ...current, [slim.logId]: slim }
     })
   }, [])
 
@@ -131,29 +169,32 @@ export function useAgentRuns({
     (tabId: string, persistSoon = false): void => {
       dirtyTabIdsRef.current.add(tabId)
       if (persistSoon) {
+        persistDirtyTabIdsRef.current.add(tabId)
         if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
         persistTimerRef.current = setTimeout(() => {
-          for (const dirtyTabId of dirtyTabIdsRef.current) {
+          const pending = [...persistDirtyTabIdsRef.current]
+          persistDirtyTabIdsRef.current.clear()
+          for (const dirtyTabId of pending) {
             const run = activeAgentRunRef.current.get(dirtyTabId)
             if (!run) continue
-            updateLogEntryText(dirtyTabId, run.logId, formatAgentRunDocument(run, t), true)
+            // Debounced persist only — never rewrite agentLog on the RAF hot path.
+            updateLogEntryText(dirtyTabId, run.logId, formatAgentRunDocumentCompact(run), true)
           }
-        }, 400)
+        }, AGENT_STREAM_LIVE_FLUSH.persistDebounceMs)
       }
       if (rafFlushRef.current != null) return
       rafFlushRef.current = window.requestAnimationFrame(() => {
         rafFlushRef.current = null
-        for (const dirtyTabId of dirtyTabIdsRef.current) {
+        const dirty = [...dirtyTabIdsRef.current]
+        dirtyTabIdsRef.current.clear()
+        for (const dirtyTabId of dirty) {
           const run = activeAgentRunRef.current.get(dirtyTabId)
           if (!run) continue
           publishLiveRun(run)
-          // Keep serialized log text reasonably fresh without blocking every token.
-          updateLogEntryText(dirtyTabId, run.logId, formatAgentRunDocument(run, t), false)
         }
-        dirtyTabIdsRef.current.clear()
       })
     },
-    [activeAgentRunRef, publishLiveRun, t, updateLogEntryText]
+    [activeAgentRunRef, publishLiveRun, updateLogEntryText]
   )
 
   const updateAgentRun = useCallback(
@@ -165,6 +206,7 @@ export function useAgentRuns({
       const run = activeAgentRunRef.current.get(tabId)
       if (!run) return
 
+      // Keep actions on the ref for export/trace; React live map uses toLiveRunView (no actions).
       const nextRun = syncActionsFromStructuredRun(updater(run))
       activeAgentRunRef.current.set(tabId, nextRun)
 
@@ -177,11 +219,11 @@ export function useAgentRuns({
       updateLogEntryText(
         tabId,
         nextRun.logId,
-        formatAgentRunDocument(nextRun, t),
+        formatAgentRunDocumentCompact(nextRun),
         options?.immediatePersist !== false
       )
     },
-    [activeAgentRunRef, publishLiveRun, scheduleLiveFlush, t, updateLogEntryText]
+    [activeAgentRunRef, publishLiveRun, scheduleLiveFlush, updateLogEntryText]
   )
 
   const attachApprovalRequest = useCallback(
@@ -300,14 +342,17 @@ export function useAgentRuns({
             const last = steps[steps.length - 1]
             if (last?.kind === 'message' && last.phase === 'streaming') {
               steps = [...steps]
-              steps[steps.length - 1] = { ...last, text: `${last.text}${event.text}` }
+              steps[steps.length - 1] = {
+                ...last,
+                text: clampAgentText(`${last.text}${event.text}`, AGENT_RUN_STREAM_MAX_CHARS)
+              }
             } else {
               steps = [
                 ...steps,
                 {
                   id: createStepId('message'),
                   kind: 'message',
-                  text: event.text,
+                  text: clampAgentText(event.text, AGENT_RUN_STREAM_MAX_CHARS),
                   phase: 'streaming'
                 }
               ]
@@ -334,14 +379,17 @@ export function useAgentRuns({
             const last = steps[steps.length - 1]
             if (last?.kind === 'thought' && last.phase === 'streaming') {
               steps = [...steps]
-              steps[steps.length - 1] = { ...last, text: `${last.text}${delta}` }
+              steps[steps.length - 1] = {
+                ...last,
+                text: clampAgentText(`${last.text}${delta}`, AGENT_RUN_STREAM_MAX_CHARS)
+              }
             } else {
               steps = [
                 ...steps,
                 {
                   id: createStepId('thought'),
                   kind: 'thought',
-                  text: delta,
+                  text: clampAgentText(delta, AGENT_RUN_STREAM_MAX_CHARS),
                   phase: 'streaming'
                 }
               ]
@@ -349,7 +397,10 @@ export function useAgentRuns({
             return {
               ...run,
               steps,
-              thinkingText: `${run.thinkingText ?? ''}${delta}`
+              thinkingText: clampAgentText(
+                `${run.thinkingText ?? ''}${delta}`,
+                AGENT_RUN_STREAM_MAX_CHARS
+              )
             }
           },
           { streaming: true }
@@ -691,6 +742,7 @@ export function useAgentRuns({
     updateAgentRun,
     appendAgentEvent,
     liveRunByLogId,
+    pruneLiveRuns,
     attachApprovalRequest,
     applyApprovalPurpose,
     resolveApprovalStep
