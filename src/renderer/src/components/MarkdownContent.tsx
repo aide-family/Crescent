@@ -38,6 +38,11 @@ import {
 } from '@renderer/lib/markdown-fence'
 import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
 import {
+  buildMarkdownPreview,
+  LruMap,
+  shouldTruncateMarkdown
+} from '@renderer/lib/markdown-truncate'
+import {
   copyFeedback,
   copyText,
   exportFeedback,
@@ -63,7 +68,7 @@ const MERMAID_RENDER_CONFIG = {
   fontFamily: 'ui-sans-serif, system-ui, sans-serif'
 } as const
 
-const mermaidSvgCache = new Map<string, string>()
+const mermaidSvgCache = new LruMap<string, string>(32)
 
 async function downloadSvg(value: string, filename: string, t: Dictionary): Promise<void> {
   await saveTextFile(
@@ -234,9 +239,43 @@ export function MarkdownContent({
   headingIdPrefix?: string
   streaming?: boolean
 }): React.JSX.Element {
+  const oversized = shouldTruncateMarkdown(value)
+  const [forceExpanded, setForceExpanded] = useState(false)
+  const expanded = !oversized || forceExpanded
+  const renderValue = expanded ? value : buildMarkdownPreview(value)
+
   return (
     <div className="markdown-body select-text min-w-0 space-y-2 overflow-hidden leading-relaxed break-words">
-      {renderMarkdownBlocks(value, t, { headingIdPrefix, streaming })}
+      {renderMarkdownBlocks(renderValue, t, { headingIdPrefix, streaming })}
+      {oversized ? (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px]"
+            onClick={() => setForceExpanded((current) => !current)}
+          >
+            {forceExpanded ? t.input.markdownCollapseLarge : t.input.markdownExpandLarge}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 text-[11px]"
+            onClick={() => {
+              void saveTextFile(
+                value,
+                'crescent-markdown.txt',
+                'text/plain;charset=utf-8',
+                exportFeedback(t)
+              )
+            }}
+          >
+            {t.input.markdownDownloadLarge}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

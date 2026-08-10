@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -15,11 +14,13 @@ import {
   ThumbsDownIcon,
   ThumbsUpIcon,
   TriangleAlertIcon,
-  XIcon,
   BookMarkedIcon
 } from 'lucide-react'
 
-import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
+import {
+  FullAgentRunOverlay,
+  type FullAgentRunOverlayTab
+} from '@renderer/components/FullAgentRunOverlay'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import { QuotaErrorCard } from '@renderer/components/QuotaErrorCard'
 import { Badge } from '@renderer/components/ui/badge'
@@ -30,6 +31,7 @@ import type { ParsedAgentRunDocument } from '@renderer/lib/agent-run-document'
 import { shouldShowAgentRunResult, omitDuplicateTrailingMessage } from '@renderer/lib/agent-run-document'
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
 import { formatLogTime } from '@renderer/lib/agent-log'
+import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 import { extractRiskVerb, isStaticallyReadonly, shouldShowWhitelistEntry } from '../../../shared/command-guard'
@@ -47,6 +49,7 @@ export function AgentRunTimeline({
   copied,
   feedbackRating,
   feedbackBusy,
+  storageRef,
   onCopyResult,
   onExportResult,
   onExportFull,
@@ -63,6 +66,8 @@ export function AgentRunTimeline({
   copied: boolean
   feedbackRating?: OpsHistoryRating | null
   feedbackBusy?: boolean
+  /** When set, finished runs can open the on-demand full process/result overlay. */
+  storageRef?: { tabId: string; logId: number; runId?: string }
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
@@ -74,14 +79,9 @@ export function AgentRunTimeline({
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
 }): React.JSX.Element {
-  const [resultExpanded, setResultExpanded] = useState(false)
-  const resultPreviewMarkdown = document.resultMarkdown || document.errorMarkdown
-  const headingIdPrefix = useMemo(() => `agent-result-${crypto.randomUUID()}`, [])
-  const resultHeadings = useMemo(
-    () => extractMarkdownHeadings(resultPreviewMarkdown, headingIdPrefix),
-    [headingIdPrefix, resultPreviewMarkdown]
-  )
+  const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
   const runFinished = typeof document.elapsedMs === 'number'
+  const canOpenFullRun = Boolean(storageRef?.tabId && typeof storageRef.logId === 'number' && runFinished)
   const hasApprovalStep = document.steps.some((step) => step.kind === 'approval')
   const visibleSteps = omitDuplicateTrailingMessage(
     coalesceVisiblePtyToolSteps(
@@ -166,6 +166,31 @@ export function AgentRunTimeline({
             }
             return null
           })}
+          {canOpenFullRun ? (
+            <div className="pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => setFullOverlayTab('steps')}
+              >
+                {t.input.fullRunViewSteps}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : canOpenFullRun ? (
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs text-muted-foreground"
+            onClick={() => setFullOverlayTab('steps')}
+          >
+            {t.input.fullRunViewSteps}
+          </Button>
         </div>
       ) : null}
 
@@ -178,7 +203,10 @@ export function AgentRunTimeline({
                 <span>{t.input.result}</span>
               </div>
               <div className="min-w-0 text-[15px] leading-relaxed text-amber-950/90 dark:text-amber-50/95">
-                <MarkdownContent value={document.resultMarkdown} t={t} />
+                <MarkdownContent
+                  value={clampAgentText(document.resultMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
+                  t={t}
+                />
               </div>
               {onInjectSuggestions ? (
                 <ResultSuggestionsPicker
@@ -200,7 +228,10 @@ export function AgentRunTimeline({
               />
             ) : (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                <MarkdownContent value={document.errorMarkdown} t={t} />
+                <MarkdownContent
+                  value={clampAgentText(document.errorMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
+                  t={t}
+                />
               </div>
             )
           ) : null}
@@ -306,16 +337,18 @@ export function AgentRunTimeline({
                 </Button>
               </>
             ) : null}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.common.enlarge}
-              title={t.common.enlarge}
-              onClick={() => setResultExpanded(true)}
-            >
-              <Maximize2Icon aria-hidden="true" />
-            </Button>
+            {canOpenFullRun ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.input.fullRunViewResult}
+                title={t.input.fullRunViewResult}
+                onClick={() => setFullOverlayTab('result')}
+              >
+                <Maximize2Icon aria-hidden="true" />
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -351,14 +384,14 @@ export function AgentRunTimeline({
         </div>
       ) : null}
 
-      {resultExpanded && resultPreviewMarkdown ? (
-        <ResultFullscreenPreview
-          value={resultPreviewMarkdown}
-          headings={resultHeadings}
-          headingIdPrefix={headingIdPrefix}
-          title={document.errorMarkdown ? t.input.error : t.input.result}
+      {fullOverlayTab && storageRef ? (
+        <FullAgentRunOverlay
+          tabId={storageRef.tabId}
+          logId={storageRef.logId}
+          runId={storageRef.runId}
+          initialTab={fullOverlayTab}
           t={t}
-          onClose={() => setResultExpanded(false)}
+          onClose={() => setFullOverlayTab(null)}
         />
       ) : null}
     </div>
@@ -374,7 +407,7 @@ function ThoughtStepRow({
   step: Extract<AgentRunStep, { kind: 'thought' }>
   t: Dictionary
 }): React.JSX.Element | null {
-  const text = step.text.trim()
+  const text = clampAgentText(step.text.trim(), AGENT_RUN_STREAM_MAX_CHARS)
   if (!text) return null
   const streaming = step.phase === 'streaming'
   const needsCollapse = !streaming && text.length > THOUGHT_PREVIEW_CHARS
@@ -429,7 +462,7 @@ function MessageStepRow({
   step: Extract<AgentRunStep, { kind: 'message' }>
   t: Dictionary
 }): React.JSX.Element | null {
-  const text = step.text.trim()
+  const text = clampAgentText(step.text.trim(), AGENT_RUN_STREAM_MAX_CHARS)
   if (!text) return null
   const streaming = step.phase === 'streaming'
   return (
@@ -459,7 +492,7 @@ function UserSupplementStepRow({
         <time dateTime={step.createdAt}>{formatLogTime(step.createdAt)}</time>
       </div>
       <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-        {step.text}
+        {clampAgentText(step.text, AGENT_RUN_STREAM_MAX_CHARS)}
       </pre>
     </div>
   )
@@ -477,7 +510,10 @@ function ToolCallRow({
   const running = step.phase === 'started'
   const command = step.command?.trim()
   const preview = hideCommand ? undefined : command || summarizeArgs(step.argsText)
-  const observation = step.resultText?.trim()
+  const observationRaw = step.resultText?.trim()
+  const observation = observationRaw
+    ? clampAgentText(observationRaw, AGENT_RUN_STREAM_MAX_CHARS)
+    : undefined
   const batchParts = observation ? parseBatchedToolOutput(observation) : null
   const showObservation = Boolean(observation && observation !== command && !batchParts)
   const observationLong = Boolean(showObservation && observation && observation.length > 240)
@@ -828,6 +864,33 @@ function ApprovalStepCard({
     (isStaticallyReadonly(step.command)
       ? t.commandReview.readOnlyHuman.replace('{verb}', riskVerb)
       : t.commandReview.highRiskHuman.replace('{verb}', riskVerb))
+  const riskDetail = (
+    <>
+      {step.riskPoints && step.riskPoints.length > 0 ? (
+        <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+          {step.riskPoints.map((point) => (
+            <li key={point}>{point}</li>
+          ))}
+        </ul>
+      ) : null}
+      {step.impactAnalysis ? (
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground/80">
+            {t.commandReview.impactAnalysis}:{' '}
+          </span>
+          {step.impactAnalysis}
+        </p>
+      ) : null}
+      {step.recommendation ? (
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground/80">
+            {t.commandReview.recommendation}:{' '}
+          </span>
+          {step.recommendation}
+        </p>
+      ) : null}
+    </>
+  )
 
   return (
     <div
@@ -912,6 +975,7 @@ function ApprovalStepCard({
               </p>
             ) : null}
             <p className="text-foreground/90">{highlightRiskVerb(humanSummary, riskVerb)}</p>
+            {riskDetail}
           </>
         ) : (
           <>
@@ -924,24 +988,7 @@ function ApprovalStepCard({
                 {step.operationReason}
               </p>
             ) : null}
-            {step.riskPoints && step.riskPoints.length > 0 ? (
-              <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
-                {step.riskPoints.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            ) : null}
-            {step.impactAnalysis ? (
-              <p className="text-muted-foreground">{step.impactAnalysis}</p>
-            ) : null}
-            {step.recommendation ? (
-              <p className="text-muted-foreground">
-                <span className="font-medium text-foreground/80">
-                  {t.commandReview.recommendation}:{' '}
-                </span>
-                {step.recommendation}
-              </p>
-            ) : null}
+            {riskDetail}
           </>
         )}
 
@@ -1322,110 +1369,4 @@ function formatDuration(elapsedMs: number): string {
   const minutes = Math.floor(seconds / 60)
   const rem = Math.round(seconds % 60)
   return `${minutes}m ${rem}s`
-}
-
-interface MarkdownHeading {
-  id: string
-  level: number
-  text: string
-}
-
-function ResultFullscreenPreview({
-  value,
-  headings,
-  headingIdPrefix,
-  title,
-  t,
-  onClose
-}: {
-  value: string
-  headings: MarkdownHeading[]
-  headingIdPrefix: string
-  title: string
-  t: Dictionary
-  onClose: () => void
-}): React.JSX.Element {
-  return createPortal(
-    <div
-      className="app-fullscreen-overlay fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b bg-background px-4">
-        <div className="min-w-0 truncate text-sm font-semibold">{title}</div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={t.common.close}
-          title={t.common.close}
-          onClick={onClose}
-        >
-          <XIcon aria-hidden="true" />
-        </Button>
-      </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(0,1fr)]">
-        <nav
-          className="min-h-0 overflow-auto border-r bg-muted/15 p-3"
-          aria-label={t.common.navigation}
-        >
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
-            {t.common.navigation}
-          </div>
-          {headings.length === 0 ? (
-            <div className="rounded-md border bg-background/60 p-2 text-xs text-muted-foreground">
-              {title}
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {headings.map((heading) => (
-                <a
-                  key={heading.id}
-                  href={`#${heading.id}`}
-                  className="block truncate rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-background hover:text-foreground"
-                  style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 10}px` }}
-                >
-                  {heading.text}
-                </a>
-              ))}
-            </div>
-          )}
-        </nav>
-        <div className="min-h-0 overflow-auto p-5">
-          <div className="mx-auto max-w-5xl rounded-md border bg-card/80 p-5">
-            <MarkdownContent value={value} t={t} headingIdPrefix={headingIdPrefix} />
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body
-  )
-}
-
-function extractMarkdownHeadings(value: string, prefix: string): MarkdownHeading[] {
-  let index = 0
-  return value
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .flatMap((line) => {
-      const match = line.match(/^(#{1,4})\s+(.+)$/)
-      if (!match) return []
-      const text = stripInlineMarkdown(match[2]).trim()
-      const heading: MarkdownHeading = {
-        id: buildMarkdownHeadingId(prefix, text, index),
-        level: match[1].length,
-        text
-      }
-      index += 1
-      return [heading]
-    })
-}
-
-function stripInlineMarkdown(value: string): string {
-  return value
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/[<#>*_~]/g, '')
 }

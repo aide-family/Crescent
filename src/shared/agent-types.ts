@@ -293,6 +293,9 @@ export interface TerminalCommandResult {
   interrupted?: boolean
   terminalExited?: boolean
   detached?: boolean
+  environmentDrift?: boolean
+  observedHost?: string
+  expectedHost?: string
   subterminalName?: string
   subterminalTabId?: string
 }

@@ -3,6 +3,11 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerTerminalIpc, stopAllTerminalSessions } from './terminal/ipc'
+import {
+  appendRendererDiagnostic,
+  attachRendererCrashRecovery,
+  registerRendererRecoveryIpc
+} from './renderer-recovery'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -74,7 +79,7 @@ function installNativeLogFilter(): void {
   }) as typeof process.stderr.write
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
@@ -96,16 +101,17 @@ function createWindow(): void {
     'did-fail-load',
     (_event, errorCode, errorDescription, validatedURL) => {
       console.error('Renderer failed to load', { errorCode, errorDescription, validatedURL })
+      appendRendererDiagnostic(
+        `[did-fail-load] code=${errorCode} ${errorDescription} url=${validatedURL}`
+      )
     }
   )
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('Renderer process gone', details)
-  })
   mainWindow.webContents.on('console-message', (event) => {
     if (event.level !== 'warning' && event.level !== 'error') return
     console.error(
       `[renderer:${event.level}] ${event.message} (${event.sourceId}:${event.lineNumber})`
     )
+    appendRendererDiagnostic(`[renderer:${event.level}] ${event.message}`.slice(0, 500))
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -129,6 +135,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 // This method will be called when Electron has finished
@@ -194,6 +202,7 @@ app.whenReady().then(async () => {
     }
   )
   initializeCrescentDatabase()
+  registerRendererRecoveryIpc(icon)
   const { ensureDefaultInstructionFiles } = await import('./agent/instruction-files')
   ensureDefaultInstructionFiles()
   registerAgentIpc()
@@ -203,12 +212,29 @@ app.whenReady().then(async () => {
   registerUpdateIpc()
   stopAttachmentCleanup = startAttachmentCleanupScheduler()
 
-  createWindow()
+  const mainWindow = createWindow()
+  attachRendererCrashRecovery(mainWindow, {
+    iconPath: icon,
+    notifyTitle: 'Crescent',
+    notifyBody: 'Renderer recovered after a crash. Recent session will be restored when available.',
+    loopTitle: 'Crescent',
+    loopBody: 'Renderer crashed repeatedly. Auto-reload stopped; open the diagnostic panel.'
+  })
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const window = createWindow()
+      attachRendererCrashRecovery(window, {
+        iconPath: icon,
+        notifyTitle: 'Crescent',
+        notifyBody:
+          'Renderer recovered after a crash. Recent session will be restored when available.',
+        loopTitle: 'Crescent',
+        loopBody: 'Renderer crashed repeatedly. Auto-reload stopped; open the diagnostic panel.'
+      })
+    }
   })
 })
 

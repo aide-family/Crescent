@@ -96,7 +96,9 @@ import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
 import {
   AGENT_LOG_SOFT_LIMIT,
+  AGENT_RUN_STREAM_MAX_CHARS,
   appendElapsedFooter,
+  clampAgentText,
   connectionFailureMarkers,
   formatAgentRunMarkdown,
   hydrateStoredAgentLog,
@@ -104,7 +106,10 @@ import {
   trimAgentLogEntries
 } from '@renderer/lib/agent-log'
 import { resolveSuccessfulAgentResult } from '@renderer/lib/agent-run-finalize'
-import { closeStreamingOpenSteps } from '@renderer/lib/agent-run-document'
+import {
+  buildFinishPersistText,
+  closeStreamingOpenSteps
+} from '@renderer/lib/agent-run-document'
 import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
 import { suggestWhitelistRule } from '@renderer/lib/command-whitelist'
 import {
@@ -179,20 +184,42 @@ import {
   shouldDrainPostConnectionTasks
 } from '@renderer/lib/connection-automation-policy'
 import { formatConnectionTarget } from '@renderer/lib/connections'
-import { formatSuggestionsForInput, routeConnection, looksLikeRemoteOpsIntent, formatConnectionClarifyOptions } from '@renderer/lib/connection-route'
+import {
+  formatSuggestionsForInput,
+  isActiveLoggedInTerminal,
+  prioritizeClarifyOptions,
+  routeConnection,
+  looksLikeRemoteOpsIntent,
+  formatConnectionClarifyOptions,
+  resolveConnectionClarifyConfirm,
+  routeForcedConnection,
+  type ConnectionClarifyConfirmPayload
+} from '@renderer/lib/connection-route'
+import {
+  beginConnectionRetry,
+  canAttemptConnection,
+  createIdleConnectionAttempt,
+  markConnectionFailed,
+  markConnectionReady,
+  shouldAppendSwitchedEntry,
+  type ConnectionAttemptState
+} from '@renderer/lib/connection-attempt'
+import { runWithTimeout } from '@renderer/lib/with-timeout'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
 import { buildBusySupplementArtifacts } from '@renderer/lib/busy-supplement'
 import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
 import {
   buildTerminalNotReadyClarifyOptions,
   CLARIFY_MANUAL_CONTINUE_ID,
-  CLARIFY_OPEN_CONNECTIONS_ID,
   isRemoteExecutionTab,
   isTerminalSnapshotReadyForAgent,
   resolveTerminalReadyGateOutcome,
   TERMINAL_READY_WAIT_MS
 } from '@renderer/lib/terminal-ready-gate'
-import { createPendingAttentionNotifier, summarizeNotificationBody } from '@renderer/lib/pending-attention-notify'
+import {
+  createPendingAttentionNotifier,
+  summarizeNotificationBody
+} from '@renderer/lib/pending-attention-notify'
 import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import {
   copyFeedback,
@@ -221,9 +248,11 @@ import {
   getSessionTerminals,
   getTerminalDisplayTitle,
   isReservedTerminalTabId,
+  resolveConnectTargetTab,
   resolveSessionChatTabId,
   resolveShellFooterState,
   resolveTabModelSelection,
+  retainSettledClarification,
   type AgentLogEntry,
   type AgentLogEntryInput,
   type AgentRunViewState,
@@ -344,7 +373,16 @@ interface PostConnectionTask {
 const initialTerminalTab = createTerminalTab({ title: 'Terminal' })
 const emptyLocalTab = createTerminalTab({ title: 'Terminal' })
 
-function App(): React.JSX.Element {
+/** Hard timeout for PTY spawn during reconnect (configurable). */
+const CONNECTION_SPAWN_TIMEOUT_MS = 10_000
+/** Hard timeout for the whole login automation (spawn + actions + password wait). */
+const CONNECTION_LOGIN_TOTAL_TIMEOUT_MS = 90_000
+
+function App({
+  recoveryMode = 'none'
+}: {
+  recoveryMode?: 'none' | 'pending'
+}): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -393,10 +431,12 @@ function App(): React.JSX.Element {
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
+  const environmentDriftHandlingRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
   const skipConnectionReconnectRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
+  const stopAgentRunRef = useRef<((tabId?: string) => void) | null>(null)
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
   const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
@@ -468,6 +508,16 @@ function App(): React.JSX.Element {
   const [mcpEditorOpen, setMcpEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [loadingEarlierLogs, setLoadingEarlierLogs] = useState(false)
+  const [hasEarlierLogs, setHasEarlierLogs] = useState(false)
+  const [connectionAttemptByChatTab, setConnectionAttemptByChatTab] = useState<
+    Record<string, ConnectionAttemptState>
+  >({})
+  const [dismissedRecoveryByChatTab, setDismissedRecoveryByChatTab] = useState<
+    Record<string, boolean>
+  >({})
+  const lastProcessedFailureEntryRef = useRef(new Map<string, number>())
+  const retryInFlightRef = useRef(new Set<string>())
   const [opsFeedbackByLogId, setOpsFeedbackByLogId] = useState<Record<number, 'like' | 'dislike'>>(
     {}
   )
@@ -630,30 +680,125 @@ function App(): React.JSX.Element {
     t
   ])
 
-  const connectionRecovery = useMemo(() => {
-    const markers = connectionFailureMarkers(t)
-    const latestError = [...sessionChatTab.agentLog]
-      .reverse()
-      .find((entry) => entry.kind === 'error')
-    const visible = Boolean(latestError && isConnectionFailureLog(latestError.text, markers))
-    const canRetry = Boolean(
-      activeTab.connectionId ||
-      sessionChatTab.connectionId ||
-      sessionTerminals.some((tab) => Boolean(tab.connectionId))
+  useEffect(() => {
+    let cancelled = false
+    const chatTabId = sessionChatTab.id
+    void window.api.storage.countAgentLogs(chatTabId).then((count) => {
+      if (cancelled) return
+      setHasEarlierLogs(count > sessionChatTab.agentLog.length)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionChatTab.agentLog.length, sessionChatTab.id])
+
+  async function loadEarlierAgentLogs(): Promise<void> {
+    if (loadingEarlierLogs) return
+    const chatTabId = sessionChatTab.id
+    const oldestId = sessionChatTab.agentLog.reduce(
+      (min, entry) => Math.min(min, entry.id),
+      Number.POSITIVE_INFINITY
     )
-    return { visible, canRetry }
-  }, [
-    activeTab.connectionId,
-    sessionChatTab.agentLog,
-    sessionChatTab.connectionId,
-    sessionTerminals,
-    t
-  ])
+    setLoadingEarlierLogs(true)
+    try {
+      const rows = await window.api.storage.listAgentLogs({
+        tabId: chatTabId,
+        beforeLogId: Number.isFinite(oldestId) ? oldestId : undefined,
+        limit: 40
+      })
+      if (rows.length === 0) {
+        setHasEarlierLogs(false)
+        return
+      }
+      const existingIds = new Set(sessionChatTab.agentLog.map((entry) => entry.id))
+      const hydrated = rows
+        .map((row) => hydrateStoredAgentLog(row))
+        .filter((entry) => !existingIds.has(entry.id))
+      if (hydrated.length === 0) {
+        setHasEarlierLogs(false)
+        return
+      }
+      updateTab(chatTabId, (tab) => {
+        const merged = trimAgentLogEntries([...hydrated, ...tab.agentLog], AGENT_LOG_SOFT_LIMIT)
+        return { ...tab, agentLog: merged }
+      })
+      const total = await window.api.storage.countAgentLogs(chatTabId)
+      const nextLen =
+        tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog.length ??
+        sessionChatTab.agentLog.length + hydrated.length
+      setHasEarlierLogs(total > nextLen)
+    } finally {
+      setLoadingEarlierLogs(false)
+    }
+  }
+
+  const updateConnectionAttempt = useCallback(
+    (chatTabId: string, updater: (state: ConnectionAttemptState) => ConnectionAttemptState) => {
+      setConnectionAttemptByChatTab((current) => ({
+        ...current,
+        [chatTabId]: updater(current[chatTabId] ?? createIdleConnectionAttempt())
+      }))
+    },
+    []
+  )
+
+  const markChatTabReady = useCallback(
+    (chatTabId: string) => {
+      updateConnectionAttempt(chatTabId, markConnectionReady)
+    },
+    [updateConnectionAttempt]
+  )
+
+  const connectionRecovery = useMemo(() => {
+    const chatTabId = sessionChatTab.id
+    const state = connectionAttemptByChatTab[chatTabId] ?? createIdleConnectionAttempt()
+    const visible = state.phase === 'failed' || state.phase === 'connecting'
+    return {
+      visible,
+      canRetry: state.canRetry && !state.pipeFallback,
+      connecting: state.phase === 'connecting',
+      pipeFallback: state.pipeFallback,
+      reason: state.reason,
+      dismissed: Boolean(dismissedRecoveryByChatTab[chatTabId])
+    }
+  }, [connectionAttemptByChatTab, dismissedRecoveryByChatTab, sessionChatTab.id])
+
+  // Single source of truth: any NEW connection-failure error entry transitions
+  // the per-chat connection attempt into failed on the same card.
+  useEffect(() => {
+    const chatTabId = sessionChatTab.id
+    const markers = connectionFailureMarkers(t)
+    const processedUpTo = lastProcessedFailureEntryRef.current.get(chatTabId) ?? -1
+    let lastSeen = processedUpTo
+    for (const entry of sessionChatTab.agentLog) {
+      if (entry.kind !== 'error') continue
+      if (entry.id <= processedUpTo) continue
+      lastSeen = Math.max(lastSeen, entry.id)
+      if (isConnectionFailureLog(entry.text, markers)) {
+        const pipeFallback =
+          /SSH requires PTY/i.test(entry.text) ||
+          sessionTerminals.some((tab) => tab.terminalMode === 'pipe')
+        updateConnectionAttempt(chatTabId, (state) =>
+          markConnectionFailed(state, {
+            reason: entry.text,
+            pipeFallback,
+            failureEntryId: entry.id
+          })
+        )
+        setDismissedRecoveryByChatTab((current) => ({ ...current, [chatTabId]: false }))
+      }
+    }
+    if (lastSeen > processedUpTo) {
+      lastProcessedFailureEntryRef.current.set(chatTabId, lastSeen)
+    }
+  }, [sessionChatTab.agentLog, sessionChatTab.id, sessionTerminals, t, updateConnectionAttempt])
   const {
     appendLog,
+    updateLogEntryText,
     updateAgentRun,
     appendAgentEvent,
     liveRunByLogId,
+    pruneLiveRuns,
     attachApprovalRequest,
     applyApprovalPurpose,
     resolveApprovalStep
@@ -736,6 +881,12 @@ function App(): React.JSX.Element {
       ? `${t.app.aiNotReady}: ${modelValidationError}`
       : t.app.aiReady
   const shellState: 'ready' | 'pending' | 'not-ready' = resolveShellFooterState(activeTab)
+  const footerChatTabId = resolveSessionChatTabId(tabsRef.current, activeTab.id)
+  const footerAttempt =
+    connectionAttemptByChatTab[footerChatTabId] ?? createIdleConnectionAttempt()
+  const footerDisconnected =
+    Boolean(activeTab.connectionId || activeTab.isSsh) &&
+    (footerAttempt.phase === 'connecting' || footerAttempt.phase === 'failed')
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const {
     displayConnections,
@@ -877,7 +1028,10 @@ function App(): React.JSX.Element {
           originalTask: task.displayInput
         })
         const elapsedMs = Date.now() - task.startedAt
-        if (task.reuseRun && activeAgentRunRef.current.get(chatTabId)?.logId === task.reuseRun.logId) {
+        if (
+          task.reuseRun &&
+          activeAgentRunRef.current.get(chatTabId)?.logId === task.reuseRun.logId
+        ) {
           updateAgentRun(chatTabId, (run) => ({
             ...run,
             error: message,
@@ -973,11 +1127,7 @@ function App(): React.JSX.Element {
           }
 
           if (task.reuseRun) {
-            appendStatusToActiveRunOrLog(
-              chatTabId,
-              t.terminal.postLoginTaskStarting,
-              task.reuseRun
-            )
+            appendStatusToActiveRunOrLog(chatTabId, t.terminal.postLoginTaskStarting, task.reuseRun)
           } else {
             appendLog(
               {
@@ -1068,6 +1218,10 @@ function App(): React.JSX.Element {
 
       automatedLoginTabsRef.current.add(targetTabId)
       passwordPromptBuffersRef.current.set(targetTabId, '')
+      void window.api.terminal.setExpectedHost({
+        tabId: targetTabId,
+        host: resolvedConnection.host
+      })
       try {
         const ok = includeSshCommand
           ? await runConnectionCommandSequence(commands, targetTabId, appendLog, t, chatTabId)
@@ -1076,6 +1230,7 @@ function App(): React.JSX.Element {
           // Failed auth/host/login must not auto-retry the same SSH connection on exit.
           skipConnectionReconnectRef.current.add(targetTabId)
           abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
+          void window.api.terminal.setExpectedHost({ tabId: targetTabId, host: null })
         }
         return ok
       } catch (error) {
@@ -1083,6 +1238,7 @@ function App(): React.JSX.Element {
         skipConnectionReconnectRef.current.add(targetTabId)
         appendLog({ kind: 'error', text: message }, chatTabId)
         abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
+        void window.api.terminal.setExpectedHost({ tabId: targetTabId, host: null })
         return false
       } finally {
         automatedLoginTabsRef.current.delete(targetTabId)
@@ -1094,10 +1250,46 @@ function App(): React.JSX.Element {
 
   const executeConnectionCommands = useCallback(
     async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
-      const ok = await executeConnectionAutomation(connection, targetTabId, true)
-      if (shouldDrainPostConnectionTasks(ok)) drainPostConnectionTasks(targetTabId)
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      const timeoutMessage = t.terminal.connectionLoginTimeout.replace(
+        '{ms}',
+        String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
+      )
+      console.info(
+        `[conn-trace] automation-start tab=${targetTabId} connection=${connection.id}`
+      )
+      const ok = await runWithTimeout(
+        executeConnectionAutomation(connection, targetTabId, true),
+        CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
+        () => {
+          console.info(`[conn-trace] automation-timeout tab=${targetTabId}`)
+          appendLog({ kind: 'error', text: timeoutMessage }, chatTabId)
+        }
+      )
+      if (ok) {
+        markChatTabReady(chatTabId)
+      } else if (ok === undefined) {
+        // Overall login timeout: settle the pending run (spinner) and the card
+        // explicitly. The watcher also picks the error entry up, but do not
+        // rely on marker coverage.
+        abortPostConnectionTasks(targetTabId, timeoutMessage)
+        updateConnectionAttempt(chatTabId, (state) =>
+          markConnectionFailed(state, { reason: timeoutMessage })
+        )
+      }
+      retryInFlightRef.current.delete(chatTabId)
+      if (shouldDrainPostConnectionTasks(ok === true)) drainPostConnectionTasks(targetTabId)
+      console.info(`[conn-trace] automation-end tab=${targetTabId} ok=${ok}`)
     },
-    [drainPostConnectionTasks, executeConnectionAutomation]
+    [
+      abortPostConnectionTasks,
+      appendLog,
+      drainPostConnectionTasks,
+      executeConnectionAutomation,
+      markChatTabReady,
+      t,
+      updateConnectionAttempt
+    ]
   )
 
   useEffect(() => {
@@ -1107,6 +1299,32 @@ function App(): React.JSX.Element {
   useEffect(() => {
     restoreTerminalSessionRef.current = restoreTerminalSession
   })
+
+  useEffect(() => {
+    stopAgentRunRef.current = stopAgentRun
+  })
+
+  useEffect(() => {
+    return window.api.terminal.onEnvironmentDrift((event) => {
+      if (environmentDriftHandlingRef.current.has(event.tabId)) return
+      environmentDriftHandlingRef.current.add(event.tabId)
+
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+      const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
+      if (chatTab?.agentBusy || activeRunIdRef.current.has(chatTabId)) {
+        stopAgentRunRef.current?.(chatTabId)
+      }
+
+      const message = t.terminal.terminalEnvironmentDrift
+        .replace('{expected}', event.expectedHost)
+        .replace('{observed}', event.observedHost)
+      appendLog({ kind: 'status', text: message }, chatTabId)
+
+      void restoreTerminalSessionRef.current?.(event.tabId).finally(() => {
+        environmentDriftHandlingRef.current.delete(event.tabId)
+      })
+    })
+  }, [appendLog, t.terminal.terminalEnvironmentDrift])
 
   useEffect(() => {
     if (!passwordPromptRequest) return
@@ -1539,11 +1757,25 @@ function App(): React.JSX.Element {
             })
             return
           }
-          const ok = await executeConnectionAutomation(connection, payload.tabId, true)
+          const timeoutMessage = t.terminal.connectionLoginTimeout.replace(
+            '{ms}',
+            String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
+          )
+          const ok = await runWithTimeout(
+            executeConnectionAutomation(connection, payload.tabId, true),
+            CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
+            () => {
+              void window.api.agent.ackSubterminalOpened({
+                tabId: payload.tabId,
+                ok: false,
+                error: timeoutMessage
+              })
+            }
+          )
           void window.api.agent.ackSubterminalOpened({
             tabId: payload.tabId,
-            ok,
-            error: ok ? undefined : 'SSH login automation failed.'
+            ok: ok === true,
+            error: ok === true ? undefined : ok === undefined ? timeoutMessage : 'SSH login automation failed.'
           })
         } catch (error) {
           void window.api.agent.ackSubterminalOpened({
@@ -1618,9 +1850,25 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skillInstallIds, skillInstallLogCreatedAt])
 
+  const activeLiveRun = useMemo(() => {
+    const entries = activeTab?.agentLog ?? []
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]
+      if (entry.kind === 'assistant' && liveRunByLogId[entry.id]) {
+        return liveRunByLogId[entry.id]
+      }
+    }
+    return undefined
+  }, [activeTab?.agentLog, liveRunByLogId])
+
   useEffect(() => {
     agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
-  }, [activeTab?.agentLog, activeTab?.agentThinking, activeTab?.thinkingMessage])
+  }, [
+    activeTab?.agentLog,
+    activeTab?.agentThinking,
+    activeTab?.thinkingMessage,
+    activeLiveRun
+  ])
 
   const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
 
@@ -2085,6 +2333,35 @@ function App(): React.JSX.Element {
       }
     }
   }
+
+  useEffect(() => {
+    if (recoveryMode !== 'pending') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const items = await window.api.storage.listSessionHistory(1)
+        if (cancelled) return
+        const latest = items[0]
+        if (latest) {
+          await openHistorySession(latest)
+        }
+        toast.message(t.notifications.rendererRecoveredTitle, {
+          description: t.notifications.rendererRecoveredBody
+        })
+      } catch (error) {
+        console.error('[renderer-recovery] failed to restore session', error)
+      } finally {
+        if (!cancelled) {
+          void window.api.app.clearRendererRecovery()
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Intentionally once on mount for pending recovery.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recoveryMode])
 
   async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
@@ -2718,6 +2995,7 @@ function App(): React.JSX.Element {
     reconnectingTabsRef.current.add(tabId)
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, chatTabId)
+    void window.api.terminal.setExpectedHost({ tabId, host: null })
 
     try {
       const dimensions =
@@ -2776,29 +3054,10 @@ function App(): React.JSX.Element {
         throw new Error(`${t.history.connectionMissing}: ${tab.connectionName ?? tab.connectionId}`)
       }
 
-      const dimensions =
-        tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
-      const session = await window.api.terminal.start({
-        cols: dimensions?.cols ?? 80,
-        rows: dimensions?.rows ?? 24,
-        tabId
-      })
-      updateTab(tabId, (current) => ({
-        ...current,
-        sessionId: session.sessionId,
-        terminalMode: session.mode,
-        terminalCwd: session.cwd,
-        terminalReady: true,
-        terminalStartError: undefined
-      }))
-      if (tabId === activeTabIdRef.current) {
-        terminalSessionIdRef.current = session.sessionId
-        terminalModeRef.current = session.mode
-        terminalCwdRef.current = session.cwd
-        pipePromptRef.current = formatPipePrompt(session.cwd)
-      }
-      const ok = await executeConnectionAutomation(connection, tabId, true)
-      if (shouldDrainPostConnectionTasks(ok)) drainPostConnectionTasks(tabId)
+      // Reuse the same login chain as /connect and the retry card: fresh PTY
+      // spawn (hard timeout) + normal login automation (overall timeout) +
+      // post-login task drain. No separate reconnect path that can deadlock.
+      const ok = await spawnAndLoginConnection(connection, tabId)
       if (!ok) {
         // Keep local shell; do not schedule another SSH reconnect cycle.
         skipConnectionReconnectRef.current.add(tabId)
@@ -2836,7 +3095,18 @@ function App(): React.JSX.Element {
     return false
   }
 
-  function connectToConnection(
+  function activateTerminalTab(tabId: string): void {
+    activeTabIdRef.current = tabId
+    flushSync(() => {
+      setActiveTabId(tabId)
+      setTerminalPage('terminal')
+      setHiddenPane(null)
+    })
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    setActiveExecutionTerminal(chatTabId, tabId)
+  }
+
+  async function connectToConnection(
     connection: ConnectionConfig,
     postLoginInput?: string,
     postLoginDisplayInput?: string,
@@ -2844,19 +3114,29 @@ function App(): React.JSX.Element {
     postLoginAppendUserLog = true,
     postLoginStartedAt = Date.now(),
     reuseRun?: ReuseAgentRun
-  ): string {
+  ): Promise<string> {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
+    const resolution = resolveConnectTargetTab({
+      currentTab,
+      connectionId: connection.id,
+      tabs: tabsRef.current
+    })
+    console.info(
+      `[conn-trace] connect connection=${connection.id} resolution=${resolution.kind}`
+    )
+
     let targetTabId = currentTab?.id ?? ''
     let targetTab = currentTab
     let forceFreshLogin = false
+    let statusLabel: string | undefined
 
     void window.api.connections.setLastUsed(connection.id).catch(() => undefined)
 
-    if (currentTab?.isSsh && currentTab.connectionId === connection.id) {
-      targetTabId = currentTab.id
-      targetTab = currentTab
-      forceFreshLogin = true
-      updateTab(currentTab.id, (tab) => ({
+    if (resolution.kind === 'reuse') {
+      targetTabId = resolution.tab.id
+      targetTab = resolution.tab
+      forceFreshLogin = resolution.forceFreshLogin
+      updateTab(resolution.tab.id, (tab) => ({
         ...tab,
         connectionId: connection.id,
         connectionName: connection.name,
@@ -2864,17 +3144,15 @@ function App(): React.JSX.Element {
         sessionId: undefined,
         terminalReady: false
       }))
-      setActiveTabId(currentTab.id)
-      void window.api.terminal.stop(currentTab.id)
-    } else if (currentTab?.isSsh) {
-      // Keep the current chat session and open a peer terminal for comparison.
-      const groupId = getSessionGroupId(currentTab)
-      if (currentTab.sessionGroupId !== groupId) {
-        updateTab(currentTab.id, (tab) => ({ ...tab, sessionGroupId: groupId }))
+      void window.api.terminal.stop(resolution.tab.id)
+      statusLabel = t.terminal.switchedToConnection.replace('{name}', connection.name)
+    } else if (resolution.kind === 'create-peer' && currentTab) {
+      if (currentTab.sessionGroupId !== resolution.sessionGroupId) {
+        updateTab(currentTab.id, (tab) => ({ ...tab, sessionGroupId: resolution.sessionGroupId }))
       }
       const nextTab = createTerminalTab({
         title: getNextTerminalTitle(connection.name, tabsRef.current),
-        sessionGroupId: groupId,
+        sessionGroupId: resolution.sessionGroupId,
         providerId: currentTab.providerId ?? config.providerId,
         model: currentTab.model,
         connectionId: connection.id,
@@ -2883,20 +3161,13 @@ function App(): React.JSX.Element {
       })
       targetTabId = nextTab.id
       targetTab = nextTab
-      setTabs((current) => [...current, nextTab])
-      setActiveTabId(nextTab.id)
-      const chatTabId = resolveSessionChatTabId(
-        [...tabsRef.current.filter((tab) => tab.id !== nextTab.id), nextTab],
-        nextTab.id
-      )
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.openedPeerTerminal}: ${connection.name}`
-        },
-        chatTabId
-      )
-    } else if (!currentTab) {
+      setTabs((current) => {
+        const next = [...current, nextTab]
+        tabsRef.current = next
+        return next
+      })
+      statusLabel = t.terminal.switchedToConnection.replace('{name}', connection.name)
+    } else if (resolution.kind === 'create-new' || !currentTab) {
       const nextTab = createTerminalTab({
         title: getNextTerminalTitle(connection.name, tabsRef.current),
         providerId: config.providerId,
@@ -2906,9 +3177,14 @@ function App(): React.JSX.Element {
       })
       targetTabId = nextTab.id
       targetTab = nextTab
-      setTabs((current) => [...current, nextTab])
-      setActiveTabId(nextTab.id)
+      setTabs((current) => {
+        const next = [...current, nextTab]
+        tabsRef.current = next
+        return next
+      })
+      statusLabel = t.terminal.switchedToConnection.replace('{name}', connection.name)
     } else {
+      // convert-current (local / non-SSH → SSH)
       updateTab(currentTab.id, (tab) => ({
         ...tab,
         title:
@@ -2919,10 +3195,29 @@ function App(): React.JSX.Element {
         connectionName: connection.name,
         isSsh: true
       }))
-      setActiveTabId(currentTab.id)
+      targetTabId = currentTab.id
+      targetTab = currentTab
+      statusLabel = t.terminal.switchedToConnection.replace('{name}', connection.name)
     }
-    setHiddenPane(null)
-    setTerminalPage('terminal')
+
+    activateTerminalTab(targetTabId)
+
+    if (statusLabel) {
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
+      const previousStatus = [...(chatTab?.agentLog ?? [])]
+        .reverse()
+        .find((entry) => entry.kind === 'status')?.text
+      if (shouldAppendSwitchedEntry(previousStatus, statusLabel)) {
+        appendLog(
+          {
+            kind: 'status',
+            text: statusLabel
+          },
+          chatTabId
+        )
+      }
+    }
 
     if (postLoginInput) {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
@@ -2940,7 +3235,21 @@ function App(): React.JSX.Element {
       ])
     }
 
-    if (!forceFreshLogin && targetTab?.sessionId) {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+    updateConnectionAttempt(chatTabId, (state) =>
+      beginConnectionRetry(state, `conn-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    )
+
+    if (resolution.kind === 'reuse') {
+      // Same SSH tab re-login: the old PTY was stopped above. Spawn a fresh PTY
+      // inline and run the normal login chain, awaited. The xterm lifecycle
+      // effect does NOT re-run for the same active tab, so deferring the spawn
+      // to pendingSshRef left the reconnect with no PTY, no login, no settle.
+      console.info(
+        `[conn-trace] reuse-login tab=${targetTabId} connection=${connection.id}`
+      )
+      await spawnAndLoginConnection(connection, targetTabId)
+    } else if (!forceFreshLogin && targetTab?.sessionId) {
       void executeConnectionCommands(connection, targetTabId)
     } else {
       pendingSshRef.current.set(targetTabId, connection)
@@ -2949,10 +3258,87 @@ function App(): React.JSX.Element {
     return targetTabId
   }
 
+  /**
+   * Shared reconnect login chain used by both the connection entry point
+   * (connectToConnection reuse) and the drift/exit restore path. Spawns a fresh
+   * PTY (10s hard timeout), then runs the normal login automation (90s overall
+   * timeout) and drains any post-login agent task. Never throws.
+   */
+  async function spawnAndLoginConnection(
+    connection: ConnectionConfig,
+    tabId: string
+  ): Promise<boolean> {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    try {
+      const dimensions =
+        tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
+      console.info(`[conn-trace] spawn tab=${tabId}`)
+      const session = await runWithTimeout(
+        window.api.terminal.start({
+          cols: dimensions?.cols ?? 80,
+          rows: dimensions?.rows ?? 24,
+          tabId
+        }),
+        CONNECTION_SPAWN_TIMEOUT_MS,
+        () => {
+          console.info(`[conn-trace] spawn-timeout tab=${tabId}`)
+          appendLog({ kind: 'error', text: t.terminal.terminalSpawnTimeout }, chatTabId)
+        }
+      )
+      if (!session) {
+        updateConnectionAttempt(chatTabId, (state) =>
+          markConnectionFailed(state, { reason: t.terminal.terminalSpawnTimeout })
+        )
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          sessionId: undefined,
+          terminalReady: false,
+          terminalStartError: t.terminal.terminalSpawnTimeout
+        }))
+        return false
+      }
+
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        sessionId: session.sessionId,
+        terminalMode: session.mode,
+        terminalCwd: session.cwd,
+        terminalReady: true,
+        terminalStartError: undefined
+      }))
+      if (tabId === activeTabIdRef.current) {
+        terminalSessionIdRef.current = session.sessionId
+        terminalModeRef.current = session.mode
+        terminalCwdRef.current = session.cwd
+        pipePromptRef.current = formatPipePrompt(session.cwd)
+      }
+      console.info(
+        `[conn-trace] spawned tab=${tabId} mode=${session.mode} sid=${session.sessionId}`
+      )
+      await executeConnectionCommands(connection, tabId)
+      return Boolean(tabsRef.current.find((tab) => tab.id === tabId)?.sessionId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.info(`[conn-trace] spawn-failed tab=${tabId} err=${message}`)
+      updateConnectionAttempt(chatTabId, (state) =>
+        markConnectionFailed(state, { reason: message })
+      )
+      appendLog({ kind: 'error', text: message }, chatTabId)
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        sessionId: undefined,
+        terminalReady: false,
+        terminalStartError: message
+      }))
+      return false
+    }
+  }
+
   async function retryActiveConnection(): Promise<void> {
     const targetTab =
       tabsRef.current.find((tab) => tab.id === activeTabIdRef.current) ??
       tabsRef.current.find((tab) => tab.id === sessionChatTab.id)
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTab?.id ?? sessionChatTab.id)
     const connectionId =
       targetTab?.connectionId ||
       sessionTerminals.find((tab) => tab.connectionId)?.connectionId ||
@@ -2962,8 +3348,31 @@ function App(): React.JSX.Element {
       return
     }
 
+    // Synchronous idempotency guard (before any await): one attempt per click
+    // burst; an in-flight retry ignores further clicks.
+    if (retryInFlightRef.current.has(chatTabId)) return
+    const state = connectionAttemptByChatTab[chatTabId] ?? createIdleConnectionAttempt()
+    // Feasibility gate: SSH login needs PTY; PIPE fallback retry would always fail.
+    if (!canAttemptConnection({ state, terminalMode: targetTab?.terminalMode, needsPty: true })) {
+      if (state.phase !== 'connecting' && targetTab?.terminalMode === 'pipe') {
+        updateConnectionAttempt(chatTabId, (current) =>
+          markConnectionFailed(current, {
+            reason: t.input.pipeRetryUnavailable,
+            pipeFallback: true
+          })
+        )
+      }
+      return
+    }
+
+    retryInFlightRef.current.add(chatTabId)
+
     const connection = await findConnectionById(connectionId)
     if (!connection) {
+      retryInFlightRef.current.delete(chatTabId)
+      updateConnectionAttempt(chatTabId, (current) =>
+        markConnectionFailed(current, { reason: t.history.connectionMissing })
+      )
       showConnectionList()
       return
     }
@@ -2971,7 +3380,74 @@ function App(): React.JSX.Element {
     if (targetTab?.id) {
       skipConnectionReconnectRef.current.delete(targetTab.id)
     }
-    connectToConnection(connection)
+    try {
+      void connectToConnection(connection)
+    } catch (error) {
+      retryInFlightRef.current.delete(chatTabId)
+      updateConnectionAttempt(chatTabId, (current) =>
+        markConnectionFailed(current, {
+          reason: error instanceof Error ? error.message : String(error)
+        })
+      )
+    }
+  }
+
+  async function reinitActiveTerminal(): Promise<void> {
+    const targetTab =
+      tabsRef.current.find((tab) => tab.id === activeTabIdRef.current) ??
+      tabsRef.current.find((tab) => tab.id === sessionChatTab.id)
+    if (!targetTab) return
+
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTab.id)
+    const current = connectionAttemptByChatTab[chatTabId] ?? createIdleConnectionAttempt()
+    // Idempotent: one reinit at a time.
+    if (current.phase === 'connecting') return
+    updateConnectionAttempt(chatTabId, (current) =>
+      beginConnectionRetry(current, `reinit-${Date.now()}`)
+    )
+    appendLog({ kind: 'status', text: t.terminal.reinitializingTerminal }, chatTabId)
+
+    try {
+      const dimensions =
+        targetTab.id === activeTabIdRef.current
+          ? fitAddonRef.current?.proposeDimensions()
+          : undefined
+      void window.api.terminal.stop(targetTab.id)
+      const session = await window.api.terminal.start({
+        cols: dimensions?.cols ?? 80,
+        rows: dimensions?.rows ?? 24,
+        tabId: targetTab.id
+      })
+      updateTab(targetTab.id, (tab) => ({
+        ...tab,
+        sessionId: session.sessionId,
+        terminalMode: session.mode,
+        terminalCwd: session.cwd,
+        terminalReady: true,
+        terminalStartError: undefined
+      }))
+      updateConnectionAttempt(chatTabId, (current) =>
+        markConnectionFailed(current, {
+          reason: t.terminal.reinitTerminalReady,
+          pipeFallback: session.mode === 'pipe'
+        })
+      )
+    } catch (error) {
+      updateConnectionAttempt(chatTabId, (current) =>
+        markConnectionFailed(current, {
+          reason: error instanceof Error ? error.message : String(error),
+          pipeFallback: true
+        })
+      )
+    }
+  }
+
+  function dismissConnectionRecovery(chatTabId: string): void {
+    setDismissedRecoveryByChatTab((current) => ({ ...current, [chatTabId]: true }))
+  }
+
+  function viewConnectionRecovery(): void {
+    agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
   }
 
   function showConnectionList(): void {
@@ -3049,8 +3525,6 @@ function App(): React.JSX.Element {
       return
     }
 
-    setHiddenPane(null)
-    setTerminalPage('terminal')
     const nextTab = createTerminalTab({
       title: getNextTerminalTitle(connection.name, tabsRef.current),
       providerId: config.providerId,
@@ -3060,8 +3534,12 @@ function App(): React.JSX.Element {
     })
 
     pendingSshRef.current.set(nextTab.id, connection)
-    setTabs((current) => [...current, nextTab])
-    setActiveTabId(nextTab.id)
+    setTabs((current) => {
+      const next = [...current, nextTab]
+      tabsRef.current = next
+      return next
+    })
+    activateTerminalTab(nextTab.id)
   }
 
   function openConnectionInCurrentSession(connection: ConnectionConfig): void {
@@ -3083,51 +3561,23 @@ function App(): React.JSX.Element {
         model: currentTab.model,
         isSsh: false
       })
-      setTabs((current) => [...current, nextTab])
-      setActiveTabId(nextTab.id)
-      setHiddenPane(null)
-      setTerminalPage('terminal')
+      setTabs((current) => {
+        const next = [...current, nextTab]
+        tabsRef.current = next
+        return next
+      })
+      activateTerminalTab(nextTab.id)
       appendLog(
         {
           kind: 'status',
           text: `${t.terminal.openedPeerTerminal}: ${t.connections.localTerminal}`
         },
-        resolveSessionChatTabId([...tabsRef.current, nextTab], nextTab.id)
+        resolveSessionChatTabId(tabsRef.current, nextTab.id)
       )
       return
     }
 
-    const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
-    if (!currentTab) {
-      openConnectionTerminal(connection)
-      return
-    }
-
-    const groupId = getSessionGroupId(currentTab)
-    if (currentTab.sessionGroupId !== groupId) {
-      updateTab(currentTab.id, (tab) => ({ ...tab, sessionGroupId: groupId }))
-    }
-    const nextTab = createTerminalTab({
-      title: getNextTerminalTitle(connection.name, tabsRef.current),
-      sessionGroupId: groupId,
-      providerId: currentTab.providerId ?? config.providerId,
-      model: currentTab.model,
-      connectionId: connection.id,
-      connectionName: connection.name,
-      isSsh: true
-    })
-    pendingSshRef.current.set(nextTab.id, connection)
-    setTabs((current) => [...current, nextTab])
-    setActiveTabId(nextTab.id)
-    setHiddenPane(null)
-    setTerminalPage('terminal')
-    appendLog(
-      {
-        kind: 'status',
-        text: `${t.terminal.openedPeerTerminal}: ${connection.name}`
-      },
-      resolveSessionChatTabId([...tabsRef.current, nextTab], nextTab.id)
-    )
+    void connectToConnection(connection)
   }
 
   async function openLocalSubterminal(): Promise<void> {
@@ -3243,7 +3693,20 @@ function App(): React.JSX.Element {
       { kind: 'status', text: `${t.terminal.openedSubterminal}: ${connection.name}` },
       resolveSessionChatTabId(tabsRef.current, parentTab.id)
     )
-    void executeConnectionAutomation(connection, opened.tabId, true)
+    void runWithTimeout(
+      executeConnectionAutomation(connection, opened.tabId, true),
+      CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
+      () => {
+        const timeoutMessage = t.terminal.connectionLoginTimeout.replace(
+          '{ms}',
+          String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
+        )
+        appendLog(
+          { kind: 'error', text: timeoutMessage },
+          resolveSessionChatTabId(tabsRef.current, parentTab.id)
+        )
+      }
+    )
   }
 
   function connectFromConnectionManager(connection: ConnectionConfig): void {
@@ -3259,7 +3722,7 @@ function App(): React.JSX.Element {
       return
     }
 
-    connectToConnection(connection)
+    void connectToConnection(connection)
     setHiddenPane(null)
     setTerminalPage('terminal')
   }
@@ -3386,7 +3849,10 @@ function App(): React.JSX.Element {
     await submitAgentMessage()
   }
 
-  async function submitAgentMessage(overrideInput?: string): Promise<void> {
+  async function submitAgentMessage(
+    overrideInput?: string,
+    options?: { forcedConnectionId?: string; skipUserLog?: boolean }
+  ): Promise<void> {
     const terminalTabId = activeTabIdRef.current
     const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
     const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
@@ -3451,13 +3917,17 @@ function App(): React.JSX.Element {
       toolRefs: [],
       wikiRefs: []
     }))
-    appendLog(
-      {
-        kind: 'user',
-        text: displayInput
-      },
-      chatTabId
-    )
+    // Clarify-card confirm resumes with skipUserLog — selection lives on the settled card
+    // and assistant match steps, never as a second user bubble.
+    if (!options?.skipUserLog) {
+      appendLog(
+        {
+          kind: 'user',
+          text: displayInput
+        },
+        chatTabId
+      )
+    }
     const setThinking = (message: string): void => {
       updateTab(chatTabId, (current) => ({
         ...current,
@@ -3475,12 +3945,30 @@ function App(): React.JSX.Element {
     setThinking(t.input.thinkingAnalyzingRequest)
 
     const terminalContext = await window.api.terminal.getContext(terminalTabId)
+    console.info(
+      `[conn-trace] getContext tab=${terminalTabId} aligned=${terminalContext.sessionAligned ?? 'n/a'} expected=${terminalContext.expectedHost ?? '-'} tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
+    )
+    if (terminalContext.sessionAligned === 'drifted') {
+      // Remote side closed the SSH session while the outer PTY stayed alive.
+      // Mark the tab not-ready and surface the reconnect state before routing.
+      const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
+      updateConnectionAttempt(driftedChatTabId, (state) =>
+        markConnectionFailed(state, { reason: t.terminal.connectionDriftedReconnecting })
+      )
+      updateTab(terminalTabId, (tab) => ({ ...tab, terminalReady: false }))
+    }
     const pendingClarification = tab?.pendingClarification
-    const intentSourceInput =
-      pendingClarification?.kind === 'connection-intent'
-        ? `${pendingClarification.originalInput}\n\n${t.terminal.connectionClarifyReplyPrefix}\n${displayInput}`
-        : displayInput
-    if (pendingClarification) {
+    const activePending =
+      !options?.forcedConnectionId &&
+      pendingClarification?.kind === 'connection-intent' &&
+      !pendingClarification.settled
+    const intentSourceInput = activePending
+      ? `${pendingClarification.originalInput}\n\n${t.terminal.connectionClarifyReplyPrefix}\n${displayInput}`
+      : displayInput
+    if (activePending) {
+      updateTab(chatTabId, (current) => ({ ...current, pendingClarification: undefined }))
+    } else if (pendingClarification?.settled && !options?.forcedConnectionId) {
+      // Cancelled/stale settled card: drop on next typed submit.
       updateTab(chatTabId, (current) => ({ ...current, pendingClarification: undefined }))
     }
 
@@ -3492,7 +3980,7 @@ function App(): React.JSX.Element {
     )
     const lastUsedConnectionId =
       (await window.api.connections.getLastUsed().catch(() => null)) ?? undefined
-    const route = routeConnection({
+    let route = routeConnection({
       message: intentSourceInput,
       activeTabId: terminalTabId,
       activeTab: terminalTab,
@@ -3501,8 +3989,28 @@ function App(): React.JSX.Element {
       lastUsedConnectionId: lastUsedConnectionId || undefined,
       resumeRequested,
       explicitNonTerminal: explicitNonTerminalRequest,
-      explicitLocalFile: explicitLocalFileRequest
+      explicitLocalFile: explicitLocalFileRequest,
+      sessionAligned: terminalContext.sessionAligned
     })
+    console.info(
+      `[conn-trace] route action=${route.action} reason=${route.reason ?? '-'} target=${route.targetTabId} aligned=${terminalContext.sessionAligned ?? 'n/a'}`
+    )
+
+    const forcedConnectionId = options?.forcedConnectionId?.trim()
+    if (forcedConnectionId) {
+      const forcedConnection = connections.find((candidate) => candidate.id === forcedConnectionId)
+      if (!forcedConnection) {
+        console.warn('[connection-clarify] forcedConnectionId not found', forcedConnectionId)
+      } else {
+        route = routeForcedConnection({
+          connection: forcedConnection,
+          message: intentSourceInput,
+          activeTabId: terminalTabId,
+          activeTab: terminalTab,
+          sessionTabs
+        })
+      }
+    }
 
     const terminalSummary = [
       `mode=${terminalContext.mode}`,
@@ -3519,8 +4027,15 @@ function App(): React.JSX.Element {
 
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     let executionTerminalId = terminalTabId
+    const activeLoggedIn = isActiveLoggedInTerminal(terminalTab)
     try {
-      if (route.action === 'llm-fallback') {
+      if (route.action === 'llm-fallback' && activeLoggedIn) {
+        // Never let LLM / lastUsed steal an already logged-in active terminal.
+        if (route.label) {
+          setThinking(t.input.routingTo.replace('{label}', route.label))
+        }
+        connectionIntent = undefined
+      } else if (route.action === 'llm-fallback') {
         setThinking(t.input.thinkingResolvingConnection)
         connectionIntent = await resolveConnectionIntentForInput(intentSourceInput, {
           conversationContext,
@@ -3575,7 +4090,11 @@ function App(): React.JSX.Element {
                       ? t.terminal.connectionClarifyPickOne.replace(
                           '{options}',
                           formatConnectionClarifyOptions(
-                            connections.map((c) => ({ id: c.id, label: c.name }))
+                            prioritizeClarifyOptions(
+                              connections.map((c) => ({ id: c.id, label: c.name })),
+                              terminalTab?.connectionId,
+                              t.terminal.clarifyCurrentBadge
+                            )
                           )
                         )
                       : t.terminal.connectionNoneConfigured,
@@ -3595,7 +4114,11 @@ function App(): React.JSX.Element {
                     ? t.terminal.connectionClarifyPickOne.replace(
                         '{options}',
                         formatConnectionClarifyOptions(
-                          connections.map((c) => ({ id: c.id, label: c.name }))
+                          prioritizeClarifyOptions(
+                            connections.map((c) => ({ id: c.id, label: c.name })),
+                            terminalTab?.connectionId,
+                            t.terminal.clarifyCurrentBadge
+                          )
                         )
                       )
                     : t.terminal.connectionNoneConfigured,
@@ -3605,13 +4128,21 @@ function App(): React.JSX.Element {
           }
         }
       } else if (route.action === 'clarify') {
-        const optionsText = formatConnectionClarifyOptions(route.clarifyOptions ?? [])
+        const clarifyOptions = prioritizeClarifyOptions(
+          route.clarifyOptions && route.clarifyOptions.length > 0
+            ? route.clarifyOptions
+            : connections.map((c) => ({ id: c.id, label: c.name })),
+          terminalTab?.connectionId,
+          t.terminal.clarifyCurrentBadge
+        )
+        const optionsText = formatConnectionClarifyOptions(clarifyOptions)
         const clarificationQuestion =
           route.reason === 'remote-no-connections'
             ? t.terminal.connectionNoneConfigured
             : optionsText
               ? t.terminal.connectionClarifyPickOne.replace('{options}', optionsText)
               : t.terminal.connectionClarifyFallback
+        route = { ...route, clarifyOptions }
         connectionIntent = {
           analysis: {
             ok: false,
@@ -3622,10 +4153,7 @@ function App(): React.JSX.Element {
             reason: route.reason
           }
         }
-      } else if (
-        (route.action === 'connect' || route.action === 'switch') &&
-        route.connection
-      ) {
+      } else if ((route.action === 'connect' || route.action === 'switch') && route.connection) {
         const thinkingLabel = route.label || route.connection.name
         setThinking(
           route.action === 'connect'
@@ -3657,6 +4185,12 @@ function App(): React.JSX.Element {
           setThinking(t.input.routingTo.replace('{label}', route.label))
         }
         connectionIntent = undefined
+        if (route.reason === 'active-logged-in' && route.label) {
+          appendStatusToActiveRunOrLog(
+            chatTabId,
+            t.terminal.usingCurrentConnection.replace('{name}', route.label)
+          )
+        }
       }
     } finally {
       // Keep thinking visible until the next concrete UI phase replaces it.
@@ -3667,14 +4201,21 @@ function App(): React.JSX.Element {
       const question =
         connectionIntent.analysis.clarificationQuestion?.trim() ||
         t.terminal.connectionClarifyFallback
-      const clarifyOptions =
+      const clarifyOptions = prioritizeClarifyOptions(
         route.clarifyOptions && route.clarifyOptions.length > 0
           ? route.clarifyOptions
-          : connections.map((c) => ({ id: c.id, label: c.name }))
+          : connections.map((c) => ({ id: c.id, label: c.name })),
+        terminalTab?.connectionId,
+        t.terminal.clarifyCurrentBadge
+      )
       const defaultOptionId =
-        lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
+        (terminalTab?.connectionId &&
+        clarifyOptions.some((option) => option.id === terminalTab.connectionId)
+          ? terminalTab.connectionId
+          : undefined) ||
+        (lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
           ? lastUsedConnectionId
-          : undefined
+          : undefined)
       appendLog(
         {
           kind: 'assistant',
@@ -3702,6 +4243,7 @@ function App(): React.JSX.Element {
         ...current,
         pendingClarification: {
           kind: 'connection-intent',
+          routeId: `clarify-${crypto.randomUUID()}`,
           originalInput: pendingClarification?.originalInput || displayInput,
           question,
           options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
@@ -3729,7 +4271,9 @@ function App(): React.JSX.Element {
 
     // Remote ops without a resolved connection must not fall through to the main model
     // when configured connections exist (would otherwise invent "pick a login method").
+    // Skip when the active terminal is already logged in — stay on that target.
     if (
+      !activeLoggedIn &&
       !connectionIntent?.analysis?.shouldConnect &&
       looksLikeRemoteOpsIntent(intentSourceInput) &&
       connections.length > 0 &&
@@ -3740,11 +4284,13 @@ function App(): React.JSX.Element {
       )
     ) {
       clearThinking()
-      const optionsText = formatConnectionClarifyOptions(
-        connections.map((c) => ({ id: c.id, label: c.name }))
+      const clarifyOptions = prioritizeClarifyOptions(
+        connections.map((c) => ({ id: c.id, label: c.name })),
+        terminalTab?.connectionId,
+        t.terminal.clarifyCurrentBadge
       )
+      const optionsText = formatConnectionClarifyOptions(clarifyOptions)
       const question = t.terminal.connectionClarifyPickOne.replace('{options}', optionsText)
-      const clarifyOptions = connections.map((c) => ({ id: c.id, label: c.name }))
       const defaultOptionId =
         lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
           ? lastUsedConnectionId
@@ -3776,6 +4322,7 @@ function App(): React.JSX.Element {
         ...current,
         pendingClarification: {
           kind: 'connection-intent',
+          routeId: `clarify-${crypto.randomUUID()}`,
           originalInput: pendingClarification?.originalInput || displayInput,
           question,
           options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
@@ -3788,6 +4335,19 @@ function App(): React.JSX.Element {
         t.notifications.clarifyBody
       )
       return
+    }
+
+    if (
+      activeLoggedIn &&
+      connectionIntent?.analysis?.shouldConnect &&
+      connectionIntent.connection?.id &&
+      connectionIntent.connection.id !== terminalTab?.connectionId &&
+      !options?.forcedConnectionId &&
+      route.action !== 'connect' &&
+      route.action !== 'switch'
+    ) {
+      // LLM / lastUsed must not steal a logged-in active terminal; explicit route actions may.
+      connectionIntent = undefined
     }
 
     if (connectionIntent?.analysis?.shouldConnect) {
@@ -3850,7 +4410,8 @@ function App(): React.JSX.Element {
           agentInput: '',
           agentBusy: true,
           agentThinking: false,
-          thinkingMessage: undefined
+          thinkingMessage: undefined,
+          pendingClarification: retainSettledClarification(current.pendingClarification)
         }))
         activeRunCanceledRef.current.delete(chatTabId)
         activeRunIdRef.current.set(chatTabId, runId)
@@ -3892,7 +4453,7 @@ function App(): React.JSX.Element {
           connectionId: matchedConnection.id
         })
 
-        const targetTabId = connectToConnection(
+        const targetTabId = await connectToConnection(
           matchedConnection,
           buildPostLoginAgentInput(taskInput, matchedConnection, t),
           formatVisibleInputWithReferences(
@@ -3936,7 +4497,11 @@ function App(): React.JSX.Element {
         chatTabId
       )
 
-      connectToConnection(matchedConnection)
+      void connectToConnection(matchedConnection)
+      updateTab(chatTabId, (current) => ({
+        ...current,
+        pendingClarification: retainSettledClarification(current.pendingClarification)
+      }))
       return
     }
 
@@ -4043,6 +4608,7 @@ function App(): React.JSX.Element {
           ...current,
           pendingClarification: {
             kind: 'connection-intent',
+            routeId: `clarify-${crypto.randomUUID()}`,
             originalInput: displayInput,
             question,
             options: clarifyOptions,
@@ -4125,7 +4691,8 @@ function App(): React.JSX.Element {
       agentInput: '',
       agentBusy: true,
       agentThinking: false,
-      thinkingMessage: undefined
+      thinkingMessage: undefined,
+      pendingClarification: retainSettledClarification(current.pendingClarification)
     }))
     activeRunCanceledRef.current.delete(chatTabId)
     const runId = existingReuse?.runId ?? reuseRun?.runId ?? `run-${crypto.randomUUID()}`
@@ -4182,11 +4749,25 @@ function App(): React.JSX.Element {
       let terminalContext = ''
       try {
         const context = await window.api.terminal.getContext(executionTabId)
+        const executionTab =
+          tabsRef.current.find((candidate) => candidate.id === executionTabId) ?? runTab
+        const executionConnection = connections.find(
+          (candidate) => candidate.id === executionTab?.connectionId
+        )
+        const loggedIn = isActiveLoggedInTerminal(executionTab)
         const routeLine = options.connectionRouteLabel?.trim()
           ? `当前终端/连接：${options.connectionRouteLabel.trim()}`
           : ''
         terminalContext = [
           routeLine,
+          `tabId: ${executionTabId}`,
+          executionTab?.connectionId ? `connectionId: ${executionTab.connectionId}` : '',
+          executionTab?.connectionName
+            ? `connectionName: ${executionTab.connectionName}`
+            : '',
+          executionConnection?.host ? `host: ${executionConnection.host}` : '',
+          `loggedIn: ${loggedIn ? 'yes' : 'no'}`,
+          `terminalReady: ${executionTab?.terminalReady ? 'yes' : 'no'}`,
           `mode: ${context.mode}`,
           `cwd: ${context.cwd || '-'}`,
           `shell: ${context.shell || '-'}`,
@@ -4221,9 +4802,7 @@ function App(): React.JSX.Element {
       const notifyRunOutcome = (outcome: 'success' | 'error', summaryText: string): void => {
         if (activeRunCanceledRef.current.has(chatTabId)) return
         const title =
-          outcome === 'success'
-            ? t.notifications.runCompleteTitle
-            : t.notifications.runFailedTitle
+          outcome === 'success' ? t.notifications.runCompleteTitle : t.notifications.runFailedTitle
         const body =
           summarizeNotificationBody(summaryText) ||
           (outcome === 'success' ? t.input.done : t.input.failed)
@@ -4269,7 +4848,7 @@ function App(): React.JSX.Element {
           updateAgentRun(chatTabId, (run) => ({
             ...run,
             steps: closeStreamingOpenSteps(run.steps ?? []),
-            result: resolved.text,
+            result: clampAgentText(resolved.text ?? '', AGENT_RUN_STREAM_MAX_CHARS),
             elapsedMs
           }))
           void window.api.storage.saveAgentRun({
@@ -4365,10 +4944,22 @@ function App(): React.JSX.Element {
     } finally {
       // Only tear down if this run is still the active one (stop→resubmit race).
       if (activeRunIdRef.current.get(chatTabId) === runId) {
+        const finishedRun = activeAgentRunRef.current.get(chatTabId)
+        const finishedLogId = finishedRun?.logId
+        // Persist the full compact document to SQLite; updateLogEntryText
+        // structure-clamps only the in-memory agentLog copy for OOM safety.
+        if (finishedRun && typeof finishedLogId === 'number') {
+          try {
+            updateLogEntryText(chatTabId, finishedLogId, buildFinishPersistText(finishedRun))
+          } catch (error) {
+            console.warn('[crescent] finish snapshot write failed; continuing teardown', error)
+          }
+        }
         activeAgentRunRef.current.delete(chatTabId)
         activeRunCanceledRef.current.delete(chatTabId)
         activeRunIdRef.current.delete(chatTabId)
         activeRunInputRef.current.delete(chatTabId)
+        if (typeof finishedLogId === 'number') pruneLiveRuns([finishedLogId])
         updateTab(chatTabId, (current) => ({
           ...current,
           agentInput: '',
@@ -4519,7 +5110,7 @@ function App(): React.JSX.Element {
       }))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
-      connectToConnection(command.connection)
+      void connectToConnection(command.connection)
       return
     }
 
@@ -5971,7 +6562,8 @@ function App(): React.JSX.Element {
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
             onOpenLocalSubterminal={() => void openLocalSubterminal()}
-            onRetryConnection={() => void retryActiveConnection()}
+            onViewRecovery={viewConnectionRecovery}
+            onDismissRecovery={() => dismissConnectionRecovery(sessionChatTab.id)}
           />
         )}
         {!hiddenPane && (
@@ -6035,6 +6627,9 @@ function App(): React.JSX.Element {
             onSaveAsSop={(entry) => {
               void saveAgentTurnAsWikiSop(entry)
             }}
+            hasEarlierLogs={hasEarlierLogs}
+            loadingEarlier={loadingEarlierLogs}
+            onLoadEarlier={() => void loadEarlierAgentLogs()}
             onInjectSuggestions={(texts) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
               const block = formatSuggestionsForInput(texts)
@@ -6054,16 +6649,29 @@ function App(): React.JSX.Element {
                 }
               })
             }}
-            onClarifyConfirm={(label) => {
+            onClarifyConfirm={(payload: ConnectionClarifyConfirmPayload) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-              const clarification = tabsRef.current.find((tab) => tab.id === chatTabId)
-                ?.pendingClarification
-              const trimmed = label.trim()
-              if (!trimmed) return
+              const clarification = tabsRef.current.find(
+                (tab) => tab.id === chatTabId
+              )?.pendingClarification
+              if (!clarification || clarification.kind !== 'connection-intent') return
               pendingAttentionNotifierRef.current.clear(`clarify:${chatTabId}`)
 
-              const matched = clarification?.options?.find((option) => option.label === trimmed)
-              if (matched?.id === CLARIFY_OPEN_CONNECTIONS_ID) {
+              const action = resolveConnectionClarifyConfirm({
+                clarification,
+                payload,
+                connections,
+                formatTarget: formatConnectionTarget
+              })
+
+              if (action.kind === 'noop') {
+                if (action.reason === 'unmatched') {
+                  console.warn('[connection-clarify] confirm payload unmatched', payload)
+                }
+                return
+              }
+
+              if (action.kind === 'open-connections') {
                 updateTab(chatTabId, (current) => ({
                   ...current,
                   pendingClarification: undefined
@@ -6071,8 +6679,8 @@ function App(): React.JSX.Element {
                 showConnectionList()
                 return
               }
-              if (matched?.id === CLARIFY_MANUAL_CONTINUE_ID) {
-                const originalInput = clarification?.originalInput?.trim() || trimmed
+
+              if (action.kind === 'manual-continue') {
                 const executionTabId =
                   activeExecutionTabIdRef.current.get(chatTabId) ?? activeTabIdRef.current
                 updateTab(executionTabId, (current) => ({
@@ -6081,33 +6689,42 @@ function App(): React.JSX.Element {
                 }))
                 updateTab(chatTabId, (current) => ({
                   ...current,
-                  pendingClarification: undefined
+                  pendingClarification: {
+                    ...clarification,
+                    settled: { status: 'confirmed', label: payload.target.label }
+                  }
                 }))
-                void submitAgentMessage(originalInput)
+                void submitAgentMessage(action.originalInput, { skipUserLog: true })
                 return
               }
 
+              // connect — settle card then resume original task with forced connectionId
+              // (no synthetic user bubble /「用户补充说明」resubmit)
               updateTab(chatTabId, (current) => ({
                 ...current,
-                agentInput: current.agentInput.trim()
-                  ? `${current.agentInput.trim()}\n${trimmed}`
-                  : trimmed
-              }))
-              queueMicrotask(() => {
-                agentInputRef.current?.focus()
-                const el = agentInputRef.current
-                if (el) {
-                  const end = el.value.length
-                  el.setSelectionRange(end, end)
+                pendingClarification: {
+                  ...clarification,
+                  settled: { status: 'confirmed', label: action.label }
                 }
+              }))
+              void submitAgentMessage(action.originalInput, {
+                forcedConnectionId: action.connectionId,
+                skipUserLog: true
               })
             }}
             onClarifyDismiss={() => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+              const clarification = tabsRef.current.find(
+                (tab) => tab.id === chatTabId
+              )?.pendingClarification
               pendingAttentionNotifierRef.current.clear(`clarify:${chatTabId}`)
+              if (!clarification || clarification.settled) return
               updateTab(chatTabId, (current) => ({
                 ...current,
-                pendingClarification: undefined
+                pendingClarification: {
+                  ...clarification,
+                  settled: { status: 'cancelled' }
+                }
               }))
             }}
             passwordPromptRequest={passwordPromptRequest}
@@ -6127,9 +6744,15 @@ function App(): React.JSX.Element {
                 ) ??
                 getSessionChatTab(tabsRef.current, groupId) ??
                 tabsRef.current.find((tab) => getSessionGroupId(tab) === groupId)
-              if (focusTab) selectSessionTab(focusTab.id)
+              if (focusTab) {
+                selectSessionTab(focusTab.id)
+                setActiveExecutionTerminal(resolveSessionChatTabId(tabsRef.current, focusTab.id), focusTab.id)
+              }
             }}
-            onSelectTerminal={(tabId) => selectSessionTab(tabId)}
+            onSelectTerminal={(tabId) => {
+              selectSessionTab(tabId)
+              setActiveExecutionTerminal(resolveSessionChatTabId(tabsRef.current, tabId), tabId)
+            }}
             onModelChange={applyConversationModel}
             onSubmit={(event) => void submitAgent(event)}
             onInsertSlashCommand={insertSlashCommand}
@@ -6163,6 +6786,7 @@ function App(): React.JSX.Element {
             voiceWhisperSupported={voiceWhisperSupported}
             onStopAgent={() => stopAgentRun()}
             onRetryConnection={() => void retryActiveConnection()}
+            onReinitTerminal={() => void reinitActiveTerminal()}
             onOpenConnections={showConnectionList}
           />
         )}
@@ -6239,6 +6863,7 @@ function App(): React.JSX.Element {
       />
       <AppFooter
         shellState={shellState}
+        disconnected={footerDisconnected}
         activeTab={activeTab}
         agentMode={config.agentMode}
         t={t}
@@ -6445,7 +7070,10 @@ async function waitForTerminalReadyForAgent(
   tabId: string,
   options?: {
     getTab?: () =>
-      | Pick<import('@renderer/lib/terminal-tabs').AgentTerminalTab, 'terminalReady' | 'connectionId' | 'isSsh'>
+      | Pick<
+          import('@renderer/lib/terminal-tabs').AgentTerminalTab,
+          'terminalReady' | 'connectionId' | 'isSsh'
+        >
       | undefined
     timeoutMs?: number
   }

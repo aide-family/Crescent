@@ -137,7 +137,7 @@ export function useTerminalTabs({
     () =>
       tabs.filter(
         (tab) =>
-          terminalPage === 'terminal' || tab.sessionId || tab.terminalOutput || tab.terminalReady
+          terminalPage === 'terminal' || tab.sessionId || tab.terminalReady
       ),
     [tabs, terminalPage]
   )
@@ -210,7 +210,7 @@ export function useTerminalTabs({
       !currentTab.isSsh &&
       !currentTab.connectionId &&
       !currentTab.sessionId &&
-      !currentTab.terminalOutput
+      !currentTab.terminalReady
 
     const targetTabId = canReuseCurrentTab ? currentTab.id : createTerminalTab().id
 

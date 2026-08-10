@@ -10,6 +10,9 @@ export function extractResultSuggestions(resultMarkdown: string): string[] {
     .trim()
   if (!text) return []
 
+  // Connection clarify prompts are answered via ConnectionClarifyCard, not inject-suggestions.
+  if (isConnectionClarifyPrompt(text)) return []
+
   const lines = text.split(/\r?\n/)
   const heading =
     /^(#{1,6}\s*)?(\*\*)?(🔧\s*)?(修复建议|建议|Recommendations|Suggested\s+fixes?)(\*\*)?\s*$/i
@@ -68,4 +71,10 @@ export function extractResultSuggestions(resultMarkdown: string): string[] {
   }
 
   return items
+}
+
+function isConnectionClarifyPrompt(text: string): boolean {
+  return /请选择要连接的目标|Choose a connection target|reply with (?:a )?number or name|回复编号或名称/i.test(
+    text
+  )
 }

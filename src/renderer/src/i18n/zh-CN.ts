@@ -12,6 +12,7 @@ const zhCN = {
     running: '运行中',
     shellReady: 'Shell 已就绪',
     shellStarting: 'Shell 启动中',
+    shellDisconnected: '连接已断开 · 待重连',
     shellStopped: 'Shell 已停止',
     shellFailed: 'Shell 启动失败',
     shellRetry: '重试启动 Shell',
@@ -234,12 +235,13 @@ const zhCN = {
     connectionIntentWithTaskResult:
       '已根据输入匹配连接并开始登录；登录完成后会继续执行原始任务，并加载匹配的 Skill。',
     connectionMatched: '已匹配连接',
+    usingCurrentConnection: '使用当前连接：{name}',
+    clarifyCurrentBadge: '当前',
     connectionNoActions: '正在建立 SSH 连接，未配置登录动作。',
     connectionNoMatch: '没有找到匹配的 SSH 连接，请检查已有连接或自定义连接名称。',
     connectionClarifyFallback:
       '无法确定目标连接，请说明应登录哪个 SSH 连接，或是否留在当前终端继续。',
-    connectionClarifyPickOne:
-      '请选择要连接的目标（回复编号或名称即可）：\n{options}',
+    connectionClarifyPickOne: '请选择要连接的目标（回复编号或名称即可）：\n{options}',
     connectionNoneConfigured:
       '当前没有已配置的 SSH/集群连接。请先在连接列表中添加连接，或说明是否仅在本地终端继续。',
     connectionClarifyTitle: '需要确认连接目标',
@@ -250,6 +252,8 @@ const zhCN = {
     clarifyOpenConnections: '打开连接设置',
     clarifySelectConnection: '选择连接目标',
     clarifyConfirm: '确认',
+    clarifySelected: '已选择：{label}',
+    clarifyCancelled: '已取消',
     clarifyHintKeyboard: '↑↓ 选择，Enter 确认，Esc 取消',
     autoConnecting: '→ 自动连接 {label}…',
     connectionStarting: '正在建立连接，登录动作数量',
@@ -278,11 +282,21 @@ const zhCN = {
     passwordPromptSubmit: '键入终端',
     passwordPromptTitle: '终端正在等待密钥输入',
     terminalDisconnected: '终端会话已断开，已停止向该终端注入命令。',
+    terminalEnvironmentDrift:
+      '终端已离开目标环境（期望 {expected}，当前 {observed}）。已停止排查并开始恢复连接。',
     terminalReconnectFailed: '终端自动恢复失败',
     terminalReconnecting: '终端连接已断开，正在自动恢复。',
     terminalReconnectUnavailable: '终端异常，当前会话无法自动恢复，已停止自动命令执行。',
     connectionRecoveryTitle: '终端连接需要处理',
     connectionRecoveryHint: '当前会话尚未就绪。可重试连接，或打开连接列表选择其他主机。',
+    terminalRecoveryBanner: '连接未就绪。查看详情或稍后重试。',
+    terminalRecoveryView: '查看',
+    terminalRecoveryDismiss: '知道了',
+    reinitializingTerminal: '正在重新初始化终端…',
+    reinitTerminalReady: '终端已重新初始化，可重试连接。',
+    connectionDriftedReconnecting: '会话已离开目标主机，正在自动重连。',
+    connectionLoginTimeout: '连接登录超时（{ms}s），已停止本轮重连。可重试连接。',
+    terminalSpawnTimeout: '终端启动超时（10s）。',
     postLoginAgentInstruction:
       '当前终端已经完成 Crescent 目标连接登录。不要重新匹配 Crescent 连接；先按下方需求拆解理解用户目标，再基于当前终端继续完成登录后的检查、验证、总结和必要处理，直到用户目标完成。若用户任务涉及非当前主机，可以在当前终端中使用 SSH 执行对应主机的具体命令；如需密码或验证码，等待用户通过终端密钥输入弹窗提供。若涉及删除或清理文件，先检查范围和影响，只清理确认可以清除的日志文件，并总结执行结果。',
     requirementBreakdown: '用户需求拆解（必须按此完成）',
@@ -324,6 +338,7 @@ const zhCN = {
     temporarySubterminal: '子终端',
     subterminalLimitReached: '每个终端最多 3 个子终端',
     openedPeerTerminal: '已在当前会话打开对比终端',
+    switchedToConnection: '已切换到连接：{name}',
     openedSubterminal: '已打开子终端',
     terminalMode: '终端模式'
   },
@@ -388,7 +403,19 @@ const zhCN = {
     agentAlreadyProcessing: '上一轮仍在停止中，请稍候再发送。',
     missingExecutionTerminal: '执行终端尚未就绪。请打开或启动终端面板后再试。',
     noModelAvailable: '没有可用模型。请在设置中添加带 API Key 的 OpenAI 兼容供应商。',
-    runDocumentCorrupt: '本次运行记录无法还原。已隐藏原始存储信封，避免泄漏内部格式。',
+    runDocumentCorrupt: '历史数据解析失败。该条记录已降级显示，不影响继续对话。',
+    fullRunTitle: '完整回合',
+    fullRunStepsTab: '过程',
+    fullRunResultTab: '结果',
+    fullRunViewSteps: '查看完整过程',
+    fullRunViewResult: '查看完整结果',
+    fullRunLoadMoreSteps: '加载更多步骤',
+    fullRunLoadMoreResult: '加载更多正文',
+    fullRunLoading: '正在从本地存储加载…',
+    fullRunLoadFailed: '无法从存储加载完整记录。',
+    fullRunPreviewOnly: '该历史记录仅保留预览；完整步骤可能已被旧版截断覆盖。',
+    fullRunNoSteps: '没有可显示的排查步骤。',
+    fullRunNoResult: '没有可显示的结果正文。',
     askPlaceholder: '询问 AI，或输入 /command 检查当前终端',
     chatNoTools: '未配置 OpenAPI 工具，也可直接对话',
     contextAdded: '已补充到当前运行上下文',
@@ -405,9 +432,19 @@ const zhCN = {
     emptyConversationTitle: '还没有对话',
     emptyConversationHint:
       '可以向 Crescent 询问集群或工作区问题。bash 命令会显示在终端面板；高风险命令请在对话中审批。',
+    loadEarlierLogs: '加载更早消息',
+    loadingEarlierLogs: '正在加载…',
+    markdownExpandLarge: '展开全部',
+    markdownCollapseLarge: '收起预览',
+    markdownDownloadLarge: '下载全文',
     connectionRecoveryTitle: '连接未完成',
     connectionRecoveryHint: '可重试同一主机，或打开连接列表选择其他目标。',
     retryConnection: '重试连接',
+    retryConnecting: '正在重连…',
+    reinitTerminal: '重新初始化终端',
+    reinitTerminalHint:
+      '当前为 PIPE 模式，SSH 需要 PTY，重试必然失败。可重新初始化终端恢复 PTY 后重试，或选择本地 shell 连接。',
+    pipeRetryUnavailable: '当前为 PIPE 模式，无法重试 SSH 登录。',
     openConnections: '打开连接列表',
     createdPlan: '已生成执行计划',
     done: '已完成。',
@@ -574,7 +611,7 @@ const zhCN = {
     sourceSession: '来源会话',
     searchPlaceholder: '搜索标题或摘要',
     titleLabel: '标题',
-    title: '知识库',
+    title: '知识库'
   },
   settings: {
     agentMode: 'Agent 模式',
@@ -766,7 +803,19 @@ const zhCN = {
     clarifyTitle: '需要确认连接目标',
     clarifyBody: 'Crescent 需要你确认连接目标。',
     runCompleteTitle: '任务完成',
-    runFailedTitle: '任务结束（出错）'
+    runFailedTitle: '任务结束（出错）',
+    rendererRecoveredTitle: '渲染进程异常，已恢复',
+    rendererRecoveredBody: '界面已自动恢复；如有需要可从历史会话打开最近对话。'
+  },
+  recovery: {
+    errorBoundaryTitle: '界面出现异常',
+    errorBoundaryBody: '渲染过程中发生未捕获错误。你可以重新加载，或导出诊断日志。',
+    errorBoundaryReload: '重新加载',
+    errorBoundaryContinue: '忽略并继续',
+    crashLoopTitle: '已停止自动恢复',
+    crashLoopBody: '渲染进程在短时间内多次崩溃。请导出诊断日志后重试启动，或重启应用。',
+    retryStart: '清除标志并重试',
+    exportDiagnostics: '导出诊断日志'
   }
 } as const
 

@@ -12,6 +12,7 @@ const en = {
     running: 'Running',
     shellReady: 'Shell ready',
     shellStarting: 'Shell starting',
+    shellDisconnected: 'Connection lost · reconnect pending',
     shellStopped: 'Shell stopped',
     shellFailed: 'Shell failed to start',
     shellRetry: 'Retry shell start',
@@ -247,6 +248,8 @@ const en = {
     connectionIntentWithTaskResult:
       'Matched a connection from your input. After login completes, the agent will continue the requested task and load matching skills.',
     connectionMatched: 'Matched connection',
+    usingCurrentConnection: 'Using current connection: {name}',
+    clarifyCurrentBadge: 'Current',
     connectionNoActions: 'Starting SSH connection without login actions.',
     connectionNoMatch:
       'No matching SSH connection was found. Check existing connections or custom connection names.',
@@ -264,6 +267,8 @@ const en = {
     clarifyOpenConnections: 'Open connection settings',
     clarifySelectConnection: 'Select connection target',
     clarifyConfirm: 'Confirm',
+    clarifySelected: 'Selected: {label}',
+    clarifyCancelled: 'Cancelled',
     clarifyHintKeyboard: '↑↓ to move, Enter to confirm, Esc to dismiss',
     autoConnecting: '→ Auto-connecting {label}…',
     connectionStarting: 'Starting connection with login actions',
@@ -297,6 +302,8 @@ const en = {
     passwordPromptTitle: 'Terminal is waiting for secret input',
     terminalDisconnected:
       'Terminal session disconnected. Command injection to this terminal stopped.',
+    terminalEnvironmentDrift:
+      'Terminal left the target environment (expected {expected}, now {observed}). Troubleshooting stopped and connection restore started.',
     terminalReconnectFailed: 'Terminal auto-restore failed',
     terminalReconnecting: 'Terminal connection disconnected. Restoring it automatically.',
     terminalReconnectUnavailable:
@@ -304,6 +311,14 @@ const en = {
     connectionRecoveryTitle: 'Terminal connection needs attention',
     connectionRecoveryHint:
       'The session is not ready. Retry the connection or choose another host.',
+    terminalRecoveryBanner: 'Connection is not ready. View details or retry later.',
+    terminalRecoveryView: 'View',
+    terminalRecoveryDismiss: 'Got it',
+    reinitializingTerminal: 'Reinitializing terminal…',
+    reinitTerminalReady: 'Terminal reinitialized. You can retry the connection.',
+    connectionDriftedReconnecting: 'Session left the target host; reconnecting automatically.',
+    connectionLoginTimeout: 'Connection login timed out ({ms}s). This retry stopped. You can retry.',
+    terminalSpawnTimeout: 'Terminal start timed out (10s).',
     postLoginAgentInstruction:
       'The current terminal has already completed the Crescent target connection login. Do not rematch a Crescent connection; first understand the user goal through the requirement breakdown below, then continue in this terminal to complete the requested post-login inspection, verification, summary, and necessary handling until the user goal is complete. If the task involves a non-current host, use SSH from this terminal with a concrete command for that host. If a password, passphrase, or verification code is needed, wait for the user to provide it through the terminal secret-input prompt. If deleting or cleaning files is involved, inspect scope and impact first, clean only logs that are safe to remove, and summarize the result.',
     requirementBreakdown: 'User requirement breakdown (must complete accordingly)',
@@ -349,6 +364,7 @@ const en = {
     temporarySubterminal: 'Sub-terminal',
     subterminalLimitReached: 'At most 3 sub-terminals per terminal',
     openedPeerTerminal: 'Opened a comparison terminal in the current session',
+    switchedToConnection: 'Switched to connection: {name}',
     openedSubterminal: 'Opened a sub-terminal',
     terminalMode: 'Terminal mode'
   },
@@ -411,14 +427,26 @@ const en = {
     copyCommand: 'Copy command',
     autoApprovedShort: 'Auto-allowed',
     agentCanceled: 'Agent run was stopped manually.',
-    agentAlreadyProcessing:
-      'The previous run is still stopping. Wait a moment, then send again.',
+    agentAlreadyProcessing: 'The previous run is still stopping. Wait a moment, then send again.',
     missingExecutionTerminal:
       'No execution terminal is ready. Open or start a terminal pane, then try again.',
     noModelAvailable:
       'No model is available. Add an OpenAI-compatible provider with an API key in Settings.',
     runDocumentCorrupt:
-      'This run record could not be restored. The raw storage envelope was hidden to avoid leaking internal format.',
+      'Failed to parse this history entry. Showing a stub; you can continue chatting.',
+    fullRunTitle: 'Full run',
+    fullRunStepsTab: 'Process',
+    fullRunResultTab: 'Result',
+    fullRunViewSteps: 'View full process',
+    fullRunViewResult: 'View full result',
+    fullRunLoadMoreSteps: 'Load more steps',
+    fullRunLoadMoreResult: 'Load more text',
+    fullRunLoading: 'Loading from local storage…',
+    fullRunLoadFailed: 'Could not load the full record from storage.',
+    fullRunPreviewOnly:
+      'This history entry only has a preview; full steps may have been overwritten by an older slim snapshot.',
+    fullRunNoSteps: 'No process steps to show.',
+    fullRunNoResult: 'No result text to show.',
     askPlaceholder: 'Ask AI, or type /command check the current terminal',
     chatNoTools: 'Chat works without OpenAPI tools',
     contextAdded: 'Added to current run context',
@@ -436,10 +464,20 @@ const en = {
     emptyConversationTitle: 'No conversation yet',
     emptyConversationHint:
       'Ask Crescent about your cluster or workspace. Bash commands appear in the terminal pane; approve high-risk commands in the chat.',
+    loadEarlierLogs: 'Load earlier messages',
+    loadingEarlierLogs: 'Loading…',
+    markdownExpandLarge: 'Expand all',
+    markdownCollapseLarge: 'Collapse preview',
+    markdownDownloadLarge: 'Download full text',
     connectionRecoveryTitle: 'Connection did not finish',
     connectionRecoveryHint:
       'Retry the same host, or open the connection list to pick another target.',
     retryConnection: 'Retry connection',
+    retryConnecting: 'Reconnecting…',
+    reinitTerminal: 'Reinitialize terminal',
+    reinitTerminalHint:
+      'The terminal is in PIPE fallback mode, which cannot run SSH (PTY required); retrying would fail. Reinitialize the terminal to restore PTY, or pick a local shell connection.',
+    pipeRetryUnavailable: 'PIPE mode cannot retry SSH login.',
     openConnections: 'Open connections',
     createdPlan: 'Created execution plan',
     done: 'Done.',
@@ -617,7 +655,7 @@ const en = {
     sourceSession: 'Source session',
     searchPlaceholder: 'Search title or excerpt',
     titleLabel: 'Title',
-    title: 'Knowledge base',
+    title: 'Knowledge base'
   },
   settings: {
     agentMode: 'Agent mode',
@@ -821,7 +859,22 @@ const en = {
     clarifyTitle: 'Connection confirmation needed',
     clarifyBody: 'Crescent needs you to confirm the connection target.',
     runCompleteTitle: 'Task complete',
-    runFailedTitle: 'Task ended (error)'
+    runFailedTitle: 'Task ended (error)',
+    rendererRecoveredTitle: 'Renderer recovered',
+    rendererRecoveredBody:
+      'The UI process crashed and was restarted. Open History if you need a previous chat.'
+  },
+  recovery: {
+    errorBoundaryTitle: 'Something went wrong',
+    errorBoundaryBody:
+      'The interface hit an unexpected error. You can reload or export diagnostics.',
+    errorBoundaryReload: 'Reload',
+    errorBoundaryContinue: 'Dismiss',
+    crashLoopTitle: 'Auto-reload stopped',
+    crashLoopBody:
+      'The UI crashed repeatedly. Export diagnostics, then retry start or restart the app.',
+    retryStart: 'Clear flags and retry',
+    exportDiagnostics: 'Export diagnostics'
   }
 } as const
 

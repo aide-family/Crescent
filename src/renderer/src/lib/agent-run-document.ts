@@ -1,9 +1,18 @@
 import type { Dictionary } from '@renderer/i18n'
+import {
+  AGENT_LIVE_RUN_MAX_FULL_STEPS,
+  AGENT_LOG_ENTRY_MAX_CHARS,
+  AGENT_RUN_STREAM_MAX_CHARS,
+  clampAgentText
+} from './agent-text-limits'
 import { parseAgentRunMarkdown } from './agent-run-markdown'
 import { legacyActionsMarkdownToSteps } from './legacy-actions-to-steps'
 import type { AgentRunAction, AgentRunStep, AgentRunViewState } from './terminal-tabs'
 
 export const AGENT_RUN_DOCUMENT_MARKER = 'CRESCENT_RUN_V2'
+
+/** Stable error token written into parse-failure stub envelopes (UI maps to i18n). */
+export const AGENT_RUN_DOCUMENT_PARSE_STUB_ERROR = 'HISTORY_PARSE_FAILED'
 
 export interface ParsedAgentRunDocument {
   version: 1 | 2
@@ -33,24 +42,217 @@ interface SerializedAgentRunDocument {
 }
 
 export function formatAgentRunDocument(run: AgentRunViewState, t: Dictionary): string {
+  const document = buildSerializedAgentRunDocument(run)
+
+  // Keep a human-readable fallback for export/copy consumers that expect markdown.
+  const markdownFallback = formatLegacyAgentRunMarkdown(
+    {
+      ...run,
+      thinkingText: document.thinkingText,
+      steps: document.steps,
+      result: document.result,
+      error: document.error
+    },
+    t
+  )
+  return `${AGENT_RUN_DOCUMENT_MARKER}\n${JSON.stringify(document)}\n\n${markdownFallback}`
+}
+
+/** Compact JSON-only document for in-memory / debounce persist (no markdown dual-write). */
+export function formatAgentRunDocumentCompact(run: AgentRunViewState): string {
+  const document = buildSerializedAgentRunDocument(run)
+  return `${AGENT_RUN_DOCUMENT_MARKER}\n${JSON.stringify(document)}`
+}
+
+/** Full compact text written to SQLite at run end (memory path still structure-clamps). */
+export function buildFinishPersistText(run: AgentRunViewState): string {
+  return formatAgentRunDocumentCompact(run)
+}
+
+/** Valid envelope used when history JSON is corrupt — always parseable, never a half-cut slice. */
+export function formatAgentRunDocumentParseStub(
+  error: string = AGENT_RUN_DOCUMENT_PARSE_STUB_ERROR
+): string {
   const document: SerializedAgentRunDocument = {
     version: 2,
-    thinkingText: run.thinkingText?.trim() ? run.thinkingText : undefined,
-    steps: run.steps ?? [],
-    result: run.result?.trim() ? run.result : undefined,
-    error: run.error?.trim() ? run.error : undefined,
+    steps: [],
+    error
+  }
+  return `${AGENT_RUN_DOCUMENT_MARKER}\n${JSON.stringify(document)}`
+}
+
+export function isAgentRunDocumentParseStub(value: string): boolean {
+  try {
+    const serialized = tryExtractSerializedDocument(value)
+    return (
+      serialized != null &&
+      serialized.steps.length === 0 &&
+      serialized.error === AGENT_RUN_DOCUMENT_PARSE_STUB_ERROR
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Memory-safe clamp for log entry text. CRESCENT_RUN_V2 envelopes are never sliced mid-JSON:
+ * shrink structurally, or replace corrupt prefixes with a parseable stub.
+ */
+export function clampAgentRunEnvelopeText(
+  text: string,
+  maxChars = AGENT_LOG_ENTRY_MAX_CHARS
+): string {
+  try {
+    if (!looksLikeAgentRunDocument(text)) {
+      return text.length <= maxChars ? text : clampAgentText(text, maxChars)
+    }
+
+    const serialized = tryExtractSerializedDocument(text)
+    if (!serialized) {
+      return formatAgentRunDocumentParseStub()
+    }
+
+    const view = serializedDocumentToViewState(serialized)
+    let compact = formatAgentRunDocumentCompact(view)
+    if (compact.length <= maxChars) return compact
+
+    for (
+      let maxFullSteps = AGENT_LIVE_RUN_MAX_FULL_STEPS;
+      maxFullSteps >= 0;
+      maxFullSteps = maxFullSteps === 0 ? -1 : Math.floor(maxFullSteps / 2)
+    ) {
+      compact = formatAgentRunDocumentCompact(toLiveRunView(view, Math.max(0, maxFullSteps)))
+      if (compact.length <= maxChars) return compact
+      if (maxFullSteps <= 0) break
+    }
+
+    const minimal = formatAgentRunDocumentCompact({
+      logId: view.logId,
+      actions: [],
+      steps: [],
+      result: view.result?.trim() ? clampAgentText(view.result, 512) : undefined,
+      error: view.error?.trim() ? clampAgentText(view.error, 512) : undefined,
+      errorKind: view.errorKind,
+      elapsedMs: view.elapsedMs
+    })
+    if (minimal.length <= maxChars) return minimal
+    return formatAgentRunDocumentParseStub()
+  } catch {
+    return formatAgentRunDocumentParseStub()
+  }
+}
+
+function buildSerializedAgentRunDocument(run: AgentRunViewState): SerializedAgentRunDocument {
+  return {
+    version: 2,
+    thinkingText: run.thinkingText?.trim()
+      ? clampAgentText(run.thinkingText, AGENT_RUN_STREAM_MAX_CHARS)
+      : undefined,
+    steps: (run.steps ?? []).map((step) => clampRunStepText(step)),
+    result: run.result?.trim()
+      ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS)
+      : undefined,
+    error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
     errorResetHint: run.errorResetHint,
     elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
   }
+}
 
-  // Keep a human-readable fallback for export/copy consumers that expect markdown.
-  const markdownFallback = formatLegacyAgentRunMarkdown(run, t)
-  return `${AGENT_RUN_DOCUMENT_MARKER}\n${JSON.stringify(document)}\n\n${markdownFallback}`
+/**
+ * Slim view published into React during streaming — no duplicated actions array,
+ * clamped step texts, older steps collapsed to stubs.
+ */
+export function toLiveRunView(
+  run: AgentRunViewState,
+  maxFullSteps = AGENT_LIVE_RUN_MAX_FULL_STEPS
+): AgentRunViewState {
+  const steps = run.steps ?? []
+  const start = Math.max(0, steps.length - maxFullSteps)
+  const slimSteps = steps.map((step, index) => {
+    if (index < start) return stubOlderStep(step)
+    return clampRunStepText(step)
+  })
+  return {
+    logId: run.logId,
+    runId: run.runId,
+    startedAt: run.startedAt,
+    elapsedMs: run.elapsedMs,
+    thinkingText: run.thinkingText?.trim()
+      ? clampAgentText(run.thinkingText, AGENT_RUN_STREAM_MAX_CHARS)
+      : undefined,
+    steps: slimSteps,
+    actions: [],
+    result: run.result?.trim()
+      ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS)
+      : undefined,
+    error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
+    errorKind: run.errorKind,
+    errorProvider: run.errorProvider,
+    errorResetHint: run.errorResetHint
+  }
+}
+
+function stubOlderStep(step: AgentRunStep): AgentRunStep {
+  if (step.kind === 'message' || step.kind === 'thought') {
+    return {
+      ...step,
+      text: clampAgentText(step.text, 256)
+    }
+  }
+  if (step.kind === 'tool') {
+    return {
+      ...step,
+      resultText: step.resultText ? clampAgentText(step.resultText, 256) : step.resultText,
+      argsText: step.argsText ? clampAgentText(step.argsText, 256) : step.argsText
+    }
+  }
+  if (step.kind === 'status' && step.detail) {
+    return { ...step, detail: clampAgentText(step.detail, 256) }
+  }
+  return step
+}
+
+function clampRunStepText(step: AgentRunStep): AgentRunStep {
+  if (step.kind === 'message' || step.kind === 'thought') {
+    return { ...step, text: clampAgentText(step.text, AGENT_RUN_STREAM_MAX_CHARS) }
+  }
+  if (step.kind === 'tool' && (step.resultText || step.argsText)) {
+    return {
+      ...step,
+      resultText: step.resultText
+        ? clampAgentText(step.resultText, AGENT_RUN_STREAM_MAX_CHARS)
+        : step.resultText,
+      argsText: step.argsText
+        ? clampAgentText(step.argsText, AGENT_RUN_STREAM_MAX_CHARS)
+        : step.argsText
+    }
+  }
+  if (step.kind === 'status' && step.detail) {
+    return { ...step, detail: clampAgentText(step.detail, AGENT_RUN_STREAM_MAX_CHARS) }
+  }
+  return step
 }
 
 export function parseAgentRunDocument(value: string, t: Dictionary): ParsedAgentRunDocument | null {
+  try {
+    return parseAgentRunDocumentInner(value, t)
+  } catch {
+    // Never throw into React / hydrate / new-turn paths.
+    return null
+  }
+}
+
+/** Alias kept for call sites that want an explicit "never throws" name. */
+export function safeParseAgentRunDocument(
+  value: string,
+  t: Dictionary
+): ParsedAgentRunDocument | null {
+  return parseAgentRunDocument(value, t)
+}
+
+function parseAgentRunDocumentInner(value: string, t: Dictionary): ParsedAgentRunDocument | null {
   const normalized = value.replace(/\r\n/g, '\n')
   if (normalized.startsWith(`${AGENT_RUN_DOCUMENT_MARKER}\n`)) {
     const rest = normalized.slice(AGENT_RUN_DOCUMENT_MARKER.length + 1)
@@ -397,6 +599,49 @@ function findJsonObjectEnd(value: string): number {
     }
   }
   return -1
+}
+
+function tryExtractSerializedDocument(value: string): SerializedAgentRunDocument | null {
+  try {
+    const normalized = value.replace(/\r\n/g, '\n').trimStart()
+    if (!normalized.startsWith(`${AGENT_RUN_DOCUMENT_MARKER}\n`)) return null
+    const rest = normalized.slice(AGENT_RUN_DOCUMENT_MARKER.length + 1)
+    const jsonEnd = findJsonObjectEnd(rest)
+    if (jsonEnd <= 0) return null
+    const parsed = JSON.parse(rest.slice(0, jsonEnd)) as SerializedAgentRunDocument
+    if (parsed?.version !== 2 || !Array.isArray(parsed.steps)) return null
+    return {
+      version: 2,
+      thinkingText: typeof parsed.thinkingText === 'string' ? parsed.thinkingText : undefined,
+      steps: parsed.steps.filter(isAgentRunStep),
+      result: typeof parsed.result === 'string' ? parsed.result : undefined,
+      error: typeof parsed.error === 'string' ? parsed.error : undefined,
+      errorKind: parseErrorKind(parsed.errorKind),
+      errorProvider: typeof parsed.errorProvider === 'string' ? parsed.errorProvider : undefined,
+      errorResetHint:
+        typeof parsed.errorResetHint === 'string' ? parsed.errorResetHint : undefined,
+      elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function serializedDocumentToViewState(
+  document: SerializedAgentRunDocument
+): AgentRunViewState {
+  return {
+    logId: 0,
+    actions: [],
+    thinkingText: document.thinkingText,
+    steps: document.steps,
+    result: document.result,
+    error: document.error,
+    errorKind: document.errorKind,
+    errorProvider: document.errorProvider,
+    errorResetHint: document.errorResetHint,
+    elapsedMs: document.elapsedMs
+  }
 }
 
 function isAgentRunStep(value: unknown): value is AgentRunStep {
