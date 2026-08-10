@@ -28,15 +28,23 @@ import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
 import type { ParsedAgentRunDocument } from '@renderer/lib/agent-run-document'
-import { shouldShowAgentRunResult, omitDuplicateTrailingMessage } from '@renderer/lib/agent-run-document'
+import {
+  shouldShowAgentRunResult,
+  omitDuplicateTrailingMessage
+} from '@renderer/lib/agent-run-document'
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
 import { formatLogTime } from '@renderer/lib/agent-log'
 import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
-import { extractRiskVerb, isStaticallyReadonly, shouldShowWhitelistEntry } from '../../../shared/command-guard'
+import {
+  extractRiskVerb,
+  isStaticallyReadonly,
+  shouldShowWhitelistEntry
+} from '../../../shared/command-guard'
 import { parseBatchedToolOutput, type BatchedCommandPart } from '../../../shared/readonly-batch'
 import { extractResultSuggestions } from '@renderer/lib/result-suggestions'
+import { sortTimelineBySeq } from '../../../shared/connection-state'
 
 /**
  * Cursor / Codex-style agent turn view:
@@ -81,11 +89,15 @@ export function AgentRunTimeline({
 }): React.JSX.Element {
   const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
   const runFinished = typeof document.elapsedMs === 'number'
-  const canOpenFullRun = Boolean(storageRef?.tabId && typeof storageRef.logId === 'number' && runFinished)
+  const canOpenFullRun = Boolean(
+    storageRef?.tabId && typeof storageRef.logId === 'number' && runFinished
+  )
   const hasApprovalStep = document.steps.some((step) => step.kind === 'approval')
   const visibleSteps = omitDuplicateTrailingMessage(
-    coalesceVisiblePtyToolSteps(
-      document.steps.filter((step) => !isNoiseStatusStep(step, t, hasApprovalStep))
+    sortTimelineBySeq(
+      coalesceVisiblePtyToolSteps(
+        document.steps.filter((step) => !isNoiseStatusStep(step, t, hasApprovalStep))
+      )
     ),
     document.resultMarkdown
   )
@@ -102,24 +114,11 @@ export function AgentRunTimeline({
   const showActivity = Boolean(activity) && !runFinished
   return (
     <div className="min-w-0 space-y-2.5">
-      {showActivity ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-          <span>{activity}</span>
-        </div>
-      ) : null}
-
       {timelineItems.length > 0 ? (
         <div className="min-w-0 space-y-2">
           {timelineItems.map((item) => {
             if (item.kind === 'low-risk-group') {
-              return (
-                <CollapsedLowRiskGroup
-                  key={item.id}
-                  steps={item.steps}
-                  t={t}
-                />
-              )
+              return <CollapsedLowRiskGroup key={item.id} steps={item.steps} t={t} />
             }
             const step = item.step
             const index = item.index
@@ -149,9 +148,7 @@ export function AgentRunTimeline({
                 previous?.kind === 'approval' &&
                 Boolean(step.command?.trim()) &&
                 previous.command.trim() === step.command?.trim()
-              return (
-                <ToolCallRow key={step.id} step={step} t={t} hideCommand={hideCommand} />
-              )
+              return <ToolCallRow key={step.id} step={step} t={t} hideCommand={hideCommand} />
             }
             if (step.kind === 'approval') {
               return (
@@ -191,6 +188,13 @@ export function AgentRunTimeline({
           >
             {t.input.fullRunViewSteps}
           </Button>
+        </div>
+      ) : null}
+
+      {showActivity ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          <span>{activity}</span>
         </div>
       ) : null}
 
@@ -245,140 +249,140 @@ export function AgentRunTimeline({
                   : null}
             </span>
             <div className="flex flex-wrap items-center justify-end gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
-              title={copied ? t.common.copied : t.common.copyResultTooltip}
-              onClick={onCopyResult}
-            >
-              {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
-            </Button>
-            {onSaveAsSop ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                aria-label={t.common.saveAsSopTooltip}
-                title={t.common.saveAsSopTooltip}
-                onClick={onSaveAsSop}
+                aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
+                title={copied ? t.common.copied : t.common.copyResultTooltip}
+                onClick={onCopyResult}
               >
-                <BookMarkedIcon aria-hidden="true" />
+                {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
               </Button>
-            ) : null}
-            {onOpsFeedback ? (
-              <>
+              {onSaveAsSop ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  disabled={
-                    feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
-                  }
-                  aria-label={
-                    feedbackRating === 'dislike'
-                      ? t.common.likeResultLockedTooltip
-                      : t.common.likeResultTooltip
-                  }
-                  title={
-                    feedbackRating === 'dislike'
-                      ? t.common.likeResultLockedTooltip
-                      : feedbackRating === 'like'
-                        ? t.common.opsFeedbackAlreadyRated
+                  aria-label={t.common.saveAsSopTooltip}
+                  title={t.common.saveAsSopTooltip}
+                  onClick={onSaveAsSop}
+                >
+                  <BookMarkedIcon aria-hidden="true" />
+                </Button>
+              ) : null}
+              {onOpsFeedback ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={
+                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                    }
+                    aria-label={
+                      feedbackRating === 'dislike'
+                        ? t.common.likeResultLockedTooltip
                         : t.common.likeResultTooltip
-                  }
-                  className={
-                    feedbackRating === 'like'
-                      ? 'text-emerald-400 hover:text-emerald-300'
-                      : feedbackRating === 'dislike'
-                        ? 'opacity-40'
-                        : undefined
-                  }
-                  onClick={() => {
-                    if (feedbackBusy || feedbackRating) return
-                    onOpsFeedback('like')
-                  }}
-                >
-                  <ThumbsUpIcon aria-hidden="true" />
-                </Button>
+                    }
+                    title={
+                      feedbackRating === 'dislike'
+                        ? t.common.likeResultLockedTooltip
+                        : feedbackRating === 'like'
+                          ? t.common.opsFeedbackAlreadyRated
+                          : t.common.likeResultTooltip
+                    }
+                    className={
+                      feedbackRating === 'like'
+                        ? 'text-emerald-400 hover:text-emerald-300'
+                        : feedbackRating === 'dislike'
+                          ? 'opacity-40'
+                          : undefined
+                    }
+                    onClick={() => {
+                      if (feedbackBusy || feedbackRating) return
+                      onOpsFeedback('like')
+                    }}
+                  >
+                    <ThumbsUpIcon aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={
+                      feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
+                    }
+                    aria-label={
+                      feedbackRating === 'like'
+                        ? t.common.dislikeResultLockedTooltip
+                        : t.common.dislikeResultTooltip
+                    }
+                    title={
+                      feedbackRating === 'like'
+                        ? t.common.dislikeResultLockedTooltip
+                        : feedbackRating === 'dislike'
+                          ? t.common.opsFeedbackAlreadyRated
+                          : t.common.dislikeResultTooltip
+                    }
+                    className={
+                      feedbackRating === 'dislike'
+                        ? 'text-destructive hover:text-destructive'
+                        : feedbackRating === 'like'
+                          ? 'opacity-40'
+                          : undefined
+                    }
+                    onClick={() => {
+                      if (feedbackBusy || feedbackRating) return
+                      onOpsFeedback('dislike')
+                    }}
+                  >
+                    <ThumbsDownIcon aria-hidden="true" />
+                  </Button>
+                </>
+              ) : null}
+              {canOpenFullRun ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  disabled={
-                    feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'
-                  }
-                  aria-label={
-                    feedbackRating === 'like'
-                      ? t.common.dislikeResultLockedTooltip
-                      : t.common.dislikeResultTooltip
-                  }
-                  title={
-                    feedbackRating === 'like'
-                      ? t.common.dislikeResultLockedTooltip
-                      : feedbackRating === 'dislike'
-                        ? t.common.opsFeedbackAlreadyRated
-                        : t.common.dislikeResultTooltip
-                  }
-                  className={
-                    feedbackRating === 'dislike'
-                      ? 'text-destructive hover:text-destructive'
-                      : feedbackRating === 'like'
-                        ? 'opacity-40'
-                        : undefined
-                  }
-                  onClick={() => {
-                    if (feedbackBusy || feedbackRating) return
-                    onOpsFeedback('dislike')
-                  }}
+                  aria-label={t.input.fullRunViewResult}
+                  title={t.input.fullRunViewResult}
+                  onClick={() => setFullOverlayTab('result')}
                 >
-                  <ThumbsDownIcon aria-hidden="true" />
+                  <Maximize2Icon aria-hidden="true" />
                 </Button>
-              </>
-            ) : null}
-            {canOpenFullRun ? (
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                aria-label={t.input.fullRunViewResult}
-                title={t.input.fullRunViewResult}
-                onClick={() => setFullOverlayTab('result')}
+                aria-label={t.common.exportResultMarkdownTooltip}
+                title={t.common.exportResultMarkdownTooltip}
+                onClick={onExportResult}
               >
-                <Maximize2Icon aria-hidden="true" />
+                <DownloadIcon aria-hidden="true" />
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.common.exportResultMarkdownTooltip}
-              title={t.common.exportResultMarkdownTooltip}
-              onClick={onExportResult}
-            >
-              <DownloadIcon aria-hidden="true" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.common.exportFullMarkdownTooltip}
-              title={t.common.exportFullMarkdownTooltip}
-              onClick={onExportFull}
-            >
-              <FileTextIcon aria-hidden="true" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.common.exportTraceJsonTooltip}
-              title={t.common.exportTraceJsonTooltip}
-              onClick={onExportTrace}
-            >
-              <FileJsonIcon aria-hidden="true" />
-            </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.exportFullMarkdownTooltip}
+                title={t.common.exportFullMarkdownTooltip}
+                onClick={onExportFull}
+              >
+                <FileTextIcon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.exportTraceJsonTooltip}
+                title={t.common.exportTraceJsonTooltip}
+                onClick={onExportTrace}
+              >
+                <FileJsonIcon aria-hidden="true" />
+              </Button>
             </div>
           </div>
         </div>
@@ -443,7 +447,10 @@ function ThoughtStepRow({
           aria-hidden="true"
         />
       ) : (
-        <span className="mt-1 size-1.5 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden="true" />
+        <span
+          className="mt-1 size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
+          aria-hidden="true"
+        />
       )}
       <div className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap break-words">
         <span className="mr-1.5 not-italic text-muted-foreground/70">
@@ -710,9 +717,7 @@ function BatchCommandSegment({
       >
         {part.output || '(no output)'}
       </pre>
-      {copied ? (
-        <span className="text-[10px] text-muted-foreground">{t.common.copied}</span>
-      ) : null}
+      {copied ? <span className="text-[10px] text-muted-foreground">{t.common.copied}</span> : null}
     </div>
   )
 }
@@ -875,17 +880,13 @@ function ApprovalStepCard({
       ) : null}
       {step.impactAnalysis ? (
         <p className="text-muted-foreground">
-          <span className="font-medium text-foreground/80">
-            {t.commandReview.impactAnalysis}:{' '}
-          </span>
+          <span className="font-medium text-foreground/80">{t.commandReview.impactAnalysis}: </span>
           {step.impactAnalysis}
         </p>
       ) : null}
       {step.recommendation ? (
         <p className="text-muted-foreground">
-          <span className="font-medium text-foreground/80">
-            {t.commandReview.recommendation}:{' '}
-          </span>
+          <span className="font-medium text-foreground/80">{t.commandReview.recommendation}: </span>
           {step.recommendation}
         </p>
       ) : null}
@@ -931,7 +932,13 @@ function ApprovalStepCard({
       {showWhitelistAdded ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 px-3 py-2 text-[11px]">
           <span className="text-muted-foreground">{t.commandReview.addedToWhitelist}</span>
-          <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-[11px]" disabled>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 px-2 text-[11px]"
+            disabled
+          >
             <ShieldPlusIcon className="size-3.5" aria-hidden="true" />
             {t.commandReview.addedToWhitelist}
           </Button>
@@ -1105,7 +1112,9 @@ function ResultSuggestionsPicker({
         ))}
       </ul>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {status ? <span className="mr-auto text-[10px] text-muted-foreground">{status}</span> : null}
+        {status ? (
+          <span className="mr-auto text-[10px] text-muted-foreground">{status}</span>
+        ) : null}
         <Button
           type="button"
           size="sm"
@@ -1114,9 +1123,7 @@ function ResultSuggestionsPicker({
           disabled={selectedTexts.length === 0}
           onClick={() => {
             onInject(selectedTexts)
-            setStatus(
-              t.input.injectedSuggestionsCount.replace('{n}', String(selectedTexts.length))
-            )
+            setStatus(t.input.injectedSuggestionsCount.replace('{n}', String(selectedTexts.length)))
           }}
         >
           {t.input.injectSelectedSuggestions}
@@ -1250,8 +1257,7 @@ function coalesceVisiblePtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
         const merged: Extract<AgentRunStep, { kind: 'tool' }> = {
           ...prev,
           name: 'bash',
-          phase:
-            step.phase === 'finished' || prev.phase === 'finished' ? 'finished' : prev.phase,
+          phase: step.phase === 'finished' || prev.phase === 'finished' ? 'finished' : prev.phase,
           command: prev.command || step.command,
           resultText: prev.resultText || step.resultText,
           isError: Boolean(prev.isError) || Boolean(step.isError),
@@ -1267,11 +1273,7 @@ function coalesceVisiblePtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
   return next
 }
 
-function isNoiseStatusStep(
-  step: AgentRunStep,
-  t: Dictionary,
-  hasApprovalStep = false
-): boolean {
+function isNoiseStatusStep(step: AgentRunStep, t: Dictionary, hasApprovalStep = false): boolean {
   if (step.kind !== 'status') return false
   const title = step.title.trim()
   if (

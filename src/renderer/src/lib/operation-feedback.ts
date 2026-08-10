@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 
 import type { Dictionary } from '@renderer/i18n'
+import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 
 export type OperationFeedback = {
   success: string
@@ -25,7 +26,9 @@ export function exportFeedback(t: Dictionary): OperationFeedback {
 
 export function notifyOperationError(message: string, error: unknown): void {
   const detail = error instanceof Error ? error.message : String(error || '')
-  toast.error(detail ? `${message}: ${detail}` : message)
+  toast.error(detail ? `${message}: ${detail}` : message, {
+    duration: TOAST_INTERVENTION_DURATION_MS
+  })
 }
 
 export async function copyText(value: string, feedback?: OperationFeedback): Promise<void> {

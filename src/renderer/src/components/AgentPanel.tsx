@@ -592,7 +592,7 @@ export function AgentPanel({
                 <Button
                   type="submit"
                   size="icon"
-                  className={showSendButton ? undefined : 'invisible'}
+                  className={`h-5 w-5 ${showSendButton ? undefined : 'invisible'}`}
                   tabIndex={showSendButton ? undefined : -1}
                   aria-hidden={showSendButton ? undefined : true}
                   aria-label={
@@ -606,11 +606,11 @@ export function AgentPanel({
                 >
                   {sessionChatTab.agentThinking ||
                   (sessionChatTab.agentBusy && !sessionChatTab.agentInput.trim()) ? (
-                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                    <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
                   ) : sessionChatTab.agentBusy ? (
-                    <PlusIcon aria-hidden="true" />
+                    <PlusIcon className="size-3.5" aria-hidden="true" />
                   ) : (
-                    <ArrowUpIcon aria-hidden="true" />
+                    <ArrowUpIcon className="size-3.5" aria-hidden="true" />
                   )}
                 </Button>
               </div>

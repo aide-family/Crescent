@@ -55,18 +55,22 @@ export type AgentRunStep =
       kind: 'status'
       title: string
       detail?: string
+      /** Monotonic timeline order (system entries interleave in run order). */
+      seq?: number
     }
   | {
       id: string
       kind: 'thought'
       text: string
       phase: 'streaming' | 'done'
+      seq?: number
     }
   | {
       id: string
       kind: 'message'
       text: string
       phase: 'streaming' | 'done'
+      seq?: number
     }
   | {
       id: string
@@ -80,12 +84,14 @@ export type AgentRunStep =
       interrupted?: boolean
       timedOut?: boolean
       toolCallId?: string
+      seq?: number
     }
   | {
       id: string
       kind: 'user-supplement'
       text: string
       createdAt: string
+      seq?: number
     }
   | {
       id: string
@@ -106,6 +112,7 @@ export type AgentRunStep =
       rejectionReason?: string
       source?: 'whitelist' | 'rule' | 'subagent' | 'timeout-fallback'
       elapsedMs?: number
+      seq?: number
     }
 
 export interface AgentRunAction {

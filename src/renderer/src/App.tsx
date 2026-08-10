@@ -27,6 +27,7 @@ import {
   XIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
+import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 
 import { AgentPanel } from '@renderer/components/AgentPanel'
 import { AppFooter } from '@renderer/components/AppFooter'
@@ -106,10 +107,7 @@ import {
   trimAgentLogEntries
 } from '@renderer/lib/agent-log'
 import { resolveSuccessfulAgentResult } from '@renderer/lib/agent-run-finalize'
-import {
-  buildFinishPersistText,
-  closeStreamingOpenSteps
-} from '@renderer/lib/agent-run-document'
+import { buildFinishPersistText, closeStreamingOpenSteps } from '@renderer/lib/agent-run-document'
 import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
 import { suggestWhitelistRule } from '@renderer/lib/command-whitelist'
 import {
@@ -142,6 +140,14 @@ import {
   startVoiceInputSession,
   type VoiceLiveSession
 } from '@renderer/lib/voice-input'
+import {
+  appendRunStatusStep,
+  classifyPipeCommand,
+  recordRecoveryAttempt,
+  resolveRunStopReason,
+  shouldAttemptRecovery,
+  type RunStopReason
+} from '../../shared/connection-state'
 import {
   WIKI_MIN_PREVIEW_WIDTH,
   WIKI_REFRESH_MIN_LOADING_MS,
@@ -255,6 +261,7 @@ import {
   retainSettledClarification,
   type AgentLogEntry,
   type AgentLogEntryInput,
+  type AgentRunStep,
   type AgentRunViewState,
   type AgentTerminalTab,
   type AgentToolReference
@@ -378,11 +385,57 @@ const CONNECTION_SPAWN_TIMEOUT_MS = 10_000
 /** Hard timeout for the whole login automation (spawn + actions + password wait). */
 const CONNECTION_LOGIN_TOTAL_TIMEOUT_MS = 90_000
 
-function App({
-  recoveryMode = 'none'
-}: {
-  recoveryMode?: 'none' | 'pending'
-}): React.JSX.Element {
+/** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs in the renderer too. */
+function connTrace(...parts: unknown[]): void {
+  // Renderer has no Node globals under context isolation; typeof guard keeps
+  // this safe in both dev server and packaged app.
+  if (typeof process === 'undefined' || process.env?.CRESCENT_DEBUG_CONN !== '1') return
+  console.info('[conn-trace]', ...parts)
+}
+
+/** Settle copy for run stops: only a real user stop shows "manually stopped". */
+function settleStopText(
+  reason: RunStopReason,
+  t: Dictionary,
+  options: { expectedHost?: string; observedHost?: string } = {}
+): string {
+  const observedLabel =
+    options.observedHost === 'local-shell' ? t.terminal.localShellLabel : options.observedHost
+  switch (reason) {
+    case 'user':
+      return t.input.agentCanceled
+    case 'gate-interrupt':
+      return t.input.gateInterruptStopped
+        .replace('{expected}', options.expectedHost ?? '')
+        .replace('{observed}', observedLabel ?? '')
+    case 'timeout':
+      return t.input.timeoutStopped
+    case 'system-recovery':
+      return t.input.systemRecoveryStopped
+    default:
+      return t.input.systemRecoveryStopped
+  }
+}
+
+/** Subterminals live under the parent tab; resolve their terminal state. */
+function resolveSubterminalTabState(
+  tabs: AgentTerminalTab[],
+  tabId: string
+): { parentTabId: string; name: string; terminalMode?: 'pty' | 'pipe' } | undefined {
+  const marker = '::subterminal::'
+  const markerIndex = tabId.indexOf(marker)
+  if (markerIndex === -1) return undefined
+  const parentTabId = tabId.slice(0, markerIndex)
+  const name = decodeURIComponent(tabId.slice(markerIndex + marker.length))
+  const parent = tabs.find((tab) => tab.id === parentTabId)
+  return {
+    parentTabId,
+    name,
+    terminalMode: parent?.subTerminals.find((sub) => sub.id === tabId)?.terminalMode
+  }
+}
+
+function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -431,12 +484,24 @@ function App({
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
-  const environmentDriftHandlingRef = useRef(new Set<string>())
+  const recoveryBudgetByTabRef = useRef(
+    new Map<
+      string,
+      { driftKey?: string; attempts: number; windowStartAt: number; inFlight: boolean }
+    >()
+  )
+  const ptyRetryTriedRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
   const skipConnectionReconnectRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
-  const stopAgentRunRef = useRef<((tabId?: string) => void) | null>(null)
+  const stopAgentRunRef = useRef<
+    | ((
+        tabId?: string,
+        options?: { reason?: RunStopReason; expectedHost?: string; observedHost?: string }
+      ) => void | Promise<void>)
+    | null
+  >(null)
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
   const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
@@ -882,8 +947,7 @@ function App({
       : t.app.aiReady
   const shellState: 'ready' | 'pending' | 'not-ready' = resolveShellFooterState(activeTab)
   const footerChatTabId = resolveSessionChatTabId(tabsRef.current, activeTab.id)
-  const footerAttempt =
-    connectionAttemptByChatTab[footerChatTabId] ?? createIdleConnectionAttempt()
+  const footerAttempt = connectionAttemptByChatTab[footerChatTabId] ?? createIdleConnectionAttempt()
   const footerDisconnected =
     Boolean(activeTab.connectionId || activeTab.isSsh) &&
     (footerAttempt.phase === 'connecting' || footerAttempt.phase === 'failed')
@@ -1061,6 +1125,30 @@ function App({
     [appendLog, t, updateAgentRun, updateTab]
   )
 
+  /**
+   * System/status entries land INSIDE the live run timeline when a run is
+   * active (monotonic order), so recovery/drift messages never render after
+   * the run card they belong to. Without an active run they append as log rows.
+   */
+  const appendSystemToRunOrLog = useCallback(
+    (chatTabId: string, text: string, detail?: string): void => {
+      const active = activeAgentRunRef.current.get(chatTabId)
+      if (active) {
+        updateAgentRun(chatTabId, (run) => ({
+          ...run,
+          steps: appendRunStatusStep(run.steps ?? [], {
+            id: `status-${crypto.randomUUID()}`,
+            title: text,
+            detail
+          }) as unknown as AgentRunStep[]
+        }))
+        return
+      }
+      appendLog({ kind: 'status', text }, chatTabId)
+    },
+    [appendLog, updateAgentRun]
+  )
+
   const appendStatusToActiveRunOrLog = useCallback(
     (chatTabId: string, text: string, reuseRun?: ReuseAgentRun): void => {
       const active = activeAgentRunRef.current.get(chatTabId)
@@ -1078,9 +1166,9 @@ function App({
         }))
         return
       }
-      appendLog({ kind: 'status', text }, chatTabId)
+      appendSystemToRunOrLog(chatTabId, text)
     },
-    [appendLog, updateAgentRun]
+    [appendSystemToRunOrLog, updateAgentRun]
   )
 
   const drainPostConnectionTasks = useCallback(
@@ -1129,13 +1217,7 @@ function App({
           if (task.reuseRun) {
             appendStatusToActiveRunOrLog(chatTabId, t.terminal.postLoginTaskStarting, task.reuseRun)
           } else {
-            appendLog(
-              {
-                kind: 'status',
-                text: t.terminal.postLoginTaskStarting
-              },
-              chatTabId
-            )
+            appendSystemToRunOrLog(chatTabId, t.terminal.postLoginTaskStarting)
           }
           await runAgentConversationRef.current?.(
             task.input,
@@ -1153,7 +1235,7 @@ function App({
         })
       )
     },
-    [appendLog, appendStatusToActiveRunOrLog, t, updateAgentRun, updateTab]
+    [appendLog, appendStatusToActiveRunOrLog, appendSystemToRunOrLog, t, updateAgentRun, updateTab]
   )
 
   const executeConnectionAutomation = useCallback(
@@ -1190,9 +1272,18 @@ function App({
       if (commands.length === 0) return true
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
-      if (targetTab?.terminalMode !== 'pty') {
+      const subterminal = targetTab
+        ? undefined
+        : resolveSubterminalTabState(tabsRef.current, targetTabId)
+      const terminalMode = targetTab?.terminalMode ?? subterminal?.terminalMode
+      const [sshCommand] = includeSshCommand ? commands : []
+      if (
+        terminalMode === 'pipe' &&
+        sshCommand &&
+        classifyPipeCommand(sshCommand) === 'interactive'
+      ) {
         const message =
-          'SSH requires PTY mode. Current terminal is PIPE fallback; restart the app after node-pty is available.'
+          'Interactive SSH login requires PTY mode. Current terminal is PIPE fallback. One-shot non-interactive ssh (BatchMode or a remote command without -t) is still allowed; restart the app after node-pty is available for interactive sessions.'
         appendLog({ kind: 'error', text: message }, chatTabId)
         abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
         return false
@@ -1224,15 +1315,57 @@ function App({
       })
       try {
         const ok = includeSshCommand
-          ? await runConnectionCommandSequence(commands, targetTabId, appendLog, t, chatTabId)
-          : await runConnectionLoginActionSequence(commands, targetTabId, appendLog, t, chatTabId)
+          ? await runConnectionCommandSequence(
+              commands,
+              targetTabId,
+              appendLog,
+              (text, id) => appendSystemToRunOrLog(id, text),
+              t,
+              chatTabId
+            )
+          : await runConnectionLoginActionSequence(
+              commands,
+              targetTabId,
+              appendLog,
+              (text, id) => appendSystemToRunOrLog(id, text),
+              t,
+              chatTabId
+            )
         if (!ok) {
           // Failed auth/host/login must not auto-retry the same SSH connection on exit.
           skipConnectionReconnectRef.current.add(targetTabId)
           abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
           void window.api.terminal.setExpectedHost({ tabId: targetTabId, host: null })
+          return false
         }
-        return ok
+        // Wait for the remote prompt to settle, then write the verified login
+        // back to the SSOT (learns the observed prompt host as an alias). The
+        // transient local prompt of the fresh PTY is ignored during the window;
+        // ending still at the local prompt means the ssh never established.
+        const loginSignal = await waitForPromptHostOrTimeout(targetTabId)
+        const verified = sshCommand
+          ? await window.api.terminal.confirmLogin({
+              tabId: subterminal ? subterminal.parentTabId : targetTabId,
+              sourceTabId: subterminal ? targetTabId : undefined
+            })
+          : undefined
+        if (verified && !verified.ok && loginSignal === 'local') {
+          skipConnectionReconnectRef.current.add(targetTabId)
+          abortPostConnectionTasks(
+            targetTabId,
+            verified.error ?? 'SSH did not reach the target (local prompt).'
+          )
+          return false
+        }
+        if (subterminal) {
+          appendSystemToRunOrLog(
+            chatTabId,
+            t.terminal.terminalSubterminalLoginDone.replace('{name}', subterminal.name)
+          )
+        } else if ((postConnectionTasksRef.current.get(targetTabId) ?? []).length === 0) {
+          appendSystemToRunOrLog(chatTabId, t.terminal.postLoginTaskStarting)
+        }
+        return true
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         skipConnectionReconnectRef.current.add(targetTabId)
@@ -1245,7 +1378,14 @@ function App({
         passwordPromptBuffersRef.current.set(targetTabId, '')
       }
     },
-    [abortPostConnectionTasks, appendLog, appendStatusToActiveRunOrLog, t, updateTab]
+    [
+      abortPostConnectionTasks,
+      appendLog,
+      appendStatusToActiveRunOrLog,
+      appendSystemToRunOrLog,
+      t,
+      updateTab
+    ]
   )
 
   const executeConnectionCommands = useCallback(
@@ -1255,14 +1395,12 @@ function App({
         '{ms}',
         String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
       )
-      console.info(
-        `[conn-trace] automation-start tab=${targetTabId} connection=${connection.id}`
-      )
+      connTrace('automation-start', `tab=${targetTabId}`, `connection=${connection.id}`)
       const ok = await runWithTimeout(
         executeConnectionAutomation(connection, targetTabId, true),
         CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
         () => {
-          console.info(`[conn-trace] automation-timeout tab=${targetTabId}`)
+          connTrace('automation-timeout', `tab=${targetTabId}`)
           appendLog({ kind: 'error', text: timeoutMessage }, chatTabId)
         }
       )
@@ -1279,7 +1417,7 @@ function App({
       }
       retryInFlightRef.current.delete(chatTabId)
       if (shouldDrainPostConnectionTasks(ok === true)) drainPostConnectionTasks(targetTabId)
-      console.info(`[conn-trace] automation-end tab=${targetTabId} ok=${ok}`)
+      connTrace('automation-end', `tab=${targetTabId}`, `ok=${ok}`)
     },
     [
       abortPostConnectionTasks,
@@ -1306,25 +1444,121 @@ function App({
 
   useEffect(() => {
     return window.api.terminal.onEnvironmentDrift((event) => {
-      if (environmentDriftHandlingRef.current.has(event.tabId)) return
-      environmentDriftHandlingRef.current.add(event.tabId)
-
       const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
-      const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
-      if (chatTab?.agentBusy || activeRunIdRef.current.has(chatTabId)) {
-        stopAgentRunRef.current?.(chatTabId)
+      const driftKey = event.driftKey ?? `${event.expectedHost}|${event.observedHost}`
+      const budget = recoveryBudgetByTabRef.current.get(chatTabId) ?? {
+        attempts: 0,
+        windowStartAt: Date.now(),
+        inFlight: false
       }
+      if (budget.inFlight) return
+      budget.inFlight = true
+      recoveryBudgetByTabRef.current.set(chatTabId, budget)
 
-      const message = t.terminal.terminalEnvironmentDrift
-        .replace('{expected}', event.expectedHost)
-        .replace('{observed}', event.observedHost)
-      appendLog({ kind: 'status', text: message }, chatTabId)
+      void (async () => {
+        const observedLabel =
+          event.observedHost === 'local-shell' ? t.terminal.localShellLabel : event.observedHost
+        const message = t.terminal.terminalEnvironmentDrift
+          .replace('{expected}', event.expectedHost)
+          .replace('{observed}', observedLabel ?? '')
+        appendSystemToRunOrLog(chatTabId, message)
 
-      void restoreTerminalSessionRef.current?.(event.tabId).finally(() => {
-        environmentDriftHandlingRef.current.delete(event.tabId)
-      })
+        // Stop the agent run with the SYSTEM settle copy (never "manually
+        // stopped") and remember the original input so recovery can continue it.
+        const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
+        const runInput = activeRunInputRef.current.get(chatTabId)
+        const activeRun = activeAgentRunRef.current.get(chatTabId)
+        const reuseRun =
+          activeRun && activeRun.runId && activeRunIdRef.current.get(chatTabId)
+            ? { logId: activeRun.logId, runId: activeRun.runId }
+            : undefined
+        if (chatTab?.agentBusy || activeRunIdRef.current.has(chatTabId)) {
+          await stopAgentRunRef.current?.(chatTabId, {
+            reason: 'system-recovery',
+            expectedHost: event.expectedHost,
+            observedHost: event.observedHost
+          })
+        }
+
+        // Recovery brakes: same drift event <= 1 attempt; 60s window <= 2.
+        const decision = shouldAttemptRecovery(
+          {
+            alignment: 'drifted',
+            ready: false,
+            expectedHost: event.expectedHost,
+            aliases: [],
+            recovery: {
+              driftKey: budget.driftKey,
+              attempts: budget.attempts,
+              windowStartAt: budget.windowStartAt
+            }
+          },
+          driftKey
+        )
+        if (!decision.allowed) {
+          budget.inFlight = false
+          if (decision.reason !== 'aligned') {
+            appendSystemToRunOrLog(chatTabId, t.terminal.terminalRecoveryCapReached)
+            updateConnectionAttempt(chatTabId, (state) =>
+              markConnectionFailed(state, { reason: t.terminal.terminalRecoveryCapReached })
+            )
+          }
+          return
+        }
+
+        const recorded = recordRecoveryAttempt(
+          {
+            alignment: 'drifted',
+            ready: false,
+            expectedHost: event.expectedHost,
+            aliases: [],
+            recovery: {
+              driftKey: budget.driftKey,
+              attempts: budget.attempts,
+              windowStartAt: budget.windowStartAt
+            }
+          },
+          driftKey
+        )
+        budget.driftKey = recorded.recovery?.driftKey
+        budget.attempts = recorded.recovery?.attempts ?? 1
+        budget.windowStartAt = recorded.recovery?.windowStartAt ?? Date.now()
+
+        const restored = await restoreTerminalSessionRef.current?.(event.tabId)
+        budget.inFlight = false
+
+        if (restored) {
+          recoveryBudgetByTabRef.current.delete(chatTabId)
+          if (runInput && reuseRun) {
+            // Single continuation owner: drop stale post-login tasks and never
+            // double-run when another run already took over this chat.
+            postConnectionTasksRef.current.delete(event.tabId)
+            const currentRunId = activeRunIdRef.current.get(chatTabId)
+            if (currentRunId && currentRunId !== reuseRun.runId) return
+            appendSystemToRunOrLog(
+              chatTabId,
+              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
+            )
+            const terminalTab = tabsRef.current.find((tab) => tab.id === event.tabId)
+            await runAgentConversationRef.current?.(
+              runInput,
+              event.tabId,
+              terminalTab?.connectionId,
+              runInput,
+              false,
+              activeRun?.startedAt ?? Date.now(),
+              { chatTabId, reuseRun }
+            )
+          } else if (runInput) {
+            appendSystemToRunOrLog(
+              chatTabId,
+              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
+            )
+          }
+        }
+      })()
     })
-  }, [appendLog, t.terminal.terminalEnvironmentDrift])
+  }, [appendSystemToRunOrLog, markConnectionFailed, t, updateConnectionAttempt])
 
   useEffect(() => {
     if (!passwordPromptRequest) return
@@ -1733,12 +1967,16 @@ function App({
           cwd: '',
           status: 'active',
           isSsh: payload.mode === 'ssh',
-          terminalMode: 'pty',
+          terminalMode: payload.terminalMode,
           terminalReady: true
         })
         setSubterminalCollapsed(false)
 
         if (payload.mode !== 'ssh' || !payload.connectionId) {
+          const parentTab = tabsRef.current.find((tab) => tab.id === payload.parentTabId)
+          if (parentTab?.connectionId) {
+            markChatTabReady(resolveSessionChatTabId(tabsRef.current, payload.parentTabId))
+          }
           void window.api.agent.ackSubterminalOpened({ tabId: payload.tabId, ok: true })
           return
         }
@@ -1772,10 +2010,24 @@ function App({
               })
             }
           )
+          if (ok === true) {
+            // Subterminal SSH success writes back to the parent tab SSOT
+            // (confirm-login promotion inside executeConnectionAutomation):
+            // clear the recovery card and mark the chat ready.
+            const chatTabId = resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
+            markChatTabReady(chatTabId)
+            recoveryBudgetByTabRef.current.delete(chatTabId)
+            skipConnectionReconnectRef.current.delete(payload.parentTabId)
+          }
           void window.api.agent.ackSubterminalOpened({
             tabId: payload.tabId,
             ok: ok === true,
-            error: ok === true ? undefined : ok === undefined ? timeoutMessage : 'SSH login automation failed.'
+            error:
+              ok === true
+                ? undefined
+                : ok === undefined
+                  ? timeoutMessage
+                  : 'SSH login automation failed.'
           })
         } catch (error) {
           void window.api.agent.ackSubterminalOpened({
@@ -1786,7 +2038,7 @@ function App({
         }
       })()
     })
-  }, [ensureSubterminal, executeConnectionAutomation])
+  }, [ensureSubterminal, executeConnectionAutomation, markChatTabReady])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
@@ -1861,14 +2113,58 @@ function App({
     return undefined
   }, [activeTab?.agentLog, liveRunByLogId])
 
+  const userScrollingRef = useRef(false)
+  const userScrollIdleTimerRef = useRef<number | null>(null)
+
   useEffect(() => {
-    agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
-  }, [
-    activeTab?.agentLog,
-    activeTab?.agentThinking,
-    activeTab?.thinkingMessage,
-    activeLiveRun
-  ])
+    const el = agentLogRef.current
+    if (!el) return
+
+    const followLatest = (force: boolean): void => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+      // New user input always returns to the latest; otherwise follow unless
+      // the user is actively scrolling (idle timeout below resumes tracking).
+      if (force || nearBottom || !userScrollingRef.current) {
+        el.scrollTo({ top: el.scrollHeight })
+      }
+    }
+
+    const handleScroll = (): void => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+      if (nearBottom) {
+        userScrollingRef.current = false
+        if (userScrollIdleTimerRef.current != null) {
+          window.clearTimeout(userScrollIdleTimerRef.current)
+          userScrollIdleTimerRef.current = null
+        }
+        return
+      }
+      userScrollingRef.current = true
+      if (userScrollIdleTimerRef.current != null) {
+        window.clearTimeout(userScrollIdleTimerRef.current)
+      }
+      userScrollIdleTimerRef.current = window.setTimeout(() => {
+        // User stopped scrolling: resume tracking so the next update follows.
+        userScrollingRef.current = false
+        userScrollIdleTimerRef.current = null
+      }, 1500)
+    }
+
+    const entries = activeTab?.agentLog ?? []
+    const lastEntry = entries[entries.length - 1]
+    const newUserInput = Boolean(
+      lastEntry && (lastEntry.kind === 'user' || lastEntry.kind === 'user-supplement')
+    )
+    followLatest(newUserInput)
+
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    const observer = new ResizeObserver(() => followLatest(false))
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', handleScroll)
+      observer.disconnect()
+    }
+  }, [activeTab?.agentLog, activeTab?.agentThinking, activeTab?.thinkingMessage, activeLiveRun])
 
   const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
 
@@ -1890,6 +2186,7 @@ function App({
     automatedLoginTabsRef,
     passwordPromptBuffersRef,
     skipConnectionReconnectRef,
+    ptyRetryTriedRef,
     restoreTerminalSessionRef,
     updateTab,
     updateSubterminalOutput,
@@ -2826,14 +3123,27 @@ function App({
     }
   }
 
-  function stopAgentRun(tabId = activeTabIdRef.current): void {
+  function stopAgentRun(
+    tabId = activeTabIdRef.current,
+    options: { reason?: RunStopReason; expectedHost?: string; observedHost?: string } = {}
+  ): void | Promise<void> {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    const reason = resolveRunStopReason({
+      userInitiated: !options.reason || options.reason === 'user',
+      driftBlocked: options.reason === 'gate-interrupt',
+      recoveryInFlight: options.reason === 'system-recovery',
+      timedOut: options.reason === 'timeout'
+    })
+    const stopText = settleStopText(reason, t, {
+      expectedHost: options.expectedHost,
+      observedHost: options.observedHost
+    })
     activeRunCanceledRef.current.add(chatTabId)
     const runId = activeRunIdRef.current.get(chatTabId)
     if (runId) {
       updateAgentRun(chatTabId, (run) => ({
         ...run,
-        error: t.input.agentCanceled,
+        error: stopText,
         elapsedMs: Date.now() - (run.startedAt ?? Date.now()),
         steps: settleRunningToolStepsAsInterrupted(run.steps ?? [])
       }))
@@ -2844,7 +3154,7 @@ function App({
         input: activeRunInputRef.current.get(chatTabId) ?? '',
         status: 'canceled',
         output: canceledRun?.result,
-        error: t.input.agentCanceled,
+        error: stopText,
         startedAt:
           typeof canceledRun?.startedAt === 'number'
             ? new Date(canceledRun.startedAt).toISOString()
@@ -2856,13 +3166,18 @@ function App({
           displayInput: activeRunInputRef.current.get(chatTabId) ?? '',
           status: 'canceled',
           run: canceledRun,
-          error: t.input.agentCanceled
+          error: stopText
         })
       })
       // Keep UI busy until Pi session abort settles so the next prompt cannot race
       // into the SDK "Agent is already processing" guard on a reused session.
-      void settleAgentCancel(runId).finally(() => {
+      // A system stop (recovery/drift/timeout) keeps the run view alive so the
+      // recovery path can reuse the same card and auto-continue the original task.
+      const settle = settleAgentCancel(runId).finally(() => {
         if (activeRunIdRef.current.get(chatTabId) !== runId) return
+        // A resumed run (recovery auto-continue) clears the cancel flag before
+        // this settle lands; never clobber its UI state.
+        if (reason !== 'user' && !activeRunCanceledRef.current.has(chatTabId)) return
         setActiveExecutionTerminal(chatTabId, null)
         updateTab(chatTabId, (tab) => ({
           ...tab,
@@ -2870,8 +3185,13 @@ function App({
           agentThinking: false,
           thinkingMessage: undefined
         }))
+        if (reason === 'user') {
+          activeAgentRunRef.current.delete(chatTabId)
+          activeRunIdRef.current.delete(chatTabId)
+          activeRunInputRef.current.delete(chatTabId)
+        }
       })
-      return
+      return reason === 'user' ? undefined : settle.then(() => undefined)
     }
     setActiveExecutionTerminal(chatTabId, null)
     updateTab(chatTabId, (tab) => ({
@@ -2880,6 +3200,11 @@ function App({
       agentThinking: false,
       thinkingMessage: undefined
     }))
+    if (reason === 'user') {
+      activeAgentRunRef.current.delete(chatTabId)
+      activeRunIdRef.current.delete(chatTabId)
+      activeRunInputRef.current.delete(chatTabId)
+    }
   }
 
   async function submitPasswordPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -2986,6 +3311,13 @@ function App({
       return restoreLocalTerminal(tabId)
     }
 
+    // Recovery brake #1: read SSOT first. Already on target -> nothing to do.
+    const context = await window.api.terminal.getContext(tabId)
+    if (context.alignment === 'aligned') {
+      connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
+      return true
+    }
+
     return tab.connectionId ? restoreTerminalConnection(tabId) : restoreLocalTerminal(tabId)
   }
 
@@ -2994,7 +3326,7 @@ function App({
 
     reconnectingTabsRef.current.add(tabId)
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
-    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, chatTabId)
+    appendSystemToRunOrLog(chatTabId, t.terminal.terminalReconnecting)
     void window.api.terminal.setExpectedHost({ tabId, host: null })
 
     try {
@@ -3046,7 +3378,7 @@ function App({
 
     reconnectingTabsRef.current.add(tabId)
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
-    appendLog({ kind: 'status', text: t.terminal.terminalReconnecting }, chatTabId)
+    appendSystemToRunOrLog(chatTabId, t.terminal.terminalReconnecting)
 
     try {
       const connection = await findConnectionById(tab.connectionId)
@@ -3121,9 +3453,7 @@ function App({
       connectionId: connection.id,
       tabs: tabsRef.current
     })
-    console.info(
-      `[conn-trace] connect connection=${connection.id} resolution=${resolution.kind}`
-    )
+    connTrace('connect', `connection=${connection.id}`, `resolution=${resolution.kind}`)
 
     let targetTabId = currentTab?.id ?? ''
     let targetTab = currentTab
@@ -3140,11 +3470,8 @@ function App({
         ...tab,
         connectionId: connection.id,
         connectionName: connection.name,
-        isSsh: true,
-        sessionId: undefined,
-        terminalReady: false
+        isSsh: true
       }))
-      void window.api.terminal.stop(resolution.tab.id)
       statusLabel = t.terminal.switchedToConnection.replace('{name}', connection.name)
     } else if (resolution.kind === 'create-peer' && currentTab) {
       if (currentTab.sessionGroupId !== resolution.sessionGroupId) {
@@ -3209,13 +3536,7 @@ function App({
         .reverse()
         .find((entry) => entry.kind === 'status')?.text
       if (shouldAppendSwitchedEntry(previousStatus, statusLabel)) {
-        appendLog(
-          {
-            kind: 'status',
-            text: statusLabel
-          },
-          chatTabId
-        )
+        appendSystemToRunOrLog(chatTabId, statusLabel)
       }
     }
 
@@ -3241,14 +3562,24 @@ function App({
     )
 
     if (resolution.kind === 'reuse') {
-      // Same SSH tab re-login: the old PTY was stopped above. Spawn a fresh PTY
-      // inline and run the normal login chain, awaited. The xterm lifecycle
-      // effect does NOT re-run for the same active tab, so deferring the spawn
-      // to pendingSshRef left the reconnect with no PTY, no login, no settle.
-      console.info(
-        `[conn-trace] reuse-login tab=${targetTabId} connection=${connection.id}`
-      )
-      await spawnAndLoginConnection(connection, targetTabId)
+      // Recovery brake #2: never reinit + re-knock ssh on an already connected
+      // terminal. Read the SSOT first; aligned means reuse as-is.
+      const context = await window.api.terminal.getContext(targetTabId)
+      if (context.alignment === 'aligned') {
+        connTrace('connect-reuse-aligned', `tab=${targetTabId}`, 'skipping re-login')
+        markChatTabReady(chatTabId)
+        if (postConnectionTasksRef.current.get(targetTabId)?.length) {
+          drainPostConnectionTasks(targetTabId)
+        }
+      } else {
+        connTrace('reuse-login', `tab=${targetTabId}`, `connection=${connection.id}`)
+        // Same SSH tab re-login: stop the old PTY, spawn a fresh one inline and
+        // run the normal login chain, awaited. The xterm lifecycle effect does
+        // NOT re-run for the same active tab, so deferring the spawn to
+        // pendingSshRef left the reconnect with no PTY, no login, no settle.
+        void window.api.terminal.stop(targetTabId)
+        await spawnAndLoginConnection(connection, targetTabId)
+      }
     } else if (!forceFreshLogin && targetTab?.sessionId) {
       void executeConnectionCommands(connection, targetTabId)
     } else {
@@ -3272,8 +3603,8 @@ function App({
     try {
       const dimensions =
         tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
-      console.info(`[conn-trace] spawn tab=${tabId}`)
-      const session = await runWithTimeout(
+      connTrace('spawn', `tab=${tabId}`)
+      let session = await runWithTimeout(
         window.api.terminal.start({
           cols: dimensions?.cols ?? 80,
           rows: dimensions?.rows ?? 24,
@@ -3281,7 +3612,7 @@ function App({
         }),
         CONNECTION_SPAWN_TIMEOUT_MS,
         () => {
-          console.info(`[conn-trace] spawn-timeout tab=${tabId}`)
+          connTrace('spawn-timeout', `tab=${tabId}`)
           appendLog({ kind: 'error', text: t.terminal.terminalSpawnTimeout }, chatTabId)
         }
       )
@@ -3298,6 +3629,30 @@ function App({
         return false
       }
 
+      // node-pty failure falls back to PIPE; auto-reinit once before settling
+      // on the fallback so transient PTY failures self-heal.
+      if (session.mode === 'pipe' && !ptyRetryTriedRef.current.has(tabId)) {
+        ptyRetryTriedRef.current.add(tabId)
+        window.api.terminal.stop(tabId)
+        session = await runWithTimeout(
+          window.api.terminal.start({
+            cols: dimensions?.cols ?? 80,
+            rows: dimensions?.rows ?? 24,
+            tabId
+          }),
+          CONNECTION_SPAWN_TIMEOUT_MS,
+          () => {
+            connTrace('spawn-timeout-retry', `tab=${tabId}`)
+          }
+        )
+        if (!session) {
+          updateConnectionAttempt(chatTabId, (state) =>
+            markConnectionFailed(state, { reason: t.terminal.terminalSpawnTimeout })
+          )
+          return false
+        }
+      }
+
       updateTab(tabId, (tab) => ({
         ...tab,
         sessionId: session.sessionId,
@@ -3312,14 +3667,12 @@ function App({
         terminalCwdRef.current = session.cwd
         pipePromptRef.current = formatPipePrompt(session.cwd)
       }
-      console.info(
-        `[conn-trace] spawned tab=${tabId} mode=${session.mode} sid=${session.sessionId}`
-      )
+      connTrace('spawned', `tab=${tabId}`, `mode=${session.mode}`, `sid=${session.sessionId}`)
       await executeConnectionCommands(connection, tabId)
       return Boolean(tabsRef.current.find((tab) => tab.id === tabId)?.sessionId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.info(`[conn-trace] spawn-failed tab=${tabId} err=${message}`)
+      connTrace('spawn-failed', `tab=${tabId}`, `err=${message}`)
       updateConnectionAttempt(chatTabId, (state) =>
         markConnectionFailed(state, { reason: message })
       )
@@ -3405,7 +3758,7 @@ function App({
     updateConnectionAttempt(chatTabId, (current) =>
       beginConnectionRetry(current, `reinit-${Date.now()}`)
     )
-    appendLog({ kind: 'status', text: t.terminal.reinitializingTerminal }, chatTabId)
+    appendSystemToRunOrLog(chatTabId, t.terminal.reinitializingTerminal)
 
     try {
       const dimensions =
@@ -3945,8 +4298,12 @@ function App({
     setThinking(t.input.thinkingAnalyzingRequest)
 
     const terminalContext = await window.api.terminal.getContext(terminalTabId)
-    console.info(
-      `[conn-trace] getContext tab=${terminalTabId} aligned=${terminalContext.sessionAligned ?? 'n/a'} expected=${terminalContext.expectedHost ?? '-'} tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
+    connTrace(
+      'getContext',
+      `tab=${terminalTabId}`,
+      `aligned=${terminalContext.sessionAligned ?? 'n/a'}`,
+      `expected=${terminalContext.expectedHost ?? '-'}`,
+      `tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
     )
     if (terminalContext.sessionAligned === 'drifted') {
       // Remote side closed the SSH session while the outer PTY stayed alive.
@@ -3992,8 +4349,12 @@ function App({
       explicitLocalFile: explicitLocalFileRequest,
       sessionAligned: terminalContext.sessionAligned
     })
-    console.info(
-      `[conn-trace] route action=${route.action} reason=${route.reason ?? '-'} target=${route.targetTabId} aligned=${terminalContext.sessionAligned ?? 'n/a'}`
+    connTrace(
+      'route',
+      `action=${route.action}`,
+      `reason=${route.reason ?? '-'}`,
+      `target=${route.targetTabId}`,
+      `aligned=${terminalContext.sessionAligned ?? 'n/a'}`
     )
 
     const forcedConnectionId = options?.forcedConnectionId?.trim()
@@ -4710,7 +5071,9 @@ function App({
       activeAgentRunRef.current.set(chatTabId, {
         ...existingReuse,
         runId,
-        startedAt: existingReuse.startedAt ?? startedAt
+        startedAt: existingReuse.startedAt ?? startedAt,
+        error: undefined,
+        elapsedMs: undefined
       })
       updateAgentRun(chatTabId, (run) => run)
     } else {
@@ -4762,11 +5125,13 @@ function App({
           routeLine,
           `tabId: ${executionTabId}`,
           executionTab?.connectionId ? `connectionId: ${executionTab.connectionId}` : '',
-          executionTab?.connectionName
-            ? `connectionName: ${executionTab.connectionName}`
-            : '',
+          executionTab?.connectionName ? `connectionName: ${executionTab.connectionName}` : '',
           executionConnection?.host ? `host: ${executionConnection.host}` : '',
           `loggedIn: ${loggedIn ? 'yes' : 'no'}`,
+          `alignment: ${context.alignment ?? 'unknown'}`,
+          `ready: ${context.ready ? 'yes' : 'no'}`,
+          `promptHost: ${context.promptHost ?? '-'}`,
+          `aliases: ${(context.aliases ?? []).join(',') || '-'}`,
           `terminalReady: ${executionTab?.terminalReady ? 'yes' : 'no'}`,
           `mode: ${context.mode}`,
           `cwd: ${context.cwd || '-'}`,
@@ -5186,7 +5551,7 @@ function App({
     if (voiceInputState === 'transcribing') return
     // Allow recording while Whisper is still probing if browser speech works.
     if (!voiceInputSupported || (voiceInputSupportChecking && !voiceBrowserSpeechAvailable)) {
-      toast.error(t.input.voiceUnsupported)
+      toast.error(t.input.voiceUnsupported, { duration: TOAST_INTERVENTION_DURATION_MS })
       return
     }
 
@@ -5202,7 +5567,7 @@ function App({
       try {
         const transcript = (await liveSession.stop()).trim()
         if (!transcript) {
-          toast.error(t.input.voiceEmpty)
+          toast.error(t.input.voiceEmpty, { duration: TOAST_INTERVENTION_DURATION_MS })
           setVoiceInputState('idle')
           return
         }
@@ -5217,7 +5582,10 @@ function App({
         await submitAgentMessage(transcript)
       } catch (error) {
         const message = error instanceof Error ? error.message : t.input.voiceFailed
-        toast.error(isWhisperUnavailableError(message) ? t.input.voiceProviderUnsupported : message)
+        toast.error(
+          isWhisperUnavailableError(message) ? t.input.voiceProviderUnsupported : message,
+          { duration: TOAST_INTERVENTION_DURATION_MS }
+        )
         setVoiceInputState('idle')
       }
       return
@@ -5226,7 +5594,7 @@ function App({
     try {
       const permission = await window.api.agent.requestMicrophonePermission()
       if (!permission.granted) {
-        toast.error(t.input.voicePermissionDenied)
+        toast.error(t.input.voicePermissionDenied, { duration: TOAST_INTERVENTION_DURATION_MS })
         return
       }
 
@@ -5277,13 +5645,17 @@ function App({
             return
           }
           if (/permission|denied|NotAllowed/i.test(error.message)) {
-            toast.error(t.input.voicePermissionDenied)
+            toast.error(t.input.voicePermissionDenied, {
+              duration: TOAST_INTERVENTION_DURATION_MS
+            })
             voiceLiveSessionRef.current?.cancel()
             voiceLiveSessionRef.current = null
             setVoiceInputState('idle')
             return
           }
-          toast.error(error.message || t.input.voiceFailed)
+          toast.error(error.message || t.input.voiceFailed, {
+            duration: TOAST_INTERVENTION_DURATION_MS
+          })
         }
       })
       voiceLiveSessionRef.current = session
@@ -5295,7 +5667,8 @@ function App({
           ? t.input.voicePermissionDenied
           : isWhisperUnavailableError(message)
             ? t.input.voiceProviderUnsupported
-            : message
+            : message,
+        { duration: TOAST_INTERVENTION_DURATION_MS }
       )
       setVoiceInputState('idle')
     }
@@ -5857,7 +6230,9 @@ function App({
 
     const existingRating = opsFeedbackByLogId[entry.id]
     if (existingRating) {
-      toast.error(t.common.opsFeedbackAlreadyRated)
+      toast.error(t.common.opsFeedbackAlreadyRated, {
+        duration: TOAST_INTERVENTION_DURATION_MS
+      })
       return
     }
 
@@ -5872,7 +6247,7 @@ function App({
 
     const runId = await resolveRunIdForLogEntry(entry)
     if (!runId) {
-      toast.error(t.common.opsFeedbackFailed)
+      toast.error(t.common.opsFeedbackFailed, { duration: TOAST_INTERVENTION_DURATION_MS })
       return
     }
 
@@ -5887,7 +6262,9 @@ function App({
       })
       toast.dismiss(savingToast)
       if (!result.ok || !result.record) {
-        toast.error(result.error || t.common.opsFeedbackFailed)
+        toast.error(result.error || t.common.opsFeedbackFailed, {
+          duration: TOAST_INTERVENTION_DURATION_MS
+        })
         return
       }
       setOpsFeedbackByLogId((current) => ({ ...current, [entry.id]: result.record!.rating }))
@@ -6746,7 +7123,10 @@ function App({
                 tabsRef.current.find((tab) => getSessionGroupId(tab) === groupId)
               if (focusTab) {
                 selectSessionTab(focusTab.id)
-                setActiveExecutionTerminal(resolveSessionChatTabId(tabsRef.current, focusTab.id), focusTab.id)
+                setActiveExecutionTerminal(
+                  resolveSessionChatTabId(tabsRef.current, focusTab.id),
+                  focusTab.id
+                )
               }
             }}
             onSelectTerminal={(tabId) => {
@@ -6947,6 +7327,7 @@ async function runConnectionCommandSequence(
   commands: string[],
   tabId: string,
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
+  appendSystem: (text: string, tabId: string) => void,
   t: Dictionary,
   logTabId = tabId
 ): Promise<boolean> {
@@ -6976,13 +7357,7 @@ async function runConnectionCommandSequence(
     }
 
     sendTerminalInput(action, tabId)
-    appendLog(
-      {
-        kind: 'command',
-        text: formatConnectionActionLog(action, index + 1, t)
-      },
-      logTabId
-    )
+    appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
   }
 
   return true
@@ -6992,6 +7367,7 @@ async function runConnectionLoginActionSequence(
   loginActions: string[],
   tabId: string,
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
+  appendSystem: (text: string, tabId: string) => void,
   t: Dictionary,
   logTabId = tabId
 ): Promise<boolean> {
@@ -7016,13 +7392,7 @@ async function runConnectionLoginActionSequence(
     }
 
     sendTerminalInput(action, tabId)
-    appendLog(
-      {
-        kind: 'command',
-        text: formatConnectionActionLog(action, index + 1, t)
-      },
-      logTabId
-    )
+    appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
   }
 
   return true
@@ -7137,6 +7507,27 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
       resolve(value)
     }
   })
+}
+
+/**
+ * Poll SSOT for the REMOTE prompt during the login window. A transient local
+ * prompt (fresh PTY before ssh connects) must NOT abort confirmation; only
+ * when the whole window expires with the shell still at the local prompt does
+ * the login count as failed.
+ */
+async function waitForPromptHostOrTimeout(
+  tabId: string,
+  timeoutMs = 20_000
+): Promise<'host' | 'local' | 'none'> {
+  const deadline = Date.now() + timeoutMs
+  let lastSignal: 'host' | 'local' | 'none' = 'none'
+  while (Date.now() < deadline) {
+    const context = await window.api.terminal.getContext(tabId)
+    if (context.promptHost && context.promptHost !== 'local-shell') return 'host'
+    if (context.promptHost === 'local-shell') lastSignal = 'local'
+    await sleep(300)
+  }
+  return lastSignal
 }
 
 function sendTerminalInput(value: string, tabId: string): void {
