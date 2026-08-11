@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.0.4 (2026-08-11)
+
+### Terminal / SSH
+
+- Multi-hop SSH login detection: login completion now waits for the final target host prompt instead of treating an intermediate jump host as the destination.
+- Runtime host anchoring: the actual target host observed after login is recorded as the runtime anchor, so a static jump-host configuration no longer misleads environment checks.
+- Subterminal SSH login success is written back to the parent terminal, correcting failed login cards and stale disconnected state.
+
+### Security / Injection Guard
+
+- The injection guard now evaluates the live prompt host from the terminal output buffer instead of relying on stale cached state, reducing false environment-drift verdicts during login transitions.
+- Guard blocks now emit diagnostic logging with session context so drift causes are inspectable.
+
+### Agent / Terminal Automation
+
+- Login automation settles only after a stable remote prompt, improving state synchronization and run-card finalization after login.
+- User input typed during login automation is merged into the post-login task instead of being lost.
+
+### Tests / Reliability
+
+- Added and extended tests for prompt host waiting, connection state, agent run timeline, agent log list, busy supplement, connection route, and related automation paths.
+
+### Infrastructure
+
+- CI and release workflows upgraded to Node 24-based GitHub Actions runtimes (no user-facing behavior change).
+
 ## v1.0.3 (2026-08-11)
 
 ### Features

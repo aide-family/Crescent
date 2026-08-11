@@ -18,11 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Graceful model quota handling: `AccountQuotaExceeded` / quota 429 stops blind retries and shows a human-readable quota card (provider + reset hint + switch-model shortcut) instead of raw JSON.
-- Cursor-style agent timeline with coalesced thinking, tool results, and DeepSeek reasoning support.
-- Pi bash runs in the visible PTY with in-chat high-risk command approvals (`kubectl delete` and other writes stay gated independently of model HTTP).
-- Command classification funnel refinements and connection clarification UI for SSH / cluster login flows.
-- Branding and icon asset updates; SSH connection intent matching restored for cluster login requests.
+- Enhanced multi-hop SSH connection automation: login completion waits for the final target host prompt, and the actual host reached after login anchors environment checks instead of the static jump host.
+- Injection guard now detects environment drift from the live terminal prompt rather than stale cached state, with diagnostic logging when command injection is blocked.
+- Smoother login automation: input typed while logging in carries into the follow-up task, and subterminal SSH login success is written back to the parent terminal.
 
 ## Install Notes
 
