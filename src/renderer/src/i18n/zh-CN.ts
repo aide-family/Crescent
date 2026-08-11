@@ -99,7 +99,9 @@ const zhCN = {
     zoomOut: '缩小',
     user: '用户',
     saveAsSop: '存为 SOP',
-    saveAsSopTooltip: '将本轮用户目标存为知识库 SOP 文档'
+    saveAsSopTooltip: '将本轮用户目标存为知识库 SOP 文档',
+    saveAsSopSaving: '正在生成并保存 SOP 文档…',
+    saveAsSopSaved: 'SOP 已保存到知识库'
   },
   confirm: {
     closeAllTabs: '关闭所有 Tab？这些终端会话都会被停止。',
@@ -235,6 +237,21 @@ const zhCN = {
     connectionIntentWithTaskResult:
       '已根据输入匹配连接并开始登录；登录完成后会继续执行原始任务，并加载匹配的 Skill。',
     connectionMatched: '已匹配连接',
+    connectionFlowLabel: '连接 {name}',
+    connectionFlowFallback: '连接',
+    connectionFlowStepCount: '{n} 个步骤',
+    connectionFlowExpand: '查看登录动作',
+    connectionFlowCollapse: '收起登录动作',
+    loginSuccess: '登录成功',
+    loginFailed: '登录失败',
+    loginInProgress: '正在登录…',
+    loginConnectionName: '连接名称',
+    loginConnectionAddress: '连接地址',
+    loginUser: '用户',
+    loginActions: '登录动作',
+    loginActionsDone: '{n} 步全部成功',
+    loginEndToEndElapsed: '端到端耗时',
+    loginRetry: '重试登录',
     usingCurrentConnection: '使用当前连接：{name}',
     clarifyCurrentBadge: '当前',
     connectionNoActions: '正在建立 SSH 连接，未配置登录动作。',

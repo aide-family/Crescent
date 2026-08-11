@@ -7,13 +7,13 @@ import { spawn as spawnPty } from 'node-pty'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
+import { normalizeHostToken } from '../../shared/terminal-prompt-host'
 import {
-  autoLearnUnverifiedLogin,
   classifyPipeCommand,
   confirmLoginState,
   createConnectionState,
+  evaluateInjectionGuard,
   promoteSubterminalLogin,
-  resolveGateAlignment,
   resolveSessionAlignment,
   setConnectionExpectedHost,
   type ConnectionState
@@ -801,7 +801,12 @@ export function registerTerminalIpc(): void {
     'terminal:confirm-login',
     (
       event,
-      payload?: { tabId?: string; sourceTabId?: string; localHost?: string }
+      payload?: {
+        tabId?: string
+        sourceTabId?: string
+        localHost?: string
+        expectedTargetHost?: string
+      }
     ): {
       ok: boolean
       tabId?: string
@@ -820,6 +825,7 @@ export function registerTerminalIpc(): void {
       const key = getSessionKey(event.sender.id, tabId)
       sessionWebContents.set(key, event.sender)
       const localHost = payload?.localHost?.trim() || hostname()
+      const expectedTargetHost = payload?.expectedTargetHost?.trim()
 
       const confirmOn = (targetTabId: string): ConnectionState | undefined => {
         const targetKey = getSessionKey(event.sender.id, targetTabId)
@@ -833,8 +839,14 @@ export function registerTerminalIpc(): void {
           aliases: state.aliases
         }).promptHost
         const result = confirmLoginState(state, promptHost, { localHost })
-        connectionStates.set(targetKey, result.state)
-        return result.ok ? result.state : undefined
+        const anchored = expectedTargetHost
+          ? {
+              ...result.state,
+              runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
+            }
+          : result.state
+        connectionStates.set(targetKey, anchored)
+        return result.ok ? anchored : undefined
       }
 
       const isSubterminalOfParent = (parent: string, candidate: string): boolean => {
@@ -1043,13 +1055,19 @@ export function registerTerminalIpc(): void {
     const state = key ? connectionStates.get(key) : undefined
     const expectedHost = state?.expectedHost ?? ''
     const output = key ? (terminalOutputBuffers.get(key) ?? '') : ''
-    const alignment = state
+    const resolved = state
       ? resolveSessionAlignment({
           output,
           expectedHost: state.expectedHost,
           aliases: state.aliases
-        }).alignment
-      : 'unknown'
+        })
+      : undefined
+    const alignment = resolved?.alignment ?? 'unknown'
+    // Resolve promptHost live from the output buffer instead of relying on the
+    // cached state field, which is only written after confirm-login. Login
+    // completion watchers poll this to finish as soon as the remote prompt
+    // appears, otherwise they burn the whole timeout waiting for the cache.
+    const promptHost = resolved?.promptHost ?? state?.promptHost
     const sessionAligned = expectedHost ? alignment : 'unknown'
     connTrace(
       'getContext',
@@ -1074,7 +1092,7 @@ export function registerTerminalIpc(): void {
         expectedHost: expectedHost || undefined,
         sessionAligned,
         alignment,
-        promptHost: state?.promptHost,
+        promptHost,
         aliases: state?.aliases ?? [],
         ready: Boolean(state?.ready)
       }
@@ -1089,7 +1107,7 @@ export function registerTerminalIpc(): void {
       expectedHost: expectedHost || undefined,
       sessionAligned,
       alignment,
-      promptHost: state?.promptHost,
+      promptHost,
       aliases: state?.aliases ?? [],
       ready: Boolean(state?.ready)
     }
@@ -1160,48 +1178,70 @@ function detectEnvironmentDriftForSession(
   session: TerminalSession
 ): TerminalCommandExecutionResult | undefined {
   const state = connectionStates.get(key)
-  const expectedHost = state?.expectedHost
-  if (!expectedHost) return undefined
-
   const buffer = terminalOutputBuffers.get(key) ?? ''
-  const resolved = resolveSessionAlignment({
-    output: buffer,
-    expectedHost,
-    aliases: state?.aliases ?? []
-  })
-  // A hostless prompt is ambiguous; the gate only treats it as drift when the
-  // session was previously verified with a hostname prompt (exit-to-local).
-  const effectiveAlignment = state ? resolveGateAlignment(state, buffer) : resolved.alignment
-  const observedHost = effectiveAlignment === 'drifted' ? resolved.promptHost : undefined
-  if (!observedHost) return undefined
+  if (!state) return undefined
 
-  // Auto-learn on an unverified session: the first non-local prompt observed
-  // after login is treated as the target host (covers password/manual logins
-  // where confirm-login had no prompt host yet). A local prompt is never
-  // learned, so a failed ssh that dropped back to the local shell still gates.
-  const autoLearned = state
-    ? autoLearnUnverifiedLogin(state, observedHost, { localHost: hostname() })
-    : undefined
-  if (autoLearned) {
-    connectionStates.set(key, autoLearned)
-    connTrace('auto-learn', `tab=${tabId}`, `alias=${observedHost}`)
+  const verdict = evaluateInjectionGuard(state, buffer, { localHost: hostname() })
+  if (verdict.alignment !== 'drifted') {
+    if (verdict.shouldReanchor && verdict.observedHost) {
+      const anchored: ConnectionState = {
+        ...state,
+        promptHost: verdict.observedHost,
+        runtimeExpectedHost: verdict.observedHost,
+        alignment: 'aligned',
+        ready: true,
+        lastError: undefined
+      }
+      connectionStates.set(key, anchored)
+      connTrace('re-anchor', `tab=${tabId}`, `runtimeExpectedHost=${verdict.observedHost}`)
+    } else if (
+      verdict.alignment === 'aligned' &&
+      verdict.observedHost &&
+      state.runtimeExpectedHost
+    ) {
+      // Keep the runtime anchor in sync with the observed prompt (idempotent).
+      connectionStates.set(key, {
+        ...state,
+        promptHost: verdict.observedHost,
+        alignment: 'aligned',
+        ready: true
+      })
+    }
     return undefined
   }
 
-  // Learned aliases make an IP-expected / hostname-observed session aligned;
-  // only a genuinely off-target prompt reaches here.
+  const observedHost = verdict.observedHost
+  const anchorHost = verdict.effectiveExpectedHost
+  if (!observedHost || !anchorHost) return undefined
+
   connectionStates.set(key, { ...state, promptHost: observedHost, ready: false })
-  const driftKey = `${expectedHost}|${observedHost}`
+  const driftKey = `${anchorHost}|${observedHost}`
 
   const webContents = sessionWebContents.get(key)
   if (webContents && !webContents.isDestroyed()) {
     sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
       tabId,
       observedHost,
-      expectedHost,
+      expectedHost: anchorHost,
       driftKey
     })
   }
+
+  // Defensive diagnostic: dump the full session state whenever the guard blocks
+  // injection. This is the single source of truth for why runtimeExpectedHost
+  // may be null/stale and which terminal the command was routed to.
+  console.error('[EnvGuard] Blocked injection:', {
+    terminalId: tabId,
+    expectedHost: state?.expectedHost,
+    runtimeExpectedHost: state?.runtimeExpectedHost,
+    observedHost,
+    promptHost: state?.promptHost,
+    ready: state?.ready,
+    alignment: state?.alignment,
+    aliases: state?.aliases,
+    command: command.slice(0, 200),
+    anchorHost
+  })
 
   return {
     ok: false,
@@ -1211,9 +1251,9 @@ function detectEnvironmentDriftForSession(
     output: '',
     environmentDrift: true,
     observedHost,
-    expectedHost,
+    expectedHost: anchorHost,
     driftKey,
-    error: `Terminal left target environment (expected ${expectedHost}, observed ${observedHost}). Command was not injected.`
+    error: `Terminal left target environment (expected ${anchorHost}, observed ${observedHost}). Command was not injected.`
   }
 }
 

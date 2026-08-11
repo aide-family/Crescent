@@ -26,6 +26,13 @@ export interface ConnectionState {
   mode: TerminalMode
   /** Expected connection host (set on login start; cleared on local fallback). */
   expectedHost?: string
+  /**
+   * Runtime environment anchor: the prompt host actually reached after login
+   * (e.g. web1.zhangke after a multi-hop ssh). The injection guard compares the
+   * observed prompt against this anchor once a login succeeded, instead of the
+   * static configured host which only reflects the jump host.
+   */
+  runtimeExpectedHost?: string
   /** Last observed prompt host (normalized). */
   promptHost?: string
   /** Learned aliases: observed prompt hosts that proved to be on target. */
@@ -69,6 +76,7 @@ export function setConnectionExpectedHost(
     return {
       ...state,
       expectedHost: undefined,
+      runtimeExpectedHost: undefined,
       alignment: 'unknown',
       ready: false,
       lastError: undefined
@@ -77,6 +85,7 @@ export function setConnectionExpectedHost(
   return {
     ...state,
     expectedHost: expected,
+    runtimeExpectedHost: undefined,
     alignment: 'unknown',
     ready: false,
     lastError: undefined
@@ -112,11 +121,91 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
 export function resolveGateAlignment(state: ConnectionState, output: string): TerminalAlignment {
   const resolved = resolveSessionAlignment({
     output,
-    expectedHost: state.expectedHost,
+    expectedHost: state.runtimeExpectedHost ?? state.expectedHost,
     aliases: state.aliases
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
   return resolved.alignment
+}
+
+export interface InjectionGuardVerdict {
+  /** Effective expected host used for comparison (runtime anchor first). */
+  effectiveExpectedHost?: string
+  observedHost?: string
+  alignment: TerminalAlignment
+  /** True when the guard should re-anchor the runtime host to observed. */
+  shouldReanchor: boolean
+}
+
+/**
+ * Pure decision core of the command-injection environment guard. The main
+ * process calls this with the current session state + terminal buffer; tests
+ * exercise the exact same path. A verdict of `aligned` allows injection,
+ * `drifted` blocks it (and shouldReanchor tells the caller to heal a stale
+ * runtime anchor only when it is safe).
+ */
+export function evaluateInjectionGuard(
+  state: ConnectionState,
+  output: string,
+  options: { localHost?: string } = {}
+): InjectionGuardVerdict {
+  const effectiveExpectedHost = state.runtimeExpectedHost ?? state.expectedHost
+  if (!effectiveExpectedHost) {
+    return { alignment: 'unknown', shouldReanchor: false }
+  }
+
+  const resolved = resolveSessionAlignment({
+    output,
+    expectedHost: effectiveExpectedHost,
+    aliases: state.aliases
+  })
+  const effectiveAlignment = resolveGateAlignment(state, output)
+  const observedHost = effectiveAlignment === 'drifted' ? resolved.promptHost : undefined
+  if (!observedHost) {
+    return {
+      effectiveExpectedHost,
+      alignment: effectiveAlignment,
+      shouldReanchor: false
+    }
+  }
+
+  // Auto-learn on an unverified session: the first non-local prompt observed
+  // is treated as the target (covers password/manual logins where confirm-login
+  // had no prompt host yet). A local prompt is never learned.
+  const autoLearned = autoLearnUnverifiedLogin(state, observedHost, {
+    localHost: options.localHost ?? ''
+  })
+  if (autoLearned) {
+    return {
+      effectiveExpectedHost,
+      observedHost,
+      alignment: 'aligned',
+      shouldReanchor: true
+    }
+  }
+
+  // Multi-hop login: before a runtime anchor exists, a non-local, non-localhost
+  // prompt is the legitimate login destination (e.g. web1.zhangke after
+  // `ssh web1.zhangke`). After anchoring, a different host still drifts.
+  if (
+    !state.runtimeExpectedHost &&
+    observedHost !== 'local-shell' &&
+    !isPromptHostAligned(observedHost, options.localHost ?? '')
+  ) {
+    return {
+      effectiveExpectedHost,
+      observedHost,
+      alignment: 'aligned',
+      shouldReanchor: true
+    }
+  }
+
+  return {
+    effectiveExpectedHost,
+    observedHost,
+    alignment: 'drifted',
+    shouldReanchor: false
+  }
 }
 
 /** Learn an observed prompt host as an alias (idempotent). */
@@ -205,7 +294,13 @@ export function confirmLoginState(
     // A visible local prompt after login means the remote shell never took over
     // (or exited); confirmation fails and nothing is learned.
     return {
-      state: { ...state, promptHost: 'local-shell', alignment: 'drifted', ready: false },
+      state: {
+        ...state,
+        promptHost: 'local-shell',
+        runtimeExpectedHost: undefined,
+        alignment: 'drifted',
+        ready: false
+      },
       ok: false,
       learned: false
     }
@@ -216,6 +311,7 @@ export function confirmLoginState(
     return {
       state: {
         ...state,
+        runtimeExpectedHost: undefined,
         alignment: state.expectedHost ? 'unknown' : state.alignment,
         ready: state.expectedHost ? false : true
       },
@@ -230,6 +326,7 @@ export function confirmLoginState(
       state: {
         ...state,
         promptHost: observed,
+        runtimeExpectedHost: undefined,
         alignment: 'drifted',
         ready: false,
         lastError: `SSH did not reach the target (observed local host ${observed}).`
@@ -244,6 +341,7 @@ export function confirmLoginState(
     state: {
       ...learnedState,
       promptHost: observed,
+      runtimeExpectedHost: observed,
       alignment: 'aligned',
       ready: true,
       lastError: undefined
@@ -273,6 +371,7 @@ export function autoLearnUnverifiedLogin(
   return {
     ...learned,
     promptHost: observed,
+    runtimeExpectedHost: observed,
     alignment: 'aligned',
     ready: true,
     lastError: undefined
@@ -291,6 +390,8 @@ export function promoteSubterminalLogin(
     ...parent,
     aliases: [...new Set([...parent.aliases, ...source.aliases])],
     promptHost: source.promptHost ?? parent.promptHost,
+    runtimeExpectedHost:
+      source.runtimeExpectedHost ?? source.promptHost ?? parent.runtimeExpectedHost,
     alignment: 'aligned',
     ready: true,
     lastError: undefined

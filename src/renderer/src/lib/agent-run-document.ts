@@ -7,7 +7,12 @@ import {
 } from './agent-text-limits'
 import { parseAgentRunMarkdown } from './agent-run-markdown'
 import { legacyActionsMarkdownToSteps } from './legacy-actions-to-steps'
-import type { AgentRunAction, AgentRunStep, AgentRunViewState } from './terminal-tabs'
+import type {
+  AgentLoginRunMeta,
+  AgentRunAction,
+  AgentRunStep,
+  AgentRunViewState
+} from './terminal-tabs'
 
 export const AGENT_RUN_DOCUMENT_MARKER = 'CRESCENT_RUN_V2'
 
@@ -24,6 +29,8 @@ export interface ParsedAgentRunDocument {
   errorProvider?: string
   errorResetHint?: string
   elapsedMs?: number
+  /** Structured connection-login run metadata (pure login runs only). */
+  loginMeta?: AgentLoginRunMeta
   /** Legacy markdown actions block (v1 only). */
   actionsMarkdown?: string
   elapsedMarkdown?: string
@@ -39,6 +46,7 @@ interface SerializedAgentRunDocument {
   errorProvider?: string
   errorResetHint?: string
   elapsedMs?: number
+  loginMeta?: AgentLoginRunMeta
 }
 
 export function formatAgentRunDocument(run: AgentRunViewState, t: Dictionary): string {
@@ -133,7 +141,8 @@ export function clampAgentRunEnvelopeText(
       result: view.result?.trim() ? clampAgentText(view.result, 512) : undefined,
       error: view.error?.trim() ? clampAgentText(view.error, 512) : undefined,
       errorKind: view.errorKind,
-      elapsedMs: view.elapsedMs
+      elapsedMs: view.elapsedMs,
+      loginMeta: view.loginMeta
     })
     if (minimal.length <= maxChars) return minimal
     return formatAgentRunDocumentParseStub()
@@ -149,14 +158,13 @@ function buildSerializedAgentRunDocument(run: AgentRunViewState): SerializedAgen
       ? clampAgentText(run.thinkingText, AGENT_RUN_STREAM_MAX_CHARS)
       : undefined,
     steps: (run.steps ?? []).map((step) => clampRunStepText(step)),
-    result: run.result?.trim()
-      ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS)
-      : undefined,
+    result: run.result?.trim() ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
     error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
     errorResetHint: run.errorResetHint,
-    elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
+    elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined,
+    loginMeta: run.loginMeta
   }
 }
 
@@ -184,13 +192,12 @@ export function toLiveRunView(
       : undefined,
     steps: slimSteps,
     actions: [],
-    result: run.result?.trim()
-      ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS)
-      : undefined,
+    result: run.result?.trim() ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
     error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
-    errorResetHint: run.errorResetHint
+    errorResetHint: run.errorResetHint,
+    loginMeta: run.loginMeta
   }
 }
 
@@ -278,7 +285,8 @@ function parseAgentRunDocumentInner(value: string, t: Dictionary): ParsedAgentRu
               typeof parsed.errorProvider === 'string' ? parsed.errorProvider : undefined,
             errorResetHint:
               typeof parsed.errorResetHint === 'string' ? parsed.errorResetHint : undefined,
-            elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined
+            elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+            loginMeta: parseLoginMeta(parsed.loginMeta)
           }
         }
       } catch {
@@ -328,7 +336,10 @@ export function sanitizeAgentLogTextForContext(value: string, t: Dictionary): st
   if (!looksLikeAgentRunDocument(trimmed)) return trimmed
   const parsed = parseAgentRunDocument(trimmed, t)
   if (!parsed) return null
-  const extracted = [parsed.resultMarkdown, parsed.errorMarkdown].filter(Boolean).join('\n\n').trim()
+  const extracted = [parsed.resultMarkdown, parsed.errorMarkdown]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
   if (extracted) return extracted
   const stepHints = parsed.steps
     .map((step) => {
@@ -618,18 +629,16 @@ function tryExtractSerializedDocument(value: string): SerializedAgentRunDocument
       error: typeof parsed.error === 'string' ? parsed.error : undefined,
       errorKind: parseErrorKind(parsed.errorKind),
       errorProvider: typeof parsed.errorProvider === 'string' ? parsed.errorProvider : undefined,
-      errorResetHint:
-        typeof parsed.errorResetHint === 'string' ? parsed.errorResetHint : undefined,
-      elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined
+      errorResetHint: typeof parsed.errorResetHint === 'string' ? parsed.errorResetHint : undefined,
+      elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+      loginMeta: parseLoginMeta(parsed.loginMeta)
     }
   } catch {
     return null
   }
 }
 
-function serializedDocumentToViewState(
-  document: SerializedAgentRunDocument
-): AgentRunViewState {
+function serializedDocumentToViewState(document: SerializedAgentRunDocument): AgentRunViewState {
   return {
     logId: 0,
     actions: [],
@@ -640,7 +649,21 @@ function serializedDocumentToViewState(
     errorKind: document.errorKind,
     errorProvider: document.errorProvider,
     errorResetHint: document.errorResetHint,
-    elapsedMs: document.elapsedMs
+    elapsedMs: document.elapsedMs,
+    loginMeta: document.loginMeta
+  }
+}
+
+function parseLoginMeta(value: unknown): AgentLoginRunMeta | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const meta = value as Partial<AgentLoginRunMeta>
+  if (typeof meta.connectionName !== 'string' || typeof meta.host !== 'string') return undefined
+  return {
+    connectionName: meta.connectionName,
+    host: meta.host,
+    port: typeof meta.port === 'number' ? meta.port : undefined,
+    user: typeof meta.user === 'string' ? meta.user : undefined,
+    actionCount: Number.isFinite(meta.actionCount) ? Number(meta.actionCount) : 0
   }
 }
 
@@ -683,7 +706,8 @@ export function agentRunViewToDocument(run: AgentRunViewState): ParsedAgentRunDo
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
     errorResetHint: run.errorResetHint,
-    elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
+    elapsedMs: typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined,
+    loginMeta: run.loginMeta
   }
 }
 

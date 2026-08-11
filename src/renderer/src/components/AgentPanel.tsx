@@ -89,6 +89,7 @@ export function AgentPanel({
   onOpsFeedback,
   feedbackByLogId,
   feedbackBusyLogId,
+  savingSopLogId,
   liveRunByLogId,
   onResolveApproval,
   onAddCommandToWhitelist,
@@ -172,6 +173,7 @@ export function AgentPanel({
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
+  savingSopLogId?: number | null
   liveRunByLogId?: Record<number, AgentRunViewState>
   onResolveApproval?: (requestId: string, approved: boolean, note?: string) => void
   onAddCommandToWhitelist?: (command: string) => void
@@ -253,6 +255,7 @@ export function AgentPanel({
         onInjectSuggestions={onInjectSuggestions}
         feedbackByLogId={feedbackByLogId}
         feedbackBusyLogId={feedbackBusyLogId}
+        savingSopLogId={savingSopLogId}
         onRetryConnection={onRetryConnection}
         onReinitTerminal={onReinitTerminal}
         onOpenConnections={onOpenConnections}

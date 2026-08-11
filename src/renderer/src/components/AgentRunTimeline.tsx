@@ -9,7 +9,7 @@ import {
   FileJsonIcon,
   FileTextIcon,
   Loader2Icon,
-  Maximize2Icon,
+  ServerIcon,
   ShieldPlusIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
@@ -33,7 +33,7 @@ import {
   omitDuplicateTrailingMessage
 } from '@renderer/lib/agent-run-document'
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
-import { formatLogTime } from '@renderer/lib/agent-log'
+import { formatLogTime, isConnectionStatusText } from '@renderer/lib/agent-log'
 import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
@@ -57,6 +57,7 @@ export function AgentRunTimeline({
   copied,
   feedbackRating,
   feedbackBusy,
+  savingSop,
   storageRef,
   onCopyResult,
   onExportResult,
@@ -74,6 +75,7 @@ export function AgentRunTimeline({
   copied: boolean
   feedbackRating?: OpsHistoryRating | null
   feedbackBusy?: boolean
+  savingSop?: boolean
   /** When set, finished runs can open the on-demand full process/result overlay. */
   storageRef?: { tabId: string; logId: number; runId?: string }
   onCopyResult?: () => void
@@ -89,9 +91,6 @@ export function AgentRunTimeline({
 }): React.JSX.Element {
   const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
   const runFinished = typeof document.elapsedMs === 'number'
-  const canOpenFullRun = Boolean(
-    storageRef?.tabId && typeof storageRef.logId === 'number' && runFinished
-  )
   const hasApprovalStep = document.steps.some((step) => step.kind === 'approval')
   const visibleSteps = omitDuplicateTrailingMessage(
     sortTimelineBySeq(
@@ -101,17 +100,19 @@ export function AgentRunTimeline({
     ),
     document.resultMarkdown
   )
-  const timelineItems = groupLowRiskAutoPassSteps(visibleSteps)
+  const timelineItems = groupTimelineSteps(visibleSteps, t)
   const hasResultContent = Boolean(
     document.resultMarkdown?.trim() || document.errorMarkdown?.trim()
   )
+  const loginMeta = document.loginMeta
+  const loginFinished = Boolean(loginMeta && typeof document.elapsedMs === 'number')
   // Formal Result chrome only after the run finishes — mid-run prose lives in message steps.
   const showResult = shouldShowAgentRunResult({
     hasResultContent,
     elapsedMs: document.elapsedMs
   })
   const activity = resolveActivity(document, visibleSteps, t)
-  const showActivity = Boolean(activity) && !runFinished
+  const showActivity = Boolean(activity) && !runFinished && !loginMeta
   return (
     <div className="min-w-0 space-y-2.5">
       {timelineItems.length > 0 ? (
@@ -119,6 +120,18 @@ export function AgentRunTimeline({
           {timelineItems.map((item) => {
             if (item.kind === 'low-risk-group') {
               return <CollapsedLowRiskGroup key={item.id} steps={item.steps} t={t} />
+            }
+            if (item.kind === 'connection-flow') {
+              return (
+                <ConnectionFlowGroup
+                  key={item.id}
+                  steps={item.steps}
+                  t={t}
+                  connectionName={document.loginMeta?.connectionName || item.connectionName}
+                  finished={loginFinished || hasConnectionFlowFinished(item.steps, t)}
+                  failed={Boolean(document.errorMarkdown)}
+                />
+              )
             }
             const step = item.step
             const index = item.index
@@ -163,31 +176,6 @@ export function AgentRunTimeline({
             }
             return null
           })}
-          {canOpenFullRun ? (
-            <div className="pt-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground"
-                onClick={() => setFullOverlayTab('steps')}
-              >
-                {t.input.fullRunViewSteps}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      ) : canOpenFullRun ? (
-        <div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground"
-            onClick={() => setFullOverlayTab('steps')}
-          >
-            {t.input.fullRunViewSteps}
-          </Button>
         </div>
       ) : null}
 
@@ -198,14 +186,56 @@ export function AgentRunTimeline({
         </div>
       ) : null}
 
-      {showResult ? (
-        <div className="min-w-0 space-y-2 border-t border-amber-500/20 pt-3">
+      {loginFinished ? (
+        <>
+          <LoginResultCard document={document} t={t} />
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-1.5">
+            <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
+              {typeof document.elapsedMs === 'number'
+                ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
+                : document.elapsedMarkdown
+                  ? `${t.input.elapsed}：${document.elapsedMarkdown}`
+                  : null}
+            </span>
+            <ResultActionBar
+              t={t}
+              copied={copied}
+              feedbackRating={feedbackRating}
+              feedbackBusy={feedbackBusy}
+              savingSop={savingSop}
+              onCopyResult={onCopyResult}
+              onOpsFeedback={onOpsFeedback}
+              onSaveAsSop={onSaveAsSop}
+              onExportResult={onExportResult}
+              onExportFull={onExportFull}
+              onExportTrace={onExportTrace}
+            />
+          </div>
+        </>
+      ) : showResult ? (
+        <div className="min-w-0 overflow-hidden rounded-lg border border-amber-500/25 bg-amber-500/[0.04]">
+          {(document.resultMarkdown?.trim() || document.errorMarkdown?.trim()) && (
+            <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-2">
+              {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim() ? (
+                <TriangleAlertIcon
+                  className="size-4 shrink-0 text-destructive"
+                  aria-hidden="true"
+                />
+              ) : (
+                <CheckIcon
+                  className="size-4 shrink-0 text-amber-600 dark:text-amber-400"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="text-xs font-semibold tracking-wide text-amber-900/90 dark:text-amber-100/90">
+                {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim()
+                  ? t.input.error
+                  : t.input.result}
+              </span>
+            </div>
+          )}
           {document.resultMarkdown?.trim() ? (
-            <div className="min-w-0 space-y-1.5">
-              <div className="flex items-center gap-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
-                <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                <span>{t.input.result}</span>
-              </div>
+            <div className="min-w-0 space-y-2 px-3 py-2.5">
               <div className="min-w-0 text-[15px] leading-relaxed text-amber-950/90 dark:text-amber-50/95">
                 <MarkdownContent
                   value={clampAgentText(document.resultMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
@@ -231,7 +261,7 @@ export function AgentRunTimeline({
                 onOpenModelSettings={onOpenModelSettings}
               />
             ) : (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="px-3 py-2.5 text-sm text-destructive">
                 <MarkdownContent
                   value={clampAgentText(document.errorMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
                   t={t}
@@ -240,7 +270,7 @@ export function AgentRunTimeline({
             )
           ) : null}
 
-          <div className="flex items-center justify-between gap-2 pt-0.5">
+          <div className="flex items-center justify-between gap-2 border-t border-amber-500/20 bg-amber-500/[0.05] px-3 py-1.5">
             <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
               {typeof document.elapsedMs === 'number'
                 ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
@@ -264,11 +294,16 @@ export function AgentRunTimeline({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
+                  disabled={savingSop}
                   aria-label={t.common.saveAsSopTooltip}
                   title={t.common.saveAsSopTooltip}
                   onClick={onSaveAsSop}
                 >
-                  <BookMarkedIcon aria-hidden="true" />
+                  {savingSop ? (
+                    <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <BookMarkedIcon aria-hidden="true" />
+                  )}
                 </Button>
               ) : null}
               {onOpsFeedback ? (
@@ -340,18 +375,6 @@ export function AgentRunTimeline({
                     <ThumbsDownIcon aria-hidden="true" />
                   </Button>
                 </>
-              ) : null}
-              {canOpenFullRun ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.input.fullRunViewResult}
-                  title={t.input.fullRunViewResult}
-                  onClick={() => setFullOverlayTab('result')}
-                >
-                  <Maximize2Icon aria-hidden="true" />
-                </Button>
               ) : null}
               <Button
                 type="button"
@@ -728,19 +751,76 @@ function isLowRiskAutoPassStep(
   return step.kind === 'approval' && step.risk === 'low' && step.phase !== 'pending'
 }
 
-type TimelineItem =
+export type TimelineItem =
   | { kind: 'step'; step: AgentRunStep; index: number }
   | {
       kind: 'low-risk-group'
       id: string
       steps: Array<Extract<AgentRunStep, { kind: 'approval' }>>
     }
+  | {
+      kind: 'connection-flow'
+      id: string
+      steps: Array<Extract<AgentRunStep, { kind: 'status' }>>
+      connectionName: string
+    }
 
-function groupLowRiskAutoPassSteps(steps: AgentRunStep[]): TimelineItem[] {
+/** Connection/login bookkeeping steps shown as one compact flow instead of
+ *  fragmented one-liners (e.g. matched → switched → login actions → done). */
+function isConnectionFlowStatusStep(step: AgentRunStep, t: Dictionary): boolean {
+  if (step.kind !== 'status') return false
+  return isConnectionStatusText(step.title ?? '', t)
+}
+
+function isConnectionFlowStatusStepType(
+  step: AgentRunStep
+): step is Extract<AgentRunStep, { kind: 'status' }> {
+  return step.kind === 'status'
+}
+
+/** A flow is finished when its "login completed" step is present (same source
+ *  as the result card finalize event, independent of loginMeta presence). */
+function hasConnectionFlowFinished(
+  steps: Array<Extract<AgentRunStep, { kind: 'status' }>>,
+  t: Dictionary
+): boolean {
+  const done = t.terminal.postLoginTaskStarting.trim()
+  return steps.some((step) => (step.title ?? '').trim() === done)
+}
+
+export function groupTimelineSteps(steps: AgentRunStep[], t: Dictionary): TimelineItem[] {
   const items: TimelineItem[] = []
+  // Collect every connection-flow status step in this run into ONE flow group,
+  // regardless of whether unrelated rows (e.g. user supplements) appear between
+  // them. The connection name is derived from the steps, never from a row title
+  // fallback, so an interrupted login still renders as a single flow.
+  const flowSteps: Array<Extract<AgentRunStep, { kind: 'status' }>> = []
+  const flowStepIds = new Set<string>()
+  for (const step of steps) {
+    if (isConnectionFlowStatusStepType(step) && isConnectionFlowStatusStep(step, t)) {
+      flowSteps.push(step)
+      flowStepIds.add(step.id)
+    }
+  }
+  const connectionName = resolveFlowConnectionName(flowSteps, t)
+
+  let flowEmitted = false
   let index = 0
   while (index < steps.length) {
     const step = steps[index]
+    if (flowStepIds.has(step.id)) {
+      if (!flowEmitted && flowSteps.length > 0) {
+        flowEmitted = true
+        items.push({
+          kind: 'connection-flow',
+          id: 'connection-flow',
+          steps: flowSteps,
+          connectionName
+        })
+      }
+      index += 1
+      continue
+    }
     if (isLowRiskAutoPassStep(step)) {
       let end = index + 1
       while (end < steps.length && isLowRiskAutoPassStep(steps[end])) end += 1
@@ -757,7 +837,37 @@ function groupLowRiskAutoPassSteps(steps: AgentRunStep[]): TimelineItem[] {
     items.push({ kind: 'step', step, index })
     index += 1
   }
+
   return items
+}
+
+/** Extract the connection identity from a flow status step (switched/matched). */
+function resolveConnectionFlowKey(
+  step: Extract<AgentRunStep, { kind: 'status' }>,
+  t: Dictionary
+): string {
+  const title = step.title ?? ''
+  const switched = t.terminal.switchedToConnection.split('{name}')[0]
+  if (switched && title.startsWith(switched)) {
+    return title.slice(switched.length).trim()
+  }
+  const matched = t.terminal.connectionMatched
+  if (matched && title.startsWith(matched)) {
+    const firstLine = step.detail?.split('\n')[0]?.trim()
+    if (firstLine) return firstLine
+  }
+  return ''
+}
+
+function resolveFlowConnectionName(
+  steps: Array<Extract<AgentRunStep, { kind: 'status' }>>,
+  t: Dictionary
+): string {
+  for (const step of steps) {
+    const key = resolveConnectionFlowKey(step, t)
+    if (key) return key
+  }
+  return ''
 }
 
 function CollapsedLowRiskGroup({
@@ -797,6 +907,378 @@ function CollapsedLowRiskGroup({
             <ApprovalStepCard key={step.id} step={step} t={t} />
           ))}
         </div>
+      ) : null}
+    </div>
+  )
+}
+
+function ConnectionFlowGroup({
+  steps,
+  t,
+  connectionName,
+  finished = false,
+  failed = false
+}: {
+  steps: Array<Extract<AgentRunStep, { kind: 'status' }>>
+  t: Dictionary
+  connectionName: string
+  finished?: boolean
+  failed?: boolean
+}): React.JSX.Element {
+  // Expand by default so every login action is visible in the transcript; the
+  // user can collapse/expand at will and their choice is preserved.
+  const [expanded, setExpanded] = useState(true)
+  const label = connectionName
+    ? t.terminal.connectionFlowLabel.replace('{name}', connectionName)
+    : t.terminal.connectionFlowFallback
+  const stepCount = t.terminal.connectionFlowStepCount.replace('{n}', String(steps.length))
+  const statusTone = failed
+    ? 'text-destructive'
+    : finished
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : 'text-sky-600 dark:text-sky-400'
+  const statusLabel = failed
+    ? t.terminal.loginFailed
+    : finished
+      ? t.terminal.loginSuccess
+      : t.terminal.loginInProgress
+
+  return (
+    <div
+      className={`min-w-0 overflow-hidden rounded-md border bg-background/40 ${
+        failed ? 'border-destructive/30' : 'border-border/50'
+      }`}
+    >
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-muted/40"
+        aria-expanded={expanded}
+        title={expanded ? t.terminal.connectionFlowCollapse : t.terminal.connectionFlowExpand}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <ServerIcon className={`size-3.5 shrink-0 ${statusTone}`} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground/85">{label}</span>
+        <span
+          className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${statusTone} border-current/30`}
+        >
+          {!finished && !failed ? (
+            <Loader2Icon className="mr-1 inline size-2.5 animate-spin" aria-hidden="true" />
+          ) : null}
+          {statusLabel}
+        </span>
+        <span className="shrink-0 text-muted-foreground/70">{stepCount}</span>
+        {expanded ? (
+          <ChevronUpIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronDownIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="space-y-1 border-t border-border/40 px-2.5 py-2">
+          {steps.map((step, stepIndex) => {
+            const isLast = step.id === steps[steps.length - 1]?.id
+            const createdAt = (step as { createdAt?: string }).createdAt
+            return (
+              <div key={step.id} className="flex items-start gap-2 text-[11px] leading-relaxed">
+                <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center">
+                  {!finished && isLast ? (
+                    <Loader2Icon className="size-3 animate-spin text-sky-500" aria-hidden="true" />
+                  ) : failed && isLast ? (
+                    <TriangleAlertIcon className="size-3 text-destructive" aria-hidden="true" />
+                  ) : (
+                    <span
+                      className={`size-1 rounded-full ${
+                        finished ? 'bg-emerald-500/80' : 'bg-sky-500/70'
+                      }`}
+                      aria-hidden="true"
+                    />
+                  )}
+                </span>
+                <div className="min-w-0 flex-1 text-muted-foreground">
+                  <div className="flex items-baseline gap-2">
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                      {stepIndex + 1}
+                    </span>
+                    <span className="min-w-0 break-words whitespace-pre-wrap">{step.title}</span>
+                  </div>
+                  {createdAt ? (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground/50">
+                      {formatLogTime(createdAt)}
+                    </div>
+                  ) : null}
+                  {step.detail ? (
+                    <div className="mt-0.5 break-words whitespace-pre-wrap text-muted-foreground/70">
+                      {step.detail}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function LoginResultCard({
+  document,
+  t
+}: {
+  document: ParsedAgentRunDocument
+  t: Dictionary
+}): React.JSX.Element {
+  const meta = document.loginMeta
+  const failed = Boolean(document.errorMarkdown?.trim())
+  const elapsedMs = typeof document.elapsedMs === 'number' ? document.elapsedMs : undefined
+  const address = [meta?.host ?? '', meta?.port ? `:${meta.port}` : ''].join('')
+  // Count the typed login-action steps actually rendered in the flow so the
+  // result card always agrees with the flow (single source: document.steps).
+  const actionPrefix = `${t.terminal.connectionAction} `
+  const actionStepCount = document.steps.filter(
+    (step) =>
+      step.kind === 'status' &&
+      typeof step.title === 'string' &&
+      step.title.trim().startsWith(actionPrefix)
+  ).length
+  const rowEntries: Array<[string, string]> = [
+    [t.terminal.loginConnectionName, meta?.connectionName ?? ''],
+    [t.terminal.loginConnectionAddress, address],
+    [t.terminal.loginUser, meta?.user ?? ''],
+    [
+      t.terminal.loginActions,
+      failed
+        ? t.terminal.loginFailed
+        : t.terminal.loginActionsDone.replace(
+            '{n}',
+            String(actionStepCount || meta?.actionCount || 0)
+          )
+    ]
+  ]
+  const rows: Array<[string, string]> = []
+  for (const [key, value] of rowEntries) {
+    if (value) rows.push([key, value])
+  }
+
+  return (
+    <div
+      className={`min-w-0 overflow-hidden rounded-lg border ${
+        failed
+          ? 'border-destructive/30 bg-destructive/[0.04]'
+          : 'border-emerald-500/25 bg-emerald-500/[0.04]'
+      }`}
+    >
+      <div
+        className={`flex items-center gap-2 border-b px-3 py-2 ${
+          failed
+            ? 'border-destructive/20 bg-destructive/[0.06]'
+            : 'border-emerald-500/20 bg-emerald-500/[0.06]'
+        }`}
+      >
+        {failed ? (
+          <TriangleAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+        ) : (
+          <CheckIcon
+            className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+            aria-hidden="true"
+          />
+        )}
+        <span
+          className={`text-xs font-semibold tracking-wide ${
+            failed ? 'text-destructive' : 'text-emerald-800/90 dark:text-emerald-100/90'
+          }`}
+        >
+          {failed ? t.terminal.loginFailed : t.terminal.loginSuccess}
+        </span>
+        {meta?.connectionName ? (
+          <span className="ml-auto shrink-0 rounded border border-border/60 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {meta.connectionName}
+          </span>
+        ) : null}
+        {typeof elapsedMs === 'number' ? (
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            {t.terminal.loginEndToEndElapsed} {formatDuration(elapsedMs)}
+          </span>
+        ) : null}
+      </div>
+      <div className="px-3 py-2.5">
+        {rows.length > 0 ? (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+            {rows.map(([key, value]) => (
+              <div key={key} className="contents">
+                <dt className="text-muted-foreground/80">{key}</dt>
+                <dd className="break-all text-foreground/90">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+        {failed && document.errorMarkdown?.trim() ? (
+          <div className="mt-2 break-words rounded border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+            {document.errorMarkdown.trim()}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ResultActionBar({
+  t,
+  copied,
+  feedbackRating,
+  feedbackBusy,
+  savingSop,
+  onCopyResult,
+  onOpsFeedback,
+  onSaveAsSop,
+  onExportResult,
+  onExportFull,
+  onExportTrace
+}: {
+  t: Dictionary
+  copied: boolean
+  feedbackRating?: OpsHistoryRating | null
+  feedbackBusy?: boolean
+  savingSop?: boolean
+  onCopyResult?: () => void
+  onOpsFeedback?: (rating: 'like' | 'dislike') => void
+  onSaveAsSop?: () => void
+  onExportResult?: () => void
+  onExportFull?: () => void
+  onExportTrace?: () => void
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      {onCopyResult ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
+          title={copied ? t.common.copied : t.common.copyResultTooltip}
+          onClick={onCopyResult}
+        >
+          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+        </Button>
+      ) : null}
+      {onSaveAsSop ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          disabled={savingSop}
+          aria-label={t.common.saveAsSopTooltip}
+          title={t.common.saveAsSopTooltip}
+          onClick={onSaveAsSop}
+        >
+          {savingSop ? (
+            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <BookMarkedIcon aria-hidden="true" />
+          )}
+        </Button>
+      ) : null}
+      {onOpsFeedback ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+            aria-label={
+              feedbackRating === 'dislike'
+                ? t.common.likeResultLockedTooltip
+                : t.common.likeResultTooltip
+            }
+            title={
+              feedbackRating === 'dislike'
+                ? t.common.likeResultLockedTooltip
+                : feedbackRating === 'like'
+                  ? t.common.opsFeedbackAlreadyRated
+                  : t.common.likeResultTooltip
+            }
+            className={
+              feedbackRating === 'like'
+                ? 'text-emerald-400 hover:text-emerald-300'
+                : feedbackRating === 'dislike'
+                  ? 'opacity-40'
+                  : undefined
+            }
+            onClick={() => {
+              if (feedbackBusy || feedbackRating) return
+              onOpsFeedback('like')
+            }}
+          >
+            <ThumbsUpIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            disabled={feedbackBusy || feedbackRating === 'like' || feedbackRating === 'dislike'}
+            aria-label={
+              feedbackRating === 'like'
+                ? t.common.dislikeResultLockedTooltip
+                : t.common.dislikeResultTooltip
+            }
+            title={
+              feedbackRating === 'like'
+                ? t.common.dislikeResultLockedTooltip
+                : feedbackRating === 'dislike'
+                  ? t.common.opsFeedbackAlreadyRated
+                  : t.common.dislikeResultTooltip
+            }
+            className={
+              feedbackRating === 'dislike'
+                ? 'text-destructive hover:text-destructive'
+                : feedbackRating === 'like'
+                  ? 'opacity-40'
+                  : undefined
+            }
+            onClick={() => {
+              if (feedbackBusy || feedbackRating) return
+              onOpsFeedback('dislike')
+            }}
+          >
+            <ThumbsDownIcon aria-hidden="true" />
+          </Button>
+        </>
+      ) : null}
+      {onExportResult ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t.common.exportResultMarkdownTooltip}
+          title={t.common.exportResultMarkdownTooltip}
+          onClick={onExportResult}
+        >
+          <FileTextIcon aria-hidden="true" />
+        </Button>
+      ) : null}
+      {onExportFull ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t.common.exportFullMarkdownTooltip}
+          title={t.common.exportFullMarkdownTooltip}
+          onClick={onExportFull}
+        >
+          <DownloadIcon aria-hidden="true" />
+        </Button>
+      ) : null}
+      {onExportTrace ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t.common.exportTraceJsonTooltip}
+          title={t.common.exportTraceJsonTooltip}
+          onClick={onExportTrace}
+        >
+          <FileJsonIcon aria-hidden="true" />
+        </Button>
       ) : null}
     </div>
   )
