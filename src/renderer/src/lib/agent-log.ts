@@ -177,6 +177,26 @@ export function isConnectionFailureLog(text: string, markers: string[]): boolean
   })
 }
 
+/**
+ * Connection/login bookkeeping status text (matched → switched → starting →
+ * typed actions → completed). Used to group these into the assistant card and
+ * to absorb legacy standalone system rows during rendering.
+ */
+export function isConnectionStatusText(text: string, t: Dictionary): boolean {
+  const normalized = text.trim()
+  if (!normalized) return false
+  const prefixes = [
+    t.terminal.connectionMatched,
+    t.terminal.switchedToConnection.split('{name}')[0],
+    t.terminal.connectionStarting,
+    t.terminal.connectionAction,
+    t.terminal.postLoginTaskStarting,
+    t.terminal.connectionNoActions,
+    t.terminal.usingCurrentConnection.split('{name}')[0]
+  ].filter((prefix) => prefix && prefix.trim())
+  return prefixes.some((prefix) => normalized.startsWith(prefix))
+}
+
 export function connectionFailureMarkers(t: Dictionary): string[] {
   return [
     t.terminal.postLoginTaskAborted,

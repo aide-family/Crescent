@@ -127,6 +127,7 @@ export function useTerminalTabs({
     (activeTabIdRef.current === activeTabId
       ? tabsRef.current.find((tab) => tab.id === activeTabId)
       : undefined) ??
+    tabs[0] ??
     emptyLocalTab
   /* eslint-enable react-hooks/refs */
   const sessionChatTab = getSessionChatTab(tabs, activeTab.id) ?? activeTab

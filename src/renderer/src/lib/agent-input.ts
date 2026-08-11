@@ -125,13 +125,42 @@ function buildConnectionMentionTokens(values: Array<string | undefined>): string
     const normalizedValue = normalizeConnectionMentionText(value)
     if (normalizedValue.length >= 3) tokens.add(normalizedValue)
 
-    for (const token of value.split(/[^\p{L}\p{N}]+/u)) {
+    for (const token of splitMixedScriptSegments(value)) {
       const normalizedToken = normalizeConnectionMentionText(token)
       if (normalizedToken.length >= 3) tokens.add(normalizedToken)
     }
   }
 
   return [...tokens]
+}
+
+/**
+ * Split a value into CJK / non-CJK runs so mixed-script names like
+ * "demo测试集群" also yield shorthand tokens ("zhangke", "测试集群").
+ * This lets requests such as "登录demo集群" match the configured name.
+ */
+function splitMixedScriptSegments(value: string): string[] {
+  const segments: string[] = []
+  let buffer = ''
+  let bufferIsCjk: boolean | undefined
+
+  const flush = (): void => {
+    if (!buffer) return
+    for (const token of buffer.split(/[^\p{L}\p{N}]+/u)) {
+      if (token) segments.push(token)
+    }
+    buffer = ''
+  }
+
+  for (const char of value) {
+    const isCjk = /\p{Script=Han}/u.test(char)
+    if (bufferIsCjk !== undefined && isCjk !== bufferIsCjk) flush()
+    buffer += char
+    bufferIsCjk = isCjk
+  }
+  flush()
+
+  return segments
 }
 
 export function normalizeConnectionMentionText(value: string): string {

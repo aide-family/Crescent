@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import { useMemo, type RefObject } from 'react'
 import {
   CheckIcon,
   CopyIcon,
@@ -15,6 +15,7 @@ import {
   connectionFailureMarkers,
   formatLogTime,
   isConnectionFailureLog,
+  isConnectionStatusText,
   isConversationLog,
   logClassName,
   logListItemSpacingClass,
@@ -41,6 +42,7 @@ export function AgentLogList({
   onResolveApproval,
   feedbackByLogId,
   feedbackBusyLogId,
+  savingSopLogId,
   onRetryConnection,
   onReinitTerminal,
   onOpenConnections,
@@ -80,6 +82,7 @@ export function AgentLogList({
   onSaveAsSop?: (entry: AgentLogEntry) => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
+  savingSopLogId?: number | null
   onRetryConnection?: () => void
   onReinitTerminal?: () => void
   onOpenConnections?: () => void
@@ -92,6 +95,33 @@ export function AgentLogList({
     .reverse()
     .find((entry) => entry.kind === 'error' && isConnectionFailureLog(entry.text, markers))
   const showRecovery = Boolean(connectionRecovery?.visible && latestFailure)
+  // Absorb legacy/edge standalone connection status rows into the nearest
+  // assistant card so the timeline never renders fragmented system lines.
+  const absorbedByAssistantId = useMemo(() => {
+    const map = new Map<number, Array<{ id: number; text: string; createdAt: string }>>()
+    let currentAssistantId: number | undefined
+    for (const entry of entries) {
+      if (entry.kind === 'assistant') {
+        currentAssistantId = entry.id
+        continue
+      }
+      if (entry.kind === 'status' && isConnectionStatusText(entry.text, t)) {
+        if (currentAssistantId !== undefined) {
+          const bucket = map.get(currentAssistantId) ?? []
+          bucket.push({ id: entry.id, text: entry.text, createdAt: entry.createdAt })
+          map.set(currentAssistantId, bucket)
+        }
+      }
+    }
+    return map
+  }, [entries, t])
+  const absorbedIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const bucket of absorbedByAssistantId.values()) {
+      for (const entry of bucket) ids.add(entry.id)
+    }
+    return ids
+  }, [absorbedByAssistantId])
 
   return (
     <div
@@ -125,72 +155,79 @@ export function AgentLogList({
 
       {entries
         .filter((entry) => entry.kind !== 'user-supplement')
+        .filter((entry) => !(entry.kind === 'status' && absorbedIds.has(entry.id)))
         .map((entry, entryIndex, visibleEntries) => {
-        const previousKind = entryIndex > 0 ? visibleEntries[entryIndex - 1]?.kind : undefined
-        const conversation = isConversationLog(entry.kind)
-        const spacing = logListItemSpacingClass(entry.kind, previousKind, entryIndex === 0)
+          const previousKind = entryIndex > 0 ? visibleEntries[entryIndex - 1]?.kind : undefined
+          const conversation = isConversationLog(entry.kind)
+          const spacing = logListItemSpacingClass(entry.kind, previousKind, entryIndex === 0)
 
-        return (
-          <div
-            key={entry.id}
-            data-agent-log-entry={entry.id}
-            data-log-kind={entry.kind}
-            className={
-              conversation ? `${logClassName(entry.kind)} min-w-0 ${spacing}` : `min-w-0 ${spacing}`
-            }
-          >
-            {conversation ? (
-              <>
-                <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="font-semibold tracking-wide text-foreground/80">
-                      {logRoleLabel(entry.kind, t)}
-                    </span>
-                    <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
+          return (
+            <div
+              key={entry.id}
+              data-agent-log-entry={entry.id}
+              data-log-kind={entry.kind}
+              className={
+                conversation
+                  ? `${logClassName(entry.kind)} min-w-0 ${spacing}`
+                  : `min-w-0 ${spacing}`
+              }
+            >
+              {conversation ? (
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="font-semibold tracking-wide text-foreground/80">
+                        {logRoleLabel(entry.kind, t)}
+                      </span>
+                      <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t.common.copySelectionOrMessage}
+                        title={t.common.copySelectionOrMessage}
+                        onClick={() => onCopyEntry(entry)}
+                      >
+                        {copiedLogId === entry.id ? (
+                          <CheckIcon aria-hidden="true" />
+                        ) : (
+                          <CopyIcon aria-hidden="true" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={t.common.copySelectionOrMessage}
-                      title={t.common.copySelectionOrMessage}
-                      onClick={() => onCopyEntry(entry)}
-                    >
-                      {copiedLogId === entry.id ? (
-                        <CheckIcon aria-hidden="true" />
-                      ) : (
-                        <CopyIcon aria-hidden="true" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-                <AgentLogContent
-                  entry={entry}
-                  liveRun={liveRunByLogId?.[entry.id]}
-                  tabId={tabId}
-                  t={t}
-                  copied={copiedLogId === entry.id}
-                  feedbackRating={feedbackByLogId?.[entry.id] ?? null}
-                  feedbackBusy={feedbackBusyLogId === entry.id}
-                  onCopyResult={() => onCopyResult(entry)}
-                  onExportResult={() => onExportResult(entry)}
-                  onExportFull={() => onExportFull(entry)}
-                  onExportTrace={() => onExportTrace(entry)}
-                  onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
-                  onResolveApproval={onResolveApproval}
-                  onAddCommandToWhitelist={onAddCommandToWhitelist}
-                  onInjectSuggestions={onInjectSuggestions}
-                  onOpenModelSettings={onOpenModelSettings}
-                  onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
-                />
-              </>
-            ) : (
-              <ActionLogRow entry={entry} t={t} />
-            )}
-          </div>
-        )
-      })}
+                  <AgentLogContent
+                    entry={entry}
+                    liveRun={liveRunByLogId?.[entry.id]}
+                    tabId={tabId}
+                    t={t}
+                    copied={copiedLogId === entry.id}
+                    feedbackRating={feedbackByLogId?.[entry.id] ?? null}
+                    feedbackBusy={feedbackBusyLogId === entry.id}
+                    savingSop={savingSopLogId === entry.id}
+                    absorbedStatusEntries={
+                      entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined
+                    }
+                    onCopyResult={() => onCopyResult(entry)}
+                    onExportResult={() => onExportResult(entry)}
+                    onExportFull={() => onExportFull(entry)}
+                    onExportTrace={() => onExportTrace(entry)}
+                    onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
+                    onResolveApproval={onResolveApproval}
+                    onAddCommandToWhitelist={onAddCommandToWhitelist}
+                    onInjectSuggestions={onInjectSuggestions}
+                    onOpenModelSettings={onOpenModelSettings}
+                    onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
+                  />
+                </>
+              ) : (
+                <ActionLogRow entry={entry} t={t} />
+              )}
+            </div>
+          )
+        })}
 
       {showRecovery ? (
         <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-3">

@@ -211,8 +211,13 @@ import {
   type ConnectionAttemptState
 } from '@renderer/lib/connection-attempt'
 import { runWithTimeout } from '@renderer/lib/with-timeout'
+import { waitForRemotePrompt } from '@renderer/lib/prompt-host-wait'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
-import { buildBusySupplementArtifacts } from '@renderer/lib/busy-supplement'
+import {
+  buildBusySupplementArtifacts,
+  mergePostLoginSupplements,
+  resolveLoginContinuation
+} from '@renderer/lib/busy-supplement'
 import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
 import {
   buildTerminalNotReadyClarifyOptions,
@@ -483,6 +488,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   } | null>(null)
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
+  const pendingPostLoginSupplementsRef = useRef(new Map<string, string[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
   const recoveryBudgetByTabRef = useRef(
     new Map<
@@ -523,6 +529,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     | null
   >(null)
   const activeAgentRunRef = useRef(new Map<string, AgentRunViewState>())
+  /** Last pure-login run logId per chat tab, so a subterminal fallback success
+   *  can rewrite an already-finalized (failed) login card to success. */
+  const lastLoginRunLogIdRef = useRef(new Map<string, number>())
   const skillInstallResultIdsRef = useRef(new Map<string, string>())
   const skillInstallNamesRef = useRef(new Map<string, string>())
   const splitDragRef = useRef(false)
@@ -587,6 +596,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     {}
   )
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
+  const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
   const [voiceInputState, setVoiceInputState] = useState<'idle' | 'recording' | 'transcribing'>(
     'idle'
   )
@@ -1082,9 +1092,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     (targetTabId: string, reason: string): void => {
       const tasks = postConnectionTasksRef.current.get(targetTabId) ?? []
       postConnectionTasksRef.current.delete(targetTabId)
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      // Login failed; drop supplements that were queued for a post-login task
+      // that will never start.
+      pendingPostLoginSupplementsRef.current.delete(chatTabId)
       if (tasks.length === 0) return
 
-      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
       for (const task of tasks) {
         const message = formatConnectionAutomationFailure({
           abortLabel: reason,
@@ -1180,6 +1193,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
       void Promise.all(
         tasks.map(async (task) => {
+          // Supplements queued while the agent session was not active yet (e.g.
+          // typed during login automation) must reach the follow-up task.
+          const pendingSupplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
+          if (pendingSupplements.length > 0) {
+            pendingPostLoginSupplementsRef.current.delete(chatTabId)
+          }
+          const taskInput = mergePostLoginSupplements(task.input, pendingSupplements)
           const ready = await waitForTerminalReadyForAgent(targetTabId)
           if (!ready) {
             const message = t.terminal.postLoginNotReady
@@ -1220,7 +1240,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             appendSystemToRunOrLog(chatTabId, t.terminal.postLoginTaskStarting)
           }
           await runAgentConversationRef.current?.(
-            task.input,
+            taskInput,
             targetTabId,
             task.connection.id,
             task.displayInput,
@@ -1236,6 +1256,227 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       )
     },
     [appendLog, appendStatusToActiveRunOrLog, appendSystemToRunOrLog, t, updateAgentRun, updateTab]
+  )
+
+  /**
+   * Settle a pure-login assistant run after connection automation finishes:
+   * appends the login-completed step, sets the end-to-end elapsed time and the
+   * structured login result/error, then tears the run down so the card stops
+   * showing the busy state. No-op for normal agent runs (no loginMeta).
+   */
+  const finalizeLoginRun = useCallback(
+    (
+      chatTabId: string,
+      ok: boolean,
+      errorText?: string,
+      options?: { targetTabId?: string; connection?: ConnectionConfig }
+    ): void => {
+      const active = activeAgentRunRef.current.get(chatTabId)
+      if (!active?.loginMeta || !active.runId) return
+
+      const runId = active.runId
+      const startedAt = active.startedAt ?? Date.now()
+      const elapsedMs = Date.now() - startedAt
+      let finishedRun: AgentRunViewState = active
+      connTrace('login-stage', `tab=${chatTabId}`, 'finalize-start')
+
+      if (ok) {
+        const connectionTarget = formatConnectionTarget({
+          host: active.loginMeta.host,
+          port: active.loginMeta.port,
+          user: active.loginMeta.user,
+          name: active.loginMeta.connectionName,
+          source: 'custom'
+        } as ConnectionConfig)
+        finishedRun = {
+          ...active,
+          steps: appendRunStatusStep(active.steps ?? [], {
+            id: `status-${crypto.randomUUID()}`,
+            title: t.terminal.postLoginTaskStarting
+          }) as unknown as AgentRunStep[],
+          result: `${t.terminal.loginSuccess} ${active.loginMeta.connectionName} (${connectionTarget})`,
+          elapsedMs
+        }
+        updateAgentRun(chatTabId, () => finishedRun)
+        void window.api.storage.saveAgentRun({
+          runId,
+          tabId: chatTabId,
+          input: activeRunInputRef.current.get(chatTabId) ?? '',
+          status: 'success',
+          connectionId: tabsRef.current.find((tab) => tab.id === chatTabId)?.connectionId,
+          startedAt: new Date(startedAt).toISOString(),
+          elapsedMs,
+          trace: buildTraceFromAgentRunView({
+            runId,
+            tabId: chatTabId,
+            displayInput: activeRunInputRef.current.get(chatTabId) ?? '',
+            status: 'success',
+            run: finishedRun,
+            startedAt
+          })
+        })
+      } else {
+        const message = errorText?.trim() || t.terminal.postLoginTaskAborted
+        finishedRun = {
+          ...active,
+          steps: closeStreamingOpenSteps(active.steps ?? []),
+          error: message,
+          elapsedMs
+        }
+        updateAgentRun(chatTabId, () => finishedRun)
+        void window.api.storage.saveAgentRun({
+          runId,
+          tabId: chatTabId,
+          input: activeRunInputRef.current.get(chatTabId) ?? '',
+          status: 'error',
+          connectionId: tabsRef.current.find((tab) => tab.id === chatTabId)?.connectionId,
+          error: message,
+          startedAt: new Date(startedAt).toISOString(),
+          elapsedMs,
+          trace: buildTraceFromAgentRunView({
+            runId,
+            tabId: chatTabId,
+            displayInput: activeRunInputRef.current.get(chatTabId) ?? '',
+            status: 'error',
+            connectionId: tabsRef.current.find((tab) => tab.id === chatTabId)?.connectionId,
+            run: finishedRun,
+            startedAt,
+            error: message
+          })
+        })
+      }
+
+      const finishedLogId = active.logId
+      updateLogEntryText(chatTabId, finishedLogId, buildFinishPersistText(finishedRun))
+      activeAgentRunRef.current.delete(chatTabId)
+      activeRunCanceledRef.current.delete(chatTabId)
+      activeRunIdRef.current.delete(chatTabId)
+      activeRunInputRef.current.delete(chatTabId)
+      if (typeof finishedLogId === 'number') pruneLiveRuns([finishedLogId])
+      lastLoginRunLogIdRef.current.delete(chatTabId)
+      updateTab(chatTabId, (current) => ({
+        ...current,
+        agentInput: '',
+        agentBusy: false,
+        agentThinking: false,
+        thinkingMessage: undefined
+      }))
+
+      // Consume supplements that arrived during login. A pure-login run has no
+      // post-connection task, so the queue would otherwise sit unread: continue
+      // with the supplements as a new agent task in the logged-in terminal.
+      if (ok && options?.targetTabId && options.connection) {
+        const supplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
+        const continuationDecision = resolveLoginContinuation({ ok, supplements })
+        if (continuationDecision.shouldContinue) {
+          pendingPostLoginSupplementsRef.current.delete(chatTabId)
+          const supplementText = supplements.join('\n')
+          const continuationInput = buildPostLoginAgentInput(supplementText, options.connection, t)
+          const dispatchStart = Date.now()
+          connTrace(
+            'login-stage',
+            `tab=${chatTabId}`,
+            `continuationDispatch=now`,
+            `supplements=${supplements.length}`
+          )
+          // The supplements are already visible as user-supplement rows; do not
+          // append a duplicate user bubble for the continuation.
+          void runAgentConversationRef
+            .current?.(
+              continuationInput,
+              options.targetTabId,
+              options.connection.id,
+              supplementText,
+              false,
+              Date.now(),
+              { chatTabId }
+            )
+            ?.finally(() => {
+              connTrace(
+                'login-stage',
+                `tab=${chatTabId}`,
+                `continuationRunSettled`,
+                `dispatchToSettledMs=${Date.now() - dispatchStart}`
+              )
+            })
+        }
+      }
+    },
+    [
+      appendRunStatusStep,
+      closeStreamingOpenSteps,
+      pendingPostLoginSupplementsRef,
+      pruneLiveRuns,
+      t,
+      updateAgentRun,
+      updateLogEntryText,
+      updateTab
+    ]
+  )
+
+  /**
+   * Subterminal fallback success ≡ overall login success. When the main login
+   * run was already finalized (typically as a failure/timeout), rewrite that
+   * card to the success state so the badge, steps and title agree with the
+   * terminal reality instead of showing a contradictory "登录失败".
+   */
+  const correctLoginCardToSuccess = useCallback(
+    (chatTabId: string, connection: ConnectionConfig, targetTabId: string): void => {
+      const logId = lastLoginRunLogIdRef.current.get(chatTabId)
+      if (logId === undefined) return
+
+      const connectionTarget = formatConnectionTarget(connection)
+      const finishedSteps: AgentRunStep[] = [
+        {
+          id: `status-${crypto.randomUUID()}`,
+          kind: 'status',
+          title: t.terminal.postLoginTaskStarting
+        }
+      ]
+      const finishedRun: AgentRunViewState = {
+        logId,
+        runId: `run-${crypto.randomUUID()}`,
+        actions: [],
+        steps: finishedSteps,
+        startedAt: Date.now() - 1,
+        result: `${t.terminal.loginSuccess} ${connection.name} (${connectionTarget})`,
+        elapsedMs: 0,
+        loginMeta: {
+          connectionName: connection.name,
+          host: connection.host,
+          port: connection.port,
+          user: connection.user,
+          actionCount: buildConnectionLoginActions(connection).length
+        }
+      }
+      updateLogEntryText(chatTabId, logId, buildFinishPersistText(finishedRun))
+      lastLoginRunLogIdRef.current.delete(chatTabId)
+
+      // Consume any supplements queued during the login attempt and continue.
+      const supplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
+      const decision = resolveLoginContinuation({ ok: true, supplements })
+      if (decision.shouldContinue) {
+        pendingPostLoginSupplementsRef.current.delete(chatTabId)
+        const supplementText = supplements.join('\n')
+        const continuationInput = buildPostLoginAgentInput(supplementText, connection, t)
+        void runAgentConversationRef.current?.(
+          continuationInput,
+          targetTabId,
+          connection.id,
+          supplementText,
+          false,
+          Date.now(),
+          { chatTabId }
+        )
+      }
+    },
+    [
+      buildPostLoginAgentInput,
+      pendingPostLoginSupplementsRef,
+      resolveLoginContinuation,
+      t,
+      updateLogEntryText
+    ]
   )
 
   const executeConnectionAutomation = useCallback(
@@ -1299,10 +1540,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const pendingReuseRun = (postConnectionTasksRef.current.get(targetTabId) ?? []).find(
         (task) => task.reuseRun
       )?.reuseRun
+      const loginActionCount = buildConnectionLoginActions(resolvedConnection).length
       appendStatusToActiveRunOrLog(
         chatTabId,
-        resolvedConnection.actions?.length
-          ? `${t.terminal.connectionStarting}: ${resolvedConnection.actions.length}`
+        loginActionCount > 0
+          ? `${t.terminal.connectionStarting}: ${loginActionCount}`
           : t.terminal.connectionNoActions,
         pendingReuseRun
       )
@@ -1342,11 +1584,23 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // back to the SSOT (learns the observed prompt host as an alias). The
         // transient local prompt of the fresh PTY is ignored during the window;
         // ending still at the local prompt means the ssh never established.
-        const loginSignal = await waitForPromptHostOrTimeout(targetTabId)
+        const promptStart = Date.now()
+        // Multi-hop login: the final `ssh <host>` action is the true target.
+        // Wait for that host's prompt (not the jump box's) before confirming,
+        // otherwise confirm-login anchors the wrong runtime environment.
+        const finalTargetHost = resolveFinalSshTarget(commands, connection)
+        const loginSignal = await waitForPromptHostOrTimeout(targetTabId, 20_000, finalTargetHost)
+        connTrace(
+          'login-stage',
+          `tab=${targetTabId}`,
+          `promptSignal=${loginSignal}`,
+          `promptAfterMs=${Date.now() - promptStart}`
+        )
         const verified = sshCommand
           ? await window.api.terminal.confirmLogin({
               tabId: subterminal ? subterminal.parentTabId : targetTabId,
-              sourceTabId: subterminal ? targetTabId : undefined
+              sourceTabId: subterminal ? targetTabId : undefined,
+              expectedTargetHost: finalTargetHost
             })
           : undefined
         if (verified && !verified.ok && loginSignal === 'local') {
@@ -1362,6 +1616,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             chatTabId,
             t.terminal.terminalSubterminalLoginDone.replace('{name}', subterminal.name)
           )
+          // Subterminal fallback success === overall login success: settle any
+          // pending login run, or rewrite an already-finalized (failed) login
+          // card so the badge stops spinning / showing "登录失败".
+          finalizeLoginRun(chatTabId, true, undefined, {
+            targetTabId,
+            connection: resolvedConnection
+          })
+          correctLoginCardToSuccess(chatTabId, resolvedConnection, targetTabId)
         } else if ((postConnectionTasksRef.current.get(targetTabId) ?? []).length === 0) {
           appendSystemToRunOrLog(chatTabId, t.terminal.postLoginTaskStarting)
         }
@@ -1383,6 +1645,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       appendLog,
       appendStatusToActiveRunOrLog,
       appendSystemToRunOrLog,
+      correctLoginCardToSuccess,
+      finalizeLoginRun,
       t,
       updateTab
     ]
@@ -1417,6 +1681,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       }
       retryInFlightRef.current.delete(chatTabId)
       if (shouldDrainPostConnectionTasks(ok === true)) drainPostConnectionTasks(targetTabId)
+      finalizeLoginRun(
+        chatTabId,
+        ok === true,
+        ok === false
+          ? t.terminal.connectionLoginTimeout.replace(
+              '{ms}',
+              String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
+            )
+          : undefined,
+        { targetTabId, connection }
+      )
       connTrace('automation-end', `tab=${targetTabId}`, `ok=${ok}`)
     },
     [
@@ -1424,6 +1699,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       appendLog,
       drainPostConnectionTasks,
       executeConnectionAutomation,
+      finalizeLoginRun,
       markChatTabReady,
       t,
       updateConnectionAttempt
@@ -2661,6 +2937,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }, [recoveryMode])
 
   async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
+    if (savingSopLogId === entry.id) return
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
     const entryIndex = log.findIndex((item) => item.id === entry.id)
@@ -2673,9 +2950,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       }
     }
     const seed = userText.trim()
-    if (!seed) return
+    if (!seed) {
+      toast.error(t.wiki.saveFailed, { duration: TOAST_INTERVENTION_DURATION_MS })
+      return
+    }
 
+    setSavingSopLogId(entry.id)
     setWikiMessage(null)
+    const savingToast = toast.loading(t.common.saveAsSopSaving)
     try {
       const summary = buildSopGenerationSummary({
         log,
@@ -2690,6 +2972,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         fallbackTitle: fallback.title,
         fallbackContent: fallback.content
       })
+      toast.dismiss(savingToast)
       if (!generated.ok || !generated.document) {
         throw new Error(generated.error || t.wiki.saveFailed)
       }
@@ -2700,12 +2983,20 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       setWikiEditing(true)
       setWikiPreviewWidth(getDefaultWikiPreviewWidth())
       setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
+      toast.success(`${t.common.saveAsSopSaved}: ${document.title}`)
       setWikiOpen(true)
     } catch (error) {
+      toast.dismiss(savingToast)
       setWikiMessage({
         type: 'error',
         text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
       })
+      toast.error(
+        `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: TOAST_INTERVENTION_DURATION_MS }
+      )
+    } finally {
+      setSavingSopLogId(null)
     }
   }
 
@@ -3568,6 +3859,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       if (context.alignment === 'aligned') {
         connTrace('connect-reuse-aligned', `tab=${targetTabId}`, 'skipping re-login')
         markChatTabReady(chatTabId)
+        finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
         if (postConnectionTasksRef.current.get(targetTabId)?.length) {
           drainPostConnectionTasks(targetTabId)
         }
@@ -4253,7 +4545,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           stepId: `supplement-${Date.now()}`
         })
         appendLog(artifacts.logEntry, chatTabId)
-        void window.api.agent.supplement({ runId, input: wrapSteerSupplementPayload(input) })
+        const ok = await window.api.agent
+          .supplement({ runId, input: wrapSteerSupplementPayload(input) })
+          .then((result) => result?.ok === true)
+          .catch(() => false)
+        if (!ok) {
+          // The agent session may not be active yet (e.g. still logging in via
+          // post-connection automation). Queue the supplement so it is merged
+          // into the post-login task input instead of being silently dropped.
+          const pending = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
+          pendingPostLoginSupplementsRef.current.set(chatTabId, [...pending, displayInput])
+        }
         updateAgentRun(chatTabId, (run) => ({
           ...run,
           steps: [...(run.steps ?? []), artifacts.step]
@@ -4411,7 +4713,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           !connectionIntent.analysis.needsClarification &&
           !connectionIntent.analysis.shouldConnect
         ) {
-          if (connections.length === 1) {
+          const explicitlyNamedTarget =
+            isExplicitConnectionRequest(intentSourceInput) && !connectionIntent.connection
+          if (connections.length === 1 && !explicitlyNamedTarget) {
             connectionIntent = {
               analysis: {
                 ok: true,
@@ -4424,7 +4728,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               },
               connection: connections[0]
             }
-          } else if (lastUsedConnectionId) {
+          } else if (lastUsedConnectionId && !explicitlyNamedTarget) {
             const last = connections.find((c) => c.id === lastUsedConnectionId)
             if (last) {
               connectionIntent = {
@@ -4834,29 +5138,64 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         return
       }
 
-      appendLog(
+      // Pure login (no follow-up task) still gets an assistant-run card so the
+      // connection flow steps land inside it instead of scattered system rows.
+      const loginRunId = `run-${crypto.randomUUID()}`
+      updateTab(chatTabId, (current) => ({
+        ...current,
+        agentInput: '',
+        agentBusy: true,
+        agentThinking: false,
+        thinkingMessage: undefined,
+        pendingClarification: retainSettledClarification(current.pendingClarification)
+      }))
+      activeRunCanceledRef.current.delete(chatTabId)
+      activeRunIdRef.current.set(chatTabId, loginRunId)
+      activeRunInputRef.current.set(chatTabId, displayInput)
+      const loginMatchStep = {
+        id: 'match',
+        kind: 'status' as const,
+        title: t.terminal.connectionMatched,
+        detail: matchDetail
+      }
+      const loginRunLogId = appendLog(
         {
           kind: 'assistant',
           text: formatAgentRunMarkdown(
             {
               logId: -1,
               actions: [],
-              steps: [
-                {
-                  id: 'match',
-                  kind: 'status',
-                  title: t.terminal.connectionMatched,
-                  detail: matchDetail
-                }
-              ],
-              result: t.terminal.connectionIntentResult,
-              elapsedMs: Date.now() - startedAt
+              steps: [loginMatchStep],
+              startedAt
             },
             t
           )
         },
         chatTabId
       )
+      activeAgentRunRef.current.set(chatTabId, {
+        logId: loginRunLogId,
+        runId: loginRunId,
+        actions: [],
+        steps: [loginMatchStep],
+        startedAt,
+        loginMeta: {
+          connectionName: matchedConnection.name,
+          host: matchedConnection.host,
+          port: matchedConnection.port,
+          user: matchedConnection.user,
+          actionCount: buildConnectionLoginActions(matchedConnection).length
+        }
+      })
+      lastLoginRunLogIdRef.current.set(chatTabId, loginRunLogId)
+      updateAgentRun(chatTabId, (run) => run)
+      void window.api.storage.saveAgentRun({
+        runId: loginRunId,
+        tabId: chatTabId,
+        input: displayInput,
+        status: 'running',
+        connectionId: matchedConnection.id
+      })
 
       void connectToConnection(matchedConnection)
       updateTab(chatTabId, (current) => ({
@@ -5041,6 +5380,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     } = {}
   ): Promise<void> {
     const chatTabId = options.chatTabId ?? resolveSessionChatTabId(tabsRef.current, terminalTabId)
+    // Merge supplements that were queued while no agent session was active
+    // (e.g. typed during connection login) into the task that starts now.
+    const pendingSupplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
+    if (pendingSupplements.length > 0) {
+      pendingPostLoginSupplementsRef.current.delete(chatTabId)
+      input = mergePostLoginSupplements(input, pendingSupplements)
+    }
     const reuseRun = options.reuseRun
     const existingReuse =
       reuseRun && activeAgentRunRef.current.get(chatTabId)?.logId === reuseRun.logId
@@ -6051,6 +6397,15 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         if (fallback) {
           setActiveTabId(fallback.id)
           setTerminalPage('terminal')
+        } else if (next.length === 0) {
+          // Closing the last tab must not strand the chat input on the
+          // module-level emptyLocalTab (its id is absent from `tabs`, so the
+          // controlled agentInput could never update). Keep one real local tab.
+          const localTab = createTerminalTab({ title: 'Terminal' })
+          next = [localTab]
+          activeTabIdRef.current = localTab.id
+          setActiveTabId(localTab.id)
+          setTerminalPage('terminal')
         } else {
           setActiveTabId('')
           setTerminalPage('connections')
@@ -6102,9 +6457,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     cancelAgentRunsOutsideTabs([])
     rejectApprovalsForClosedTabs(closedTabIds)
 
-    setTabs([])
-    setActiveTabId('')
-    setTerminalPage('connections')
+    // Keep one real local tab so the chat input always has a live host tab;
+    // an empty tab list would strand the input on the module-level
+    // emptyLocalTab where controlled updates silently no-op.
+    const localTab = createTerminalTab({ title: 'Terminal' })
+    setTabs([localTab])
+    activeTabIdRef.current = localTab.id
+    setActiveTabId(localTab.id)
+    setTerminalPage('terminal')
     setTabMenu(null)
   }
 
@@ -6995,6 +7355,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
             feedbackByLogId={opsFeedbackByLogId}
             feedbackBusyLogId={opsFeedbackBusyLogId}
+            savingSopLogId={savingSopLogId}
             liveRunByLogId={liveRunByLogId}
             onResolveApproval={resolveInlineCommandApproval}
             onAddCommandToWhitelist={(command) => void addCommandToWhitelist(command)}
@@ -7341,10 +7702,18 @@ async function runConnectionCommandSequence(
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
+    const actionStart = Date.now()
     const ready =
       index === 0
         ? await firstActionReady
         : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
+    connTrace(
+      'login-stage',
+      `tab=${tabId}`,
+      `action=${index + 1}`,
+      `ready=${ready}`,
+      `readyAfterMs=${Date.now() - actionStart}`
+    )
     if (!ready) {
       appendLog(
         {
@@ -7358,6 +7727,25 @@ async function runConnectionCommandSequence(
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+  }
+
+  // After the final login action, wait for its output to settle so the remote
+  // prompt observed by confirm-login is the post-ssh target — not the jump-host
+  // prompt that briefly appears before the last action completes. Otherwise
+  // confirm-login learns the wrong host and the drift gate blocks the first
+  // agent command.
+  const settled = await waitForTerminalIdle(tabId, {
+    ignoredEcho: loginActions[loginActions.length - 1]
+  })
+  if (!settled) {
+    appendLog(
+      {
+        kind: 'error',
+        text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
+      },
+      logTabId
+    )
+    return false
   }
 
   return true
@@ -7376,10 +7764,18 @@ async function runConnectionLoginActionSequence(
   const firstActionReady = waitForTerminalActionPrompt(tabId)
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
+    const actionStart = Date.now()
     const ready =
       index === 0
         ? await firstActionReady
         : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
+    connTrace(
+      'login-stage',
+      `tab=${tabId}`,
+      `action=${index + 1}`,
+      `ready=${ready}`,
+      `readyAfterMs=${Date.now() - actionStart}`
+    )
     if (!ready) {
       appendLog(
         {
@@ -7393,6 +7789,22 @@ async function runConnectionLoginActionSequence(
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+  }
+
+  // Same settle wait as the ssh command sequence: the final login action's
+  // output (and its resulting prompt) must be stable before confirm-login runs.
+  const settled = await waitForTerminalIdle(tabId, {
+    ignoredEcho: loginActions[loginActions.length - 1]
+  })
+  if (!settled) {
+    appendLog(
+      {
+        kind: 'error',
+        text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
+      },
+      logTabId
+    )
+    return false
   }
 
   return true
@@ -7517,21 +7929,47 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
  */
 async function waitForPromptHostOrTimeout(
   tabId: string,
-  timeoutMs = 20_000
+  timeoutMs = 20_000,
+  expectedHost?: string
 ): Promise<'host' | 'local' | 'none'> {
-  const deadline = Date.now() + timeoutMs
-  let lastSignal: 'host' | 'local' | 'none' = 'none'
-  while (Date.now() < deadline) {
-    const context = await window.api.terminal.getContext(tabId)
-    if (context.promptHost && context.promptHost !== 'local-shell') return 'host'
-    if (context.promptHost === 'local-shell') lastSignal = 'local'
-    await sleep(300)
-  }
-  return lastSignal
+  return waitForRemotePrompt(
+    {
+      getContext: () => window.api.terminal.getContext(tabId),
+      onData: (handler) => window.api.terminal.onData(handler),
+      // DOM timer functions must be invoked with `this === window`; calling a
+      // bare reference as an object method throws "Illegal invocation" in the
+      // renderer. Wrap them so the call site keeps the correct receiver.
+      setInterval: (fn, ms) => window.setInterval(fn, ms),
+      clearInterval: (id) => window.clearInterval(id),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (id) => window.clearTimeout(id),
+      now: () => Date.now()
+    },
+    { tabId, timeoutMs, expectedHost }
+  )
 }
 
 function sendTerminalInput(value: string, tabId: string): void {
   window.api.terminal.write(`${value}\r`, tabId)
+}
+
+/**
+ * Multi-hop login target: scan the connection command list for the LAST
+ * `ssh <host>` (login action or the leading ssh command) and return that host.
+ * This is the true environment the session is expected to end on; the
+ * configured connection.host is only the jump box.
+ */
+function resolveFinalSshTarget(
+  commands: string[],
+  connection: ConnectionConfig
+): string | undefined {
+  let target: string | undefined
+  for (const command of commands) {
+    const trimmed = command.trim()
+    const match = trimmed.match(/^ssh(?:\s+-[A-Za-z0-9][^\s]*)*\s+([^\s]+)/)
+    if (match?.[1]) target = match[1].replace(/^['"]|['"]$/g, '')
+  }
+  return target || connection.host || undefined
 }
 
 function getSelectedTextWithinLog(logId: number): string {

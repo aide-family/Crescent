@@ -53,6 +53,8 @@ export function AgentLogContent({
   copied,
   feedbackRating,
   feedbackBusy,
+  savingSop,
+  absorbedStatusEntries,
   onCopyResult,
   onExportResult,
   onExportFull,
@@ -71,6 +73,9 @@ export function AgentLogContent({
   copied?: boolean
   feedbackRating?: 'like' | 'dislike' | null
   feedbackBusy?: boolean
+  savingSop?: boolean
+  /** Connection/system status rows absorbed into this assistant card. */
+  absorbedStatusEntries?: Array<{ id: number; text: string; createdAt: string }>
   onCopyResult?: () => void
   onExportResult?: () => void
   onExportFull?: () => void
@@ -99,10 +104,38 @@ export function AgentLogContent({
       try {
         if (liveRun) {
           parsedRun = agentRunViewToDocument(liveRun)
+          if (absorbedStatusEntries?.length) {
+            parsedRun = {
+              ...parsedRun,
+              steps: [
+                ...parsedRun.steps,
+                ...absorbedStatusEntries.map((entry) => ({
+                  id: `absorbed-status-${entry.id}`,
+                  kind: 'status' as const,
+                  title: entry.text,
+                  createdAt: entry.createdAt
+                }))
+              ]
+            }
+          }
         } else if (isAgentRunDocumentParseStub(entry.text)) {
           showParseStub = true
         } else {
           parsedRun = safeParseAgentRunDocument(entry.text, t)
+          if (parsedRun && absorbedStatusEntries?.length) {
+            parsedRun = {
+              ...parsedRun,
+              steps: [
+                ...parsedRun.steps,
+                ...absorbedStatusEntries.map((entry) => ({
+                  id: `absorbed-status-${entry.id}`,
+                  kind: 'status' as const,
+                  title: entry.text,
+                  createdAt: entry.createdAt
+                }))
+              ]
+            }
+          }
           if (!parsedRun && looksLikeAgentRunDocument(entry.text)) {
             showParseStub = true
           }
@@ -122,6 +155,7 @@ export function AgentLogContent({
           copied={Boolean(copied)}
           feedbackRating={feedbackRating}
           feedbackBusy={feedbackBusy}
+          savingSop={savingSop}
           storageRef={
             tabId
               ? {
@@ -156,12 +190,7 @@ export function AgentLogContent({
       )
     }
 
-    return (
-      <MarkdownContent
-        value={clampAgentText(entry.text, AGENT_RUN_STREAM_MAX_CHARS)}
-        t={t}
-      />
-    )
+    return <MarkdownContent value={clampAgentText(entry.text, AGENT_RUN_STREAM_MAX_CHARS)} t={t} />
   }
 
   const summary = summarizeBehaviorLog(entry.text, entry.kind, t)

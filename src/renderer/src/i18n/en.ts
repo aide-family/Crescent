@@ -104,7 +104,9 @@ const en = {
     zoomOut: 'Zoom out',
     user: 'User',
     saveAsSop: 'Save as SOP',
-    saveAsSopTooltip: 'Save this turn’s user goal as a wiki SOP document'
+    saveAsSopTooltip: 'Save this turn’s user goal as a wiki SOP document',
+    saveAsSopSaving: 'Generating and saving the SOP document…',
+    saveAsSopSaved: 'SOP saved to the knowledge base'
   },
   confirm: {
     closeAllTabs: 'Close all tabs? All terminal sessions will be stopped.',
@@ -248,6 +250,21 @@ const en = {
     connectionIntentWithTaskResult:
       'Matched a connection from your input. After login completes, the agent will continue the requested task and load matching skills.',
     connectionMatched: 'Matched connection',
+    connectionFlowLabel: 'Connect {name}',
+    connectionFlowFallback: 'Connection',
+    connectionFlowStepCount: '{n} steps',
+    connectionFlowExpand: 'Show login actions',
+    connectionFlowCollapse: 'Hide login actions',
+    loginSuccess: 'Login successful',
+    loginFailed: 'Login failed',
+    loginInProgress: 'Logging in…',
+    loginConnectionName: 'Connection',
+    loginConnectionAddress: 'Address',
+    loginUser: 'User',
+    loginActions: 'Login actions',
+    loginActionsDone: '{n} actions succeeded',
+    loginEndToEndElapsed: 'End-to-end time',
+    loginRetry: 'Retry login',
     usingCurrentConnection: 'Using current connection: {name}',
     clarifyCurrentBadge: 'Current',
     connectionNoActions: 'Starting SSH connection without login actions.',

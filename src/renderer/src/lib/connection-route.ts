@@ -3,6 +3,7 @@ import {
   findDirectlyMentionedConnection,
   getConnectionNameMentionTokens,
   isConnectionOnlyRequest,
+  isExplicitConnectionRequest,
   isSameConnectionTab,
   normalizeConnectionMentionText
 } from './agent-input'
@@ -177,7 +178,8 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       sessionTabs,
       connections,
       lastUsedConnectionId,
-      activeLabel
+      activeLabel,
+      message
     })
     if (remotePick) return remotePick
   }
@@ -372,9 +374,17 @@ function resolveRemoteOpsWithoutName(input: {
   connections: ConnectionConfig[]
   lastUsedConnectionId?: string
   activeLabel: string
+  message: string
 }): ConnectionRouteResult | undefined {
-  const { activeTabId, activeTab, sessionTabs, connections, lastUsedConnectionId, activeLabel } =
-    input
+  const {
+    activeTabId,
+    activeTab,
+    sessionTabs,
+    connections,
+    lastUsedConnectionId,
+    activeLabel,
+    message
+  } = input
 
   // Already on a connected tab — reuse (do not ask how to log in).
   if (activeTab?.connectionId || activeTab?.isSsh) {
@@ -409,6 +419,20 @@ function resolveRemoteOpsWithoutName(input: {
       label: activeLabel || 'local',
       reason: 'remote-no-connections',
       clarifyOptions: []
+    }
+  }
+
+  // The user explicitly asked to log into / connect to a named target that did
+  // not match any configured connection (e.g. "登录demo集群" when the only
+  // matching name is "demo测试集群"). Never guess with the last-used
+  // connection — ask which connection is intended.
+  if (isExplicitConnectionRequest(message)) {
+    return {
+      targetTabId: activeTabId,
+      action: 'clarify',
+      label: activeLabel,
+      reason: 'explicit-unnamed-request',
+      clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
     }
   }
 

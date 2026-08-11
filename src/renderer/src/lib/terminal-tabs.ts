@@ -47,6 +47,16 @@ export interface AgentRunViewState {
   errorProvider?: string
   errorResetHint?: string
   elapsedMs?: number
+  /** Structured connection-login run metadata (pure login runs only). */
+  loginMeta?: AgentLoginRunMeta
+}
+
+export interface AgentLoginRunMeta {
+  connectionName: string
+  host: string
+  port?: number
+  user?: string
+  actionCount: number
 }
 
 export type AgentRunStep =
