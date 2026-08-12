@@ -17,11 +17,11 @@ export {
 export function logClassName(kind: AgentLogEntry['kind']): string {
   switch (kind) {
     case 'user':
-      return 'rounded-lg border border-primary/25 border-l-[3px] border-l-primary bg-primary/10 px-3.5 py-3 shadow-sm ml-6'
+      return 'ml-10 rounded-2xl rounded-br-md bg-primary/10 px-3.5 py-2.5'
     case 'assistant':
-      return 'rounded-lg border border-border/80 border-l-[3px] border-l-muted-foreground/45 bg-card px-3.5 py-3 shadow-sm mr-6'
+      return 'mr-1 px-0.5 py-1'
     case 'error':
-      return 'rounded-lg border border-destructive/35 border-l-[3px] border-l-destructive bg-destructive/10 px-3.5 py-3 text-destructive shadow-sm'
+      return 'rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-destructive'
     case 'tool':
     case 'command':
     case 'plan':

@@ -148,7 +148,7 @@ export function SkillManager({
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+            <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
               <Field>
                 <FieldLabel htmlFor="skill-root">{t.settings.skillDirectory}</FieldLabel>
                 <div className="flex gap-2">
@@ -165,7 +165,7 @@ export function SkillManager({
                 <FieldDescription>{t.settings.skillDirectoryHint}</FieldDescription>
               </Field>
             </div>
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+            <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-medium text-muted-foreground">
                   {t.settings.localSkills} · {filteredLocalSkills.length}/{skills.length}
@@ -176,9 +176,13 @@ export function SkillManager({
                 </Button>
               </div>
               <Input
+                type="search"
                 value={localSkillSearchQuery}
                 onChange={(event) => onLocalSkillSearchQueryChange(event.target.value)}
                 placeholder={t.settings.localSkillsSearchPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label={t.settings.localSkillsSearchPlaceholder}
               />
               <div className="max-h-72 space-y-2 overflow-auto">
                 {skills.length === 0 ? (
@@ -193,10 +197,10 @@ export function SkillManager({
                   filteredLocalSkills.map((skill) => (
                     <div
                       key={skill.path}
-                      className={`flex cursor-pointer items-start justify-between gap-3 rounded-md border p-3 text-xs transition ${
+                      className={`flex cursor-pointer items-start justify-between gap-3 rounded-lg border p-3 text-xs transition-[border-color,background-color] ${
                         selectedSkillPreview?.skill.path === skill.path
-                          ? 'border-primary/50 bg-primary/5'
-                          : 'bg-background hover:bg-muted/40'
+                          ? 'border-primary/50 bg-primary/8'
+                          : 'border-border/70 bg-background hover:bg-muted/25'
                       }`}
                       role="button"
                       tabIndex={0}
@@ -254,9 +258,10 @@ export function SkillManager({
                 )}
               </div>
             </div>
-            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+            <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
               <div className="flex gap-2">
                 <Input
+                  type="search"
                   value={skillSearchQuery}
                   onChange={(event) => onSkillSearchQueryChange(event.target.value)}
                   onKeyDown={(event) => {
@@ -266,6 +271,9 @@ export function SkillManager({
                     }
                   }}
                   placeholder={t.settings.skillsSearchPlaceholder}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label={t.settings.skillsSearchPlaceholder}
                 />
                 <Button
                   type="button"

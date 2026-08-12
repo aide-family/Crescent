@@ -6746,10 +6746,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
                   return (
                     <div
                       key={server.id}
-                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
+                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
                         mcpEditorOpen && settingsMcpServerId === server.id
-                          ? 'border-primary/70 ring-1 ring-primary/30'
-                          : ''
+                          ? 'border-primary/50 bg-primary/8'
+                          : 'border-border/70'
                       }`}
                       role="button"
                       tabIndex={0}
@@ -6841,7 +6841,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
                 </Button>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3">
-                <FieldGroup>
+                <FieldGroup className="gap-4">
                   <label
                     htmlFor="mcp-enabled"
                     className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
@@ -7090,30 +7090,48 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
   return (
     <main className="app-shell flex h-full flex-col bg-background">
-      <Toaster richColors closeButton position="top-right" />
-      <header className="app-titlebar flex h-16 shrink-0 items-center justify-between px-4">
-        <div className="flex min-w-0 items-center gap-3">
+      <Toaster
+        theme="dark"
+        closeButton
+        position="top-right"
+        offset={56}
+        gap={8}
+        toastOptions={{
+          classNames: {
+            toast:
+              'border border-border bg-card text-foreground shadow-lg shadow-black/20',
+            title: 'text-foreground',
+            description: 'text-muted-foreground',
+            closeButton: 'border-border bg-card text-muted-foreground'
+          }
+        }}
+      />
+      <header className="app-titlebar flex h-12 shrink-0 items-center justify-between gap-3 px-3">
+        <div className="flex min-w-0 items-center gap-2.5">
           <ProductLogo />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold">Crescent</span>
+              <span className="text-sm font-semibold tracking-tight text-pretty">Crescent</span>
               <Badge
                 variant="outline"
-                className="hidden rounded-md font-mono text-[10px] sm:inline-flex"
+                className="hidden h-5 rounded-sm px-1.5 font-mono text-[10px] tabular-nums sm:inline-flex"
               >
                 {activeTab.terminalMode.toUpperCase()}
               </Badge>
             </div>
-            <div className="mt-0.5 hidden max-w-[40vw] truncate text-[11px] text-muted-foreground md:block">
-              {getTerminalDisplayTitle(activeTab, tabs)} ·{' '}
-              {activeTab.terminalCwd || t.app.shellStarting}
+            <div className="mt-px hidden max-w-[42vw] truncate text-[11px] text-muted-foreground md:block">
+              {getTerminalDisplayTitle(activeTab, tabs)}
+              <span className="text-muted-foreground/50"> · </span>
+              <span className="font-mono tabular-nums">
+                {activeTab.terminalCwd || t.app.shellStarting}
+              </span>
             </div>
           </div>
         </div>
-        <div className="app-commandbar flex items-center gap-1.5">
+        <div className="app-commandbar flex items-center gap-0.5">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.connections.manageConnections}
             title={t.connections.manageConnections}
@@ -7123,7 +7141,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.settings.mcpServers}
             title={t.settings.mcpServers}
@@ -7133,7 +7151,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.settings.skillsManagement}
             title={t.settings.skillsManagement}
@@ -7143,7 +7161,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.history.title}
             title={t.history.title}
@@ -7153,7 +7171,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.wiki.title}
             title={t.wiki.title}
@@ -7163,7 +7181,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
             aria-label={t.app.swapPanes}
             title={t.app.swapPanes}
@@ -7178,7 +7196,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
             <SelectTrigger
               size="sm"
-              className="h-8 w-auto min-w-28 justify-start px-2"
+              className="h-8 w-auto min-w-24 justify-start gap-1.5 border-transparent bg-transparent px-2 shadow-none hover:bg-accent hover:text-accent-foreground"
               aria-label={t.app.language}
               title={t.app.language}
             >
@@ -7283,7 +7301,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         {hiddenPane === 'chat' && (
           <button
             type="button"
-            className="chat-pane-rail group absolute inset-y-0 right-3 z-20 my-auto flex h-32 w-9 items-center justify-center rounded-xl border border-border/70 bg-background/70 shadow-lg shadow-black/10 backdrop-blur-md transition-all duration-200 hover:w-11 hover:border-primary/40 hover:bg-background/95"
+            className="chat-pane-rail group absolute inset-y-0 right-2 z-20 my-auto flex h-28 w-8 items-center justify-center rounded-lg border border-border/70 bg-card/90 shadow-md transition-[width,border-color,background-color] duration-200 hover:w-9 hover:border-primary/40 hover:bg-card"
             aria-label={t.app.showChat}
             title={t.app.showChat}
             onClick={() => setHiddenPane(null)}
@@ -7342,8 +7360,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         )}
         {!hiddenPane && (
           <div
-            className="app-pane-resizer w-2 shrink-0 cursor-col-resize"
+            className="app-pane-resizer w-1.5 shrink-0 cursor-col-resize outline-none focus-visible:ring-0"
             role="separator"
+            tabIndex={0}
             aria-orientation="vertical"
             aria-label="Resize terminal and chat panes"
             onPointerDown={(event) => {

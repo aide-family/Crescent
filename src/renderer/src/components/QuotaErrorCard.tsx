@@ -27,7 +27,7 @@ export function QuotaErrorCard({
   return (
     <div
       data-testid="model-quota-error-card"
-      className="min-w-0 rounded-md border border-amber-500/35 bg-amber-500/5 px-3 py-2.5 text-sm text-amber-950 dark:text-amber-50"
+      className="min-w-0 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-sm"
     >
       <div className="flex items-start gap-2">
         <TriangleAlertIcon
@@ -35,10 +35,10 @@ export function QuotaErrorCard({
           aria-hidden="true"
         />
         <div className="min-w-0 space-y-2">
-          <div className="font-semibold text-amber-800 dark:text-amber-300">
+          <div className="font-semibold text-pretty text-foreground">
             {t.input.modelQuotaExceededTitle}
           </div>
-          <p className="leading-relaxed text-amber-950/90 dark:text-amber-50/90">{body}</p>
+          <p className="leading-relaxed text-muted-foreground">{body}</p>
           {onOpenModelSettings ? (
             <Button type="button" variant="outline" size="sm" onClick={onOpenModelSettings}>
               {t.input.switchModel}

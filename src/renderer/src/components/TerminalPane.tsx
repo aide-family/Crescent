@@ -153,7 +153,7 @@ export function TerminalPane({
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
             {showTerminalRecovery && !connectionRecovery?.dismissed ? (
-              <div className="flex shrink-0 items-center gap-2 border-b bg-background/95 px-3 py-1.5 text-xs">
+              <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-xs">
                 <TriangleAlertIcon
                   className="size-3.5 shrink-0 text-amber-500"
                   aria-hidden="true"

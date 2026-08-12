@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   CopyIcon,
   CopyPlusIcon,
@@ -93,6 +94,15 @@ export function ConnectionManagerModal({
   onStartEditing: () => void
   onSave: (connectAfterSave: boolean) => void
 }): React.JSX.Element | null {
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
   if (!open) return null
 
   const selectedConnection = connections.find(
@@ -103,7 +113,7 @@ export function ConnectionManagerModal({
 
   return (
     <div
-      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby="connection-modal-title"
@@ -111,10 +121,10 @@ export function ConnectionManagerModal({
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <div className="app-modal-panel flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background shadow-2xl shadow-black/30">
-        <div className="app-modal-header flex shrink-0 items-center justify-between gap-2 border-b bg-card/80 px-3 py-2">
+      <div className="app-modal-panel flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border bg-background">
+        <div className="app-modal-header flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
           <div>
-            <h2 id="connection-modal-title" className="text-sm font-semibold">
+            <h2 id="connection-modal-title" className="text-sm font-semibold text-pretty">
               {t.connections.sshConnections}
             </h2>
             <p className="text-[11px] text-muted-foreground">
@@ -134,7 +144,7 @@ export function ConnectionManagerModal({
         </div>
         <div className="app-connection-grid grid min-h-0 flex-1 grid-cols-[minmax(280px,0.9fr)_minmax(400px,1.1fr)] overflow-hidden">
           <ConnectionList
-            className="min-h-0 border-r bg-muted/15 p-3"
+            className="min-h-0 border-r bg-muted/10 p-3"
             connections={connections}
             filteredConnections={filteredConnections}
             query={query}

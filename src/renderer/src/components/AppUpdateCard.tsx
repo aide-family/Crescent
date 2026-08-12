@@ -69,7 +69,7 @@ export function AppUpdateCard({ t }: AppUpdateCardProps): React.JSX.Element {
   const canInstall = status.state === 'downloaded'
 
   return (
-    <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+    <div className="space-y-2 rounded-lg border bg-muted/10 p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 space-y-0.5">
           <div className="text-sm font-medium">{t.settings.updateSection}</div>

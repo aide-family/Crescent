@@ -199,9 +199,13 @@ function WikiDocumentList({
   return (
     <div className="flex min-h-0 flex-col gap-2">
       <Input
+        type="search"
         value={wikiSearchQuery}
         onChange={(event) => onSearchQueryChange(event.target.value)}
         placeholder={t.wiki.searchPlaceholder}
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={t.wiki.searchPlaceholder}
       />
       <div className="min-h-0 space-y-2 overflow-auto">
         {wikiLoading && (
@@ -220,10 +224,10 @@ function WikiDocumentList({
           <button
             key={document.id}
             type="button"
-            className={`block w-full min-w-0 overflow-hidden rounded-md border p-3 text-left text-xs transition hover:border-primary/60 hover:bg-muted/30 ${
+            className={`block w-full min-w-0 overflow-hidden rounded-lg border p-3 text-left text-xs transition-[border-color,background-color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
               selectedWikiDocument?.id === document.id
-                ? 'border-primary/70 ring-1 ring-primary/30'
-                : ''
+                ? 'border-primary/50 bg-primary/8'
+                : 'border-border/70 hover:bg-muted/25'
             }`}
             onClick={() => onOpenDocument(document)}
           >

@@ -133,7 +133,7 @@ function normalizeSvgForPng(value: string): { svg: string; width: number; height
   nextRootTag = setSvgAttribute(
     nextRootTag,
     'style',
-    `${getSvgAttribute(nextRootTag, 'style') ?? ''}; background: #050608;`
+    `${getSvgAttribute(nextRootTag, 'style') ?? ''}; background: ${appMermaidThemeVariables.background};`
   )
 
   svg = svg.replace(rootTag, nextRootTag)
@@ -374,20 +374,21 @@ function renderMarkdownBlocks(
       headingIndex += 1
       const className =
         level === 1
-          ? 'text-base font-semibold'
+          ? 'text-base font-semibold text-pretty'
           : level === 2
-            ? 'text-sm font-semibold'
-            : 'text-sm font-medium'
+            ? 'text-sm font-semibold text-pretty'
+            : 'text-sm font-medium text-pretty'
       const scrollMarginClass = options.headingIdPrefix ? 'scroll-mt-28' : ''
+      const HeadingTag = level === 1 ? 'h3' : level === 2 ? 'h4' : 'h5'
 
       nodes.push(
-        <div
+        <HeadingTag
           id={headingId}
           key={nodes.length}
           className={`${className} ${scrollMarginClass} min-w-0 break-words`}
         >
           {renderInlineMarkdown(headingText)}
-        </div>
+        </HeadingTag>
       )
       index += 1
       continue
@@ -495,7 +496,7 @@ function MarkdownCodeBlock({
   }
 
   return (
-    <div className="app-code-panel min-w-0 rounded-md border bg-[var(--app-terminal)] text-zinc-100">
+    <div className="app-code-panel min-w-0 rounded-lg border bg-[var(--app-terminal)] text-zinc-100">
       <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[var(--app-terminal-rail)] px-3 py-1.5">
         <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">
           {closed ? label : `${label || 'text'}…`}
@@ -554,6 +555,20 @@ function MermaidBlock({
   const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
 
   zoomRef.current = zoom
+
+  useEffect(() => {
+    if (!expanded) return
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        setExpanded(false)
+        setZoom(1)
+        setPanning(false)
+        expandedPanRef.current = null
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [expanded])
 
   useEffect(() => {
     if (!closed) {
@@ -823,7 +838,7 @@ function MermaidBlock({
     )
 
   return (
-    <div className="app-mermaid-panel min-w-0 rounded-md border bg-background">
+    <div className="app-mermaid-panel min-w-0 rounded-lg border bg-background">
       <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
         <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           mermaid
@@ -833,7 +848,7 @@ function MermaidBlock({
             <>
               <Select key={`export-${exportSelectKey}`} onValueChange={handleMermaidExportFormat}>
                 <SelectTrigger
-                  className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+                  className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-transparent dark:hover:bg-accent/50"
                   aria-label={t.common.exportDiagram}
                   title={t.common.exportDiagram}
                 >
@@ -875,7 +890,7 @@ function MermaidBlock({
       {expanded && svg
         ? createPortal(
             <div
-              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur"
+              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain bg-background/95 backdrop-blur"
               role="dialog"
               aria-modal="true"
               aria-label={t.common.enlarge}
@@ -908,7 +923,7 @@ function MermaidBlock({
                     onValueChange={handleMermaidExportFormat}
                   >
                     <SelectTrigger
-                      className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
+                      className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-transparent dark:hover:bg-accent/50"
                       aria-label={t.common.exportDiagram}
                       title={t.common.exportDiagram}
                     >

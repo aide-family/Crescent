@@ -213,21 +213,18 @@ export function AgentRunTimeline({
           </div>
         </>
       ) : showResult ? (
-        <div className="min-w-0 overflow-hidden rounded-lg border border-amber-500/25 bg-amber-500/[0.04]">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card/50">
           {(document.resultMarkdown?.trim() || document.errorMarkdown?.trim()) && (
-            <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-2">
+            <div className="flex items-center gap-2 border-b border-border/60 bg-muted/20 px-3 py-2">
               {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim() ? (
                 <TriangleAlertIcon
-                  className="size-4 shrink-0 text-destructive"
+                  className="size-3.5 shrink-0 text-destructive"
                   aria-hidden="true"
                 />
               ) : (
-                <CheckIcon
-                  className="size-4 shrink-0 text-amber-600 dark:text-amber-400"
-                  aria-hidden="true"
-                />
+                <CheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
               )}
-              <span className="text-xs font-semibold tracking-wide text-amber-900/90 dark:text-amber-100/90">
+              <span className="text-xs font-semibold tracking-wide text-foreground/85">
                 {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim()
                   ? t.input.error
                   : t.input.result}
@@ -236,7 +233,7 @@ export function AgentRunTimeline({
           )}
           {document.resultMarkdown?.trim() ? (
             <div className="min-w-0 space-y-2 px-3 py-2.5">
-              <div className="min-w-0 text-[15px] leading-relaxed text-amber-950/90 dark:text-amber-50/95">
+              <div className="min-w-0 text-[15px] leading-relaxed text-foreground">
                 <MarkdownContent
                   value={clampAgentText(document.resultMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
                   t={t}
@@ -270,7 +267,7 @@ export function AgentRunTimeline({
             )
           ) : null}
 
-          <div className="flex items-center justify-between gap-2 border-t border-amber-500/20 bg-amber-500/[0.05] px-3 py-1.5">
+          <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/15 px-3 py-1.5">
             <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
               {typeof document.elapsedMs === 'number'
                 ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
@@ -329,7 +326,7 @@ export function AgentRunTimeline({
                     }
                     className={
                       feedbackRating === 'like'
-                        ? 'text-emerald-400 hover:text-emerald-300'
+                        ? 'text-primary hover:text-primary/80'
                         : feedbackRating === 'dislike'
                           ? 'opacity-40'
                           : undefined
@@ -565,7 +562,7 @@ function ToolCallRow({
       <div className="flex items-start gap-2 min-w-0">
         {running ? (
           <Loader2Icon
-            className="mt-0.5 size-3 shrink-0 animate-spin text-sky-500"
+            className="mt-0.5 size-3 shrink-0 animate-spin text-primary"
             aria-hidden="true"
           />
         ) : warnFinish ? (
@@ -576,17 +573,15 @@ function ToolCallRow({
         ) : (
           <span
             className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
-              step.isError ? 'bg-destructive' : 'bg-sky-500/80'
+              step.isError ? 'bg-destructive' : 'bg-primary/70'
             }`}
             aria-hidden="true"
           />
         )}
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-xs font-bold text-sky-600 dark:text-sky-400">{toolLabel}</span>
-            <span className="text-[11px] font-medium text-sky-600/80 dark:text-sky-400/80">
-              {statusLabel}
-            </span>
+            <span className="text-xs font-medium text-foreground/80">{toolLabel}</span>
+            <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
           </div>
           {batchParts ? (
             <BatchCommandGroupCard
@@ -604,7 +599,7 @@ function ToolCallRow({
       {showObservation && observation ? (
         observationLong ? (
           <details className="group ml-5 min-w-0">
-            <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 marker:content-none">
+            <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] font-medium text-muted-foreground outline-none marker:content-none focus-visible:ring-2 focus-visible:ring-ring/50">
               <ChevronRightIcon
                 className="size-3 shrink-0 transition-transform group-open:rotate-90"
                 aria-hidden="true"
@@ -615,12 +610,12 @@ function ToolCallRow({
               </span>
               <span className="hidden group-open:inline">{t.input.toolFinished}</span>
             </summary>
-            <pre className="mt-1 max-h-56 overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90">
+            <pre className="mt-1 max-h-56 overflow-auto rounded-md border border-border/60 bg-muted/15 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-foreground/90">
               {observation}
             </pre>
           </details>
         ) : (
-          <pre className="ml-5 max-h-56 overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90">
+          <pre className="ml-5 max-h-56 overflow-auto rounded-md border border-border/60 bg-muted/15 p-2 font-mono text-[11px] whitespace-pre-wrap break-words text-foreground/90">
             {observation}
           </pre>
         )
@@ -645,11 +640,11 @@ function BatchCommandGroupCard({
   const visible = expanded ? parts : parts.slice(0, previewCount)
   const hiddenCount = Math.max(0, parts.length - previewCount)
   const statusIcon = running ? (
-    <Loader2Icon className="size-3.5 shrink-0 animate-spin text-sky-500" aria-hidden="true" />
+    <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" aria-hidden="true" />
   ) : isError ? (
     <TriangleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
   ) : (
-    <CheckIcon className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+    <CheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
   )
 
   return (
@@ -667,7 +662,7 @@ function BatchCommandGroupCard({
         {hiddenCount > 0 ? (
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/40"
+            className="flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? (
@@ -713,12 +708,12 @@ function BatchCommandSegment({
   }
 
   return (
-    <div className="min-w-0 space-y-1 rounded border border-sky-500/15 bg-sky-500/5 p-2">
+    <div className="min-w-0 space-y-1 rounded-md border border-border/60 bg-muted/15 p-2">
       <div className="flex items-start gap-1.5">
-        <CheckIcon className="mt-0.5 size-3 shrink-0 text-emerald-600" aria-hidden="true" />
+        <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden="true" />
         <button
           type="button"
-          className="min-w-0 flex-1 text-left font-mono text-[11px] text-sky-900/90 dark:text-sky-100/90"
+          className="min-w-0 flex-1 text-left font-mono text-[11px] text-foreground/90 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={scrollToOutput}
           title={part.command}
         >
@@ -736,7 +731,7 @@ function BatchCommandSegment({
       </div>
       <pre
         id={segmentId}
-        className="max-h-40 overflow-auto rounded border border-emerald-500/15 bg-emerald-500/5 p-1.5 font-mono text-[10px] whitespace-pre-wrap break-words text-emerald-900/90 dark:text-emerald-100/90"
+        className="max-h-40 overflow-auto rounded-md border border-border/50 bg-muted/15 p-1.5 font-mono text-[10px] whitespace-pre-wrap break-words text-foreground/90"
       >
         {part.output || '(no output)'}
       </pre>
@@ -887,13 +882,13 @@ function CollapsedLowRiskGroup({
     .replace('{ms}', String(maxMs))
 
   return (
-    <div className="min-w-0 rounded-md border border-border/50">
+    <div className="min-w-0 rounded-lg border border-border/50">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-muted-foreground"
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-muted-foreground outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={() => setExpanded((value) => !value)}
       >
-        <CheckIcon className="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+        <CheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
         <span className="min-w-0 flex-1">{label}</span>
         {expanded ? (
           <ChevronUpIcon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -935,8 +930,8 @@ function ConnectionFlowGroup({
   const statusTone = failed
     ? 'text-destructive'
     : finished
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : 'text-sky-600 dark:text-sky-400'
+      ? 'text-primary'
+      : 'text-muted-foreground'
   const statusLabel = failed
     ? t.terminal.loginFailed
     : finished
@@ -945,13 +940,13 @@ function ConnectionFlowGroup({
 
   return (
     <div
-      className={`min-w-0 overflow-hidden rounded-md border bg-background/40 ${
+      className={`min-w-0 overflow-hidden rounded-xl border bg-card/40 ${
         failed ? 'border-destructive/30' : 'border-border/50'
       }`}
     >
       <button
         type="button"
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-muted/40"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-expanded={expanded}
         title={expanded ? t.terminal.connectionFlowCollapse : t.terminal.connectionFlowExpand}
         onClick={() => setExpanded((value) => !value)}
@@ -982,13 +977,13 @@ function ConnectionFlowGroup({
               <div key={step.id} className="flex items-start gap-2 text-[11px] leading-relaxed">
                 <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center">
                   {!finished && isLast ? (
-                    <Loader2Icon className="size-3 animate-spin text-sky-500" aria-hidden="true" />
+                    <Loader2Icon className="size-3 animate-spin text-primary" aria-hidden="true" />
                   ) : failed && isLast ? (
                     <TriangleAlertIcon className="size-3 text-destructive" aria-hidden="true" />
                   ) : (
                     <span
                       className={`size-1 rounded-full ${
-                        finished ? 'bg-emerald-500/80' : 'bg-sky-500/70'
+                        finished ? 'bg-primary/70' : 'bg-muted-foreground/40'
                       }`}
                       aria-hidden="true"
                     />
@@ -1062,30 +1057,23 @@ function LoginResultCard({
 
   return (
     <div
-      className={`min-w-0 overflow-hidden rounded-lg border ${
-        failed
-          ? 'border-destructive/30 bg-destructive/[0.04]'
-          : 'border-emerald-500/25 bg-emerald-500/[0.04]'
+      className={`min-w-0 overflow-hidden rounded-xl border ${
+        failed ? 'border-destructive/30 bg-destructive/[0.04]' : 'border-border/70 bg-card/50'
       }`}
     >
       <div
         className={`flex items-center gap-2 border-b px-3 py-2 ${
-          failed
-            ? 'border-destructive/20 bg-destructive/[0.06]'
-            : 'border-emerald-500/20 bg-emerald-500/[0.06]'
+          failed ? 'border-destructive/20 bg-destructive/[0.06]' : 'border-border/60 bg-muted/20'
         }`}
       >
         {failed ? (
-          <TriangleAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+          <TriangleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
         ) : (
-          <CheckIcon
-            className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
-            aria-hidden="true"
-          />
+          <CheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
         )}
         <span
           className={`text-xs font-semibold tracking-wide ${
-            failed ? 'text-destructive' : 'text-emerald-800/90 dark:text-emerald-100/90'
+            failed ? 'text-destructive' : 'text-foreground/85'
           }`}
         >
           {failed ? t.terminal.loginFailed : t.terminal.loginSuccess}
@@ -1096,7 +1084,7 @@ function LoginResultCard({
           </span>
         ) : null}
         {typeof elapsedMs === 'number' ? (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono tabular-nums text-[10px] text-muted-foreground">
             {t.terminal.loginEndToEndElapsed} {formatDuration(elapsedMs)}
           </span>
         ) : null}
@@ -1107,7 +1095,7 @@ function LoginResultCard({
             {rows.map(([key, value]) => (
               <div key={key} className="contents">
                 <dt className="text-muted-foreground/80">{key}</dt>
-                <dd className="break-all text-foreground/90">{value}</dd>
+                <dd className="break-all font-mono text-[11px] tabular-nums text-foreground/90">{value}</dd>
               </div>
             ))}
           </dl>
@@ -1199,7 +1187,7 @@ function ResultActionBar({
             }
             className={
               feedbackRating === 'like'
-                ? 'text-emerald-400 hover:text-emerald-300'
+                ? 'text-primary hover:text-primary/80'
                 : feedbackRating === 'dislike'
                   ? 'opacity-40'
                   : undefined
@@ -1323,9 +1311,9 @@ function ApprovalStepCard({
     const elapsed =
       typeof step.elapsedMs === 'number' ? Math.max(0, Math.round(step.elapsedMs)) : undefined
     return (
-      <div className="min-w-0 rounded-md border border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+      <div className="min-w-0 rounded-lg border border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <CheckIcon className="size-3.5 text-emerald-600" aria-hidden="true" />
+          <CheckIcon className="size-3.5 text-primary" aria-hidden="true" />
           <span>
             {elapsed === undefined
               ? t.commandReview.lowRiskAutoPass
@@ -1379,8 +1367,8 @@ function ApprovalStepCard({
     <div
       className={
         pending
-          ? 'min-w-0 rounded-md border border-amber-500/35 bg-amber-500/5'
-          : 'min-w-0 rounded-md border border-border/60'
+          ? 'min-w-0 rounded-xl border border-amber-500/35 bg-amber-500/5'
+          : 'min-w-0 rounded-xl border border-border/60'
       }
     >
       {showWhitelistEntry ? (
@@ -1488,6 +1476,8 @@ function ApprovalStepCard({
               onChange={(event) => setNote(event.target.value)}
               placeholder={t.input.approvalNotePlaceholder}
               className="min-h-14 resize-y text-xs"
+              autoComplete="off"
+              spellCheck={false}
             />
             <div className="flex flex-wrap justify-end gap-2">
               <Button
@@ -1500,7 +1490,7 @@ function ApprovalStepCard({
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="destructive"
                 onClick={() => onResolve(step.requestId, false, note.trim() || undefined)}
               >
                 {t.commandReview.reject}
@@ -1555,7 +1545,7 @@ function ResultSuggestionsPicker({
   const selectedTexts = suggestions.filter((_, index) => selected[index])
 
   return (
-    <div className="mt-2 space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+    <div className="mt-2 space-y-2 rounded-lg border border-border/50 bg-muted/10 px-3 py-2">
       <label className="flex items-center gap-2 text-[11px] font-medium text-foreground/80">
         <input
           ref={selectAllRef}
@@ -1659,7 +1649,7 @@ function CommandBlock({
   const toneClass =
     tone === 'audit'
       ? 'border-border/50 bg-muted/25 text-foreground'
-      : 'border-sky-500/20 bg-sky-500/5 text-sky-900/90 dark:text-sky-100/90'
+      : 'border-border/60 bg-muted/20 text-foreground/90'
 
   return (
     <div className={`relative min-w-0 rounded border ${toneClass}`}>
@@ -1712,7 +1702,7 @@ function CommandBlock({
           }}
         >
           {copied ? (
-            <CheckIcon className="size-3.5 text-emerald-500" aria-hidden="true" />
+            <CheckIcon className="size-3.5 text-primary" aria-hidden="true" />
           ) : (
             <CopyIcon className="size-3.5" aria-hidden="true" />
           )}

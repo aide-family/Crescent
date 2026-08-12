@@ -37,10 +37,12 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     const { t } = this.props
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
-        <h1 className="text-lg font-semibold text-foreground">{t.recovery.errorBoundaryTitle}</h1>
-        <p className="max-w-md text-sm text-muted-foreground">{t.recovery.errorBoundaryBody}</p>
+        <h1 className="text-lg font-semibold text-pretty text-foreground">{t.recovery.errorBoundaryTitle}</h1>
+        <p className="max-w-md text-sm leading-relaxed text-pretty text-muted-foreground">
+          {t.recovery.errorBoundaryBody}
+        </p>
         {this.state.message ? (
-          <pre className="max-h-40 max-w-lg overflow-auto rounded border bg-muted/30 p-3 text-left text-[11px] text-muted-foreground">
+          <pre className="max-h-40 max-w-lg overflow-auto rounded-lg border bg-muted/30 p-3 text-left text-[11px] text-muted-foreground">
             {this.state.message}
           </pre>
         ) : null}

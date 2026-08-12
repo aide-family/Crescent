@@ -238,7 +238,7 @@ export function AgentPanel({
     <aside className="app-agent-pane relative flex min-h-0 min-w-[360px] flex-1 flex-col">
       <button
         type="button"
-        className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/50 opacity-70 transition-all hover:bg-muted/60 hover:text-foreground hover:opacity-100"
+        className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/50 opacity-70 transition-[background-color,color,opacity] hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-label={t.app.hideChat}
         title={t.app.hideChat}
         onClick={onHideChatPane}
@@ -309,7 +309,7 @@ export function AgentPanel({
           />
         </div>
       ) : null}
-      <div className="app-input-dock space-y-3 bg-background p-4">
+      <div className="app-input-dock space-y-2 p-3">
         <form onSubmit={onSubmit} className="space-y-2">
           <div className="flex items-center gap-2">
             <Button
@@ -468,7 +468,7 @@ export function AgentPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="relative rounded-lg border bg-background/95 p-2 shadow-sm">
+          <div className="app-composer relative rounded-xl p-2">
             <SlashCommandMenu
               visible={slashMenuVisible}
               listRef={slashCommandListRef}
@@ -514,7 +514,7 @@ export function AgentPanel({
               onKeyDown={onAgentInputKeyDown}
               onPaste={onAgentInputPaste}
               placeholder={t.input.askPlaceholder}
-              className="max-h-40 min-h-20 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
+              className="max-h-40 min-h-16 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
             <div className="flex items-center gap-2 px-1 pt-2 text-xs text-muted-foreground">
               <div className="flex min-h-5 min-w-0 flex-1 items-center">
@@ -594,23 +594,22 @@ export function AgentPanel({
                 <span className="whitespace-nowrap">
                   {configured ? t.input.toolsConfigured : t.input.chatNoTools}
                 </span>
-                <div className="flex h-5 w-[3.75rem] shrink-0 items-center justify-end">
+                <div className="flex h-7 shrink-0 items-center justify-end gap-1.5">
                   {sessionChatTab.agentBusy ? (
                     <Button
                       type="button"
                       variant="destructive"
                       size="xs"
-                      className="h-5 px-2 text-[11px]"
+                      className="h-7 px-2 text-[11px]"
                       onClick={onStopAgent}
                     >
                       {t.common.stop}
                     </Button>
                   ) : null}
-                </div>
                 <Button
                   type="submit"
                   size="icon"
-                  className={`h-5 w-5 ${showSendButton ? undefined : 'invisible'}`}
+                  className={`h-7 w-7 rounded-full ${showSendButton ? undefined : 'invisible'}`}
                   tabIndex={showSendButton ? undefined : -1}
                   aria-hidden={showSendButton ? undefined : true}
                   aria-label={
@@ -631,6 +630,7 @@ export function AgentPanel({
                     <ArrowUpIcon className="size-3.5" aria-hidden="true" />
                   )}
                 </Button>
+                </div>
               </div>
             </div>
           </div>
