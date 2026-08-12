@@ -4,7 +4,7 @@
 
 把 AI 真正放进终端里的开源运维工作台。
 
-Crescent 是一个基于 Electron + React + TypeScript 构建的桌面端 AI 命令工作台，帮助运维、后端和平台工程师把本地终端、SSH 连接、AI Agent、MCP/OpenAPI 工具和知识库沉淀整合到一个界面里。
+Crescent 是一个基于 Electron + React + TypeScript 构建的桌面端 AI 命令工作台，帮助运维、后端和平台工程师把本地终端、SSH 连接、AI Agent、命令审核、Skills 和知识库沉淀整合到一个界面里。
 
 > 如果你经常在服务器、Kubernetes、Docker、SSH 终端之间来回切换，又希望 AI 不只是“给建议”，而是能基于真实终端上下文一步步帮你检查、执行、复盘，Crescent 正是为这种工作流设计的。
 
@@ -16,7 +16,7 @@ Crescent 是一个基于 Electron + React + TypeScript 构建的桌面端 AI 命
 - AI 生成的命令需要手动复制粘贴，执行结果又要再复制回去。
 - 一旦涉及删除文件、重启服务、修改配置，风险很难被提前解释清楚。
 - 排障过程做完就散了，下次遇到类似问题还要从头来。
-- OpenAPI、MCP、终端命令、文档解析各自分散，很难形成一个连续工作流。
+- AI 建议、终端会话和沉淀下来的运维经验各自分散，很难形成一个连续工作流。
 
 Crescent 想解决的就是这个问题：让 AI 贴着真实终端工作，并把每一步变成可观察、可审核、可复用的操作过程。
 
@@ -69,11 +69,15 @@ Crescent 还支持本地 Skill 管理和知识库沉淀。你可以把一次排�
 
 这让 Crescent 不只是会话工具，而更像一个面向团队经验复用的运维工作台。
 
-### 5. 支持 OpenAPI 和 MCP，把外部系统变成 Agent 工具
+### 5. 聚焦的 Agent 工具运行时
 
-Crescent 支持加载 OpenAPI 文档生成函数工具，也支持配置 stdio MCP 服务，让 Agent 在终端之外调用外部工具。
+Agent 只运行一组小而可审核的工具，而不是开放式的插件面：
 
-这类能力适合把内部平台、CMDB、告警系统、发布系统、工单系统等接进来，形成更完整的自动化工作流。
+- `read` / `write` / `edit`：操作 Agent 工作区内的文件。
+- `bash`：在当前可见终端执行，每条命令都可观察，高危命令仍需审批。
+- `open_subterminal`：停靠一个专用的本地 / SSH 子终端，用于跨上下文工作。
+
+早期版本的 OpenAPI 与 MCP 工具已从 Agent 循环中移除，相关设置仅保留用于配置迁移。
 
 ## 方案对比
 
@@ -81,7 +85,7 @@ Crescent 支持加载 OpenAPI 文档生成函数工具，也支持配置 stdio M
 | ---------------- | ---------------- | ------------------------------------ | ---------------------------------------------------- |
 | 普通终端         | 直接、可靠、可控 | 没有 AI 辅助和上下文理解             | 在终端旁边嵌入 Agent，并基于真实输出闭环执行         |
 | 通用 AI 聊天工具 | 推理和解释能力强 | 不能直接读取终端状态，复制粘贴成本高 | 把命令执行、结果观察和下一步决策串起来               |
-| API 调试工具     | 适合接口验证     | 不擅长 SSH、系统排障和终端操作       | 支持 OpenAPI 工具，同时保留终端工作流                |
+| API 调试工具     | 适合接口验证     | 不擅长 SSH、系统排障和终端操作       | 让 Agent 贴着真实终端工作，而不是替代终端            |
 | 自动化脚本平台   | 标准化强         | 灵活排障能力弱，前期沉淀成本高       | 用 Skills/SOP 逐步沉淀经验，不要求一开始就写完整平台 |
 
 ## 架构概览
@@ -91,13 +95,12 @@ flowchart TD
   user["用户请求"] --> ui["Crescent 桌面工作台"]
   ui --> terminal["本地终端 / SSH 终端"]
   ui --> agent["AI Agent Core"]
-  agent --> planner["ReAct / Plan-and-Execute"]
   agent --> audit["命令审核"]
   audit --> terminal
   agent --> tools["工具运行时"]
-  tools --> openapi["OpenAPI 工具"]
-  tools --> mcp["MCP 服务"]
-  tools --> docs["文档 / 图片 / 音频解析"]
+  tools --> files["read / write / edit"]
+  tools --> bash["bash 可见终端执行"]
+  tools --> subterm["open_subterminal"]
   tools --> wiki["本地知识库"]
   wiki --> agent
   terminal --> agent
@@ -111,12 +114,12 @@ flowchart TD
 
 从 [Releases](https://github.com/aide-family/Crescent/releases) 下载对应平台安装包：
 
-| 平台 | 推荐资产 |
-| --- | --- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg` |
-| macOS Intel | `crescent-*-x64.dmg` |
-| Windows | `crescent-*-x64-setup.exe` |
-| Linux | `.AppImage` 或 `.deb` |
+| 平台                | 推荐资产                   |
+| ------------------- | -------------------------- |
+| macOS Apple Silicon | `crescent-*-arm64.dmg`     |
+| macOS Intel         | `crescent-*-x64.dmg`       |
+| Windows             | `crescent-*-x64-setup.exe` |
+| Linux               | `.AppImage` 或 `.deb`      |
 
 建议先用 Release 中的 `SHA256SUMS.txt` 校验下载文件。
 
@@ -185,12 +188,12 @@ Crescent 特别适合这些人：
 - 经常通过 SSH 排查问题的运维工程师。
 - 负责 Kubernetes、Docker、Linux 主机的 SRE。
 - 需要把排障流程沉淀成 SOP 的平台团队。
-- 想把内部 OpenAPI / MCP 工具接入 AI Agent 的开发者。
+- 希望 AI Agent 贴着真实终端工作、执行可审核命令的开发者。
 - 不满足于“AI 只给建议”，希望 AI 能围绕真实环境闭环工作的工程师。
 
 ## Roadmap
 
-Crescent 目前已经具备可用 MVP 的核心能力：本地终端、模型配置、OpenAPI 工具、ReAct / Plan-and-Execute、Agent 运行面板、命令审核、Skills 和知识库等。
+Crescent 目前已经具备可用 MVP 的核心能力：本地终端、模型配置、终端闭环 Agent 执行、Agent 运行面板、命令审核、Skills 和知识库等。
 
 Phase 1–4 产品与分发基础设施已就绪：基于 GitHub Releases 的应用内更新、打包冒烟检查，以及在配置证书密钥后由 CI 执行签名/公证（见 [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)）。
 

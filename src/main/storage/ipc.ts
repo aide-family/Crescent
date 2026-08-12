@@ -87,14 +87,11 @@ export function registerStorageIpc(): void {
     return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
   })
 
-  ipcMain.handle(
-    'storage:get-agent-log',
-    (_, payload?: { tabId?: string; logId?: number }) => {
-      const tabId = payload?.tabId?.trim() ?? ''
-      const logId = typeof payload?.logId === 'number' ? payload.logId : Number.NaN
-      return getAgentLog(tabId, logId)
-    }
-  )
+  ipcMain.handle('storage:get-agent-log', (_, payload?: { tabId?: string; logId?: number }) => {
+    const tabId = payload?.tabId?.trim() ?? ''
+    const logId = typeof payload?.logId === 'number' ? payload.logId : Number.NaN
+    return getAgentLog(tabId, logId)
+  })
 
   ipcMain.handle(
     'storage:list-agent-logs',

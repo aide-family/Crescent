@@ -7,7 +7,11 @@ import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { appTerminalTheme } from '@renderer/lib/design-system'
-import { createCrescentBootstrapFilter, filterCrescentBootstrapOutput, getSubterminalWidths } from '@renderer/lib/terminal-text'
+import {
+  createCrescentBootstrapFilter,
+  filterCrescentBootstrapOutput,
+  getSubterminalWidths
+} from '@renderer/lib/terminal-text'
 import {
   appendTerminalOutputRing,
   readTerminalOutputRing

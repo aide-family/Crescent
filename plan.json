@@ -3,12 +3,7 @@
   "phase": "next — Architecture + Features + Bugfix + UI",
   "updatedAt": "2026-07-31T13:20:00+08:00",
   "goal": "Stabilize release/runtime defects, extract App.tsx hotspots, finish Phase 3 workflow leftovers, and polish operational UI without expanding marketing chrome.",
-  "tracks": [
-    "architecture",
-    "features",
-    "bugfix",
-    "ui"
-  ],
+  "tracks": ["architecture", "features", "bugfix", "ui"],
   "sequencing": [
     "Stabilize release path: env/password regression (mac + win) + connection-failure tests + signing plan",
     "Architecture slices: TerminalPane → AgentPanel while tests stay green",
@@ -53,51 +48,37 @@
       "id": "plan",
       "title": "Create executable development plan",
       "status": "completed",
-      "tests": [
-        "manual: plan.json exists and is updated as tasks complete"
-      ]
+      "tests": ["manual: plan.json exists and is updated as tasks complete"]
     },
     {
       "id": "model-provider-config",
       "title": "Add model provider and default-agent configuration",
       "status": "completed",
-      "tests": [
-        "unit: provider config resolves model/baseUrl/apiKey without leaking secrets"
-      ]
+      "tests": ["unit: provider config resolves model/baseUrl/apiKey without leaking secrets"]
     },
     {
       "id": "agent-runtime",
       "title": "Complete common AI Agent runtime: brain, memory, planner, tools, sessions",
       "status": "completed",
-      "tests": [
-        "unit: mode/config normalization and memory persistence behavior"
-      ]
+      "tests": ["unit: mode/config normalization and memory persistence behavior"]
     },
     {
       "id": "openapi-tools",
       "title": "Harden OpenAPI dynamic tool loading and execution pipeline",
       "status": "completed",
-      "tests": [
-        "unit: OpenAPI paths convert to OpenAI function tools"
-      ]
+      "tests": ["unit: OpenAPI paths convert to OpenAI function tools"]
     },
     {
       "id": "renderer-controls",
       "title": "Expose provider/model/agent controls in shadcn UI",
       "status": "completed",
-      "tests": [
-        "typecheck: renderer API and UI compile"
-      ]
+      "tests": ["typecheck: renderer API and UI compile"]
     },
     {
       "id": "verification",
       "title": "Run automated verification before final handoff",
       "status": "completed",
-      "tests": [
-        "npm run test",
-        "npm run typecheck",
-        "npm run build"
-      ]
+      "tests": ["npm run test", "npm run typecheck", "npm run build"]
     },
     {
       "id": "n1-openapi-settings-ui",
@@ -119,10 +100,7 @@
       "iteration": "A",
       "status": "completed",
       "dependsOn": [],
-      "tests": [
-        "unit: hung requests abort on timeout",
-        "unit: retry/backoff behavior covered"
-      ]
+      "tests": ["unit: hung requests abort on timeout", "unit: retry/backoff behavior covered"]
     },
     {
       "id": "n3-log-redaction",
@@ -155,9 +133,7 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": [
-        "n3-log-redaction"
-      ],
+      "dependsOn": ["n3-log-redaction"],
       "tests": [
         "unit: trace export includes tool chain with redacted secrets",
         "manual: export JSON from current/history run; Markdown export still works"
@@ -169,9 +145,7 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": [
-        "n2-openapi-timeout-retry"
-      ],
+      "dependsOn": ["n2-openapi-timeout-retry"],
       "tests": [
         "integration: tool execution against local mock HTTP server without external network",
         "npm run test"
@@ -183,9 +157,7 @@
       "priority": "P2",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "n1-openapi-settings-ui"
-      ],
+      "dependsOn": ["n1-openapi-settings-ui"],
       "tests": [
         "unit: profiles persist and active profile resolves correctly",
         "manual: save at least two profiles and switch between them"
@@ -197,9 +169,7 @@
       "priority": "P2",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "n1-openapi-settings-ui"
-      ],
+      "dependsOn": ["n1-openapi-settings-ui"],
       "tests": [
         "typecheck: renderer compiles after extraction",
         "manual: settings sheet behavior unchanged"
@@ -238,11 +208,7 @@
         "n8-extract-settings-panel",
         "n9-renderer-tests"
       ],
-      "tests": [
-        "npm run test",
-        "npm run typecheck",
-        "npm run build"
-      ]
+      "tests": ["npm run test", "npm run typecheck", "npm run build"]
     },
     {
       "id": "p5-bug-mac-env-regression",
@@ -284,11 +250,7 @@
       "status": "completed",
       "dependsOn": [],
       "notes": "Presentational TerminalPane extracted. xterm lifecycle still in App.tsx; follow-up hook after props stabilize (ARCHITECTURE.md step 2).",
-      "tests": [
-        "typecheck: renderer compiles",
-        "npm run test",
-        "npm run lint"
-      ]
+      "tests": ["typecheck: renderer compiles", "npm run test", "npm run lint"]
     },
     {
       "id": "p5-arch-agent-panel",
@@ -297,15 +259,9 @@
       "priority": "P0",
       "iteration": "A",
       "status": "completed",
-      "dependsOn": [
-        "p5-arch-terminal-pane"
-      ],
+      "dependsOn": ["p5-arch-terminal-pane"],
       "notes": "AgentPanel owns log list + input dock; App retains submit/run ownership.",
-      "tests": [
-        "typecheck: renderer compiles",
-        "npm run test",
-        "npm run lint"
-      ]
+      "tests": ["typecheck: renderer compiles", "npm run test", "npm run lint"]
     },
     {
       "id": "p5-feat-win-password-env",
@@ -314,9 +270,7 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": [
-        "p5-bug-mac-env-regression"
-      ],
+      "dependsOn": ["p5-bug-mac-env-regression"],
       "notes": "Reads HKCU\\Environment then HKLM session Environment via reg query; expands REG_EXPAND_SZ. PowerShell profile deferred.",
       "tests": [
         "unit: parseRegQueryValue / expandWindowsEnvRefs / HKCU→HKLM fallback",
@@ -332,10 +286,7 @@
       "status": "completed",
       "dependsOn": [],
       "notes": "Carry over unfinished ROADMAP Phase 3 item.",
-      "tests": [
-        "unit: templates persist per profile",
-        "manual: pin and run a workflow from UI"
-      ]
+      "tests": ["unit: templates persist per profile", "manual: pin and run a workflow from UI"]
     },
     {
       "id": "p5-feat-tool-allow-deny",
@@ -358,9 +309,7 @@
       "priority": "P1",
       "iteration": "B",
       "status": "completed",
-      "dependsOn": [
-        "p5-bug-connection-failure-regression"
-      ],
+      "dependsOn": ["p5-bug-connection-failure-regression"],
       "tests": [
         "manual: bad host/password does not infinitely reconnect",
         "manual: peer-terminal errors land on session chat tab"
@@ -373,13 +322,9 @@
       "priority": "P0",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "p5-arch-agent-panel"
-      ],
+      "dependsOn": ["p5-arch-agent-panel"],
       "notes": "Follow docs/UI_DESIGN_SYSTEM.md; accent #13c2c2; no new palette.",
-      "tests": [
-        "manual: user/assistant blocks clearer than command/status rows"
-      ]
+      "tests": ["manual: user/assistant blocks clearer than command/status rows"]
     },
     {
       "id": "p5-ui-empty-error-states",
@@ -388,12 +333,8 @@
       "priority": "P0",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "p5-bug-connection-failure-regression"
-      ],
-      "tests": [
-        "manual: connection failure shows recovery CTA in chat/terminal"
-      ]
+      "dependsOn": ["p5-bug-connection-failure-regression"],
+      "tests": ["manual: connection failure shows recovery CTA in chat/terminal"]
     },
     {
       "id": "p5-arch-settings-wiki-history",
@@ -402,9 +343,7 @@
       "priority": "P1",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "p5-arch-agent-panel"
-      ],
+      "dependsOn": ["p5-arch-agent-panel"],
       "tests": [
         "typecheck: renderer compiles",
         "manual: settings/skills/wiki/history flows unchanged"
@@ -419,9 +358,7 @@
       "status": "completed",
       "dependsOn": [],
       "notes": "Also covers ROADMAP Phase 4 onboarding; keep in-app, do not expand README.",
-      "tests": [
-        "manual: fresh profile sees one-time onboarding"
-      ]
+      "tests": ["manual: fresh profile sees one-time onboarding"]
     },
     {
       "id": "p5-feat-app-update-channel",
@@ -432,9 +369,7 @@
       "status": "completed",
       "dependsOn": [],
       "notes": "GitHub Releases provider; Settings AppUpdateCard; IPC update:* channels.",
-      "tests": [
-        "manual: update check against configured feed"
-      ]
+      "tests": ["manual: update check against configured feed"]
     },
     {
       "id": "p5-bug-signing-notarize",
@@ -445,9 +380,7 @@
       "status": "completed",
       "dependsOn": [],
       "notes": "docs/CODE_SIGNING.md + release.yml conditional signing when CSC_*/APPLE_* secrets present.",
-      "tests": [
-        "manual: downloaded signed build opens without xattr workaround"
-      ]
+      "tests": ["manual: downloaded signed build opens without xattr workaround"]
     },
     {
       "id": "p5-ui-session-switcher-forms",
@@ -456,12 +389,8 @@
       "priority": "P1",
       "iteration": "C",
       "status": "completed",
-      "dependsOn": [
-        "p5-ui-conversation-hierarchy"
-      ],
-      "tests": [
-        "manual: peer badges / active execution indicator readable"
-      ]
+      "dependsOn": ["p5-ui-conversation-hierarchy"],
+      "tests": ["manual: peer badges / active execution indicator readable"]
     },
     {
       "id": "p5-phase-exit",
@@ -478,11 +407,7 @@
         "p5-feat-prompt-templates",
         "p5-feat-tool-allow-deny"
       ],
-      "tests": [
-        "npm run test",
-        "npm run typecheck",
-        "npm run lint"
-      ]
+      "tests": ["npm run test", "npm run typecheck", "npm run lint"]
     }
   ]
 }

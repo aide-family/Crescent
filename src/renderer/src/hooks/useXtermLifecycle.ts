@@ -242,15 +242,22 @@ export function useXtermLifecycle({
         terminalModeRef.current = tab.terminalMode
         terminalCwdRef.current = tab.terminalCwd
         pipePromptRef.current = formatPipePrompt(tab.terminalCwd)
+        // A connection may have been queued while the tab already had a live
+        // session (e.g. connect requested between render and mount). Consume
+        // it here so the login automation still starts.
+        const existingPending = pendingSshRef.current.get(tab.id)
+        if (existingPending) {
+          pendingSshRef.current.delete(tab.id)
+          void executeConnectionCommands(existingPending, tab.id)
+        }
         return
       }
 
       const dimensions = fitAddon.proposeDimensions()
-      const pendingConnection = pendingSshRef.current.get(tab.id)
       if (typeof process !== 'undefined' && process.env?.CRESCENT_DEBUG_CONN === '1') {
         console.info(
           '[conn-trace]',
-          `lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingConnection)}`
+          `lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingSshRef.current.get(tab.id))}`
         )
       }
       let session = await window.api.terminal.start({
@@ -283,6 +290,10 @@ export function useXtermLifecycle({
         terminalReady: true,
         terminalStartError: undefined
       }))
+      // Re-read AFTER the spawn: connectToConnection may set pendingSshRef while
+      // the PTY is starting (first-launch /connect). A pre-await snapshot would
+      // miss it and leave the tab stuck with no login automation at all.
+      const pendingConnection = pendingSshRef.current.get(tab.id)
       if (pendingConnection) {
         pendingSshRef.current.delete(tab.id)
         // Start a local shell first, then run SSH only after password/env checks pass.

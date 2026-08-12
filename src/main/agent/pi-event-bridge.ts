@@ -20,7 +20,9 @@ const MAX_TOOL_RESULT_CHARS = 8_000
 
 /**
  * Map Pi coding-agent session events onto Crescent renderer AgentEvent shapes
- * that useAgentRuns already understands (token / tool / thought / status / error / done).
+ * that useAgentRuns already understands (token / tool / thought / status / error).
+ * The host emits `done` itself from the final assistant text after prompt() resolves,
+ * so `agent_end` needs no bridge mapping.
  */
 export function mapPiSessionEventToAgentEvents(
   event: AgentSessionEvent,
@@ -108,8 +110,6 @@ export function mapPiSessionEventToAgentEvents(
     }
     case 'compaction_start':
       return [{ type: 'status', message: `Compacting context (${event.reason})…`, ...base }]
-    case 'agent_end':
-      return [{ type: 'done', message: 'Agent finished.', ...base }]
     default:
       return []
   }

@@ -16,13 +16,7 @@ const path = require('node:path')
 const PLATFORM_RULES = [
   {
     id: 'macos-dmg-or-zip',
-    patterns: [
-      /\.dmg$/i,
-      /mac.*\.zip$/i,
-      /darwin.*\.zip$/i,
-      /-arm64.*\.zip$/i,
-      /-x64.*\.zip$/i
-    ]
+    patterns: [/\.dmg$/i, /mac.*\.zip$/i, /darwin.*\.zip$/i, /-arm64.*\.zip$/i, /-x64.*\.zip$/i]
   },
   {
     id: 'windows-installer',

@@ -66,7 +66,9 @@ export class CommandAuditor {
       if (!parsed && modelSource === 'heuristic' && modelId !== this.config.model.trim()) {
         modelId = this.config.model.trim() || this.brain.defaultModel
         modelSource = 'fallback'
-        console.info(`[command-audit] model=${modelId} source=${modelSource} (retry after non-JSON)`)
+        console.info(
+          `[command-audit] model=${modelId} source=${modelSource} (retry after non-JSON)`
+        )
         content = await this.requestAudit(input.command, modelId, controller.signal)
         parsed = tryParseAuditLevel(content)
       }
@@ -74,7 +76,9 @@ export class CommandAuditor {
       const audit = parsed
         ? buildAuditFromLevel(parsed.level, parsed.reason, language)
         : buildHighAudit(
-            language === 'zh-CN' ? '命令审核响应不是有效 JSON。' : 'Command audit response was not valid JSON.',
+            language === 'zh-CN'
+              ? '命令审核响应不是有效 JSON。'
+              : 'Command audit response was not valid JSON.',
             content.trim() || (language === 'zh-CN' ? '审核响应为空。' : 'Empty audit response.'),
             language
           )
@@ -85,7 +89,9 @@ export class CommandAuditor {
         throw new CommandAuditTimeoutError()
       }
       return buildHighAudit(
-        language === 'zh-CN' ? '命令审核模型在执行前失败。' : 'Command audit model failed before execution.',
+        language === 'zh-CN'
+          ? '命令审核模型在执行前失败。'
+          : 'Command audit model failed before execution.',
         error instanceof Error ? error.message : String(error),
         language
       )
@@ -143,7 +149,9 @@ export function parseAuditResult(
   const parsed = tryParseAuditLevel(content)
   if (!parsed) {
     return buildHighAudit(
-      language === 'zh-CN' ? '命令审核响应不是有效 JSON。' : 'Command audit response was not valid JSON.',
+      language === 'zh-CN'
+        ? '命令审核响应不是有效 JSON。'
+        : 'Command audit response was not valid JSON.',
       content.trim() || (language === 'zh-CN' ? '审核响应为空。' : 'Empty audit response.'),
       language
     )
@@ -151,7 +159,9 @@ export function parseAuditResult(
   return buildAuditFromLevel(parsed.level, parsed.reason, language)
 }
 
-export function tryParseAuditLevel(content: string): { level: 'low' | 'high'; reason: string } | null {
+export function tryParseAuditLevel(
+  content: string
+): { level: 'low' | 'high'; reason: string } | null {
   try {
     const parsed = parseJsonFromModelContent<{ level?: unknown; reason?: unknown; risk?: unknown }>(
       content

@@ -78,8 +78,11 @@ export function findNewestPromptSignal(
 
 function isLocalPromptLine(line: string): boolean {
   // oh-my-zsh / powerlevel10k arrows, bare `$`/`%` and `~ $` style prompts.
-  if (/^➜\s+\S/.test(line)) return true
-  if (/^❯\s/.test(line)) return true
+  // The arrow must be the WHOLE line: `➜  ~ ssh …` is a pasted command echo,
+  // not a local prompt signal, and treating it as one would poison the
+  // alignment/guard logic while the ssh login is still in progress.
+  if (/^➜\s+\S+\s*$/.test(line)) return true
+  if (/^❯\s+\S+\s*$/.test(line)) return true
   if (/^[%$]\s*$/.test(line)) return true
   if (/^~\s+[%$]\s*$/.test(line)) return true
   return false
@@ -143,8 +146,10 @@ export function isLocalShellPromptVisible(output: string): boolean {
     const trimmed = stripAnsi(line).trim()
     if (!trimmed) continue
     // oh-my-zsh / powerlevel10k arrows, bare `$`/`%` and `~ $` style prompts.
-    if (/^➜\s+\S/.test(trimmed)) return true
-    if (/^❯\s/.test(trimmed)) return true
+    // Same whole-line rule as findNewestPromptSignal: a line like
+    // `➜  ~ ssh …` is a command echo, not the local prompt itself.
+    if (/^➜\s+\S+\s*$/.test(trimmed)) return true
+    if (/^❯\s+\S+\s*$/.test(trimmed)) return true
     if (/^[%$]\s*$/.test(trimmed)) return true
     if (/^~\s+[%$]\s*$/.test(trimmed)) return true
   }

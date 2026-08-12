@@ -14,10 +14,7 @@ export const AGENT_STREAM_LIVE_FLUSH = {
   persistDebounceMs: 400
 } as const
 
-export function clampAgentText(
-  text: string,
-  maxChars = AGENT_LOG_ENTRY_MAX_CHARS
-): string {
+export function clampAgentText(text: string, maxChars = AGENT_LOG_ENTRY_MAX_CHARS): string {
   if (text.length <= maxChars) return text
   const omitted = text.length - maxChars
   return `${text.slice(0, maxChars)}\n\n…[truncated ${omitted} chars]`

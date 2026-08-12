@@ -54,7 +54,11 @@ installGlobalErrorReporting()
 const locale = resolveBootLocale()
 const t = dictionaries[locale]
 
-function BootShell({ dictionary }: { dictionary: (typeof dictionaries)[Locale] }): React.JSX.Element {
+function BootShell({
+  dictionary
+}: {
+  dictionary: (typeof dictionaries)[Locale]
+}): React.JSX.Element {
   const [mode, setMode] = useState<'loading' | 'none' | 'pending' | 'crash-loop'>('loading')
 
   useEffect(() => {

@@ -51,10 +51,7 @@ export function clearFailedCommandFingerprints(runId: string): void {
 }
 
 /** Pure helper for tests: whether a normalized fingerprint is blocked. */
-export function shouldBlockFailedRetry(
-  fingerprint: string,
-  failed: ReadonlySet<string>
-): boolean {
+export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<string>): boolean {
   return Boolean(fingerprint && failed.has(fingerprint))
 }
 

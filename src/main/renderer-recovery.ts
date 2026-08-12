@@ -1,4 +1,10 @@
-import { BrowserWindow, Notification, dialog, ipcMain, type RenderProcessGoneDetails } from 'electron'
+import {
+  BrowserWindow,
+  Notification,
+  dialog,
+  ipcMain,
+  type RenderProcessGoneDetails
+} from 'electron'
 import { writeFileSync } from 'fs'
 
 import { writeCrescentDbFlag, readCrescentDbFlag } from './crescent-sqlite'
@@ -41,8 +47,7 @@ export function registerRendererRecoveryIpc(_iconPath: string): void {
   })
 
   ipcMain.handle('app:export-renderer-diagnostics', async () => {
-    const target =
-      BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
     const result = await dialog.showSaveDialog(target ?? undefined, {
       title: 'Export Crescent diagnostics',
       defaultPath: `crescent-diagnostics-${Date.now()}.txt`,
@@ -72,7 +77,13 @@ export function registerRendererRecoveryIpc(_iconPath: string): void {
 
 export function attachRendererCrashRecovery(
   mainWindow: BrowserWindow,
-  options: { iconPath: string; notifyTitle: string; notifyBody: string; loopTitle: string; loopBody: string }
+  options: {
+    iconPath: string
+    notifyTitle: string
+    notifyBody: string
+    loopTitle: string
+    loopBody: string
+  }
 ): void {
   mainWindow.webContents.on('render-process-gone', (_event, details: RenderProcessGoneDetails) => {
     handleRendererGone(mainWindow, details, options)

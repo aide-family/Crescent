@@ -21,7 +21,7 @@ function summarizeToolSteps(steps: AgentRunStep[]): string[] {
       ]
         .filter(Boolean)
         .join('\n')
-      )
+    )
   }
   return lines
 }

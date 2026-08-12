@@ -37,10 +37,7 @@ export type SopChatFn = (
   options?: { signal?: AbortSignal }
 ) => Promise<{ choices: Array<{ message?: { content?: string | null } }> }>
 
-export type SopSaveFn = (input: {
-  title: string
-  content: string
-}) => Promise<WikiDocument>
+export type SopSaveFn = (input: { title: string; content: string }) => Promise<WikiDocument>
 
 /** Strip any tool-calling fields so SOP generation cannot invoke tools. */
 export function stripToolsFromChatParams<T extends Record<string, unknown>>(params: T): T {
@@ -168,8 +165,7 @@ export async function generateSopFromSummary(
     return { ok: true, title: parsed.title, content: parsed.content, generated: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const timedOut =
-      controller.signal.aborted || /aborted|timeout|timed out/i.test(message)
+    const timedOut = controller.signal.aborted || /aborted|timeout|timed out/i.test(message)
     return {
       ok: false,
       error: message,
@@ -197,9 +193,10 @@ export async function generateAndSaveSop(
   const fallbackTitle = input.fallbackTitle?.trim()
   const fallbackContent = input.fallbackContent?.trim()
 
-  const title = generated.ok && generated.title?.trim()
-    ? generated.title.trim()
-    : ensureSopTitle(fallbackTitle || 'SOP')
+  const title =
+    generated.ok && generated.title?.trim()
+      ? generated.title.trim()
+      : ensureSopTitle(fallbackTitle || 'SOP')
   const content =
     generated.ok && generated.content?.trim()
       ? generated.content.trim()

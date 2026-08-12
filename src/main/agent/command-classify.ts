@@ -63,8 +63,7 @@ export async function classifyCommand(
     })
     const elapsedMs = Date.now() - startedAt
     // Clamp mistaken high ratings when the command is statically read-only.
-    const level: 'low' | 'high' =
-      audit.risk === 'low' || isStaticallyReadonly(cmd) ? 'low' : 'high'
+    const level: 'low' | 'high' = audit.risk === 'low' || isStaticallyReadonly(cmd) ? 'low' : 'high'
     const human =
       level === 'high'
         ? buildHighRiskHumanSummary(cmd, ctx.locale)
@@ -111,9 +110,7 @@ function buildHighRiskHumanSummary(cmd: string, locale: string | undefined): str
 function buildReadOnlyHumanSummary(cmd: string, locale: string | undefined): string {
   const zh = resolveZh(locale)
   const verb = extractRiskVerb(cmd)
-  return zh
-    ? `该命令为只读查询（${verb}）。`
-    : `This command is a read-only query (${verb}).`
+  return zh ? `该命令为只读查询（${verb}）。` : `This command is a read-only query (${verb}).`
 }
 
 function buildRuleAudit(

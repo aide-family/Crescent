@@ -4,16 +4,16 @@ This document records the expected security posture for the AI terminal workbenc
 
 ## Capability Boundaries
 
-| Capability | Boundary | Expected Control |
-| --- | --- | --- |
-| Terminal command execution | Local or connected shell state | Command audit, approval for state-changing commands, watchdog timeouts |
-| Sub-terminal execution | Local temporary shell | Same audit and timeout behavior as terminal execution |
-| Local file writes | Crescent client filesystem | User-supplied or confirmed destination, no implicit report path |
-| Local document parsing | Crescent client filesystem | User-referenced path, extension-specific parsers |
-| SSH connections | Remote shell | Explicit connection selection and user-driven credential prompt |
-| OpenAPI tools | External HTTP API | Tool catalog display and provider configuration review |
-| MCP tools | Local stdio server with arbitrary server-defined behavior | Server allowlist by configuration and tool catalog display |
-| Model providers | External AI endpoint | API key storage and secret redaction in logs/UI |
+| Capability                 | Boundary                                                  | Expected Control                                                       |
+| -------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Terminal command execution | Local or connected shell state                            | Command audit, approval for state-changing commands, watchdog timeouts |
+| Sub-terminal execution     | Local temporary shell                                     | Same audit and timeout behavior as terminal execution                  |
+| Local file writes          | Crescent client filesystem                                | User-supplied or confirmed destination, no implicit report path        |
+| Local document parsing     | Crescent client filesystem                                | User-referenced path, extension-specific parsers                       |
+| SSH connections            | Remote shell                                              | Explicit connection selection and user-driven credential prompt        |
+| OpenAPI tools              | External HTTP API                                         | Tool catalog display and provider configuration review                 |
+| MCP tools                  | Local stdio server with arbitrary server-defined behavior | Server allowlist by configuration and tool catalog display             |
+| Model providers            | External AI endpoint                                      | API key storage and secret redaction in logs/UI                        |
 
 ## Tool Metadata
 

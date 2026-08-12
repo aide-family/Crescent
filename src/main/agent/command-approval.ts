@@ -120,12 +120,9 @@ export function requestCommandApproval(input: {
       input.signal?.removeEventListener('abort', onAbort)
       resolve(decision)
     }
-    const timeout = setTimeout(
-      () => {
-        settlePendingCommandApproval(requestId, { approved: false })
-      },
-      60 * 1000
-    )
+    const timeout = setTimeout(() => {
+      settlePendingCommandApproval(requestId, { approved: false })
+    }, 60 * 1000)
     const onAbort = (): void => {
       settlePendingCommandApproval(requestId, {
         approved: false,
@@ -133,8 +130,7 @@ export function requestCommandApproval(input: {
       })
     }
 
-    const purposeAbort =
-      input.audit.risk === 'high' ? new AbortController() : undefined
+    const purposeAbort = input.audit.risk === 'high' ? new AbortController() : undefined
 
     pendingCommandApprovals.set(requestId, {
       runId: input.runId,

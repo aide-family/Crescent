@@ -98,6 +98,7 @@ export function AgentPanel({
   onClarifyConfirm,
   onClarifyDismiss,
   onToggleTerminalPane,
+  onHideChatPane,
   onSelectSession,
   onSelectTerminal,
   onModelChange,
@@ -182,6 +183,7 @@ export function AgentPanel({
   onClarifyConfirm?: (payload: ConnectionClarifyConfirmPayload) => void
   onClarifyDismiss?: () => void
   onToggleTerminalPane: () => void
+  onHideChatPane: () => void
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
   onModelChange: (selection: string) => void
@@ -233,7 +235,20 @@ export function AgentPanel({
     activeAgentPending || sessionChatTab.agentBusy || Boolean(sessionChatTab.agentInput.trim())
 
   return (
-    <aside className="app-agent-pane flex min-h-0 min-w-[360px] flex-1 flex-col">
+    <aside className="app-agent-pane relative flex min-h-0 min-w-[360px] flex-1 flex-col">
+      <button
+        type="button"
+        className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/50 opacity-70 transition-all hover:bg-muted/60 hover:text-foreground hover:opacity-100"
+        aria-label={t.app.hideChat}
+        title={t.app.hideChat}
+        onClick={onHideChatPane}
+      >
+        {terminalPaneFirst ? (
+          <PanelRightCloseIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : (
+          <PanelLeftCloseIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
+      </button>
       <AgentLogList
         logRef={agentLogRef}
         entries={sessionChatTab.agentLog}
