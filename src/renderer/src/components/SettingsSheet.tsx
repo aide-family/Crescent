@@ -189,7 +189,7 @@ export function SettingsSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetTrigger asChild>
         <Button
-          variant="outline"
+          variant="ghost"
           size="icon-sm"
           aria-label={t.common.settings}
           title={t.common.settings}
@@ -230,8 +230,8 @@ export function SettingsSheet({
                   return (
                     <div
                       key={provider.id}
-                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
-                        selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                        selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                       }`}
                       role="button"
                       tabIndex={0}
@@ -322,7 +322,7 @@ export function SettingsSheet({
               </div>
             )}
 
-            <FieldGroup>
+            <FieldGroup className="gap-4">
               <Field>
                 <FieldLabel htmlFor="model">{t.settings.model}</FieldLabel>
                 <Select
@@ -409,8 +409,8 @@ export function SettingsSheet({
                       return (
                         <div
                           key={file.name}
-                          className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
-                            selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                          className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                            selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                           }`}
                           role="button"
                           tabIndex={0}
@@ -523,7 +523,7 @@ export function SettingsSheet({
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3">
-                <FieldGroup>
+                <FieldGroup className="gap-4">
                   <div className="grid grid-cols-2 gap-2">
                     <Field>
                       <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>
@@ -561,7 +561,7 @@ export function SettingsSheet({
                       type="password"
                       value={editingProvider.apiKey ?? ''}
                       onChange={(event) => onUpdateSettingsProvider('apiKey', event.target.value)}
-                      placeholder="sk-... or leave blank when env key is available"
+                      placeholder="sk-… or leave blank when env key is available"
                     />
                   </Field>
                   <Field>
@@ -705,7 +705,7 @@ export function SettingsSheet({
                 </Button>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3">
-                <FieldGroup>
+                <FieldGroup className="gap-4">
                   <Field>
                     <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/10 p-3">
                       <div className="min-w-0 space-y-1">

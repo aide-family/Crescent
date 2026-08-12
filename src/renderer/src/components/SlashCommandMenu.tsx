@@ -21,7 +21,7 @@ export function SlashCommandMenu({
   if (!visible) return null
 
   return (
-    <div className="absolute right-2 bottom-full left-2 z-50 mb-2 overflow-hidden rounded-md border bg-popover text-xs text-popover-foreground shadow-lg">
+    <div className="absolute right-2 bottom-full left-2 z-50 mb-2 overflow-hidden rounded-xl border bg-popover/95 text-xs text-popover-foreground shadow-lg backdrop-blur-sm overscroll-contain">
       <div className="border-b px-3 py-2 text-muted-foreground">{t.input.slashCommandHint}</div>
       <div ref={listRef} className="max-h-56 overflow-auto p-1">
         {options.map((command, index) => (
@@ -29,9 +29,9 @@ export function SlashCommandMenu({
             key={command.id}
             type="button"
             data-slash-command-index={index}
-            className={`block w-full rounded px-2 py-2 text-left transition-colors ${
+            className={`block w-full rounded-md px-2 py-2 text-left transition-[background-color,color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
               index === selectedIndex
-                ? 'bg-secondary text-secondary-foreground'
+                ? 'bg-primary/12 text-foreground'
                 : 'hover:bg-muted/50'
             }`}
             onMouseDown={(event) => {

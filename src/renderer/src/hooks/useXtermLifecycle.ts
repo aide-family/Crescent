@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm'
 
 import { formatPipePrompt } from '../lib/app-shell'
 import { resolveConnectionReconnectPolicy } from '../lib/connection-automation-policy'
-import { appTerminalTheme } from '../lib/design-system'
+import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '../lib/design-system'
 import {
   handlePipeTerminalInput as applyPipeTerminalInput,
   observeTerminalHostResize,
@@ -135,9 +135,9 @@ export function useXtermLifecycle({
     const terminal = new Terminal({
       cursorBlink: true,
       convertEol: true,
-      fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
+      fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
+      fontSize: APP_TERMINAL_TYPOGRAPHY.fontSize,
+      lineHeight: APP_TERMINAL_TYPOGRAPHY.lineHeight,
       theme: appTerminalTheme
     })
     const fitAddon = new FitAddon()

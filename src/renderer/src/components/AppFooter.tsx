@@ -34,15 +34,15 @@ export function AppFooter({
   const dotState: 'ready' | 'pending' | 'not-ready' = disconnected ? 'pending' : shellState
 
   return (
-    <footer className="app-footer flex h-9 shrink-0 items-center justify-between gap-3 px-4 text-xs text-muted-foreground">
+    <footer className="app-footer flex h-8 shrink-0 items-center justify-between gap-3 px-3 text-[11px] text-muted-foreground">
       <span className="inline-flex min-w-0 items-center gap-2 truncate">
         <StatusDot state={dotState} />
         <span className="truncate" title={activeTab.terminalStartError || undefined}>
           {statusLabel}
           {failed && activeTab.terminalStartError ? ` · ${activeTab.terminalStartError}` : null}
         </span>
-        <span className="truncate text-muted-foreground/70">
-          {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}
+        <span className="truncate font-mono tabular-nums text-muted-foreground/70">
+          {t.app.workingDirectory}: {activeTab.terminalCwd || '…'}
         </span>
         {failed && onRetryShell ? (
           <Button

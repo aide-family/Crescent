@@ -38,7 +38,7 @@ export function CloseTabsConfirmModal({
 
   return (
     <div
-      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby="close-tabs-confirm-title"
@@ -46,7 +46,7 @@ export function CloseTabsConfirmModal({
         if (event.target === event.currentTarget) onCancel()
       }}
     >
-      <div className="app-modal-panel w-full max-w-md overflow-hidden rounded-lg border bg-background shadow-xl">
+      <div className="app-modal-panel w-full max-w-md overflow-hidden rounded-xl border bg-background">
         <div className="app-modal-header flex items-start gap-3 border-b px-4 py-3">
           <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
           <div className="min-w-0">
@@ -144,7 +144,7 @@ export function PasswordPromptInlineCard({
   return (
     <form
       onSubmit={onSubmit}
-      className="min-w-0 rounded-md border border-amber-500/35 bg-amber-500/5"
+      className="min-w-0 rounded-xl border border-amber-500/35 bg-amber-500/5"
     >
       <div className="flex items-start justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
@@ -217,12 +217,12 @@ export function CommandApprovalModal({
 
   return (
     <div
-      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby="command-review-title"
     >
-      <div className="app-modal-panel flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl">
+      <div className="app-modal-panel flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background">
         <div className="app-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -304,10 +304,10 @@ export function CommandApprovalModal({
           </section>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
-          <Button type="button" variant="outline" onClick={() => onResolve(false)}>
+          <Button type="button" variant="destructive" onClick={() => onResolve(false)}>
             {t.commandReview.reject}
           </Button>
-          <Button type="button" variant="destructive" onClick={() => onResolve(true)}>
+          <Button type="button" onClick={() => onResolve(true)}>
             {t.commandReview.approve}
           </Button>
         </div>

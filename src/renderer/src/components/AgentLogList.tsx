@@ -126,7 +126,7 @@ export function AgentLogList({
   return (
     <div
       ref={logRef}
-      className="relative z-0 min-h-0 min-w-0 flex-1 overflow-auto px-4 pb-4 text-sm"
+      className="relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm"
     >
       {onLoadEarlier && hasEarlierLogs ? (
         <div className="mb-3 flex justify-center pt-2">
@@ -143,11 +143,11 @@ export function AgentLogList({
         </div>
       ) : null}
       {entries.length === 0 && !thinking ? (
-        <div className="mt-8 rounded-lg border border-dashed border-border/70 bg-muted/15 px-4 py-6 text-center">
-          <div className="text-sm font-medium text-foreground">
+        <div className="mt-10 rounded-xl border border-dashed border-border/60 bg-muted/10 px-5 py-8 text-center">
+          <div className="text-sm font-medium text-pretty text-foreground">
             {t.input.emptyConversationTitle}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-pretty text-muted-foreground">
             {t.input.emptyConversationHint}
           </p>
         </div>
@@ -174,12 +174,14 @@ export function AgentLogList({
             >
               {conversation ? (
                 <>
-                  <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                  <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="font-semibold tracking-wide text-foreground/80">
+                      <span className="font-medium text-foreground/70">
                         {logRoleLabel(entry.kind, t)}
                       </span>
-                      <time dateTime={entry.createdAt}>{formatLogTime(entry.createdAt)}</time>
+                      <time className="tabular-nums text-muted-foreground/70" dateTime={entry.createdAt}>
+                        {formatLogTime(entry.createdAt)}
+                      </time>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
@@ -230,7 +232,7 @@ export function AgentLogList({
         })}
 
       {showRecovery ? (
-        <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-3">
+        <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             {connectionRecovery?.connecting ? (
               <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
@@ -293,14 +295,14 @@ export function AgentLogList({
       ) : null}
 
       {thinking ? (
-        <div className="mt-3 rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2 font-medium text-foreground">
-            <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
-            {t.input.thinking}
+        <div className="mt-3 flex items-start gap-2 px-0.5 text-xs text-muted-foreground">
+          <span className="mt-1.5 inline-block size-1.5 animate-pulse rounded-full bg-primary" />
+          <div className="min-w-0">
+            <div className="font-medium text-foreground/80">{t.input.thinking}</div>
+            <p className="mt-0.5 leading-relaxed">
+              {thinkingMessage || t.input.thinkingAnalyzingRequest}
+            </p>
           </div>
-          <p className="mt-1 leading-relaxed">
-            {thinkingMessage || t.input.thinkingAnalyzingRequest}
-          </p>
         </div>
       ) : null}
     </div>

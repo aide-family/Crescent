@@ -51,10 +51,10 @@ export function SkillManageStatus({
 
   const className =
     message.type === 'success'
-      ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300'
+      ? 'border-primary/35 bg-primary/8 text-foreground'
       : message.type === 'error'
         ? 'border-destructive/40 bg-destructive/10 text-destructive'
-        : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+        : 'border-border/70 bg-muted/20 text-muted-foreground'
 
   return (
     <pre
@@ -74,14 +74,14 @@ export function StatusDot({
 }): React.JSX.Element {
   const className =
     state === 'ready'
-      ? 'bg-green-500 shadow-green-500/40'
+      ? 'bg-green-500'
       : state === 'pending'
-        ? 'bg-yellow-400 shadow-yellow-400/40'
-        : 'bg-red-500 shadow-red-500/40'
+        ? 'bg-yellow-400'
+        : 'bg-red-500'
 
   return (
     <span
-      className={`inline-block size-2 shrink-0 rounded-full shadow-[0_0_8px] ${className}`}
+      className={`inline-block size-2 shrink-0 rounded-full ${className}`}
       title={title}
       aria-label={title}
     />
@@ -137,9 +137,9 @@ export function TerminalActivityDot({
   title?: string
 }): React.JSX.Element {
   const className = executing
-    ? 'bg-primary shadow-[0_0_8px] shadow-primary/50 ring-1 ring-primary/60'
+    ? 'bg-primary ring-1 ring-primary/50'
     : active
-      ? 'bg-green-500 shadow-[0_0_8px] shadow-green-500/50'
+      ? 'bg-green-500'
       : 'bg-muted-foreground/30'
 
   return (

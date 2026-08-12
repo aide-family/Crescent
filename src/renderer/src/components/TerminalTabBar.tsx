@@ -55,7 +55,7 @@ export function TerminalTabBar({
   }, [activeTabId, tabs.length, terminalPage])
 
   return (
-    <div className="app-tabbar flex h-10 shrink-0 items-center gap-1 px-2">
+    <div className="app-tabbar flex h-9 shrink-0 items-center gap-1 px-1.5">
       {tabs.length === 0 ? (
         <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
           <span className="truncate text-xs font-medium text-muted-foreground">
@@ -87,12 +87,12 @@ export function TerminalTabBar({
                   type="button"
                   role="tab"
                   aria-selected={selected}
-                  className={`inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition ${
+                  className={`inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition-[background-color,border-color,color,box-shadow] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
                     selected
-                      ? 'border-primary/70 bg-primary/15 text-foreground shadow-sm ring-1 ring-primary/40'
+                      ? 'border-primary/50 bg-primary/12 text-foreground'
                       : executing
-                        ? 'border-primary/40 bg-primary/10 text-foreground'
-                        : 'border-transparent text-muted-foreground hover:border-white/10 hover:bg-muted/40 hover:text-foreground'
+                        ? 'border-primary/35 bg-primary/8 text-foreground'
+                        : 'border-transparent text-muted-foreground hover:border-white/8 hover:bg-white/5 hover:text-foreground'
                   }`}
                   onClick={() => onSelectTab(tab.id)}
                   onContextMenu={(event) => {
@@ -129,7 +129,7 @@ export function TerminalTabBar({
       )}
       {tabMenu && (
         <div
-          className="fixed z-50 min-w-36 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
+          className="fixed z-50 min-w-36 overflow-hidden rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-lg overscroll-contain"
           style={{ left: tabMenu.x, top: tabMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >

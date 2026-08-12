@@ -43,7 +43,7 @@ export function summarizeHistoryMessage(value: string): string {
     .trim()
 
   if (compact.length <= 120) return compact
-  return `${compact.slice(0, 120)}...`
+  return `${compact.slice(0, 120)}…`
 }
 
 export function HistoryPanel({
@@ -74,13 +74,13 @@ export function HistoryPanel({
         </SheetHeader>
         <div className="app-sheet-list min-h-0 flex-1 space-y-2 overflow-auto px-4">
           {loading && (
-            <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
               {t.history.loading}
             </div>
           )}
           {!loading && items.length === 0 && (
-            <div className="rounded-md border p-3 text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
               {t.history.empty}
             </div>
           )}
@@ -91,7 +91,7 @@ export function HistoryPanel({
               return (
                 <div
                   key={item.tabId}
-                  className="rounded-md border bg-card p-3 text-sm transition hover:border-primary/60 hover:bg-muted/30"
+                  className="rounded-lg border border-border/70 bg-card/70 p-3 text-sm transition-[border-color,background-color] hover:border-border hover:bg-muted/25"
                 >
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1 overflow-hidden">

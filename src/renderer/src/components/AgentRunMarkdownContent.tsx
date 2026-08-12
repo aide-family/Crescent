@@ -94,7 +94,7 @@ export function AgentRunMarkdownContent({
                     }
                     className={
                       feedbackRating === 'like'
-                        ? 'text-emerald-400 hover:text-emerald-300'
+                        ? 'text-primary hover:text-primary/80'
                         : feedbackRating === 'dislike'
                           ? 'opacity-40'
                           : undefined

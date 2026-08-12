@@ -127,6 +127,14 @@ export function FullAgentRunOverlay({
     }
   }, [activeTab, hasMoreSteps, loading, stepLimit])
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const headingIdPrefix = useMemo(() => `full-run-${logId}-`, [])
   const headings = useMemo(
     () => extractMarkdownHeadings(visibleResult, headingIdPrefix),
@@ -135,7 +143,7 @@ export function FullAgentRunOverlay({
 
   return createPortal(
     <div
-      className="app-fullscreen-overlay fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur"
+      className="app-fullscreen-overlay fixed inset-0 z-50 flex flex-col overscroll-contain bg-background/98 backdrop-blur"
       role="dialog"
       aria-modal="true"
       aria-label={t.input.fullRunTitle}
@@ -193,7 +201,7 @@ export function FullAgentRunOverlay({
           className="min-h-0 flex-1 overflow-auto p-5"
         >
           {previewOnlyHint ? (
-            <div className="mx-auto mb-3 max-w-5xl rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+            <div className="mx-auto mb-3 max-w-5xl rounded-lg border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
               {t.input.fullRunPreviewOnly}
             </div>
           ) : null}
@@ -206,7 +214,7 @@ export function FullAgentRunOverlay({
                 </div>
               ) : (
                 <>
-                  <div className="min-w-0 space-y-2 rounded-md border bg-card/80 p-4">
+                  <div className="min-w-0 space-y-2 rounded-xl border bg-card/80 p-4">
                     {visibleSteps.map((step) => (
                       <FullRunStepRow key={step.id} step={step} t={t} />
                     ))}
@@ -233,7 +241,7 @@ export function FullAgentRunOverlay({
                       <a
                         key={heading.id}
                         href={`#${heading.id}`}
-                        className="block truncate rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-background hover:text-foreground"
+                        className="block truncate rounded-md px-2 py-1.5 text-xs text-muted-foreground outline-none hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                         style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 10}px` }}
                       >
                         {heading.text}
@@ -242,7 +250,7 @@ export function FullAgentRunOverlay({
                   </div>
                 )}
               </nav>
-              <div className="min-w-0 space-y-3 rounded-md border bg-card/80 p-5">
+              <div className="min-w-0 space-y-3 rounded-xl border bg-card/80 p-5">
                 {resultMarkdown ? (
                   <>
                     <MarkdownContent
@@ -296,8 +304,8 @@ function FullRunStepRow({ step, t }: { step: AgentRunStep; t: Dictionary }): Rea
   }
   if (step.kind === 'tool') {
     return (
-      <div className="min-w-0 space-y-1 rounded border border-sky-500/20 bg-sky-500/5 px-2.5 py-2 text-[12px]">
-        <div className="font-semibold text-sky-700 dark:text-sky-300">{step.name}</div>
+      <div className="min-w-0 space-y-1 rounded-lg border border-border/60 bg-muted/15 px-2.5 py-2 text-[12px]">
+        <div className="font-medium text-foreground/85">{step.name}</div>
         {step.command ? (
           <pre className="overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">
             {step.command}

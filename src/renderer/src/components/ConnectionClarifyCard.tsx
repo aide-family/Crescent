@@ -97,7 +97,7 @@ export function ConnectionClarifyCard({
 
   return (
     <div
-      className="mx-3 mb-2 space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2"
+      className="mx-3 mb-2 space-y-2 rounded-lg border border-border/50 bg-card/40 px-3 py-2"
       role="listbox"
       aria-label={t.terminal.clarifySelectConnection}
     >
@@ -113,9 +113,9 @@ export function ConnectionClarifyCard({
                 type="button"
                 role="option"
                 aria-selected={selected}
-                className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[12px] ${
+                className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none transition-[background-color] focus-visible:ring-2 focus-visible:ring-ring/50 ${
                   selected
-                    ? 'bg-amber-500/15 text-foreground'
+                    ? 'bg-primary/12 text-foreground'
                     : 'text-muted-foreground hover:bg-muted/40'
                 }`}
                 onClick={() => setSelectedIndex(index)}

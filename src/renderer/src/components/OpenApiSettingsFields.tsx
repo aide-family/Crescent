@@ -63,8 +63,8 @@ export function OpenApiProfileList({
             return (
               <div
                 key={profile.id}
-                className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-md border bg-card p-3 text-xs transition hover:bg-muted/30 ${
-                  selected ? 'border-primary/70 ring-1 ring-primary/30' : ''
+                className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                  selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                 }`}
                 role="button"
                 tabIndex={0}
@@ -177,7 +177,7 @@ export function OpenApiProfileEditorFields({
   const openApiTools = filterOpenApiValidationTools(validation)
 
   return (
-    <FieldGroup>
+    <FieldGroup className="gap-4">
       <Field>
         <FieldLabel htmlFor="openapi-profile-name">{t.settings.openApiProfileName}</FieldLabel>
         <Input

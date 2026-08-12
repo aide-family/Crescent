@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { BookOpenIcon, PlugIcon, ServerIcon, SparklesIcon } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -20,11 +21,20 @@ export function OnboardingModal({
   onOpenSkills: () => void
   onAddExampleOpenApi: () => void
 }): React.JSX.Element | null {
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') onDismiss()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onDismiss])
+
   if (!open) return null
 
   return (
     <div
-      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
@@ -32,9 +42,9 @@ export function OnboardingModal({
         if (event.target === event.currentTarget) onDismiss()
       }}
     >
-      <div className="app-modal-panel w-full max-w-lg overflow-hidden rounded-lg border bg-background shadow-xl">
+      <div className="app-modal-panel w-full max-w-lg overflow-hidden rounded-xl border bg-background">
         <div className="app-modal-header border-b px-4 py-3">
-          <h2 id="onboarding-title" className="text-sm font-semibold">
+          <h2 id="onboarding-title" className="text-sm font-semibold text-pretty">
             {t.onboarding.title}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">{t.onboarding.description}</p>
@@ -63,7 +73,7 @@ export function OnboardingModal({
             actionLabel={t.onboarding.openSkills}
             onAction={onOpenSkills}
           />
-          <div className="rounded-md border border-dashed bg-muted/10 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-dashed bg-muted/10 p-3 text-xs text-muted-foreground">
             <div className="flex items-start gap-2">
               <BookOpenIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span>{t.onboarding.hint}</span>
@@ -101,7 +111,7 @@ function OnboardingStep({
   onSecondary?: () => void
 }): React.JSX.Element {
   return (
-    <div className="rounded-md border bg-card p-3">
+    <div className="rounded-lg border border-border/70 bg-card/70 p-3">
       <div className="flex items-start gap-3">
         <div className="mt-0.5">{icon}</div>
         <div className="min-w-0 flex-1">

@@ -6,7 +6,7 @@ import { ChevronDownIcon, ChevronUpIcon, PlusIcon, Trash2Icon, XIcon } from 'luc
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
-import { appTerminalTheme } from '@renderer/lib/design-system'
+import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '@renderer/lib/design-system'
 import {
   createCrescentBootstrapFilter,
   filterCrescentBootstrapOutput,
@@ -50,8 +50,9 @@ function SubterminalXtermPane({
     const terminal = new Terminal({
       convertEol: true,
       cursorBlink: true,
-      fontSize: 11,
-      lineHeight: 1.2,
+      fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
+      fontSize: APP_TERMINAL_TYPOGRAPHY.subterminalFontSize,
+      lineHeight: APP_TERMINAL_TYPOGRAPHY.subterminalLineHeight,
       theme: appTerminalTheme
     })
     const fitAddon = new FitAddon()
@@ -144,7 +145,7 @@ export function SubterminalPanel({
   if (activeTab.subTerminals.length === 0) {
     if (!onOpenLocalSubterminal) return null
     return (
-      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-t border-white/10 bg-background/95 px-2">
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-t border-white/8 bg-[var(--app-terminal-rail)] px-2">
         <div className="min-w-0 truncate text-xs font-medium text-muted-foreground">
           {t.terminal.temporarySubterminal}
         </div>
@@ -166,14 +167,14 @@ export function SubterminalPanel({
 
   return (
     <div
-      className="shrink-0 border-t border-white/10 bg-background/95"
+      className="shrink-0 border-t border-white/8 bg-[var(--app-terminal-rail)]"
       style={{
         height: collapsed ? undefined : panelHeight
       }}
     >
       {!collapsed && (
         <div
-          className="h-1.5 cursor-row-resize bg-border/60 hover:bg-primary/60"
+          className="h-1 cursor-row-resize bg-transparent hover:bg-primary/50"
           role="separator"
           aria-orientation="horizontal"
           aria-label={t.terminal.resizeSubterminalHeight}
@@ -251,7 +252,7 @@ export function SubterminalPanel({
                   className="flex min-w-0"
                   style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
                 >
-                  <section className="flex min-w-0 flex-1 flex-col rounded-md border bg-card text-xs">
+                  <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-white/8 bg-black/30 text-xs">
                     <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
                       <div className="min-w-0">
                         <p className="truncate font-medium">
@@ -290,7 +291,7 @@ export function SubterminalPanel({
                   </section>
                   {nextSubterminal && (
                     <div
-                      className="mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-border hover:bg-primary/60"
+                      className="mx-1 w-1 shrink-0 cursor-col-resize rounded-full bg-white/10 hover:bg-primary/60"
                       role="separator"
                       aria-orientation="vertical"
                       aria-label={t.terminal.resizeSubterminals}
