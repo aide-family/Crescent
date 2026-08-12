@@ -97,9 +97,7 @@ export function FullAgentRunOverlay({
   }, [logId, runId, t, tabId])
 
   const resultMarkdown =
-    fullDocument?.resultMarkdown?.trim() ||
-    fullDocument?.errorMarkdown?.trim() ||
-    resultFallback
+    fullDocument?.resultMarkdown?.trim() || fullDocument?.errorMarkdown?.trim() || resultFallback
   const resultChunks = useMemo(
     () => chunkTextByChars(resultMarkdown, AGENT_RESULT_CHUNK_CHARS),
     [resultMarkdown]
@@ -282,7 +280,9 @@ function FullRunStepRow({ step, t }: { step: AgentRunStep; t: Dictionary }): Rea
   if (step.kind === 'thought') {
     return (
       <div className="text-[12px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap break-words">
-        <span className="mr-1.5 not-italic text-muted-foreground/70">{t.input.thinkingProcessCompleted}</span>
+        <span className="mr-1.5 not-italic text-muted-foreground/70">
+          {t.input.thinkingProcessCompleted}
+        </span>
         {step.text}
       </div>
     )
@@ -327,9 +327,7 @@ function FullRunStepRow({ step, t }: { step: AgentRunStep; t: Dictionary }): Rea
   }
   if (step.kind === 'approval') {
     return (
-      <div className="rounded border px-2 py-1.5 text-xs text-muted-foreground">
-        {step.command}
-      </div>
+      <div className="rounded border px-2 py-1.5 text-xs text-muted-foreground">{step.command}</div>
     )
   }
   return <div className="text-xs text-muted-foreground">—</div>

@@ -217,10 +217,12 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
 
 /** Synced “logged in / ready to reuse” for routing (no async PTY snapshot). */
 export function isActiveLoggedInTerminal(
-  tab: Pick<
-    AgentTerminalTab,
-    'terminalReady' | 'connectionId' | 'isSsh' | 'sessionId' | 'terminalStartError'
-  > | undefined,
+  tab:
+    | Pick<
+        AgentTerminalTab,
+        'terminalReady' | 'connectionId' | 'isSsh' | 'sessionId' | 'terminalStartError'
+      >
+    | undefined,
   options?: { sessionAligned?: 'aligned' | 'drifted' | 'unknown' }
 ): boolean {
   if (!tab) return false
@@ -240,9 +242,7 @@ export function shouldPreferActiveLoggedIn(input: {
   mentionedConnection?: ConnectionConfig
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
 }): boolean {
-  if (
-    !isActiveLoggedInTerminal(input.activeTab, { sessionAligned: input.sessionAligned })
-  ) {
+  if (!isActiveLoggedInTerminal(input.activeTab, { sessionAligned: input.sessionAligned })) {
     return false
   }
   if (
@@ -263,8 +263,7 @@ export function buildClarifyOptions(
   const badge = currentBadge?.trim()
   const mapped = connections.map((connection) => {
     const isCurrent = Boolean(activeConnectionId && connection.id === activeConnectionId)
-    const label =
-      isCurrent && badge ? `${badge} · ${connection.name}` : connection.name
+    const label = isCurrent && badge ? `${badge} · ${connection.name}` : connection.name
     return { id: connection.id, label, isCurrent }
   })
   if (!activeConnectionId) return mapped
@@ -286,8 +285,7 @@ export function prioritizeClarifyOptions(
     return {
       id: option.id,
       isCurrent,
-      label:
-        isCurrent && badge && !alreadyBadged ? `${badge} · ${option.label}` : option.label
+      label: isCurrent && badge && !alreadyBadged ? `${badge} · ${option.label}` : option.label
     }
   })
   if (!activeConnectionId) return decorated

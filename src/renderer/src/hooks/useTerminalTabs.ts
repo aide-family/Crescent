@@ -135,11 +135,7 @@ export function useTerminalTabs({
   const sessionChatTabs = useMemo(() => listSessionChatTabs(tabs), [tabs])
   const activeAgentPending = sessionChatTab.agentBusy || sessionChatTab.agentThinking
   const terminalTabs = useMemo(
-    () =>
-      tabs.filter(
-        (tab) =>
-          terminalPage === 'terminal' || tab.sessionId || tab.terminalReady
-      ),
+    () => tabs.filter((tab) => terminalPage === 'terminal' || tab.sessionId || tab.terminalReady),
     [tabs, terminalPage]
   )
 

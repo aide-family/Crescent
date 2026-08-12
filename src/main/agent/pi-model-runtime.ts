@@ -85,7 +85,9 @@ export async function resolvePiModel(
   return all[0]
 }
 
-export function resolveThinkingLevelForModel(model: Model<Api> | undefined): 'off' | 'high' {
+export function resolveThinkingLevelForModel(
+  model: Pick<Model<Api>, 'reasoning'> | undefined
+): 'off' | 'high' {
   if (!model?.reasoning) return 'off'
   return 'high'
 }
@@ -133,7 +135,7 @@ export async function listPiAvailableModels(config: AgentConfig): Promise<
   })
 }
 
-function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInput {
+export function toProviderConfigInput(provider: AgentProviderConfig): ProviderConfigInput {
   const deepseek = isDeepSeekProvider(provider)
   const baseUrl = normalizeProviderBaseUrl(provider.baseUrl, deepseek)
   const gatewayCompat = openAiCompatibleModelCompat(provider.baseUrl)

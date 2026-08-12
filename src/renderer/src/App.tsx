@@ -19,6 +19,7 @@ import {
   HistoryIcon,
   LanguagesIcon,
   Loader2Icon,
+  MessageSquareIcon,
   PlugIcon,
   PlusIcon,
   ServerIcon,
@@ -177,6 +178,7 @@ import {
 } from '@renderer/lib/agent-input'
 import { buildFallbackSopSeed, buildSopGenerationSummary } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
+import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
 import {
   buildConnectionCommands,
   buildConnectionLoginActions,
@@ -646,7 +648,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
-  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('terminal')
+  // First-open shows the terminal and keeps the chat area hidden; the chat can
+  // be summoned from the right-edge rail or the header toggle.
+  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('chat')
   const [paneOrder, setPaneOrder] = useState<PaneOrder>(() => resolveInitialPaneOrder())
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
@@ -3723,7 +3727,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     flushSync(() => {
       setActiveTabId(tabId)
       setTerminalPage('terminal')
-      setHiddenPane(null)
     })
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     setActiveExecutionTerminal(chatTabId, tabId)
@@ -3856,8 +3859,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       // Recovery brake #2: never reinit + re-knock ssh on an already connected
       // terminal. Read the SSOT first; aligned means reuse as-is.
       const context = await window.api.terminal.getContext(targetTabId)
-      if (context.alignment === 'aligned') {
+      // A session that is already sitting on a REMOTE prompt host is usable
+      // even when the SSOT alignment says "drifted" (e.g. the configured host
+      // is an IP while the remote prompt shows a hostname). Re-learn the
+      // observed host as an alias instead of killing a working login.
+      const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
+      if (context.alignment === 'aligned' || onRemoteHost) {
         connTrace('connect-reuse-aligned', `tab=${targetTabId}`, 'skipping re-login')
+        if (onRemoteHost && context.alignment !== 'aligned') {
+          const verified = await window.api.terminal.confirmLogin({ tabId: targetTabId })
+          connTrace('reuse-reconfirm', `tab=${targetTabId}`, `ok=${verified?.ok}`)
+        }
         markChatTabReady(chatTabId)
         finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
         if (postConnectionTasksRef.current.get(targetTabId)?.length) {
@@ -3869,8 +3881,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // run the normal login chain, awaited. The xterm lifecycle effect does
         // NOT re-run for the same active tab, so deferring the spawn to
         // pendingSshRef left the reconnect with no PTY, no login, no settle.
+        // Mark the tab as reconnecting BEFORE stopping: the stop fires
+        // terminal:exit, whose handler would otherwise start a SECOND
+        // restore+login chain concurrently (two pasted ssh commands, two
+        // password prompts). With the mark in place it waits for our spawn.
+        reconnectingTabsRef.current.add(targetTabId)
         void window.api.terminal.stop(targetTabId)
-        await spawnAndLoginConnection(connection, targetTabId)
+        try {
+          await spawnAndLoginConnection(connection, targetTabId)
+        } finally {
+          reconnectingTabsRef.current.delete(targetTabId)
+        }
       }
     } else if (!forceFreshLogin && targetTab?.sessionId) {
       void executeConnectionCommands(connection, targetTabId)
@@ -7257,8 +7278,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       {historySheet}
       {wikiSheet}
       <section
-        className={`app-frame flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
+        className={`app-frame relative flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
       >
+        {hiddenPane === 'chat' && (
+          <button
+            type="button"
+            className="chat-pane-rail group absolute inset-y-0 right-3 z-20 my-auto flex h-32 w-9 items-center justify-center rounded-xl border border-border/70 bg-background/70 shadow-lg shadow-black/10 backdrop-blur-md transition-all duration-200 hover:w-11 hover:border-primary/40 hover:bg-background/95"
+            aria-label={t.app.showChat}
+            title={t.app.showChat}
+            onClick={() => setHiddenPane(null)}
+          >
+            <span className="flex flex-col items-center gap-2 text-muted-foreground transition-colors group-hover:text-foreground">
+              <MessageSquareIcon className="h-4 w-4" aria-hidden="true" />
+              <span className="text-[10px] font-medium tracking-[0.18em] [writing-mode:vertical-rl]">
+                {t.app.chat}
+              </span>
+            </span>
+          </button>
+        )}
         {hiddenPane !== 'terminal' && (
           <TerminalPane
             widthPercent={terminalPanePercent}
@@ -7475,6 +7512,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onToggleTerminalPane={() => {
               setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
             }}
+            onHideChatPane={() => setHiddenPane('chat')}
             onSelectSession={(groupId) => {
               const focusTab =
                 getSessionTerminals(tabsRef.current, groupId).find(
@@ -7695,11 +7733,20 @@ async function runConnectionCommandSequence(
   const [sshCommand, ...loginActions] = commands
   if (!sshCommand) return true
 
+  // Paste into a shell that is still sourcing startup files can drop the
+  // command: zsh's line editor discards input typed before the first prompt
+  // (the PTY still echoes it, which is why the terminal shows the line). Wait
+  // for the shell to be interactive before pasting, then proceed regardless on
+  // timeout so a slow/headless prompt never blocks the login forever.
+  const shellInteractive = await waitForShellInteractive(tabId)
+  connTrace('login-stage', `tab=${tabId}`, `shellInteractive=${shellInteractive}`)
+
   const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
 
   if (loginActions.length === 0) return true
 
+  let sentAnyAction = false
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
     const actionStart = Date.now()
@@ -7715,37 +7762,57 @@ async function runConnectionCommandSequence(
       `readyAfterMs=${Date.now() - actionStart}`
     )
     if (!ready) {
+      // The interactive-prompt event can be missed by the renderer data
+      // subscription (coalescing/backpressure). Re-check the live context; if
+      // the terminal is actually at a password prompt now, send the action
+      // anyway instead of aborting the whole login.
+      const context = await window.api.terminal.getContext(tabId)
+      if (hasInteractivePrompt(context.output)) {
+        connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
+        sendTerminalInput(action, tabId)
+        appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+        sentAnyAction = true
+        continue
+      }
+      // Still not ready: the login may have completed without an interactive
+      // prompt (key-based auth) or the terminal may be waiting on the user.
+      // Do NOT abort here — waitForPromptHostOrTimeout is the authoritative
+      // completion check and runs right after this sequence.
       appendLog(
         {
-          kind: 'error',
+          kind: 'status',
           text: `${t.terminal.outputSettleTimeout} (${index + 1})`
         },
         logTabId
       )
-      return false
+      break
     }
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+    sentAnyAction = true
   }
 
-  // After the final login action, wait for its output to settle so the remote
-  // prompt observed by confirm-login is the post-ssh target — not the jump-host
-  // prompt that briefly appears before the last action completes. Otherwise
-  // confirm-login learns the wrong host and the drift gate blocks the first
-  // agent command.
-  const settled = await waitForTerminalIdle(tabId, {
-    ignoredEcho: loginActions[loginActions.length - 1]
-  })
-  if (!settled) {
-    appendLog(
-      {
-        kind: 'error',
-        text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
-      },
-      logTabId
-    )
-    return false
+  if (sentAnyAction) {
+    // After the final login action, wait for its output to settle so the remote
+    // prompt observed by confirm-login is the post-ssh target — not the
+    // jump-host prompt that briefly appears before the last action completes.
+    // A settle timeout is NOT fatal: the remote prompt may be slow, or the
+    // terminal may have no new output while waiting on the user.
+    // waitForPromptHostOrTimeout below decides success/failure authoritatively.
+    const settled = await waitForTerminalIdle(tabId, {
+      ignoredEcho: loginActions[loginActions.length - 1],
+      timeoutMs: 15_000
+    })
+    if (!settled) {
+      appendLog(
+        {
+          kind: 'status',
+          text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
+        },
+        logTabId
+      )
+    }
   }
 
   return true
@@ -7762,6 +7829,7 @@ async function runConnectionLoginActionSequence(
   if (loginActions.length === 0) return true
 
   const firstActionReady = waitForTerminalActionPrompt(tabId)
+  let sentAnyAction = false
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
     const actionStart = Date.now()
@@ -7777,34 +7845,46 @@ async function runConnectionLoginActionSequence(
       `readyAfterMs=${Date.now() - actionStart}`
     )
     if (!ready) {
+      const context = await window.api.terminal.getContext(tabId)
+      if (hasInteractivePrompt(context.output)) {
+        connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
+        sendTerminalInput(action, tabId)
+        appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+        sentAnyAction = true
+        continue
+      }
       appendLog(
         {
-          kind: 'error',
+          kind: 'status',
           text: `${t.terminal.outputSettleTimeout} (${index + 1})`
         },
         logTabId
       )
-      return false
+      break
     }
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+    sentAnyAction = true
   }
 
-  // Same settle wait as the ssh command sequence: the final login action's
-  // output (and its resulting prompt) must be stable before confirm-login runs.
-  const settled = await waitForTerminalIdle(tabId, {
-    ignoredEcho: loginActions[loginActions.length - 1]
-  })
-  if (!settled) {
-    appendLog(
-      {
-        kind: 'error',
-        text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
-      },
-      logTabId
-    )
-    return false
+  if (sentAnyAction) {
+    // Same settle wait as the ssh command sequence: the final login action's
+    // output (and its resulting prompt) must be stable before confirm-login
+    // runs. Non-fatal: the prompt-host wait below is the authoritative check.
+    const settled = await waitForTerminalIdle(tabId, {
+      ignoredEcho: loginActions[loginActions.length - 1],
+      timeoutMs: 15_000
+    })
+    if (!settled) {
+      appendLog(
+        {
+          kind: 'status',
+          text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
+        },
+        logTabId
+      )
+    }
   }
 
   return true
@@ -7919,6 +7999,24 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
       resolve(value)
     }
   })
+}
+
+/**
+ * Wait until the terminal shell has produced an interactive prompt (local or
+ * remote host style). A freshly spawned PTY is ready only after the shell
+ * finishes its startup files; pasting earlier loses the command in zsh.
+ */
+async function waitForShellInteractive(tabId: string, timeoutMs = 10_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const context = await window.api.terminal.getContext(tabId)
+    const signal = findNewestPromptSignal(context.output)
+    if (signal?.kind === 'local' || signal?.kind === 'host') return true
+    await sleep(200)
+  }
+
+  return false
 }
 
 /**

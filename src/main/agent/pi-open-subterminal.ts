@@ -1,10 +1,10 @@
-import { Type, type Static } from 'typebox'
+import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { openTemporarySubterminal, resolveParentTerminalTabId } from '../terminal/ipc'
 import { listConnections } from '../connections/ipc'
-import type { PiCodingAgentModule } from './pi-sdk'
+import { loadPiAi, type PiCodingAgentModule } from './pi-sdk'
 import { getPtyBashExecContext, updatePtyBashExecutionTabId } from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
@@ -15,19 +15,19 @@ export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。'
 ].join('\n')
 
-const openSubterminalSchema = Type.Object({
-  mode: Type.Union([Type.Literal('local'), Type.Literal('ssh')]),
-  name: Type.Optional(Type.String()),
-  connectionId: Type.Optional(Type.String())
-})
+export type OpenSubterminalMode = 'local' | 'ssh'
 
-export type OpenSubterminalParams = Static<typeof openSubterminalSchema>
+export interface OpenSubterminalParams {
+  mode: OpenSubterminalMode
+  name?: string
+  connectionId?: string
+}
 
 export interface AgentSubterminalOpenedPayload {
   parentTabId: string
   tabId: string
   name: string
-  mode: 'local' | 'ssh'
+  mode: OpenSubterminalMode
   terminalMode: 'pty' | 'pipe'
   connectionId?: string
   chatTabId?: string
@@ -191,10 +191,18 @@ export async function openAgentSubterminal(input: {
   }
 }
 
-export function createOpenSubterminalToolDefinition(
+export async function createOpenSubterminalToolDefinition(
   pi: PiCodingAgentModule,
   sessionKey: string
-): ReturnType<PiCodingAgentModule['defineTool']> {
+): Promise<ReturnType<PiCodingAgentModule['defineTool']>> {
+  const { StringEnum } = await loadPiAi()
+  const parameters = Type.Object({
+    // StringEnum (pi-ai) instead of Type.Union/Type.Literal: Google's API and
+    // other providers don't support anyOf/const patterns for string enums.
+    mode: StringEnum(['local', 'ssh'] as const),
+    name: Type.Optional(Type.String()),
+    connectionId: Type.Optional(Type.String())
+  })
   return pi.defineTool({
     name: 'open_subterminal',
     label: 'Open subterminal',
@@ -209,7 +217,7 @@ export function createOpenSubterminalToolDefinition(
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
       'For a new SSH target the current pane cannot reach, call open_subterminal(mode=ssh, connectionId=...).'
     ],
-    parameters: openSubterminalSchema,
+    parameters,
     executionMode: 'sequential',
     async execute(_toolCallId, params) {
       const result = await openAgentSubterminal({

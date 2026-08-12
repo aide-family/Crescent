@@ -4,7 +4,7 @@ English | [简体中文](./README.zh-CN.md)
 
 An open-source operations workbench that brings AI into the real terminal.
 
-Crescent is a desktop AI command workbench built with Electron, React, and TypeScript. It helps operations engineers, backend developers, and platform teams bring local terminals, SSH connections, AI agents, MCP/OpenAPI tools, and reusable operational knowledge into one focused workspace.
+Crescent is a desktop AI command workbench built with Electron, React, and TypeScript. It helps operations engineers, backend developers, and platform teams bring local terminals, SSH connections, AI agents, command review, Skills, and reusable operational knowledge into one focused workspace.
 
 > If you frequently switch between servers, Kubernetes clusters, Docker hosts, and SSH terminals, and you want AI to do more than “suggest commands”, Crescent is designed for that workflow: inspect the real terminal context, execute step by step, review results, and preserve the final knowledge.
 
@@ -16,7 +16,7 @@ Many AI tools can generate shell commands. In real operations and troubleshootin
 - Generated commands still need manual copy and paste, and command output must be copied back into the chat.
 - Risky operations such as file deletion, service restarts, and configuration changes need clear review before execution.
 - Troubleshooting knowledge often disappears after the incident is closed.
-- OpenAPI tools, MCP tools, terminal commands, and document parsing are usually scattered across different products.
+- AI suggestions, terminal sessions, and accumulated operational knowledge are usually scattered across different products.
 
 Crescent aims to solve this by keeping AI close to the real terminal and making each step observable, reviewable, and reusable.
 
@@ -69,20 +69,24 @@ It also supports local Skill management and a local knowledge base. You can turn
 
 This makes Crescent more than a chat interface. It is a workbench for gradually accumulating team knowledge.
 
-### 5. OpenAPI and MCP Tooling
+### 5. Focused Agent Tool Runtime
 
-Crescent can load OpenAPI documents and expose operations as Agent tools. It can also connect to custom stdio MCP servers.
+The Agent runs on a small, reviewable tool set instead of an open-ended plugin surface:
 
-This makes it possible to connect internal platforms, CMDB systems, alerting tools, deployment systems, ticketing systems, and other APIs into the same Agent workflow.
+- `read` / `write` / `edit` for files inside the Agent workspace.
+- `bash` executed in the visible terminal pane, so every command is observable and high-risk commands still need approval.
+- `open_subterminal` to dock a dedicated local or SSH terminal for cross-context work.
+
+OpenAPI and MCP tooling from earlier versions has been removed from the Agent loop; their settings remain only for config migration.
 
 ## Comparison
 
-| Option               | Strength                         | Limitation                                                   | Crescent Difference                                                     |
-| -------------------- | -------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| Plain terminal       | Direct, reliable, controllable   | No AI assistance or context understanding                    | Embeds an Agent beside the terminal and works from real command output  |
-| General AI chat      | Strong reasoning and explanation | Cannot inspect the live terminal; copy/paste heavy           | Connects command execution, output observation, and next-step decisions |
-| API testing tools    | Good for endpoint validation     | Weak for SSH, system troubleshooting, and terminal workflows | Supports OpenAPI tools while preserving terminal-first operations       |
-| Automation platforms | Strong standardization           | Less flexible for exploratory troubleshooting                | Lets teams evolve Skills and SOPs gradually                             |
+| Option               | Strength                         | Limitation                                                   | Crescent Difference                                                           |
+| -------------------- | -------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Plain terminal       | Direct, reliable, controllable   | No AI assistance or context understanding                    | Embeds an Agent beside the terminal and works from real command output        |
+| General AI chat      | Strong reasoning and explanation | Cannot inspect the live terminal; copy/paste heavy           | Connects command execution, output observation, and next-step decisions       |
+| API testing tools    | Good for endpoint validation     | Weak for SSH, system troubleshooting, and terminal workflows | Keeps the Agent grounded in real terminal workflows instead of replacing them |
+| Automation platforms | Strong standardization           | Less flexible for exploratory troubleshooting                | Lets teams evolve Skills and SOPs gradually                                   |
 
 ## Architecture
 
@@ -91,13 +95,12 @@ flowchart TD
   user["User request"] --> ui["Crescent desktop workbench"]
   ui --> terminal["Local terminal / SSH terminal"]
   ui --> agent["AI Agent Core"]
-  agent --> planner["ReAct / Plan-and-Execute"]
   agent --> audit["Command review"]
   audit --> terminal
   agent --> tools["Tool runtime"]
-  tools --> openapi["OpenAPI tools"]
-  tools --> mcp["MCP servers"]
-  tools --> docs["Document / image / audio parsing"]
+  tools --> files["read / write / edit"]
+  tools --> bash["bash in visible terminal"]
+  tools --> subterm["open_subterminal"]
   tools --> wiki["Local knowledge base"]
   wiki --> agent
   terminal --> agent
@@ -111,12 +114,12 @@ The core idea is simple: the Agent should not reason away from the worksite. It 
 
 Download the package for your platform from [Releases](https://github.com/aide-family/Crescent/releases):
 
-| Platform | Recommended asset |
-| --- | --- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg` |
-| macOS Intel | `crescent-*-x64.dmg` |
-| Windows | `crescent-*-x64-setup.exe` |
-| Linux | `.AppImage` or `.deb` |
+| Platform            | Recommended asset          |
+| ------------------- | -------------------------- |
+| macOS Apple Silicon | `crescent-*-arm64.dmg`     |
+| macOS Intel         | `crescent-*-x64.dmg`       |
+| Windows             | `crescent-*-x64-setup.exe` |
+| Linux               | `.AppImage` or `.deb`      |
 
 Verify downloads with `SHA256SUMS.txt` from the same release when possible.
 
@@ -185,12 +188,12 @@ Crescent is especially useful for:
 - Operations engineers who troubleshoot through SSH every day.
 - SREs responsible for Kubernetes, Docker, and Linux hosts.
 - Platform teams that want to turn troubleshooting workflows into SOPs.
-- Developers who want to connect internal OpenAPI / MCP tools to an AI Agent.
+- Developers who want an AI Agent grounded in real terminals with reviewable command execution.
 - Engineers who want AI to operate around real environments instead of only giving suggestions.
 
 ## Roadmap
 
-Crescent already includes the core MVP capabilities: local terminal, model provider configuration, OpenAPI tools, ReAct / Plan-and-Execute modes, Agent run panel, command review, Skills, and a knowledge base.
+Crescent already includes the core MVP capabilities: local terminal, model provider configuration, terminal-grounded Agent execution, Agent run panel, command review, Skills, and a knowledge base.
 
 Phase 1–4 product and distribution plumbing are in place: in-app updates against GitHub Releases, packaging smoke checks, and CI signing/notarization when certificate secrets are configured (see [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)).
 

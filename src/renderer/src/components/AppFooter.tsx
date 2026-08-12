@@ -39,9 +39,7 @@ export function AppFooter({
         <StatusDot state={dotState} />
         <span className="truncate" title={activeTab.terminalStartError || undefined}>
           {statusLabel}
-          {failed && activeTab.terminalStartError
-            ? ` · ${activeTab.terminalStartError}`
-            : null}
+          {failed && activeTab.terminalStartError ? ` · ${activeTab.terminalStartError}` : null}
         </span>
         <span className="truncate text-muted-foreground/70">
           {t.app.workingDirectory}: {activeTab.terminalCwd || '...'}

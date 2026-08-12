@@ -24,6 +24,11 @@ import {
   createOpenSubterminalToolDefinition,
   OPEN_SUBTERMINAL_DISCIPLINE
 } from './pi-open-subterminal'
+import {
+  HOSTED_SESSION_TOOL_PROFILE,
+  needsModelChange,
+  shouldReuseHostedSession
+} from './pi-host-policy'
 import { rejectPendingApprovalsForRun } from './command-approval'
 import {
   buildQuotaResetHint,
@@ -48,8 +53,6 @@ interface HostedSession {
   toolProfile: string
   unsubscribe?: () => void
 }
-
-const TOOL_PROFILE = 'pty-bash-open-subterminal-v2'
 
 interface ActiveRun {
   runId: string
@@ -109,10 +112,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       }
     }
 
-    if (
-      hosted.session.model?.id !== model.id ||
-      hosted.session.model?.provider !== model.provider
-    ) {
+    if (needsModelChange(hosted.session.model, model)) {
       await hosted.session.setModel(model)
     }
 
@@ -358,10 +358,10 @@ async function ensureHostedSession(
 ): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
+  if (shouldReuseHostedSession(existing, cwd)) {
+    return existing as HostedSession
+  }
   if (existing) {
-    if (existing.toolProfile === TOOL_PROFILE && existing.cwd === cwd) {
-      return existing
-    }
     try {
       existing.unsubscribe?.()
       existing.session.dispose()
@@ -479,7 +479,7 @@ async function ensureHostedSession(
   })
   await resourceLoader.reload()
 
-  const openSubterminalTool = createOpenSubterminalToolDefinition(pi, sessionKey)
+  const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
 
   const { session } = await pi.createAgentSession({
     cwd,
@@ -494,7 +494,12 @@ async function ensureHostedSession(
     settingsManager
   })
 
-  const hosted: HostedSession = { sessionKey, session, cwd, toolProfile: TOOL_PROFILE }
+  const hosted: HostedSession = {
+    sessionKey,
+    session,
+    cwd,
+    toolProfile: HOSTED_SESSION_TOOL_PROFILE
+  }
   hostedSessions.set(sessionKey, hosted)
   return hosted
 }

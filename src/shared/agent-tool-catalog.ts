@@ -50,8 +50,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'open_subterminal',
     method: 'post',
     path: 'pi://crescent/open_subterminal',
-    description:
-      'Open a docked local or SSH subterminal and route subsequent bash commands there.',
+    description: 'Open a docked local or SSH subterminal and route subsequent bash commands there.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,

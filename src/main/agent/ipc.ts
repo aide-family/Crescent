@@ -442,10 +442,10 @@ export function registerAgentIpc(): void {
     })
     const sessionKey = payload?.tabId?.trim() || 'default'
     const executionTabId = payload?.executionTabId?.trim() || payload?.tabId?.trim() || ''
-    const wikiIds = [...new Set((payload?.activeWikiIds ?? []).map((id) => id.trim()).filter(Boolean))]
-    const activeWikiDocs = (
-      await Promise.all(wikiIds.map((id) => getWikiDocument(id)))
-    )
+    const wikiIds = [
+      ...new Set((payload?.activeWikiIds ?? []).map((id) => id.trim()).filter(Boolean))
+    ]
+    const activeWikiDocs = (await Promise.all(wikiIds.map((id) => getWikiDocument(id))))
       .filter((doc): doc is NonNullable<typeof doc> => Boolean(doc))
       .map((doc) => ({ title: doc.title, content: doc.content }))
 

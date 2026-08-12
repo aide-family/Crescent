@@ -16,7 +16,7 @@ export function appendTerminalRingText(
   if (maxLines > 0) {
     const lines = next.split('\n')
     if (lines.length > maxLines) {
-      next = lines.slice(-(maxLines)).join('\n')
+      next = lines.slice(-maxLines).join('\n')
     }
   }
   return next

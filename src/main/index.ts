@@ -179,28 +179,24 @@ app.whenReady().then(async () => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  ipcMain.handle(
-    'app:notify-attention',
-    (_, payload?: { title?: string; body?: string }) => {
-      const title = payload?.title?.trim() || 'Crescent'
-      const body = payload?.body?.trim() || ''
-      if (!Notification.isSupported()) return { ok: false }
+  ipcMain.handle('app:notify-attention', (_, payload?: { title?: string; body?: string }) => {
+    const title = payload?.title?.trim() || 'Crescent'
+    const body = payload?.body?.trim() || ''
+    if (!Notification.isSupported()) return { ok: false }
 
-      const notification = new Notification(
-        process.platform === 'darwin' ? { title, body } : { title, body, icon }
-      )
-      notification.on('click', () => {
-        const target =
-          BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
-        if (!target) return
-        if (target.isMinimized()) target.restore()
-        target.show()
-        target.focus()
-      })
-      notification.show()
-      return { ok: true }
-    }
-  )
+    const notification = new Notification(
+      process.platform === 'darwin' ? { title, body } : { title, body, icon }
+    )
+    notification.on('click', () => {
+      const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (!target) return
+      if (target.isMinimized()) target.restore()
+      target.show()
+      target.focus()
+    })
+    notification.show()
+    return { ok: true }
+  })
   initializeCrescentDatabase()
   registerRendererRecoveryIpc(icon)
   const { ensureDefaultInstructionFiles } = await import('./agent/instruction-files')

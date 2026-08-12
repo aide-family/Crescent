@@ -8,13 +8,13 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Downloads
 
-| Platform | Asset | Notes |
-| --- | --- | --- |
-| macOS Apple Silicon | `crescent-{{VERSION}}-arm64.dmg`, `.zip` | Native build for M-series Macs. |
-| macOS Intel | `crescent-{{VERSION}}-x64.dmg`, `.zip` | Native build for Intel Macs. |
-| Windows | `crescent-{{VERSION}}-x64-setup.exe` | NSIS installer. |
-| Linux | `crescent-{{VERSION}}-x64.AppImage`, `.deb` | Choose the package format used by your distribution. |
-| Integrity | `SHA256SUMS.txt` | Verify downloaded files before installing. |
+| Platform            | Asset                                       | Notes                                                |
+| ------------------- | ------------------------------------------- | ---------------------------------------------------- |
+| macOS Apple Silicon | `crescent-{{VERSION}}-arm64.dmg`, `.zip`    | Native build for M-series Macs.                      |
+| macOS Intel         | `crescent-{{VERSION}}-x64.dmg`, `.zip`      | Native build for Intel Macs.                         |
+| Windows             | `crescent-{{VERSION}}-x64-setup.exe`        | NSIS installer.                                      |
+| Linux               | `crescent-{{VERSION}}-x64.AppImage`, `.deb` | Choose the package format used by your distribution. |
+| Integrity           | `SHA256SUMS.txt`                            | Verify downloaded files before installing.           |
 
 ## Highlights
 

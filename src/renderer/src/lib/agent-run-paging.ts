@@ -32,7 +32,11 @@ export function chunkTextByChars(text: string, size = AGENT_RESULT_CHUNK_CHARS):
 }
 
 /** Slice a step list for paginated overlay rendering. */
-export function pageSteps<T>(steps: readonly T[], offset: number, limit = AGENT_STEP_PAGE_SIZE): T[] {
+export function pageSteps<T>(
+  steps: readonly T[],
+  offset: number,
+  limit = AGENT_STEP_PAGE_SIZE
+): T[] {
   const start = Math.max(0, Math.floor(offset))
   const count = Math.max(0, Math.floor(limit))
   if (count === 0 || start >= steps.length) return []

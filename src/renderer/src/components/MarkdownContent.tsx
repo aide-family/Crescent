@@ -32,10 +32,7 @@ import {
 import type { Dictionary } from '@renderer/i18n'
 import { appMermaidThemeVariables } from '@renderer/lib/design-system'
 import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
-import {
-  resolveMermaidBlockUiState,
-  scanMarkdownFence
-} from '@renderer/lib/markdown-fence'
+import { resolveMermaidBlockUiState, scanMarkdownFence } from '@renderer/lib/markdown-fence'
 import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
 import {
   buildMarkdownPreview,
@@ -834,10 +831,7 @@ function MermaidBlock({
         <div className="flex shrink-0 items-center gap-1">
           {svg ? (
             <>
-              <Select
-                key={`export-${exportSelectKey}`}
-                onValueChange={handleMermaidExportFormat}
-              >
+              <Select key={`export-${exportSelectKey}`} onValueChange={handleMermaidExportFormat}>
                 <SelectTrigger
                   className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50"
                   aria-label={t.common.exportDiagram}
@@ -887,9 +881,7 @@ function MermaidBlock({
               aria-label={t.common.enlarge}
             >
               <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-                <span className="text-xs text-muted-foreground">
-                  mermaid · {zoomPercent}%
-                </span>
+                <span className="text-xs text-muted-foreground">mermaid · {zoomPercent}%</span>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Button
                     type="button"

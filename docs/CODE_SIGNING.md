@@ -17,13 +17,13 @@ Signed builds remove Gatekeeper “damaged” false positives on macOS and Smart
 
 ### Repository secrets
 
-| Secret | Purpose |
-| --- | --- |
-| `CSC_LINK` | Base64-encoded `.p12` (or path/URL supported by electron-builder) |
-| `CSC_KEY_PASSWORD` | Password for the `.p12` |
-| `APPLE_API_KEY` | App Store Connect API key `.p8` contents (or file contents) |
-| `APPLE_API_KEY_ID` | Key ID |
-| `APPLE_API_ISSUER` | Issuer UUID |
+| Secret             | Purpose                                                           |
+| ------------------ | ----------------------------------------------------------------- |
+| `CSC_LINK`         | Base64-encoded `.p12` (or path/URL supported by electron-builder) |
+| `CSC_KEY_PASSWORD` | Password for the `.p12`                                           |
+| `APPLE_API_KEY`    | App Store Connect API key `.p8` contents (or file contents)       |
+| `APPLE_API_KEY_ID` | Key ID                                                            |
+| `APPLE_API_ISSUER` | Issuer UUID                                                       |
 
 Alternative notarization path (instead of API key): `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
 
@@ -54,10 +54,10 @@ Use an EV or standard code-signing certificate from a trusted CA. Export as `.pf
 
 ### Repository secrets
 
-| Secret | Purpose |
-| --- | --- |
-| `WIN_CSC_LINK` | Base64-encoded `.pfx` (electron-builder prefers `CSC_LINK` on Windows runners; use `WIN_CSC_LINK` when macOS and Windows certs differ) |
-| `WIN_CSC_KEY_PASSWORD` | Password for the `.pfx` |
+| Secret                 | Purpose                                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `WIN_CSC_LINK`         | Base64-encoded `.pfx` (electron-builder prefers `CSC_LINK` on Windows runners; use `WIN_CSC_LINK` when macOS and Windows certs differ) |
+| `WIN_CSC_KEY_PASSWORD` | Password for the `.pfx`                                                                                                                |
 
 When only one cert is used across platforms, `CSC_LINK` / `CSC_KEY_PASSWORD` on the Windows job is enough.
 
@@ -84,7 +84,7 @@ AppImage / deb builds are not code-signed with Apple/Microsoft tooling. Rely on 
 
 - Signing secrets are staged as `*_RAW` env vars and only promoted to `CSC_LINK` / `APPLE_*` when non-empty. An empty `CSC_LINK=""` must never reach electron-builder (it treats that as a cert path and fails with `<repo> not a file`).
 - If macOS signing secrets are set: build with notarization and hardened runtime enabled; do not force `CSC_IDENTITY_AUTO_DISCOVERY=false`.
-- Otherwise: keep the current unsigned path (`notarize=false`, `hardenedRuntime=false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`, CSC_* unset).
+- Otherwise: keep the current unsigned path (`notarize=false`, `hardenedRuntime=false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`, CSC\_\* unset).
 - Windows uses `CSC_LINK` / `WIN_CSC_LINK` when present; otherwise produces unsigned NSIS installers.
 
 ## Auto-update dependency

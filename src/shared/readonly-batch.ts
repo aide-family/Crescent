@@ -184,7 +184,11 @@ export function parseBatchedToolOutput(text: string): BatchedCommandPart[] | nul
     const command = match[3]
     i += 1
     const outputLines: string[] = []
-    while (i < lines.length && !BATCH_COMMAND_LINE.test(lines[i] ?? '') && lines[i] !== '--- trailing output ---') {
+    while (
+      i < lines.length &&
+      !BATCH_COMMAND_LINE.test(lines[i] ?? '') &&
+      lines[i] !== '--- trailing output ---'
+    ) {
       outputLines.push(lines[i] ?? '')
       i += 1
     }

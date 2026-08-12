@@ -18,6 +18,7 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
+import { redactSensitiveText } from '../../shared/secret-redaction'
 import { createPendingCommandController } from './pending-command'
 
 interface TerminalSession {
@@ -1239,7 +1240,7 @@ function detectEnvironmentDriftForSession(
     ready: state?.ready,
     alignment: state?.alignment,
     aliases: state?.aliases,
-    command: command.slice(0, 200),
+    command: redactSensitiveText(command).slice(0, 200),
     anchorHost
   })
 
@@ -1805,9 +1806,6 @@ function suppressAutomationEcho(key: string, data: string): string {
     return data
   }
 
-  const compactEcho = compactForEcho(suppression.echo)
-  if (!compactEcho) return data
-
   const parts = data.split(/(\r?\n)/)
   let output = ''
   let skipNewline = false
@@ -1819,8 +1817,7 @@ function suppressAutomationEcho(key: string, data: string): string {
       continue
     }
 
-    const stripped = stripPromptPrefix(part.trim())
-    if (stripped && compactForEcho(stripped) === compactEcho) {
+    if (isAutomationEchoLine(part, suppression.echo)) {
       skipNewline = true
       continue
     }
@@ -1830,6 +1827,24 @@ function suppressAutomationEcho(key: string, data: string): string {
   }
 
   return output
+}
+
+/**
+ * True when a terminal data line is the raw echo of an automation-pasted
+ * command. The line may be prefixed by the shell prompt; custom prompt themes
+ * (p10k, starship, bracketed prompts) do not match `stripPromptPrefix`, so the
+ * compacted command is also matched as a trailing segment. The command itself
+ * is displayed once via `session.display`, which is why the echo is dropped.
+ */
+export function isAutomationEchoLine(line: string, command: string): boolean {
+  const compactEcho = compactForEcho(command)
+  if (!compactEcho) return false
+
+  const stripped = stripPromptPrefix(line.trim())
+  return (
+    Boolean(stripped && compactForEcho(stripped) === compactEcho) ||
+    compactForEcho(line).endsWith(compactEcho)
+  )
 }
 
 function compactForEcho(value: string): string {

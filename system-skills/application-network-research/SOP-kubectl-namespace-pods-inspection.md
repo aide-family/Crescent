@@ -8,22 +8,26 @@
 ## 步骤
 
 1. 环境确认（只读，可合并执行）
+
    ```bash
    kubectl version --short
    kubectl get nodes -o wide
    ```
 
 2. 概览：列出目标命名空间全部 Pods
+
    ```bash
    kubectl get pods -n <namespace> -o wide
    ```
 
 3. 定位异常：过滤非 Running / Completed 的 Pod
+
    ```bash
    kubectl get pods -n <namespace> --no-headers | awk '$4!="Running"&&$4!="Completed"'
    ```
 
 4. 仅对异常 Pod 深钻（每个异常 Pod 独立执行一次，不批量深钻健康 Pod）
+
    ```bash
    kubectl describe pod <pod> -n <namespace>
    kubectl logs <pod> -n <namespace> --tail=100

@@ -2,17 +2,17 @@
 
 ## Master
 
-| File | Role |
-| --- | --- |
+| File                            | Role                                                                          |
+| ------------------------------- | ----------------------------------------------------------------------------- |
 | `build/icons/crescent-logo.png` | **Production logo master** — iridescent 3D crescent in ring (transparent PNG) |
 
 Legacy vector concepts (kept for reference, not used by packaging):
 
-| File | Role |
-| --- | --- |
-| `build/icons/crescent-app.svg` | Older cyan-glow app icon concept |
-| `build/icons/crescent-mark.svg` | Older flat teal mark concept |
-| `build/icons/crescent-circuit.svg` | Marketing circuit variant |
+| File                               | Role                             |
+| ---------------------------------- | -------------------------------- |
+| `build/icons/crescent-app.svg`     | Older cyan-glow app icon concept |
+| `build/icons/crescent-mark.svg`    | Older flat teal mark concept     |
+| `build/icons/crescent-circuit.svg` | Marketing circuit variant        |
 
 Concept raster references live in `design/brand/concepts/`.
 
