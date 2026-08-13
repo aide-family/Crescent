@@ -1,0 +1,22 @@
+---
+description: Run the full local CI gate before every git commit
+alwaysApply: true
+---
+
+# CI before commit
+
+Do not create a git commit until `npm run ci` has passed in this session against the files you are about to commit.
+
+`npm run ci` is the local equivalent of `.github/workflows/ci.yml`:
+
+```bash
+npm run lint
+npm run test
+npm run typecheck
+npm run build
+```
+
+- If any step fails, fix it and re-run the full `npm run ci`. Do not commit a red tree.
+- Do not use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
+- The `pre-commit` hook also runs `npm run ci`. Treat a hook failure as a hard stop.
+- Docs-only or config-only commits still require a green `npm run ci`.

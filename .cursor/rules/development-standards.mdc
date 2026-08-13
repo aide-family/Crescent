@@ -1,0 +1,30 @@
+---
+description: Crescent development must follow pi-dev, Electron, and desktop-app-design
+alwaysApply: true
+---
+
+# Development standards
+
+Follow these skills as the source of truth. Do not invent APIs or desktop patterns from memory.
+
+## Pi (`pi-dev`)
+
+- Read installed `@earendil-works/pi-*` docs/types in `node_modules` before changing agent code. Keep those packages on one version.
+- Import pi only through `src/main/agent/pi-sdk.ts` (`import()`). Never static-import pi into CJS main.
+- Custom tools must be allowlisted, truncate large output, and use `withFileMutationQueue` for file writes.
+- Put pi-facing tests next to the module (`src/main/agent/*.test.ts`).
+
+## Electron (`electron-dev`, `electron`)
+
+- Renderer: no Node, no filesystem. Main owns OS/DB/secrets. Preload is the only bridge.
+- Keep `contextIsolation: true`, `nodeIntegration: false`. Whitelist IPC in preload; validate arguments in main.
+- Native modules stay outside the bundler (`asarUnpack` / `external`), loaded at runtime.
+
+## Desktop UI (`desktop-app-design`, `docs/UI_DESIGN_SYSTEM.md`)
+
+- Dense, keyboard-first, quiet operations chrome. No marketing layouts or nested cards.
+- Accent is `#13c2c2`. Terminal/code/mermaid use shared tokens. Visible focus rings; Escape closes overlays.
+
+## Electron EGG (`electron-egg`)
+
+- Crescent is electron-vite + electron-builder, not `ee-core`. Do not introduce Electron EGG architecture, plugins, or APIs.

@@ -1,0 +1,29 @@
+---
+description: Commits must use only the repository git user; never Cursor attribution
+alwaysApply: true
+---
+
+# Git commit identity
+
+There is exactly one commit author: the repository git user (`git config user.name` / `user.email`).
+
+- Do not add `Co-authored-by: Cursor`, `cursoragent@cursor.com`, or any Cursor/agent trailer to the commit message.
+- Do not pass `git commit --author`.
+- Do not set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, or `GIT_COMMITTER_EMAIL` for commits.
+- Write the message with a HEREDOC only. The `commit-msg` hook strips leftover Cursor trailers if the IDE injects them.
+
+```bash
+# ❌ BAD
+git commit --author="Cursor <cursoragent@cursor.com>" -m "feat: x"
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
+# ✅ GOOD
+git commit -m "$(cat <<'EOF'
+feat: x
+
+EOF
+)"
+```
+
+IDE agents: turn off Cursor Settings → Agent → Attribution so the UI does not append a Cursor trailer.

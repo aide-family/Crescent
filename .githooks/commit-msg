@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+repo_root="$(git rev-parse --show-toplevel)"
+node "$repo_root/scripts/git-commit-policy.cjs" commit-msg "$1"

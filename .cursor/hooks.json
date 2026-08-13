@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "node scripts/git-commit-policy.cjs cursor-hook",
+        "matcher": "git(\\s+-C\\s+\\S+)?\\s+commit\\b",
+        "failClosed": true,
+        "timeout": 15
+      }
+    ]
+  }
+}
