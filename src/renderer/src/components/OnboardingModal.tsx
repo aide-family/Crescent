@@ -49,7 +49,7 @@ export function OnboardingModal({
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">{t.onboarding.description}</p>
         </div>
-        <div className="space-y-3 px-4 py-4">
+        <div className="space-y-2.5 px-4 py-3">
           <OnboardingStep
             icon={<PlugIcon className="size-4 text-primary" aria-hidden="true" />}
             title={t.onboarding.stepOpenApiTitle}
@@ -80,7 +80,7 @@ export function OnboardingModal({
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+        <div className="flex items-center justify-end gap-2 border-t px-4 py-2">
           <Button type="button" variant="outline" onClick={onDismiss}>
             {t.onboarding.skip}
           </Button>
@@ -111,13 +111,13 @@ function OnboardingStep({
   onSecondary?: () => void
 }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-border/70 bg-card/70 p-3">
+    <div className="rounded-lg border border-border/70 bg-card/70 px-2.5 py-2">
       <div className="flex items-start gap-3">
         <div className="mt-0.5">{icon}</div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{title}</div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{body}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <Button type="button" size="sm" onClick={onAction}>
               {actionLabel}
             </Button>

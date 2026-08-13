@@ -184,39 +184,36 @@ export function SkillManager({
                 spellCheck={false}
                 aria-label={t.settings.localSkillsSearchPlaceholder}
               />
-              <div className="max-h-72 space-y-2 overflow-auto">
+              <div className="max-h-72 space-y-1.5 overflow-auto overscroll-contain">
                 {skills.length === 0 ? (
-                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                  <div className="rounded-md border bg-background p-2.5 text-xs text-muted-foreground">
                     {t.settings.noLocalSkills}
                   </div>
                 ) : filteredLocalSkills.length === 0 ? (
-                  <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                  <div className="rounded-md border bg-background p-2.5 text-xs text-muted-foreground">
                     {t.settings.noMatchedLocalSkills}
                   </div>
                 ) : (
                   filteredLocalSkills.map((skill) => (
                     <div
                       key={skill.path}
-                      className={`flex cursor-pointer items-start justify-between gap-3 rounded-lg border p-3 text-xs transition-[border-color,background-color] ${
+                      className={`flex items-start justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs transition-[border-color,background-color] ${
                         selectedSkillPreview?.skill.path === skill.path
                           ? 'border-primary/50 bg-primary/8'
                           : 'border-border/70 bg-background hover:bg-muted/25'
                       }`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => void onPreviewSkill(skill)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          void onPreviewSkill(skill)
-                        }
-                      }}
                     >
-                      <div className="min-w-0 space-y-1">
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 space-y-0.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        onClick={() => void onPreviewSkill(skill)}
+                      >
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate font-medium">{skill.name}</span>
+                          <span className="truncate text-[13px] font-medium">{skill.name}</span>
                           {!skill.removable && (
-                            <Badge variant="outline">{t.settings.protectedSkill}</Badge>
+                            <Badge variant="outline" className="h-5 text-[10px]">
+                              {t.settings.protectedSkill}
+                            </Badge>
                           )}
                           {skillPreviewLoadingPath === skill.path && (
                             <Loader2Icon
@@ -226,14 +223,14 @@ export function SkillManager({
                           )}
                         </div>
                         {skill.description && (
-                          <div className="line-clamp-2 text-muted-foreground">
+                          <div className="line-clamp-2 text-[11px] text-muted-foreground">
                             {skill.description}
                           </div>
                         )}
                         <div className="truncate font-mono text-[11px] text-muted-foreground">
                           {skill.path}
                         </div>
-                      </div>
+                      </button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -455,7 +452,7 @@ export function SkillManager({
                     </Button>
                   </div>
                 </div>
-                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+                <pre className="min-h-0 flex-1 select-text overflow-auto bg-[var(--app-markdown-canvas)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-[var(--app-markdown-text)]">
                   {selectedSkillInstallLog || t.settings.skillInstallWaitingLog}
                 </pre>
                 <div className="flex items-center justify-end gap-2 border-t px-3 py-2">

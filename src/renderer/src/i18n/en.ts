@@ -189,12 +189,12 @@ const en = {
     connectionListDescription: 'Choose the default local terminal or switch to an SSH terminal.',
     copiedConnection: 'Paste copied connection',
     copiedConnectionPlaceholder:
-      'Paste copied connection JSON to edit it as a new custom connection',
+      'Paste copied connection JSON to edit it as a new custom connection…',
     copyAsJson: 'Copy JSON',
     customConnectionName: 'Custom connection name',
     defaultTerminal: 'Default terminal (local)',
     description: 'Description',
-    descriptionPlaceholder: 'Optional note',
+    descriptionPlaceholder: 'Optional note…',
     duplicateAsNew: 'Duplicate as new',
     existing: 'Existing',
     host: 'Host',
@@ -205,7 +205,7 @@ const en = {
       'One line per terminal input after ssh starts. Crescent types these lines in order.',
     localTerminal: 'Local terminal',
     manageConnections: 'Manage connections',
-    namePlaceholder: 'production',
+    namePlaceholder: 'production…',
     noConnections: 'No connections found.',
     noSearchResults: 'No matching connections.',
     openConnectionList: 'Open connection list',
@@ -215,8 +215,8 @@ const en = {
       'When password is empty, login reads this variable from the process environment or user shell profile (~/.zprofile / ~/.zshrc on macOS/Linux; User/Machine env on Windows). Only the variable name is stored.',
     passwordEnvVarMissing:
       'Could not read the password environment variable. Packaged apps do not inherit terminal exports — on macOS/Linux define it in ~/.zprofile or ~/.zshrc; on Windows set a User environment variable, then relaunch Crescent',
-    passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD',
-    passwordPlaceholder: 'Optional; leave empty to skip automatic password input',
+    passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD…',
+    passwordPlaceholder: 'Optional; leave empty to skip automatic password input…',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
     saveAndConnectSucceeded: 'Connection saved. Connecting now.',
@@ -400,7 +400,7 @@ const en = {
     description:
       'Switching to a history session restores the chat. If it was linked to SSH, Crescent opens a terminal and logs in using the current connection configuration.',
     empty: 'No history sessions yet.',
-    loading: 'Loading history sessions',
+    loading: 'Loading history sessions…',
     refresh: 'Refresh history',
     renameTitle: 'Rename title',
     runs: 'runs',
@@ -570,7 +570,7 @@ const en = {
     resumeRecentContext: 'Recent conversation context',
     startedRun: 'Started agent run',
     terminalContext: 'Collecting terminal context.',
-    thinking: 'AI is thinking',
+    thinking: 'AI is thinking…',
     thinkingAnalyzingRequest:
       'Understanding your request and checking the current terminal context…',
     thinkingResolvingConnection: 'Deciding whether a configured SSH connection should be opened…',
@@ -667,7 +667,7 @@ const en = {
     generatedFromHistory:
       'This document was generated from a saved operations history item. Review and edit it before treating it as final SOP.',
     historyTranscript: 'Source transcript',
-    loading: 'Loading wiki documents',
+    loading: 'Loading wiki documents…',
     markdownPreview: 'Markdown preview',
     markdownSource: 'Markdown source',
     navigation: 'Headings',
@@ -712,7 +712,7 @@ const en = {
     dynamicToolLimit: 'Dynamic tool limit',
     clearOpenApiDocument: 'Clear',
     importOpenApiFile: 'Import file',
-    importingOpenApi: 'Importing',
+    importingOpenApi: 'Importing…',
     openApiBaseUrl: 'REST API base URL',
     openApiBaseUrlHint: 'Base URL used when executing generated OpenAPI tools.',
     openApiDocumentHint:
@@ -763,6 +763,7 @@ const en = {
     instructionFilePlaceholder:
       'Write local instructions here. Saving writes to ~/.crescent and injects the content into later Agent sessions.',
     instructionFileSaved: 'Saved',
+    instructionFileCharCount: '{n} chars',
     instructionFiles: 'Local instruction files',
     maxToolsHint: 'Only the most relevant OpenAPI tools are sent to the model.',
     mcpArgs: 'MCP arguments',
@@ -848,7 +849,7 @@ const en = {
     skillInstallingShort: 'Installing',
     skillInstalls: 'Installs',
     skillPreview: 'Skill preview',
-    skillPreviewLoading: 'Loading skill content',
+    skillPreviewLoading: 'Loading skill content…',
     updateSkill: 'Update',
     skillsManagement: 'Skills management',
     skillsManagementHint:
@@ -880,7 +881,7 @@ const en = {
     updateDownloadFailed: 'Update download failed',
     updateInstallFailed: 'Update install failed',
     validateTools: 'Validate tools',
-    validating: 'Validating'
+    validating: 'Validating…'
   },
   notifications: {
     approvalTitle: 'Command approval needed',

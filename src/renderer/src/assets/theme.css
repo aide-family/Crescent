@@ -50,6 +50,13 @@
   --app-panel-strong: #f6f8fa;
   --app-terminal: #0b0d10;
   --app-terminal-rail: #171b21;
+  --app-markdown-canvas: #08090c;
+  --app-markdown-surface: #12161c;
+  --app-markdown-surface-raised: #1c232d;
+  --app-markdown-text: #eef2f7;
+  --app-markdown-muted: #8fa7b8;
+  --app-markdown-border: rgba(203, 213, 225, 0.18);
+  --app-markdown-accent: #13c2c2;
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 12px 32px rgb(18 24 31 / 12%);
@@ -79,6 +86,13 @@
   --app-panel-strong: #161c26;
   --app-terminal: #08090c;
   --app-terminal-rail: #0e1218;
+  --app-markdown-canvas: #08090c;
+  --app-markdown-surface: #12161c;
+  --app-markdown-surface-raised: #1c232d;
+  --app-markdown-text: #eef2f7;
+  --app-markdown-muted: #8fa7b8;
+  --app-markdown-border: rgba(203, 213, 225, 0.18);
+  --app-markdown-accent: #13c2c2;
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 16px 40px rgb(0 0 0 / 28%);

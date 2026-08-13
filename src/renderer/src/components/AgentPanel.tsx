@@ -309,8 +309,8 @@ export function AgentPanel({
           />
         </div>
       ) : null}
-      <div className="app-input-dock space-y-2 p-3">
-        <form onSubmit={onSubmit} className="space-y-2">
+      <div className="app-input-dock space-y-1.5 p-2.5">
+        <form onSubmit={onSubmit} className="space-y-1.5">
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -468,7 +468,7 @@ export function AgentPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="app-composer relative rounded-xl p-2">
+          <div className="app-composer relative rounded-lg p-1.5">
             <SlashCommandMenu
               visible={slashMenuVisible}
               listRef={slashCommandListRef}
@@ -514,9 +514,12 @@ export function AgentPanel({
               onKeyDown={onAgentInputKeyDown}
               onPaste={onAgentInputPaste}
               placeholder={t.input.askPlaceholder}
+              aria-label={t.input.askPlaceholder}
+              name="agent-input"
+              autoComplete="off"
               className="max-h-40 min-h-16 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
-            <div className="flex items-center gap-2 px-1 pt-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 px-1 pt-1.5 text-xs text-muted-foreground">
               <div className="flex min-h-5 min-w-0 flex-1 items-center">
                 <span className="truncate">{footerStatusText || '\u00a0'}</span>
               </div>

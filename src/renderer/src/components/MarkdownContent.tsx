@@ -403,7 +403,7 @@ function renderMarkdownBlocks(
       nodes.push(
         <blockquote
           key={nodes.length}
-          className="min-w-0 break-words border-l-2 border-border pl-3 text-muted-foreground"
+          className="min-w-0 break-words border-l-2 pl-3"
         >
           {renderInlineMarkdown(quoteLines.join(' '))}
         </blockquote>
@@ -496,21 +496,25 @@ function MarkdownCodeBlock({
   }
 
   return (
-    <div className="app-code-panel min-w-0 rounded-lg border bg-[var(--app-terminal)] text-zinc-100">
-      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[var(--app-terminal-rail)] px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-400">
+    <div className="app-code-panel min-w-0 rounded-lg border">
+      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
+        <span className="min-w-0 truncate font-mono text-[11px]">
           {closed ? label : `${label || 'text'}…`}
         </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          className="h-6 w-6 shrink-0 text-zinc-300 hover:bg-white/10 hover:text-white"
+          className="h-6 w-6 shrink-0 text-[var(--app-markdown-muted)] hover:bg-white/8 hover:text-[var(--app-markdown-text)]"
           aria-label={copied ? t.common.copied : t.common.copy}
           title={copied ? t.common.copied : t.common.copy}
           onClick={() => void copyCode()}
         >
-          {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+          {copied ? (
+            <CheckIcon className="text-primary" aria-hidden="true" />
+          ) : (
+            <CopyIcon aria-hidden="true" />
+          )}
         </Button>
       </div>
       <pre className="min-w-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
@@ -831,18 +835,16 @@ function MermaidBlock({
         <div className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
           {t.common.mermaidRenderFailed}
         </div>
-        <pre className="min-w-0 overflow-hidden rounded bg-[var(--app-terminal)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+        <pre className="min-w-0 overflow-hidden rounded-md bg-[var(--app-markdown-canvas)] p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-[var(--app-markdown-text)]">
           <code>{code}</code>
         </pre>
       </div>
     )
 
   return (
-    <div className="app-mermaid-panel min-w-0 rounded-lg border bg-background">
+    <div className="app-mermaid-panel min-w-0 rounded-lg border">
       <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-          mermaid
-        </span>
+        <span className="min-w-0 truncate font-mono text-[11px]">mermaid</span>
         <div className="flex shrink-0 items-center gap-1">
           {svg ? (
             <>
@@ -890,7 +892,7 @@ function MermaidBlock({
       {expanded && svg
         ? createPortal(
             <div
-              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain bg-background/95 backdrop-blur"
+              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain"
               role="dialog"
               aria-modal="true"
               aria-label={t.common.enlarge}
@@ -1030,9 +1032,9 @@ function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
   const rows = bodyLines.map(splitMarkdownTableRow)
 
   return (
-    <div className="min-w-0 overflow-hidden rounded-md border">
+    <div className="markdown-table min-w-0 overflow-hidden rounded-md border">
       <table className="w-full table-fixed border-collapse text-left text-xs">
-        <thead className="bg-muted/40">
+        <thead>
           <tr>
             {headers.map((header, index) => (
               <th key={index} className="break-words border-b px-2 py-1.5 font-medium">
@@ -1080,7 +1082,7 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
       nodes.push(
         <code
           key={nodes.length}
-          className="break-all rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
+          className="break-all rounded px-1 py-0.5 font-mono text-[0.9em]"
         >
           {token.slice(1, -1)}
         </code>
@@ -1095,7 +1097,7 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
           <a
             key={nodes.length}
             href={href}
-            className="break-words text-[var(--app-cyan)] underline underline-offset-2"
+            className="break-words text-[var(--app-markdown-accent)] underline underline-offset-2"
             rel="noreferrer"
             target="_blank"
           >

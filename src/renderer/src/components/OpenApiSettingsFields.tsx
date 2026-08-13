@@ -63,51 +63,46 @@ export function OpenApiProfileList({
             return (
               <div
                 key={profile.id}
-                className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
                   selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                 }`}
-                role="button"
-                tabIndex={0}
-                onClick={() => onToggleProfileDetails(profile.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    onToggleProfileDetails(profile.id)
-                  }
-                }}
               >
-                <div className="min-w-0 text-left">
+                <button
+                  type="button"
+                  className="min-w-0 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  onClick={() => onToggleProfileDetails(profile.id)}
+                >
                   <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2">
                         <StatusDot state={ready ? 'ready' : 'not-ready'} />
-                        <span className="truncate text-sm font-medium">
+                        <span className="truncate text-[13px] font-medium">
                           {profile.name || profile.id}
                         </span>
                       </div>
-                      <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                      <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                         {profile.id}
                       </div>
                     </div>
                     {isActive && (
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      <Badge variant="secondary" className="h-5 shrink-0 text-[10px]">
                         {t.settings.openApiActiveBadge}
                       </Badge>
                     )}
                   </div>
-                  <div className="mt-3 truncate font-mono text-[11px] text-muted-foreground">
+                  <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
                     {profile.baseUrl || '-'}
                   </div>
-                  <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span>
                       {summary.kind === 'empty' ? t.settings.openApiDocumentEmpty : summary.kind}
                     </span>
                     <span>·</span>
-                    <span>
+                    <span className="tabular-nums">
                       {profile.timeoutMs}ms / {profile.maxRetries}x
                     </span>
                   </div>
-                </div>
+                </button>
               </div>
             )
           })}

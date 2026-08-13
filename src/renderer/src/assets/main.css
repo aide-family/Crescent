@@ -202,7 +202,7 @@
 
 .app-composer:focus-within {
   border-color: color-mix(in oklch, var(--ring) 55%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 22%, transparent);
 }
 
 /*
@@ -269,6 +269,12 @@
   padding-block: 0.25rem;
 }
 
+.app-sheet-main,
+.app-sheet-list,
+.connection-list-scroll {
+  overscroll-behavior: contain;
+}
+
 .app-sheet-main > .rounded-md.border,
 .app-sheet-list > .rounded-md.border,
 .app-document-panel,
@@ -306,16 +312,16 @@
 }
 
 .markdown-body {
-  color: color-mix(in oklch, var(--foreground) 94%, var(--muted-foreground));
+  color: color-mix(in oklch, var(--app-markdown-text) 92%, var(--muted-foreground));
 }
 
 .markdown-body :is(h1, h2, h3, h4, h5) {
   text-wrap: pretty;
-  color: var(--foreground);
+  color: var(--app-markdown-text);
 }
 
 .markdown-body a {
-  color: var(--primary);
+  color: var(--app-markdown-accent);
   text-underline-offset: 0.18em;
 }
 
@@ -325,19 +331,19 @@
 
 .markdown-body ul,
 .markdown-body ol {
-  color: color-mix(in oklch, var(--foreground) 90%, var(--muted-foreground));
+  color: color-mix(in oklch, var(--app-markdown-text) 88%, var(--app-markdown-muted));
 }
 
 .markdown-body hr {
-  border-color: var(--border);
+  border-color: var(--app-markdown-border);
 }
 
 .markdown-body code {
-  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border: 1px solid var(--app-markdown-border);
   border-radius: 0.375rem;
-  background: color-mix(in oklch, var(--muted) 50%, transparent);
+  background: var(--app-markdown-surface);
   padding: 0.08rem 0.28rem;
-  color: var(--foreground);
+  color: var(--app-markdown-text);
   font-size: 0.88em;
 }
 
@@ -348,32 +354,52 @@
 }
 
 .markdown-body blockquote {
-  background: color-mix(in oklch, var(--muted) 35%, transparent);
+  background: color-mix(in oklch, var(--app-markdown-surface) 88%, transparent);
+  border-left: 2px solid color-mix(in oklch, var(--app-markdown-accent) 55%, transparent);
   border-radius: 0 0.375rem 0.375rem 0;
+  color: var(--app-markdown-muted);
   padding-block: 0.45rem;
 }
 
-.markdown-body table {
+.markdown-body table,
+.markdown-body .markdown-table {
   overflow: hidden;
+  border-color: var(--app-markdown-border);
   border-radius: 0.375rem;
+  background: var(--app-markdown-surface);
+}
+
+.markdown-body thead {
+  background: var(--app-markdown-surface-raised);
+  color: var(--app-markdown-text);
+}
+
+.markdown-body th,
+.markdown-body td {
+  border-color: var(--app-markdown-border);
 }
 
 .app-code-panel,
 .app-mermaid-panel {
-  border-color: rgb(255 255 255 / 8%);
+  border-color: var(--app-markdown-border);
   box-shadow: none;
+  background: var(--app-markdown-canvas);
+  color: var(--app-markdown-text);
 }
 
-.app-mermaid-panel {
-  background: color-mix(in oklch, var(--app-terminal) 78%, var(--background));
+.app-code-panel > :first-child,
+.app-mermaid-panel > :first-child {
+  border-bottom-color: var(--app-markdown-border);
+  background: var(--app-terminal-rail);
+  color: var(--app-markdown-muted);
 }
 
 .app-mermaid-expanded {
-  background: var(--app-terminal);
+  background: var(--app-markdown-canvas);
 }
 
 .app-mermaid-expanded > :first-child {
-  border-bottom-color: rgb(255 255 255 / 8%);
+  border-bottom-color: var(--app-markdown-border);
   background: var(--app-terminal-rail);
 }
 

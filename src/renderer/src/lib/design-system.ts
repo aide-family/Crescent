@@ -102,3 +102,14 @@ export const appMermaidThemeVariables = {
   activationBorderColor: 'rgba(19,194,194,0.22)',
   sequenceNumberColor: APP_UI_THEME.terminal.background
 } as const
+
+export const appMarkdownTheme = {
+  canvas: APP_UI_THEME.terminal.background,
+  surface: APP_UI_THEME.chart.surface,
+  surfaceRaised: APP_UI_THEME.chart.surfaceRaised,
+  text: APP_UI_THEME.chart.text,
+  muted: APP_UI_THEME.chart.line,
+  border: APP_UI_THEME.chart.borderSubtle,
+  accent: APP_ACCENT_COLOR,
+  accentBorder: APP_UI_THEME.chart.borderAccent
+} as const

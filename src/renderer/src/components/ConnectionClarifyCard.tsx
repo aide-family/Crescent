@@ -137,7 +137,6 @@ export function ConnectionClarifyCard({
         <Button
           type="button"
           size="sm"
-          variant="outline"
           className="h-7 text-[11px]"
           onClick={() => {
             const selected = options[selectedIndex]

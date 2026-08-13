@@ -207,32 +207,32 @@ function WikiDocumentList({
         spellCheck={false}
         aria-label={t.wiki.searchPlaceholder}
       />
-      <div className="min-h-0 space-y-2 overflow-auto">
+      <div className="min-h-0 space-y-1.5 overflow-auto overscroll-contain">
         {wikiLoading && (
-          <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 rounded-md border p-2.5 text-sm text-muted-foreground">
             <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
             {t.wiki.loading}
           </div>
         )}
         {!wikiLoading && wikiDocuments.length === 0 && (
-          <div className="rounded-md border p-3 text-sm text-muted-foreground">{t.wiki.empty}</div>
+          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">{t.wiki.empty}</div>
         )}
         {!wikiLoading && wikiDocuments.length > 0 && filteredWikiDocuments.length === 0 && (
-          <div className="rounded-md border p-3 text-sm text-muted-foreground">{t.wiki.empty}</div>
+          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">{t.wiki.empty}</div>
         )}
         {filteredWikiDocuments.map((document) => (
           <button
             key={document.id}
             type="button"
-            className={`block w-full min-w-0 overflow-hidden rounded-lg border p-3 text-left text-xs transition-[border-color,background-color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
+            className={`block w-full min-w-0 overflow-hidden rounded-lg border px-2.5 py-2 text-left text-xs transition-[border-color,background-color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
               selectedWikiDocument?.id === document.id
                 ? 'border-primary/50 bg-primary/8'
                 : 'border-border/70 hover:bg-muted/25'
             }`}
             onClick={() => onOpenDocument(document)}
           >
-            <span className="block truncate font-medium">{document.title}</span>
-            <span className="mt-1 block truncate text-muted-foreground">
+            <span className="block truncate text-[13px] font-medium">{document.title}</span>
+            <span className="mt-0.5 block truncate tabular-nums text-[11px] text-muted-foreground">
               {formatHistoryTime(document.updatedAt)}
             </span>
           </button>
@@ -250,7 +250,7 @@ function WikiHeadingNavigation({
   headings: ReturnType<typeof parseWikiHeadings>
 }): React.JSX.Element {
   return (
-    <aside className="min-h-0 overflow-auto rounded-md border bg-muted/10 p-2">
+    <aside className="min-h-0 overflow-auto overscroll-contain rounded-md border bg-muted/10 p-2">
       <div className="sticky top-0 z-10 border-b bg-background px-1 py-2 text-xs font-semibold text-muted-foreground">
         {t.wiki.navigation}
       </div>
@@ -262,7 +262,7 @@ function WikiHeadingNavigation({
             <button
               key={`${heading.index}:${heading.text}`}
               type="button"
-              className="block w-full truncate rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              className="block w-full truncate rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
               style={{ paddingLeft: `${Math.min(heading.level - 1, 3) * 10 + 8}px` }}
               title={heading.text}
               onClick={() => {
@@ -270,7 +270,12 @@ function WikiHeadingNavigation({
                   .getElementById(
                     buildMarkdownHeadingId(WIKI_HEADING_PREFIX, heading.text, heading.index)
                   )
-                  ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                  ?.scrollIntoView({
+                    block: 'start',
+                    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                      ? 'auto'
+                      : 'smooth'
+                  })
               }}
             >
               {heading.text}

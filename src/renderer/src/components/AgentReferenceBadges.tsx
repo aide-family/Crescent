@@ -41,7 +41,7 @@ export function AgentReferenceBadges({
   }
 
   return (
-    <div className="mb-2 flex flex-wrap gap-2 px-1">
+    <div className="mb-1.5 flex flex-wrap gap-1.5 px-1">
       {wikiRefs.map((wiki) => (
         <Badge
           key={wiki.id}
