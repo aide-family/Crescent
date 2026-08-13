@@ -18,9 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Enhanced multi-hop SSH connection automation: login completion waits for the final target host prompt, and the actual host reached after login anchors environment checks instead of the static jump host.
-- Injection guard now detects environment drift from the live terminal prompt rather than stale cached state, with diagnostic logging when command injection is blocked.
-- Smoother login automation: input typed while logging in carries into the follow-up task, and subterminal SSH login success is written back to the parent terminal.
+- Working styles (`swift` / `concise` / `guided` / `teach`) control how much the agent talks without slowing execution, safety checks, or batching. Default is concise, and the style stays bound to the current chat.
+- Composer references for skills, SOPs, tools, and paths insert as inline chips at the caret so quoted context stays aligned with the prompt.
+- Native application menu plus quieter updates: check-then-update from the menu or footer, and installers download to Downloads.
 
 ## Install Notes
 
