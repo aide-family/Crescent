@@ -23,6 +23,7 @@ export type {
   AgentMcpServerConfig,
   AgentMcpTransport,
   AgentMode,
+  AgentStyle,
   AgentModelOption,
   AgentPathReference,
   AgentProviderConfig,

@@ -38,17 +38,20 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import type { Dictionary } from '@renderer/i18n'
+import { agentStyleSelectOptions } from '@renderer/lib/agent-style-ui'
 import { buildModelSelectionValue, parseModelSelectionValue } from '@renderer/lib/app-runtime'
 import {
   formatPinnedWorkflowsText,
   parsePinnedWorkflowsText
 } from '../../../shared/openapi-profiles'
 import { formatToolNameListText, parseToolNameListText } from '../../../shared/tool-policy'
+import { normalizeAgentStyle, resolveShowAgentThinking } from '../../../shared/agent-style'
 import type {
   AgentConfig,
   AgentModelOption,
   AgentOpenApiProfile,
   AgentProviderConfig,
+  AgentStyle,
   AgentValidationResult,
   LocalInstructionDocument
 } from '../../../shared/agent-types'
@@ -95,6 +98,8 @@ export interface SettingsSheetProps {
   onDeleteProvider: (providerId: string) => void
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
+  onAgentStyleChange: (style: AgentStyle) => void
+  onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
   onMaxActiveToolsChange: (value: number) => void
   onCommandWhitelistChange: (text: string) => void
@@ -148,6 +153,8 @@ export function SettingsSheet({
   onToggleProviderDetails,
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
+  onAgentStyleChange,
+  onShowAgentThinkingChange,
   onWorkspaceCwdChange,
   onMaxActiveToolsChange: _onMaxActiveToolsChange,
   onCommandWhitelistChange: _onCommandWhitelistChange,
@@ -345,6 +352,60 @@ export function SettingsSheet({
                 <FieldDescription>{t.settings.modelHint}</FieldDescription>
               </Field>
               <Field>
+                <FieldLabel htmlFor="agent-style">{t.settings.agentStyle}</FieldLabel>
+                <Select
+                  value={normalizeAgentStyle(config.agentStyle)}
+                  onValueChange={(value) => onAgentStyleChange(normalizeAgentStyle(value))}
+                >
+                  <SelectTrigger id="agent-style" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t.settings.agentStyle}</SelectLabel>
+                      {agentStyleSelectOptions(t).map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          <span className="flex flex-col items-start gap-0.5">
+                            <span>{option.title}</span>
+                            <span className="text-xs font-normal text-muted-foreground">
+                              {option.description}
+                            </span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
+              </Field>
+              <Field>
+                <label
+                  htmlFor="show-agent-thinking"
+                  className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
+                >
+                  <span className="space-y-1">
+                    <span className="block text-sm font-medium">
+                      {t.settings.showAgentThinking}
+                    </span>
+                    <FieldDescription>{t.settings.showAgentThinkingHint}</FieldDescription>
+                  </span>
+                  <Input
+                    id="show-agent-thinking"
+                    type="checkbox"
+                    checked={resolveShowAgentThinking(
+                      normalizeAgentStyle(config.agentStyle),
+                      config.showAgentThinking
+                    )}
+                    onChange={(event) => {
+                      const checked = event.target.checked
+                      const styleDefault = normalizeAgentStyle(config.agentStyle) === 'teach'
+                      onShowAgentThinkingChange(checked === styleDefault ? undefined : checked)
+                    }}
+                    className="mt-0.5 size-4 shrink-0 accent-primary"
+                  />
+                </label>
+              </Field>
+              <Field>
                 <label
                   htmlFor="close-terminal-confirm"
                   className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
@@ -385,6 +446,7 @@ export function SettingsSheet({
                   <FieldLabel>{t.settings.instructionFiles}</FieldLabel>
                   <span className="text-xs text-muted-foreground">{instructionFiles.length}</span>
                 </div>
+                <FieldDescription>{t.settings.instructionFilesHint}</FieldDescription>
                 {instructionFiles.length === 0 ? (
                   <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
                     <FileTextIcon className="mr-2 inline size-3" aria-hidden="true" />

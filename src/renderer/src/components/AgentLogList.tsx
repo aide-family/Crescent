@@ -31,6 +31,7 @@ export function AgentLogList({
   copiedLogId,
   thinking,
   thinkingMessage,
+  thinkingCollapsedByDefault,
   connectionRecovery,
   t,
   onCopyEntry,
@@ -61,6 +62,7 @@ export function AgentLogList({
   copiedLogId?: number | null
   thinking?: boolean
   thinkingMessage?: string
+  thinkingCollapsedByDefault?: boolean
   connectionRecovery?: {
     visible: boolean
     canRetry: boolean
@@ -215,6 +217,7 @@ export function AgentLogList({
                     absorbedStatusEntries={
                       entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined
                     }
+                    thinkingCollapsedByDefault={thinkingCollapsedByDefault}
                     onCopyResult={() => onCopyResult(entry)}
                     onExportResult={() => onExportResult(entry)}
                     onExportFull={() => onExportFull(entry)}

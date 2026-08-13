@@ -1,5 +1,9 @@
+import type { AgentStyle } from './agent-style'
+
 /** @deprecated Plan/react modes removed; Pi session loop is the only runtime. */
 export type AgentMode = 'react' | 'plan-execute'
+
+export type { AgentStyle } from './agent-style'
 
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'trace'
 
@@ -11,6 +15,10 @@ export interface AgentConfig {
   model: string
   /** Workspace directory for Pi read/write/edit/bash tools. */
   workspaceCwd?: string
+  /** How much the agent says to the user. Does not change execution speed or safety. */
+  agentStyle: AgentStyle
+  /** When set, overrides the style default for showing the thinking block. */
+  showAgentThinking?: boolean
   /** @deprecated Ignored; Pi owns the agent loop. Kept for config migration. */
   agentMode: AgentMode
   /** @deprecated Ignored after Pi migration. */
@@ -223,6 +231,8 @@ export interface AgentRunInput {
   activeWikiIds?: string[]
   /** Skill paths whose SKILL.md content is inlined into the run prompt. */
   activeSkillPaths?: string[]
+  /** Run-scoped working style snapshot so a mid-run config change cannot mix styles. */
+  agentStyle?: AgentStyle
 }
 
 export interface AgentGenerateSopInput {

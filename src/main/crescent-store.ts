@@ -18,6 +18,7 @@ import {
   resolveActiveOpenApiProfile
 } from '../shared/openapi-profiles'
 import { normalizeToolNameList } from '../shared/tool-policy'
+import { DEFAULT_AGENT_STYLE, normalizeAgentStyle } from '../shared/agent-style'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -57,6 +58,8 @@ export const defaultAgentConfig: AgentConfig = {
   providerId: undefined,
   model: '',
   workspaceCwd: undefined,
+  agentStyle: DEFAULT_AGENT_STYLE,
+  showAgentThinking: undefined,
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: defaultCommandWhitelist,
@@ -227,6 +230,9 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     providerId: provider?.id,
     model: modelOk ? requestedModel : defaultModel,
     workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
+    agentStyle: normalizeAgentStyle(config.agentStyle),
+    showAgentThinking:
+      typeof config.showAgentThinking === 'boolean' ? config.showAgentThinking : undefined,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
     maxActiveTools: clampNumber(
       config.maxActiveTools,

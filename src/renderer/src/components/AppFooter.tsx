@@ -2,7 +2,8 @@ import { ArrowUpCircleIcon, CheckIcon, Loader2Icon } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
-import type { AgentConfig } from '../../../shared/agent-types'
+import { agentStyleTitle } from '@renderer/lib/agent-style-ui'
+import { normalizeAgentStyle, type AgentStyle } from '../../../shared/agent-style'
 import { CRESCENT_GITHUB_URL } from '../../../shared/app-links'
 import type { AppUpdateStatusEvent } from '../../../shared/update-types'
 
@@ -20,17 +21,18 @@ function GitHubMark({ className }: { className?: string }): React.JSX.Element {
 export function AppFooter({
   version,
   updateStatus,
-  agentMode,
+  agentStyle,
   t,
   onDownloadUpdate
 }: {
   version: string
   updateStatus: AppUpdateStatusEvent | { state: 'idle' }
-  agentMode: AgentConfig['agentMode']
+  agentStyle: AgentStyle
   t: Dictionary
   onDownloadUpdate: () => void
 }): React.JSX.Element {
-  const modeLabel = agentMode === 'plan-execute' ? 'Plan-and-Execute' : 'ReAct'
+  const style = normalizeAgentStyle(agentStyle)
+  const styleLabel = agentStyleTitle(style, t)
   const updateAvailable = updateStatus.state === 'available'
   const downloading = updateStatus.state === 'downloading'
   const downloaded = updateStatus.state === 'downloaded' && Boolean(updateStatus.installerPath)
@@ -102,8 +104,8 @@ export function AppFooter({
           <GitHubMark className="size-3.5" />
         </Button>
       </span>
-      <span className="app-footer-mode shrink-0" title={t.settings.agentMode}>
-        {modeLabel}
+      <span className="app-footer-mode shrink-0" title={t.settings.agentStyleHint}>
+        {styleLabel}
       </span>
     </footer>
   )

@@ -39,7 +39,7 @@ export function SlashCommandMenu({
           >
             <span className="block font-medium">
               {command.connection ||
-              command.agentMode ||
+              command.agentStyle ||
               command.pathReferenceKind ||
               command.toolRef ||
               command.wikiDocument ||

@@ -58,6 +58,12 @@ import {
   type AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import { buildModelSelectionValue } from '@renderer/lib/app-runtime'
+import {
+  agentStyleHint,
+  agentStyleSelectOptions,
+  agentStyleTitle
+} from '@renderer/lib/agent-style-ui'
+import { normalizeAgentStyle, type AgentStyle } from '../../../shared/agent-style'
 import type { AgentModelOption, AgentPinnedWorkflow } from '../../../shared/agent-types'
 
 export function AgentPanel({
@@ -81,6 +87,9 @@ export function AgentPanel({
   aiState,
   aiStatusText,
   modelValidationError,
+  agentStyle,
+  onAgentStyleChange,
+  thinkingCollapsedByDefault,
   activeAgentPending,
   executionTerminalId,
   pinnedWorkflows,
@@ -154,6 +163,9 @@ export function AgentPanel({
   aiState: 'ready' | 'pending' | 'not-ready'
   aiStatusText: string
   modelValidationError?: string
+  agentStyle: AgentStyle
+  onAgentStyleChange: (style: AgentStyle) => void
+  thinkingCollapsedByDefault: boolean
   activeAgentPending: boolean
   executionTerminalId?: string
   pinnedWorkflows: AgentPinnedWorkflow[]
@@ -258,6 +270,7 @@ export function AgentPanel({
         copiedLogId={sessionChatTab.copiedLogId}
         thinking={sessionChatTab.agentThinking}
         thinkingMessage={sessionChatTab.thinkingMessage}
+        thinkingCollapsedByDefault={thinkingCollapsedByDefault}
         connectionRecovery={connectionRecovery}
         t={t}
         onCopyEntry={onCopyEntry}
@@ -524,6 +537,31 @@ export function AgentPanel({
                           value={buildModelSelectionValue(model.providerId, model.id)}
                         >
                           {model.name} · {model.providerName}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={normalizeAgentStyle(agentStyle)}
+                  onValueChange={(value) => onAgentStyleChange(normalizeAgentStyle(value))}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="app-model-trigger app-style-trigger"
+                    aria-label={t.settings.agentStyle}
+                    title={agentStyleHint(normalizeAgentStyle(agentStyle), t)}
+                  >
+                    <span className="truncate">
+                      {agentStyleTitle(normalizeAgentStyle(agentStyle), t)}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectGroup>
+                      <SelectLabel>{t.settings.agentStyle}</SelectLabel>
+                      {agentStyleSelectOptions(t).map((option) => (
+                        <SelectItem key={option.id} value={option.id} title={option.description}>
+                          {option.title}
                         </SelectItem>
                       ))}
                     </SelectGroup>
