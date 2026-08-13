@@ -28,10 +28,16 @@ export interface SlashCommandOption {
   templateInput?: string
 }
 
-export function getSlashCommandQuery(value: string): string | undefined {
-  if (!value.startsWith('/') || value.includes('\n')) return undefined
+/** Trailing `/token` at start of input or after whitespace (last line). */
+const TRAILING_SLASH_COMMAND = /(?:^|\s)\/([^\s]*)\s*$/
 
-  return value.slice(1).trim().toLowerCase()
+export function getSlashCommandQuery(value: string, cursor = value.length): string | undefined {
+  const clamped = Math.max(0, Math.min(cursor, value.length))
+  const before = value.slice(0, clamped)
+  const lastLine = before.includes('\n') ? (before.split('\n').pop() ?? '') : before
+  const match = TRAILING_SLASH_COMMAND.exec(lastLine)
+  if (!match) return undefined
+  return match[1].toLowerCase()
 }
 
 export function matchesSlashCommand(
@@ -154,10 +160,28 @@ export function matchesConnectionSlashCommand(command: SlashCommandOption, query
   return searchable.includes(connectionQuery)
 }
 
-export function replaceSlashCommandInput(value: string, replacement: string): string {
-  if (!value.startsWith('/')) return `${replacement}\n${value}`.trim()
-
-  return `${replacement}\n${value.replace(/^\/[^\n]*/, '').replace(/^\n/, '')}`.trim()
+export function replaceSlashCommandInput(
+  value: string,
+  replacement: string,
+  cursor = value.length
+): string {
+  const clamped = Math.max(0, Math.min(cursor, value.length))
+  const before = value.slice(0, clamped)
+  const after = value.slice(clamped)
+  const match = TRAILING_SLASH_COMMAND.exec(before)
+  const prefix = (match ? before.slice(0, match.index) : before).trimEnd()
+  const next = replacement.trim()
+  if (!next) return `${prefix}${after}`
+  if (!prefix) {
+    const body = next.startsWith('{{@') ? `${next} ` : next
+    return `${body}${after}`
+  }
+  if (next.startsWith('/')) return `${prefix} ${next}${after}`
+  if (next.startsWith('{{@')) {
+    const rest = after.replace(/^[ \t]+/, '')
+    return `${prefix} ${next}${rest ? ` ${rest}` : ' '}`
+  }
+  return `${prefix}\n${next}${after}`
 }
 
 export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {

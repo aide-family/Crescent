@@ -5,6 +5,7 @@ import {
   formatAgentRunDocument,
   formatAgentRunDocumentParseStub
 } from './agent-run-document'
+import { decodeUserMessageText } from './agent-message-refs'
 import { AGENT_LOG_ENTRY_MAX_CHARS } from './agent-text-limits'
 import type { AgentLogEntry, AgentRunAction, AgentRunViewState } from './terminal-tabs'
 
@@ -190,6 +191,7 @@ export function isConnectionStatusText(text: string, t: Dictionary): boolean {
     t.terminal.switchedToConnection.split('{name}')[0],
     t.terminal.connectionStarting,
     t.terminal.connectionAction,
+    t.terminal.loginConfirming,
     t.terminal.postLoginTaskStarting,
     t.terminal.connectionNoActions,
     t.terminal.usingCurrentConnection.split('{name}')[0]
@@ -285,13 +287,24 @@ export function formatHistoryTime(value: string): string {
 export function hydrateStoredAgentLog(entry: StoredAgentLogEntry): AgentLogEntry {
   try {
     const kind = normalizeStoredAgentLogKind(entry.kind)
-    if (kind === 'user-supplement') {
+    if (kind === 'user' || kind === 'user-supplement') {
+      const decoded = decodeUserMessageText(entry.text)
+      if (kind === 'user-supplement') {
+        return clampAgentLogEntryText({
+          id: entry.logId,
+          kind: 'user-supplement',
+          text: decoded.text,
+          createdAt: entry.createdAt,
+          runId: entry.runId?.trim() || '',
+          references: decoded.references
+        })
+      }
       return clampAgentLogEntryText({
         id: entry.logId,
-        kind: 'user-supplement',
-        text: entry.text,
+        kind: 'user',
+        text: decoded.text,
         createdAt: entry.createdAt,
-        runId: entry.runId?.trim() || ''
+        references: decoded.references
       })
     }
     return clampAgentLogEntryText({

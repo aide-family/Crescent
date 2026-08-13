@@ -27,6 +27,7 @@ import {
   collectTrimmedAgentLogIds,
   trimAgentLogEntries
 } from '@renderer/lib/agent-log'
+import { encodeUserMessageText } from '@renderer/lib/agent-message-refs'
 import { AGENT_STREAM_LIVE_FLUSH } from '@renderer/lib/agent-text-limits'
 import type {
   AgentLogEntry,
@@ -107,6 +108,10 @@ export function useAgentRuns({
       const createdAt = new Date().toISOString()
       nextLogIdRef.current += 1
       let droppedIds: number[] = []
+      const storedText =
+        entry.kind === 'user' || entry.kind === 'user-supplement'
+          ? encodeUserMessageText(entry.text, entry.references)
+          : entry.text
       const nextEntry = clampAgentLogEntryText({ ...entry, id, createdAt } as AgentLogEntry)
       updateTab(tabId, (tab) => {
         const next = [...tab.agentLog, nextEntry]
@@ -123,7 +128,7 @@ export function useAgentRuns({
         tabId,
         logId: id,
         kind: nextEntry.kind,
-        text: entry.text,
+        text: storedText,
         createdAt,
         runId: nextEntry.kind === 'user-supplement' ? nextEntry.runId : undefined
       })

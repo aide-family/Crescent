@@ -1,3 +1,5 @@
+import { isPromptHostAligned, normalizeHostToken } from '../../../shared/terminal-prompt-host'
+
 export interface PromptWaitDeps {
   getContext: () => Promise<{ promptHost?: string }>
   onData: (handler: (event: { tabId: string }) => void) => () => void
@@ -23,6 +25,19 @@ export function waitForRemotePrompt(
      * confirm-login from running on an intermediate jump-host prompt.
      */
     expectedHost?: string
+    aliases?: string[]
+    localHost?: string
+    /**
+     * First login to an IP (or any unverified target): accept a non-local
+     * hostname prompt so confirm-login can learn the alias instead of waiting
+     * out the timeout.
+     */
+    acceptAnyRemoteHost?: boolean
+    /**
+     * When the last typed action was another `ssh`, ignore this already-visible
+     * jump-host prompt until a different remote host appears.
+     */
+    previousHost?: string
   }
 ): Promise<PromptWaitSignal> {
   const { tabId } = options
@@ -30,6 +45,7 @@ export function waitForRemotePrompt(
   const pollMs = options.pollMs ?? 200
   const dataDebounceMs = options.dataDebounceMs ?? 80
   const expectedHost = options.expectedHost?.trim() || undefined
+  const previousHost = options.previousHost?.trim() || undefined
 
   return new Promise((resolve) => {
     let lastSignal: PromptWaitSignal = 'none'
@@ -52,7 +68,15 @@ export function waitForRemotePrompt(
         if (settled) return
         const promptHost = context.promptHost
         if (promptHost && promptHost !== 'local-shell') {
-          if (!expectedHost || isHostAligned(promptHost, expectedHost)) {
+          if (
+            isLoginPromptReady(promptHost, {
+              expectedHost,
+              aliases: options.aliases,
+              localHost: options.localHost,
+              acceptAnyRemoteHost: options.acceptAnyRemoteHost,
+              previousHost
+            })
+          ) {
             settle('host')
             return
           }
@@ -76,19 +100,57 @@ export function waitForRemotePrompt(
       () => settle(seenTransitionalHost ? 'none' : lastSignal),
       timeoutMs
     )
+    check()
   })
+}
+
+/** Strip `user@` from an ssh target (`aide@192.0.2.10` → `192.0.2.10`). */
+export function stripSshTarget(value: string): string {
+  const trimmed = value.trim()
+  const at = trimmed.lastIndexOf('@')
+  if (at > 0 && at < trimmed.length - 1) return trimmed.slice(at + 1)
+  return trimmed
+}
+
+export function isIpv4Literal(value: string): boolean {
+  const host = stripSshTarget(value)
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host)
+}
+
+/**
+ * True when a remote prompt is enough to treat login as ready:
+ * FQDN/alias match, or IP expected vs hostname observed (learn alias next).
+ */
+export function isLoginPromptReady(
+  promptHost: string,
+  options: {
+    expectedHost?: string
+    aliases?: string[]
+    localHost?: string
+    acceptAnyRemoteHost?: boolean
+    previousHost?: string
+  } = {}
+): boolean {
+  const observed = normalizeHostToken(stripSshTarget(promptHost))
+  if (!observed || observed === 'local-shell') return false
+
+  const local = normalizeHostToken(stripSshTarget(options.localHost ?? ''))
+  if (local && isPromptHostAligned(observed, local)) return false
+
+  const previous = normalizeHostToken(stripSshTarget(options.previousHost ?? ''))
+  if (previous && isPromptHostAligned(observed, previous)) return false
+
+  if (options.acceptAnyRemoteHost) return true
+
+  const expected = normalizeHostToken(stripSshTarget(options.expectedHost ?? ''))
+  if (!expected) return true
+  if (isPromptHostAligned(observed, expected)) return true
+  if (options.aliases?.some((alias) => isPromptHostAligned(observed, alias))) return true
+  if (isIpv4Literal(expected) && !isIpv4Literal(observed)) return true
+  return false
 }
 
 /** Host alignment for the prompt-wait (short host vs FQDN, exact or suffix). */
 export function isHostAligned(observedHost: string, expectedHost: string): boolean {
-  const observed = observedHost.trim().toLowerCase()
-  const expected = expectedHost.trim().toLowerCase()
-  if (!observed || !expected) return false
-  if (observed === expected) return true
-  return (
-    observed.endsWith(`.${expected}`) ||
-    expected.endsWith(`.${observed}`) ||
-    observed.startsWith(`${expected}.`) ||
-    expected.startsWith(`${observed}.`)
-  )
+  return isPromptHostAligned(stripSshTarget(observedHost), stripSshTarget(expectedHost))
 }

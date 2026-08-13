@@ -162,6 +162,18 @@ import {
   isExplicitConnectionRequest,
   isExplicitNonTerminalAgentRequest
 } from '@renderer/lib/agent-input'
+import {
+  decodeUserMessageText,
+  snapshotMessageReferences
+} from '@renderer/lib/agent-message-refs'
+import {
+  collectComposerRefIds,
+  formatComposerRefToken,
+  hasComposerRefTokens,
+  insertComposerRefTokenAt,
+  removeComposerRefToken,
+  stripComposerRefTokens
+} from '@renderer/lib/composer-ref-tokens'
 import { buildFallbackSopSeed, buildSopGenerationSummary } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
 import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
@@ -199,7 +211,10 @@ import {
   type ConnectionAttemptState
 } from '@renderer/lib/connection-attempt'
 import { runWithTimeout } from '@renderer/lib/with-timeout'
-import { waitForRemotePrompt } from '@renderer/lib/prompt-host-wait'
+import {
+  isIpv4Literal,
+  waitForRemotePrompt
+} from '@renderer/lib/prompt-host-wait'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
 import {
   buildBusySupplementArtifacts,
@@ -248,6 +263,7 @@ import {
   isReservedTerminalTabId,
   resolveConnectTargetTab,
   resolveSessionChatTabId,
+  resolveSessionAgentStyle,
   resolveTabModelSelection,
   retainSettledClarification,
   type AgentLogEntry,
@@ -373,6 +389,8 @@ interface PostConnectionTask {
   appendUserLog: boolean
   startedAt: number
   reuseRun?: ReuseAgentRun
+  activeWikiIds?: string[]
+  activeSkillPaths?: string[]
 }
 
 const initialTerminalTab = createTerminalTab({ title: 'Terminal' })
@@ -517,6 +535,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           conversationContext?: string
           chatTabId?: string
           reuseRun?: ReuseAgentRun
+          connectionRouteLabel?: string
+          activeWikiIds?: string[]
+          activeSkillPaths?: string[]
         }
       ) => Promise<void>)
     | null
@@ -642,6 +663,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
+  const [composerCaret, setComposerCaret] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
   const [closeTerminalConfirmEnabled, setCloseTerminalConfirmEnabled] = useState(
     () => localStorage.getItem(CLOSE_TERMINAL_CONFIRM_STORAGE_KEY) !== 'false'
@@ -694,6 +716,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     localTerminalTitle: t.connections.localTerminal,
     providerId: config.providerId
   })
+  const sessionAgentStyle = resolveSessionAgentStyle(sessionChatTab, config)
 
   useEffect(() => {
     const connectionId = resolveOpsConnectionId(
@@ -959,7 +982,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     localTerminalLabel: t.connections.localTerminal,
     localTerminalDescription: t.connections.defaultTerminal
   })
-  const slashCommandQuery = getSlashCommandQuery(sessionChatTab.agentInput)
+  const slashQueryCursor =
+    getSlashCommandQuery(sessionChatTab.agentInput, composerCaret) !== undefined
+      ? composerCaret
+      : sessionChatTab.agentInput.length
+  const slashCommandQuery = getSlashCommandQuery(sessionChatTab.agentInput, slashQueryCursor)
   const slashCommandOptions = useMemo(() => {
     if (slashCommandQuery === undefined) return []
 
@@ -1233,7 +1260,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             {
               conversationContext: task.conversationContext,
               chatTabId,
-              reuseRun: task.reuseRun
+              reuseRun: task.reuseRun,
+              activeWikiIds: task.activeWikiIds,
+              activeSkillPaths: task.activeSkillPaths
             }
           )
         })
@@ -1565,7 +1594,19 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // Wait for that host's prompt (not the jump box's) before confirming,
         // otherwise confirm-login anchors the wrong runtime environment.
         const finalTargetHost = resolveFinalSshTarget(commands, connection)
-        const loginSignal = await waitForPromptHostOrTimeout(targetTabId, 20_000, finalTargetHost)
+        const lastAction = commands.length > 1 ? commands[commands.length - 1] : undefined
+        const lastActionIsSsh = Boolean(lastAction && /^\s*ssh\b/i.test(lastAction))
+        const preConfirm = await window.api.terminal.getContext(targetTabId)
+        const previousHost =
+          lastActionIsSsh && preConfirm.promptHost && preConfirm.promptHost !== 'local-shell'
+            ? preConfirm.promptHost
+            : undefined
+        appendSystemToRunOrLog(chatTabId, t.terminal.loginConfirming)
+        const loginSignal = await waitForPromptHostOrTimeout(targetTabId, 20_000, {
+          expectedHost: finalTargetHost,
+          previousHost,
+          acceptAnyRemoteHost: !finalTargetHost || isIpv4Literal(finalTargetHost)
+        })
         connTrace(
           'login-stage',
           `tab=${targetTabId}`,
@@ -2840,6 +2881,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       isSsh: detail.isSsh,
       terminalCwd: detail.terminalCwd,
       terminalMode: detail.terminalMode ?? 'pty',
+      agentStyle: detail.agentStyle,
       terminalReady: false,
       terminalOutput: '',
       agentLog: restoredLogs
@@ -3286,15 +3328,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     void persistModelSelection(selectedModel.providerId, selectedModel.id)
   }
 
-  async function persistAgentStyle(style: AgentStyle): Promise<void> {
-    const optimisticConfig = { ...config, agentStyle: style }
-    setConfig(optimisticConfig)
-    setValidation(undefined)
-    try {
-      await saveAgentConfig(optimisticConfig)
-    } catch (error) {
-      writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
-    }
+  function applyConversationStyle(style: AgentStyle): void {
+    updateTab(sessionChatTab.id, (tab) => ({
+      ...tab,
+      agentStyle: normalizeAgentStyle(style)
+    }))
   }
 
   function setActiveExecutionTerminal(chatTabId: string, terminalTabId: string | null): void {
@@ -3702,7 +3740,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     postLoginConversationContext?: string,
     postLoginAppendUserLog = true,
     postLoginStartedAt = Date.now(),
-    reuseRun?: ReuseAgentRun
+    reuseRun?: ReuseAgentRun,
+    postLoginRefs?: { activeWikiIds?: string[]; activeSkillPaths?: string[] }
   ): Promise<string> {
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
     const resolution = resolveConnectTargetTab({
@@ -3739,6 +3778,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         sessionGroupId: resolution.sessionGroupId,
         providerId: currentTab.providerId ?? config.providerId,
         model: currentTab.model,
+        agentStyle: currentTab.agentStyle,
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -3755,6 +3795,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const nextTab = createTerminalTab({
         title: getNextTerminalTitle(connection.name, tabsRef.current),
         providerId: config.providerId,
+        agentStyle: config.agentStyle,
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -3808,7 +3849,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           connection,
           appendUserLog: postLoginAppendUserLog,
           startedAt: postLoginStartedAt,
-          reuseRun
+          reuseRun,
+          activeWikiIds: postLoginRefs?.activeWikiIds,
+          activeSkillPaths: postLoginRefs?.activeSkillPaths
         }
       ])
     }
@@ -4116,6 +4159,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const nextTab = createTerminalTab({
       title: getNextTerminalTitle(t.connections.localTerminal, tabsRef.current),
       providerId: config.providerId,
+      agentStyle: config.agentStyle,
       isSsh: false
     })
     // Clear slash residue (e.g. "/") from the previous session before switching away.
@@ -4157,6 +4201,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const nextTab = createTerminalTab({
       title: getNextTerminalTitle(connection.name, tabsRef.current),
       providerId: config.providerId,
+      agentStyle: config.agentStyle,
       connectionId: connection.id,
       connectionName: connection.name,
       isSsh: true
@@ -4188,6 +4233,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         sessionGroupId: groupId,
         providerId: currentTab.providerId ?? config.providerId,
         model: currentTab.model,
+        agentStyle: currentTab.agentStyle,
         isSsh: false
       })
       setTabs((current) => {
@@ -4486,8 +4532,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
     const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
     const terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
-    const displayInput = (overrideInput ?? tab?.agentInput ?? '').trim()
-    if (!displayInput) return
+    const rawInput = (overrideInput ?? tab?.agentInput ?? '').trim()
+    const displayInput = stripComposerRefTokens(rawInput).trim()
+    if (!displayInput && !hasComposerRefTokens(rawInput)) return
 
     if (/^\/new$/i.test(displayInput)) {
       startNewSession()
@@ -4498,6 +4545,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const pathRefs = tab?.pathRefs ?? []
     const toolRefs = tab?.toolRefs ?? []
     const wikiRefs = tab?.wikiRefs ?? []
+    const wikiIds = [...(tab?.activeWikiIds ?? [])]
+    const skillPaths = skillRefs.map((skill) => skill.path).filter(Boolean)
+    const messageRefs = snapshotMessageReferences({
+      skillRefs,
+      wikiRefs,
+      toolRefs,
+      pathRefs
+    })
     const resumeRequested = isContinueIntent(displayInput)
     const baseInput = buildAgentInputWithReferences(
       displayInput,
@@ -4518,15 +4573,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         skillRefs: [],
         pathRefs: [],
         toolRefs: [],
-        wikiRefs: []
+        wikiRefs: [],
+        activeWikiIds: []
       }))
       const runId = activeRunIdRef.current.get(chatTabId)
       if (runId) {
         const artifacts = buildBusySupplementArtifacts({
-          displayInput,
+          displayInput: rawInput,
           runId,
           createdAt: new Date().toISOString(),
-          stepId: `supplement-${Date.now()}`
+          stepId: `supplement-${Date.now()}`,
+          references: messageRefs
         })
         appendLog(artifacts.logEntry, chatTabId)
         const ok = await window.api.agent
@@ -4554,7 +4611,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       skillRefs: [],
       pathRefs: [],
       toolRefs: [],
-      wikiRefs: []
+      wikiRefs: [],
+      activeWikiIds: []
     }))
     // Clarify-card confirm resumes with skipUserLog — selection lives on the settled card
     // and assistant match steps, never as a second user bubble.
@@ -4562,7 +4620,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       appendLog(
         {
           kind: 'user',
-          text: displayInput
+          text: rawInput,
+          references: messageRefs
         },
         chatTabId
       )
@@ -5116,7 +5175,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           conversationContext,
           false,
           startedAt,
-          { logId: runLogId, runId }
+          { logId: runLogId, runId },
+          { activeWikiIds: wikiIds, activeSkillPaths: skillPaths }
         )
         setActiveExecutionTerminal(chatTabId, targetTabId)
         return
@@ -5344,7 +5404,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       {
         conversationContext,
         chatTabId,
-        connectionRouteLabel: route.label
+        connectionRouteLabel: route.label,
+        activeWikiIds: wikiIds,
+        activeSkillPaths: skillPaths
       }
     )
   }
@@ -5361,6 +5423,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       chatTabId?: string
       reuseRun?: ReuseAgentRun
       connectionRouteLabel?: string
+      activeWikiIds?: string[]
+      activeSkillPaths?: string[]
     } = {}
   ): Promise<void> {
     const chatTabId = options.chatTabId ?? resolveSessionChatTabId(tabsRef.current, terminalTabId)
@@ -5488,9 +5552,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         executionTabId,
         terminalContext,
         locale,
-        agentStyle: normalizeAgentStyle(config.agentStyle),
-        activeWikiIds: chatTab?.activeWikiIds ?? [],
-        activeSkillPaths: (chatTab?.skillRefs ?? []).map((skill) => skill.path).filter(Boolean)
+        agentStyle: normalizeAgentStyle(sessionAgentStyle),
+        activeWikiIds: options.activeWikiIds ?? chatTab?.activeWikiIds ?? [],
+        activeSkillPaths:
+          options.activeSkillPaths ??
+          (chatTab?.skillRefs ?? []).map((skill) => skill.path).filter(Boolean)
       })
 
       if (activeRunCanceledRef.current.has(chatTabId)) return
@@ -5667,6 +5733,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  function slashReplacementCursor(input: string): number {
+    return getSlashCommandQuery(input, composerCaret) !== undefined
+      ? composerCaret
+      : input.length
+  }
+
+  function applyComposerInput(
+    tab: AgentTerminalTab,
+    value: string,
+    extras: Partial<AgentTerminalTab> = {}
+  ): AgentTerminalTab {
+    const merged = { ...tab, ...extras, agentInput: value }
+    const ids = collectComposerRefIds(value)
+    return {
+      ...merged,
+      skillRefs: merged.skillRefs.filter((item) => ids.skill.has(item.id)),
+      wikiRefs: merged.wikiRefs.filter((item) => ids.wiki.has(item.id)),
+      toolRefs: merged.toolRefs.filter((item) => ids.tool.has(item.id)),
+      pathRefs: merged.pathRefs.filter((item) => ids.path.has(item.id)),
+      activeWikiIds: (merged.activeWikiIds ?? []).filter((id) => ids.wiki.has(id))
+    }
+  }
   function handleAgentInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.key === 'Enter' && isComposingInput(event)) return
 
@@ -5717,10 +5805,18 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     )
     if (validReferences.length === 0) return
 
-    updateTab(resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current), (tab) => ({
-      ...tab,
-      pathRefs: validReferences.reduce(addUniquePathRef, tab.pathRefs)
-    }))
+    updateTab(resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current), (tab) => {
+      let nextInput = tab.agentInput
+      let cursor = slashReplacementCursor(nextInput)
+      let pathRefs = tab.pathRefs
+      for (const reference of validReferences) {
+        nextInput = insertComposerRefTokenAt(nextInput, cursor, 'path', reference.id)
+        const token = formatComposerRefToken('path', reference.id)
+        cursor = nextInput.indexOf(token, Math.max(0, cursor - 1)) + token.length
+        pathRefs = addUniquePathRef(pathRefs, reference)
+      }
+      return applyComposerInput(tab, nextInput, { pathRefs })
+    })
   }
 
   function insertSlashCommand(command: SlashCommandOption): void {
@@ -5739,10 +5835,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
 
     if (command.pathReferenceKind) {
-      updateTab(sessionChatTab.id, (tab) => ({
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, '')
-      }))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       void pickPathReference(command.pathReferenceKind)
@@ -5750,11 +5842,18 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
 
     if (command.toolRef) {
-      updateTab(sessionChatTab.id, (tab) => ({
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
-        toolRefs: addUniqueToolRef(tab.toolRefs, command.toolRef as AgentToolReference)
-      }))
+      const toolRef = command.toolRef as AgentToolReference
+      updateTab(sessionChatTab.id, (tab) =>
+        applyComposerInput(
+          tab,
+          replaceSlashCommandInput(
+            tab.agentInput,
+            formatComposerRefToken('tool', toolRef.id),
+            slashReplacementCursor(tab.agentInput)
+          ),
+          { toolRefs: addUniqueToolRef(tab.toolRefs, toolRef) }
+        )
+      )
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       return
@@ -5771,17 +5870,23 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const wikiRef = command.wikiRef as AgentWikiReference
       updateTab(sessionChatTab.id, (tab) => {
         const ids = tab.activeWikiIds ?? []
-        return {
-          ...tab,
-          agentInput: replaceSlashCommandInput(tab.agentInput, ''),
-          activeWikiIds: ids.includes(wikiRef.id) ? ids : [...ids, wikiRef.id],
-          wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
-            id: wikiRef.id,
-            title: wikiRef.title,
-            path: wikiRef.path,
-            content: ''
-          })
-        }
+        return applyComposerInput(
+          tab,
+          replaceSlashCommandInput(
+            tab.agentInput,
+            formatComposerRefToken('wiki', wikiRef.id),
+            slashReplacementCursor(tab.agentInput)
+          ),
+          {
+            activeWikiIds: ids.includes(wikiRef.id) ? ids : [...ids, wikiRef.id],
+            wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+              id: wikiRef.id,
+              title: wikiRef.title,
+              path: wikiRef.path,
+              content: ''
+            })
+          }
+        )
       })
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
@@ -5789,35 +5894,47 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
 
     if (command.agentStyle) {
-      void persistAgentStyle(command.agentStyle)
-      updateTab(sessionChatTab.id, (tab) => ({
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, '')
-      }))
+      applyConversationStyle(command.agentStyle)
+      updateTab(sessionChatTab.id, (tab) =>
+        applyComposerInput(
+          tab,
+          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
+        )
+      )
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       return
     }
 
     if (command.connection) {
-      updateTab(sessionChatTab.id, (tab) => ({
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, '')
-      }))
+      updateTab(sessionChatTab.id, (tab) =>
+        applyComposerInput(
+          tab,
+          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
+        )
+      )
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       void connectToConnection(command.connection)
       return
     }
 
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      agentInput: replaceSlashCommandInput(
-        tab.agentInput,
-        command.templateInput ?? (command.skill ? '' : command.value)
-      ),
-      skillRefs: command.skill ? addUniqueSkillRef(tab.skillRefs, command.skill) : tab.skillRefs
-    }))
+    updateTab(sessionChatTab.id, (tab) => {
+      const replacement = command.skill
+        ? formatComposerRefToken('skill', command.skill.id)
+        : (command.templateInput ?? command.value)
+      return applyComposerInput(
+        tab,
+        replaceSlashCommandInput(
+          tab.agentInput,
+          replacement,
+          slashReplacementCursor(tab.agentInput)
+        ),
+        command.skill
+          ? { skillRefs: addUniqueSkillRef(tab.skillRefs, command.skill) }
+          : {}
+      )
+    })
     setSlashCommandIndex(0)
     setSlashCommandOpen(
       shouldOpenStyleList ||
@@ -5830,41 +5947,43 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function removeSkillRef(skillId: string): void {
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      skillRefs: tab.skillRefs.filter((skill) => skill.id !== skillId)
-    }))
+    updateTab(sessionChatTab.id, (tab) =>
+      applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'skill', skillId))
+    )
   }
 
   function removeToolRef(toolId: string): void {
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      toolRefs: tab.toolRefs.filter((tool) => tool.id !== toolId)
-    }))
+    updateTab(sessionChatTab.id, (tab) =>
+      applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'tool', toolId))
+    )
   }
 
   function removeWikiRef(wikiId: string): void {
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      wikiRefs: tab.wikiRefs.filter((wiki) => wiki.id !== wikiId),
-      activeWikiIds: (tab.activeWikiIds ?? []).filter((id) => id !== wikiId)
-    }))
+    updateTab(sessionChatTab.id, (tab) =>
+      applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'wiki', wikiId))
+    )
   }
 
   async function addWikiReference(document: WikiDocumentSummary): Promise<void> {
     updateTab(sessionChatTab.id, (tab) => {
       const ids = tab.activeWikiIds ?? []
-      return {
-        ...tab,
-        agentInput: replaceSlashCommandInput(tab.agentInput, ''),
-        activeWikiIds: ids.includes(document.id) ? ids : [...ids, document.id],
-        wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
-          id: document.id,
-          title: document.title,
-          path: document.path,
-          content: ''
-        })
-      }
+      return applyComposerInput(
+        tab,
+        replaceSlashCommandInput(
+          tab.agentInput,
+          formatComposerRefToken('wiki', document.id),
+          slashReplacementCursor(tab.agentInput)
+        ),
+        {
+          activeWikiIds: ids.includes(document.id) ? ids : [...ids, document.id],
+          wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+            id: document.id,
+            title: document.title,
+            path: document.path,
+            content: ''
+          })
+        }
+      )
     })
   }
 
@@ -5872,17 +5991,26 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const reference = await window.api.agent.pickPathReference(kind)
     if (!reference) return
 
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      pathRefs: addUniquePathRef(tab.pathRefs, reference)
-    }))
+    updateTab(sessionChatTab.id, (tab) => {
+      const cursor = slashReplacementCursor(tab.agentInput)
+      const nextInput =
+        getSlashCommandQuery(tab.agentInput, cursor) !== undefined
+          ? replaceSlashCommandInput(
+              tab.agentInput,
+              formatComposerRefToken('path', reference.id),
+              cursor
+            )
+          : insertComposerRefTokenAt(tab.agentInput, cursor, 'path', reference.id)
+      return applyComposerInput(tab, nextInput, {
+        pathRefs: addUniquePathRef(tab.pathRefs, reference)
+      })
+    })
   }
 
   function removePathRef(pathRefId: string): void {
-    updateTab(sessionChatTab.id, (tab) => ({
-      ...tab,
-      pathRefs: tab.pathRefs.filter((reference) => reference.id !== pathRefId)
-    }))
+    updateTab(sessionChatTab.id, (tab) =>
+      applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'path', pathRefId))
+    )
   }
 
   function updateConfig<K extends keyof AgentConfig>(key: K, value: AgentConfig[K]): void {
@@ -6364,7 +6492,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
   async function copyLogEntry(entry: AgentLogEntry): Promise<void> {
     const tabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    await copyText(getSelectedTextWithinLog(entry.id) || entry.text, copyFeedback(t))
+    await copyText(
+      getSelectedTextWithinLog(entry.id) ||
+        stripComposerRefTokens(decodeUserMessageText(entry.text).text),
+      copyFeedback(t)
+    )
     updateTab(tabId, (tab) => ({ ...tab, copiedLogId: entry.id }))
     window.setTimeout(() => {
       updateTab(tabId, (tab) => ({
@@ -7202,13 +7334,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             aiState={aiState}
             aiStatusText={aiStatusText}
             modelValidationError={modelValidationError}
-            agentStyle={normalizeAgentStyle(config.agentStyle)}
-            onAgentStyleChange={(style) => void persistAgentStyle(style)}
+            agentStyle={sessionAgentStyle}
+            onAgentStyleChange={applyConversationStyle}
             thinkingCollapsedByDefault={
-              !resolveShowAgentThinking(
-                normalizeAgentStyle(config.agentStyle),
-                config.showAgentThinking
-              )
+              !resolveShowAgentThinking(sessionAgentStyle, config.showAgentThinking)
             }
             activeAgentPending={activeAgentPending}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
@@ -7379,11 +7508,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onAgentInputChange={(value) => {
               setSlashCommandOpen(true)
               setSlashCommandIndex(0)
-              updateTab(sessionChatTab.id, (tab) => ({
-                ...tab,
-                agentInput: value
-              }))
+              updateTab(sessionChatTab.id, (tab) => applyComposerInput(tab, value))
             }}
+            onComposerCaretChange={setComposerCaret}
             onAgentInputKeyDown={handleAgentInputKeyDown}
             onAgentInputPaste={(event) => void handleAgentInputPaste(event)}
             onRemoveSkill={removeSkillRef}
@@ -7471,7 +7598,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       <AppFooter
         version={appVersion}
         updateStatus={appUpdateStatus}
-        agentStyle={normalizeAgentStyle(config.agentStyle)}
+        agentStyle={sessionAgentStyle}
         t={t}
         onDownloadUpdate={() => {
           if (appUpdateStatus.state === 'downloading') return
@@ -7589,7 +7716,6 @@ async function runConnectionCommandSequence(
 
   if (loginActions.length === 0) return true
 
-  let sentAnyAction = false
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
     const actionStart = Date.now()
@@ -7614,7 +7740,6 @@ async function runConnectionCommandSequence(
         connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
         sendTerminalInput(action, tabId)
         appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-        sentAnyAction = true
         continue
       }
       // Still not ready: the login may have completed without an interactive
@@ -7633,29 +7758,6 @@ async function runConnectionCommandSequence(
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-    sentAnyAction = true
-  }
-
-  if (sentAnyAction) {
-    // After the final login action, wait for its output to settle so the remote
-    // prompt observed by confirm-login is the post-ssh target — not the
-    // jump-host prompt that briefly appears before the last action completes.
-    // A settle timeout is NOT fatal: the remote prompt may be slow, or the
-    // terminal may have no new output while waiting on the user.
-    // waitForPromptHostOrTimeout below decides success/failure authoritatively.
-    const settled = await waitForTerminalIdle(tabId, {
-      ignoredEcho: loginActions[loginActions.length - 1],
-      timeoutMs: 15_000
-    })
-    if (!settled) {
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
-        },
-        logTabId
-      )
-    }
   }
 
   return true
@@ -7672,7 +7774,6 @@ async function runConnectionLoginActionSequence(
   if (loginActions.length === 0) return true
 
   const firstActionReady = waitForTerminalActionPrompt(tabId)
-  let sentAnyAction = false
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
     const actionStart = Date.now()
@@ -7693,7 +7794,6 @@ async function runConnectionLoginActionSequence(
         connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
         sendTerminalInput(action, tabId)
         appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-        sentAnyAction = true
         continue
       }
       appendLog(
@@ -7708,26 +7808,6 @@ async function runConnectionLoginActionSequence(
 
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-    sentAnyAction = true
-  }
-
-  if (sentAnyAction) {
-    // Same settle wait as the ssh command sequence: the final login action's
-    // output (and its resulting prompt) must be stable before confirm-login
-    // runs. Non-fatal: the prompt-host wait below is the authoritative check.
-    const settled = await waitForTerminalIdle(tabId, {
-      ignoredEcho: loginActions[loginActions.length - 1],
-      timeoutMs: 15_000
-    })
-    if (!settled) {
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.outputSettleTimeout} (${loginActions.length + 1})`
-        },
-        logTabId
-      )
-    }
   }
 
   return true
@@ -7871,7 +7951,11 @@ async function waitForShellInteractive(tabId: string, timeoutMs = 10_000): Promi
 async function waitForPromptHostOrTimeout(
   tabId: string,
   timeoutMs = 20_000,
-  expectedHost?: string
+  options?: {
+    expectedHost?: string
+    previousHost?: string
+    acceptAnyRemoteHost?: boolean
+  }
 ): Promise<'host' | 'local' | 'none'> {
   return waitForRemotePrompt(
     {
@@ -7886,7 +7970,13 @@ async function waitForPromptHostOrTimeout(
       clearTimeout: (id) => window.clearTimeout(id),
       now: () => Date.now()
     },
-    { tabId, timeoutMs, expectedHost }
+    {
+      tabId,
+      timeoutMs,
+      expectedHost: options?.expectedHost,
+      previousHost: options?.previousHost,
+      acceptAnyRemoteHost: options?.acceptAnyRemoteHost
+    }
   )
 }
 

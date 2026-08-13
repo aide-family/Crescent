@@ -15,8 +15,13 @@ import type {
 } from './agent/types'
 import type { CrescentMemoryFile } from './crescent-store'
 import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
+import { isAgentStyle, type AgentStyle } from '../shared/agent-style'
 
 let database: DatabaseSync | undefined
+
+function parseStoredAgentStyle(value: string | null | undefined): AgentStyle | undefined {
+  return isAgentStyle(value) ? value : undefined
+}
 
 interface SessionHistoryRow {
   tabId: string
@@ -32,6 +37,7 @@ interface SessionHistoryRow {
   lastMessage?: string | null
   lastMessageAt?: string | null
   runCount?: number
+  agentStyle?: string | null
 }
 
 export function initializeCrescentDatabase(): void {
@@ -137,6 +143,7 @@ export function initializeCrescentDatabase(): void {
 
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'session_tabs', 'agent_style', 'TEXT')
   ensureColumn(db, 'agent_logs', 'run_id', 'TEXT')
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
@@ -153,8 +160,8 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
   const now = new Date().toISOString()
   const statement = db.prepare(`
     INSERT INTO session_tabs (
-      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id) DO UPDATE SET
       title = CASE
         WHEN session_tabs.title_locked = 1 THEN session_tabs.title
@@ -165,6 +172,7 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       is_ssh = excluded.is_ssh,
       terminal_cwd = excluded.terminal_cwd,
       terminal_mode = excluded.terminal_mode,
+      agent_style = excluded.agent_style,
       updated_at = excluded.updated_at
   `)
 
@@ -177,6 +185,7 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       tab.isSsh ? 1 : 0,
       tab.terminalCwd ?? null,
       tab.terminalMode ?? null,
+      tab.agentStyle ?? null,
       now
     )
   }
@@ -621,6 +630,7 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
         tab.is_ssh AS isSsh,
         tab.terminal_cwd AS terminalCwd,
         tab.terminal_mode AS terminalMode,
+        tab.agent_style AS agentStyle,
         tab.updated_at AS updatedAt,
         tab.summary AS summary,
         tab.title_locked AS titleLocked,
@@ -663,6 +673,7 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
     isSsh: Boolean(row.isSsh),
     terminalCwd: row.terminalCwd ?? undefined,
     terminalMode: row.terminalMode ?? undefined,
+    agentStyle: parseStoredAgentStyle(row.agentStyle),
     updatedAt: row.updatedAt,
     summary: row.summary ?? undefined,
     lastMessage: row.lastMessage ?? undefined,
@@ -683,6 +694,7 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         is_ssh AS isSsh,
         terminal_cwd AS terminalCwd,
         terminal_mode AS terminalMode,
+        agent_style AS agentStyle,
         summary,
         title_locked AS titleLocked,
         updated_at AS updatedAt
@@ -721,6 +733,7 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     isSsh: Boolean(tab.isSsh),
     terminalCwd: tab.terminalCwd ?? undefined,
     terminalMode: tab.terminalMode ?? undefined,
+    agentStyle: parseStoredAgentStyle(tab.agentStyle),
     updatedAt: tab.updatedAt,
     summary: tab.summary ?? undefined,
     lastMessage: historyItem?.lastMessage,

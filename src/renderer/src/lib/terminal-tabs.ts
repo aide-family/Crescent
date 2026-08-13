@@ -6,15 +6,26 @@ import type {
   AgentWikiReference,
   StoredSessionTab
 } from '../../../shared/agent-types'
+import type { AgentStyle } from '../../../shared/agent-style'
+import { normalizeAgentStyle } from '../../../shared/agent-style'
+
+import type { AgentMessageReferences } from './agent-message-refs'
 
 export type AgentLogEntry =
-  | { id: number; kind: 'user' | 'assistant' | 'error'; text: string; createdAt: string }
+  | {
+      id: number
+      kind: 'user' | 'assistant' | 'error'
+      text: string
+      createdAt: string
+      references?: AgentMessageReferences
+    }
   | {
       id: number
       kind: 'user-supplement'
       text: string
       createdAt: string
       runId: string
+      references?: AgentMessageReferences
     }
   | {
       id: number
@@ -102,6 +113,7 @@ export type AgentRunStep =
       text: string
       createdAt: string
       seq?: number
+      references?: AgentMessageReferences
     }
   | {
       id: string
@@ -144,6 +156,8 @@ export interface AgentTerminalTab {
   sessionGroupId: string
   providerId?: string
   model?: string
+  /** Per-session working style; unset falls back to config.agentStyle. */
+  agentStyle?: AgentStyle
   connectionId?: string
   connectionName?: string
   isSsh: boolean
@@ -277,6 +291,7 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     sessionGroupId,
     providerId: input?.providerId,
     model: input?.model,
+    agentStyle: input?.agentStyle,
     connectionId: input?.connectionId,
     connectionName: input?.connectionName,
     isSsh: input?.isSsh ?? false,
@@ -323,7 +338,8 @@ export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[
     connectionName: tab.connectionName,
     isSsh: tab.isSsh,
     terminalCwd: tab.terminalCwd,
-    terminalMode: tab.terminalMode
+    terminalMode: tab.terminalMode,
+    agentStyle: tab.agentStyle
   }))
 }
 
@@ -459,4 +475,11 @@ export function resolveTabModelSelection(
       : (providerModels[0]?.id ?? config.model)
 
   return { providerId, model }
+}
+
+export function resolveSessionAgentStyle(
+  tab: Pick<AgentTerminalTab, 'agentStyle'> | undefined,
+  config: Pick<AgentConfig, 'agentStyle'>
+): AgentStyle {
+  return normalizeAgentStyle(tab?.agentStyle ?? config.agentStyle)
 }
