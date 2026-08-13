@@ -37,6 +37,7 @@ import {
 } from './pi-model-runtime'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
+import { normalizeAgentStyle } from '../../shared/agent-style'
 import { rejectPendingApprovalsForTab, resolveCommandApprovalDecision } from './command-approval'
 import { resolveAgentSubterminalReady } from './pi-open-subterminal'
 import { safeWebContentsSend } from '../safe-ipc-send'
@@ -482,6 +483,7 @@ export function registerAgentIpc(): void {
       executionTabId,
       terminalContext: payload?.terminalContext,
       locale: payload?.locale,
+      agentStyle: normalizeAgentStyle(payload?.agentStyle ?? agentConfig.agentStyle),
       activeWikiDocs,
       activeSkillDocs,
       emit: (agentEvent) => {

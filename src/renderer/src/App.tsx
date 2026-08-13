@@ -265,22 +265,22 @@ import {
 import {
   buildConnectionSlashCommand,
   buildMcpSlashCommand,
-  buildModeSlashCommands,
   buildSkillSlashCommand,
   buildSlashCommandOptions,
+  buildStyleSlashCommands,
   buildToolSlashCommand,
   buildWikiSlashCommand,
   getSlashCommandQuery,
   isConnectionSlashQuery,
   isMcpSlashQuery,
-  isModeSlashQuery,
+  isStyleSlashQuery,
   isToolSlashQuery,
   isWikiSlashQuery,
   matchesConnectionSlashCommand,
   matchesMcpSlashCommand,
-  matchesModeSlashCommand,
   matchesSkillSlashCommand,
   matchesSlashCommand,
+  matchesStyleSlashCommand,
   matchesToolSlashCommand,
   matchesWikiSlashCommand,
   replaceSlashCommandInput,
@@ -307,6 +307,11 @@ import type {
   WikiDocumentSummary
 } from '../../shared/agent-types'
 import {
+  normalizeAgentStyle,
+  resolveShowAgentThinking,
+  type AgentStyle
+} from '../../shared/agent-style'
+import {
   createEmptyOpenApiProfile,
   updateOpenApiProfileInConfig,
   resolveActiveOpenApiProfile,
@@ -324,6 +329,7 @@ const emptyConfig: AgentConfig = {
   providers: [],
   providerId: undefined,
   model: '',
+  agentStyle: 'concise',
   agentMode: 'react',
   maxActiveTools: 5,
   commandWhitelist: [],
@@ -957,9 +963,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const slashCommandOptions = useMemo(() => {
     if (slashCommandQuery === undefined) return []
 
-    if (isModeSlashQuery(slashCommandQuery)) {
-      return buildModeSlashCommands(t).filter((command) =>
-        matchesModeSlashCommand(command, slashCommandQuery ?? '')
+    if (isStyleSlashQuery(slashCommandQuery)) {
+      return buildStyleSlashCommands(t).filter((command) =>
+        matchesStyleSlashCommand(command, slashCommandQuery ?? '')
       )
     }
     if (isToolSlashQuery(slashCommandQuery)) {
@@ -3280,6 +3286,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     void persistModelSelection(selectedModel.providerId, selectedModel.id)
   }
 
+  async function persistAgentStyle(style: AgentStyle): Promise<void> {
+    const optimisticConfig = { ...config, agentStyle: style }
+    setConfig(optimisticConfig)
+    setValidation(undefined)
+    try {
+      await saveAgentConfig(optimisticConfig)
+    } catch (error) {
+      writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
+    }
+  }
+
   function setActiveExecutionTerminal(chatTabId: string, terminalTabId: string | null): void {
     if (terminalTabId) {
       activeExecutionTabIdRef.current.set(chatTabId, terminalTabId)
@@ -5471,6 +5488,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         executionTabId,
         terminalContext,
         locale,
+        agentStyle: normalizeAgentStyle(config.agentStyle),
         activeWikiIds: chatTab?.activeWikiIds ?? [],
         activeSkillPaths: (chatTab?.skillRefs ?? []).map((skill) => skill.path).filter(Boolean)
       })
@@ -5706,7 +5724,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function insertSlashCommand(command: SlashCommandOption): void {
-    const shouldOpenModeList = command.id === 'mode'
+    const shouldOpenStyleList = command.id === 'style'
     const shouldOpenSkillList = command.id === 'skill'
     const shouldOpenConnectionList = command.id === 'connection'
     const shouldOpenToolList = command.id === 'tool'
@@ -5770,8 +5788,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
-    if (command.agentMode) {
-      updateConfig('agentMode', command.agentMode)
+    if (command.agentStyle) {
+      void persistAgentStyle(command.agentStyle)
       updateTab(sessionChatTab.id, (tab) => ({
         ...tab,
         agentInput: replaceSlashCommandInput(tab.agentInput, '')
@@ -5802,7 +5820,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }))
     setSlashCommandIndex(0)
     setSlashCommandOpen(
-      shouldOpenModeList ||
+      shouldOpenStyleList ||
         shouldOpenSkillList ||
         shouldOpenConnectionList ||
         shouldOpenToolList ||
@@ -7041,6 +7059,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onDeleteProvider={deleteSettingsProvider}
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
+            onAgentStyleChange={(style) => updateConfig('agentStyle', style)}
+            onShowAgentThinkingChange={(value) => updateConfig('showAgentThinking', value)}
             onWorkspaceCwdChange={(value) =>
               updateConfig('workspaceCwd', value.trim() || undefined)
             }
@@ -7182,6 +7202,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             aiState={aiState}
             aiStatusText={aiStatusText}
             modelValidationError={modelValidationError}
+            agentStyle={normalizeAgentStyle(config.agentStyle)}
+            onAgentStyleChange={(style) => void persistAgentStyle(style)}
+            thinkingCollapsedByDefault={
+              !resolveShowAgentThinking(
+                normalizeAgentStyle(config.agentStyle),
+                config.showAgentThinking
+              )
+            }
             activeAgentPending={activeAgentPending}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
@@ -7443,7 +7471,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       <AppFooter
         version={appVersion}
         updateStatus={appUpdateStatus}
-        agentMode={config.agentMode}
+        agentStyle={normalizeAgentStyle(config.agentStyle)}
         t={t}
         onDownloadUpdate={() => {
           if (appUpdateStatus.state === 'downloading') return

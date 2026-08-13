@@ -224,6 +224,10 @@
   box-shadow: none;
 }
 
+.app-style-trigger[data-slot='select-trigger'] {
+  max-width: 6.75rem;
+}
+
 .app-model-trigger[data-slot='select-trigger']:hover,
 .app-model-trigger[data-slot='select-trigger']:focus-visible {
   color: var(--foreground);

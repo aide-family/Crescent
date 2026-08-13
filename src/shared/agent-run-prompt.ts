@@ -1,3 +1,5 @@
+import { buildAgentStyleContract, DEFAULT_AGENT_STYLE, type AgentStyle } from './agent-style'
+
 export const SOP_GUIDANCE_HEADER = '# 生效 SOP 指引（用户选定）'
 export const SKILL_GUIDANCE_HEADER = '# 引用 Skill 内容'
 export const SOP_TRUNCATION_MARK = '…（已截断）'
@@ -22,6 +24,7 @@ export interface BuildPromptTextInput {
   locale?: string
   activeWikiDocs?: SopWikiPromptPart[]
   activeSkillDocs?: SkillPromptPart[]
+  agentStyle?: AgentStyle
 }
 
 /** Build the active SOP guidance block from wiki docs; empty when none. Caps total length. */
@@ -85,12 +88,13 @@ export function buildLanguageDirective(locale: string | undefined): string {
 
 /**
  * Assemble the user-facing prompt for a Pi agent run.
- * Order: language → conversation → terminal → SOP → skills → user input.
+ * Order: language → working style → conversation → terminal → SOP → skills → user input.
  */
 export function buildPromptText(input: BuildPromptTextInput): string {
   const parts: string[] = []
   const languageDirective = buildLanguageDirective(input.locale)
   if (languageDirective) parts.push(languageDirective)
+  parts.push(`${buildAgentStyleContract(input.agentStyle ?? DEFAULT_AGENT_STYLE)}\n`)
   if (input.conversationContext?.trim()) {
     parts.push(`# Recent conversation\n${input.conversationContext.trim()}\n`)
   }

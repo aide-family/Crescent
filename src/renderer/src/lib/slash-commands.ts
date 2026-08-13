@@ -1,10 +1,12 @@
 import type { Dictionary } from '@renderer/i18n'
+import { agentStyleHint, agentStyleTitle } from '@renderer/lib/agent-style-ui'
 import { formatConnectionTarget } from '@renderer/lib/connections'
 import type { AgentToolReference } from '@renderer/lib/terminal-tabs'
+import { AGENT_STYLES } from '../../../shared/agent-style'
 import type {
-  AgentConfig,
   AgentPathReference,
   AgentSkillOption,
+  AgentStyle,
   AgentWikiReference,
   ConnectionConfig,
   WikiDocumentSummary
@@ -18,7 +20,7 @@ export interface SlashCommandOption {
   keywords: string[]
   skill?: AgentSkillOption
   connection?: ConnectionConfig
-  agentMode?: AgentConfig['agentMode']
+  agentStyle?: AgentStyle
   pathReferenceKind?: AgentPathReference['kind']
   toolRef?: AgentToolReference
   wikiRef?: AgentWikiReference
@@ -114,23 +116,23 @@ export function matchesWikiSlashCommand(command: SlashCommandOption, query: stri
   return searchable.includes(wikiQuery)
 }
 
-export function isModeSlashQuery(query: string | undefined): boolean {
+export function isStyleSlashQuery(query: string | undefined): boolean {
   if (query === undefined) return false
-  return query.startsWith('mode:')
+  return query.startsWith('style:')
 }
 
-export function matchesModeSlashCommand(command: SlashCommandOption, query: string): boolean {
-  const modeQuery = query
-    .replace(/^mode:?/, '')
+export function matchesStyleSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const styleQuery = query
+    .replace(/^style:?/, '')
     .trim()
     .toLowerCase()
-  if (!modeQuery) return true
+  if (!styleQuery) return true
 
-  const searchable = [command.title, command.description, ...command.keywords]
+  const searchable = [command.id, command.title, command.description, ...command.keywords]
     .join(' ')
     .toLowerCase()
 
-  return searchable.includes(modeQuery)
+  return searchable.includes(styleQuery)
 }
 
 export function isConnectionSlashQuery(query: string | undefined): boolean {
@@ -168,11 +170,11 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['new', 'session', 'chat', 'conversation', '新建', '会话', '新会话']
     },
     {
-      id: 'mode',
-      title: t.input.slashMode,
-      description: t.input.slashModeDescription,
-      value: '/mode:',
-      keywords: ['mode', 'agent', 'react', 'plan']
+      id: 'style',
+      title: t.input.slashStyle,
+      description: t.input.slashStyleDescription,
+      value: '/style:',
+      keywords: ['style', 'agent', 'swift', 'concise', 'guided', 'teach', 'brief', 'verbose']
     },
     {
       id: 'connection',
@@ -283,25 +285,15 @@ export function buildWikiSlashCommand(
   }
 }
 
-export function buildModeSlashCommands(t: Dictionary): SlashCommandOption[] {
-  return [
-    {
-      id: 'mode:react',
-      title: 'ReAct',
-      description: t.settings.planExecuteHint,
-      value: '',
-      keywords: ['mode', 'agent', 'react'],
-      agentMode: 'react'
-    },
-    {
-      id: 'mode:plan-execute',
-      title: 'Plan-and-Execute',
-      description: t.settings.planExecuteHint,
-      value: '',
-      keywords: ['mode', 'agent', 'plan', 'execute', 'plan-execute'],
-      agentMode: 'plan-execute'
-    }
-  ]
+export function buildStyleSlashCommands(t: Dictionary): SlashCommandOption[] {
+  return AGENT_STYLES.map((style) => ({
+    id: `style:${style}`,
+    title: agentStyleTitle(style, t),
+    description: agentStyleHint(style, t),
+    value: '',
+    keywords: ['style', 'agent', style, agentStyleTitle(style, t), agentStyleHint(style, t)],
+    agentStyle: style
+  }))
 }
 
 export function buildConnectionSlashCommand(

@@ -588,7 +588,7 @@ const en = {
     approvalNotePlaceholder: 'Optional note for the AI…',
     yourApprovalNote: 'Your note: {note}',
     thinkingPreparingRun: 'Preparing the execution plan and available tools…',
-    slashCommandHint: 'Type / to reference context, MCP tools, mode, or skills',
+    slashCommandHint: 'Type / to reference context, MCP tools, working style, or skills',
     slashNew: 'New session',
     slashNewDescription: 'Start a new linked terminal and chat session',
     sessionLabel: 'Session',
@@ -600,8 +600,8 @@ const en = {
       'I want to create a custom Skill. Guide me through the name, use cases, triggers, workflow steps, inputs and outputs, risks, and validation approach, then generate a SKILL.md draft.',
     slashFileDescription: 'Choose a local file as referenced context',
     slashFolderDescription: 'Choose a local folder as referenced context',
-    slashMode: 'Change chat mode',
-    slashModeDescription: 'Choose the agent mode',
+    slashStyle: 'Change working style',
+    slashStyleDescription: 'How much the agent says — execution speed stays the same',
     slashMcp: 'Reference MCP tool',
     slashMcpDescription: 'Choose a tool exposed by a configured MCP server',
     slashSkill: 'Reference skill',
@@ -696,7 +696,22 @@ const en = {
     title: 'Knowledge base'
   },
   settings: {
-    agentMode: 'Agent mode',
+    agentStyle: 'Working style',
+    agentStyleHint:
+      'Controls how much Crescent says. It does not slow down work, skip checks, or change safety rules.',
+    agentStyleSwift: 'Swift',
+    agentStyleSwiftHint:
+      'Silent while working; 1–3 sentence result. Best for experts watching the terminal.',
+    agentStyleConcise: 'Concise',
+    agentStyleConciseHint:
+      'One status line between steps; short conclusion. Default for on-call work.',
+    agentStyleGuided: 'Guided',
+    agentStyleGuidedHint: 'Pair through the investigation: goal, evidence, next step.',
+    agentStyleTeach: 'Teach',
+    agentStyleTeachHint: 'Explain why this check and what the evidence means. For learning.',
+    showAgentThinking: 'Show thinking process',
+    showAgentThinkingHint:
+      'Overrides the style default. Swift/Concise/Guided hide thinking; Teach shows it.',
     apiKey: 'OpenAI API key',
     baseUrl: 'OpenAI-compatible base URL',
     baseUrlHint:
@@ -771,7 +786,9 @@ const en = {
       'Write local instructions here. Saving writes to ~/.crescent and injects the content into later Agent sessions.',
     instructionFileSaved: 'Saved',
     instructionFileCharCount: '{n} chars',
-    instructionFiles: 'Local instruction files',
+    instructionFiles: 'Advanced: identity and principles',
+    instructionFilesHint:
+      'Working style controls how much Crescent says. These files still shape judgment and identity; they do not override working-style density or safety rules.',
     maxToolsHint: 'Only the most relevant OpenAPI tools are sent to the model.',
     mcpArgs: 'MCP arguments',
     mcpArgsHint: 'One argument per line. Values are passed to the MCP command in order.',
@@ -806,7 +823,6 @@ const en = {
     editMcpServer: 'Edit MCP server',
     enableMcpServer: 'Enable',
     disableMcpServer: 'Disable',
-    planExecuteHint: 'Use Plan-and-Execute for longer workflows that may need replanning.',
     providerId: 'Provider ID',
     providerList: 'Provider list',
     providerModels: 'Model list',

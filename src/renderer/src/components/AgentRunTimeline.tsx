@@ -68,7 +68,8 @@ export function AgentRunTimeline({
   onAddCommandToWhitelist,
   onInjectSuggestions,
   onOpenModelSettings,
-  onSaveAsSop
+  onSaveAsSop,
+  thinkingCollapsedByDefault = true
 }: {
   document: ParsedAgentRunDocument
   t: Dictionary
@@ -88,6 +89,7 @@ export function AgentRunTimeline({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
+  thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
   const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
   const runFinished = typeof document.elapsedMs === 'number'
@@ -136,7 +138,14 @@ export function AgentRunTimeline({
             const step = item.step
             const index = item.index
             if (step.kind === 'thought') {
-              return <ThoughtStepRow key={step.id} step={step} t={t} />
+              return (
+                <ThoughtStepRow
+                  key={step.id}
+                  step={step}
+                  t={t}
+                  collapsedByDefault={thinkingCollapsedByDefault}
+                />
+              )
             }
             if (step.kind === 'message') {
               return <MessageStepRow key={step.id} step={step} t={t} />
@@ -426,31 +435,41 @@ const THOUGHT_PREVIEW_CHARS = 120
 
 function ThoughtStepRow({
   step,
-  t
+  t,
+  collapsedByDefault
 }: {
   step: Extract<AgentRunStep, { kind: 'thought' }>
   t: Dictionary
+  collapsedByDefault: boolean
 }): React.JSX.Element | null {
   const text = clampAgentText(step.text.trim(), AGENT_RUN_STREAM_MAX_CHARS)
   if (!text) return null
   const streaming = step.phase === 'streaming'
-  const needsCollapse = !streaming && text.length > THOUGHT_PREVIEW_CHARS
+  const needsCollapse = collapsedByDefault || (!streaming && text.length > THOUGHT_PREVIEW_CHARS)
 
   if (needsCollapse) {
     return (
-      <details className="group min-w-0" open>
+      <details className="group min-w-0" open={collapsedByDefault ? undefined : true}>
         <summary className="flex cursor-pointer select-none items-start gap-1.5 marker:content-none">
-          <ChevronRightIcon
-            className="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
-            aria-hidden="true"
-          />
+          {streaming ? (
+            <Loader2Icon
+              className="mt-0.5 size-3 shrink-0 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          ) : (
+            <ChevronRightIcon
+              className="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+              aria-hidden="true"
+            />
+          )}
           <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic">
             <span className="mr-1.5 not-italic text-muted-foreground/70">
-              {t.input.thinkingProcessCompleted}
+              {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
             </span>
             <span className="group-open:hidden">
-              {text.slice(0, THOUGHT_PREVIEW_CHARS)}
-              {text.length > THOUGHT_PREVIEW_CHARS ? '…' : ''}
+              {collapsedByDefault && streaming
+                ? null
+                : `${text.slice(0, THOUGHT_PREVIEW_CHARS)}${text.length > THOUGHT_PREVIEW_CHARS ? '…' : ''}`}
             </span>
             <span className="hidden whitespace-pre-wrap break-words group-open:inline">{text}</span>
           </span>

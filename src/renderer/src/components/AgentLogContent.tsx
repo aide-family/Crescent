@@ -64,7 +64,8 @@ export function AgentLogContent({
   onAddCommandToWhitelist,
   onInjectSuggestions,
   onOpenModelSettings,
-  onSaveAsSop
+  onSaveAsSop,
+  thinkingCollapsedByDefault
 }: {
   entry: AgentLogEntry
   liveRun?: AgentRunViewState | null
@@ -86,6 +87,7 @@ export function AgentLogContent({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
+  thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
@@ -175,6 +177,7 @@ export function AgentLogContent({
           onInjectSuggestions={onInjectSuggestions}
           onOpenModelSettings={onOpenModelSettings}
           onSaveAsSop={onSaveAsSop}
+          thinkingCollapsedByDefault={thinkingCollapsedByDefault}
         />
       )
     }
