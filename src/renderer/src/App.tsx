@@ -162,10 +162,7 @@ import {
   isExplicitConnectionRequest,
   isExplicitNonTerminalAgentRequest
 } from '@renderer/lib/agent-input'
-import {
-  decodeUserMessageText,
-  snapshotMessageReferences
-} from '@renderer/lib/agent-message-refs'
+import { decodeUserMessageText, snapshotMessageReferences } from '@renderer/lib/agent-message-refs'
 import {
   collectComposerRefIds,
   formatComposerRefToken,
@@ -211,10 +208,7 @@ import {
   type ConnectionAttemptState
 } from '@renderer/lib/connection-attempt'
 import { runWithTimeout } from '@renderer/lib/with-timeout'
-import {
-  isIpv4Literal,
-  waitForRemotePrompt
-} from '@renderer/lib/prompt-host-wait'
+import { isIpv4Literal, waitForRemotePrompt } from '@renderer/lib/prompt-host-wait'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
 import {
   buildBusySupplementArtifacts,
@@ -5734,9 +5728,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function slashReplacementCursor(input: string): number {
-    return getSlashCommandQuery(input, composerCaret) !== undefined
-      ? composerCaret
-      : input.length
+    return getSlashCommandQuery(input, composerCaret) !== undefined ? composerCaret : input.length
   }
 
   function applyComposerInput(
@@ -5930,9 +5922,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           replacement,
           slashReplacementCursor(tab.agentInput)
         ),
-        command.skill
-          ? { skillRefs: addUniqueSkillRef(tab.skillRefs, command.skill) }
-          : {}
+        command.skill ? { skillRefs: addUniqueSkillRef(tab.skillRefs, command.skill) } : {}
       )
     })
     setSlashCommandIndex(0)

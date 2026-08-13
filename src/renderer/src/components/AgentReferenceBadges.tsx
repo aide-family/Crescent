@@ -6,10 +6,7 @@ import type { Dictionary } from '@renderer/i18n'
 import type { AgentMessageReferences } from '@renderer/lib/agent-message-refs'
 import { hasMessageReferences } from '@renderer/lib/agent-message-refs'
 import { clampAgentText } from '@renderer/lib/agent-text-limits'
-import {
-  parseComposerSegments,
-  type ComposerRefKind
-} from '@renderer/lib/composer-ref-tokens'
+import { parseComposerSegments, type ComposerRefKind } from '@renderer/lib/composer-ref-tokens'
 import type { AgentToolReference } from '@renderer/lib/terminal-tabs'
 import type {
   AgentPathReference,
@@ -46,7 +43,15 @@ export function ComposerRefChip({
   onKeyDown?: (event: React.KeyboardEvent<HTMLSpanElement>) => void
 }): React.JSX.Element {
   const tone =
-    kind === 'wiki' ? TAG_CLASS.wiki : kind === 'skill' ? TAG_CLASS.skill : kind === 'path' ? TAG_CLASS.path : isMcp ? TAG_CLASS.mcp : TAG_CLASS.tool
+    kind === 'wiki'
+      ? TAG_CLASS.wiki
+      : kind === 'skill'
+        ? TAG_CLASS.skill
+        : kind === 'path'
+          ? TAG_CLASS.path
+          : isMcp
+            ? TAG_CLASS.mcp
+            : TAG_CLASS.tool
   const prefix =
     kind === 'wiki'
       ? t.input.tagSop
@@ -84,7 +89,9 @@ export function ComposerRefChip({
       {kind === 'path' && pathKind !== 'directory' ? (
         <FileIcon className="size-3 shrink-0" aria-hidden="true" />
       ) : null}
-      {kind === 'tool' && isMcp ? <PlugIcon className="size-3 shrink-0" aria-hidden="true" /> : null}
+      {kind === 'tool' && isMcp ? (
+        <PlugIcon className="size-3 shrink-0" aria-hidden="true" />
+      ) : null}
       <span className="truncate">
         {prefix}: {label}
       </span>

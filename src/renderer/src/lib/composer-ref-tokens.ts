@@ -65,11 +65,7 @@ export function collectComposerRefIds(value: string): Record<ComposerRefKind, Se
   return ids
 }
 
-export function removeComposerRefToken(
-  value: string,
-  kind: ComposerRefKind,
-  id: string
-): string {
+export function removeComposerRefToken(value: string, kind: ComposerRefKind, id: string): string {
   const token = formatComposerRefToken(kind, id)
   let next = value
   while (next.includes(token)) {
@@ -103,9 +99,7 @@ export function deleteAdjacentComposerRef(
     direction === 'backward'
       ? [...ranges]
           .reverse()
-          .find(
-            (range) => range.end <= cursor && !value.slice(range.end, cursor).trim()
-          )
+          .find((range) => range.end <= cursor && !value.slice(range.end, cursor).trim())
       : ranges.find((range) => range.start >= cursor && !value.slice(cursor, range.start).trim())
   if (!target) return null
   return spliceComposerRange(value, target.start, target.end)
