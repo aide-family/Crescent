@@ -92,9 +92,7 @@ export function AgentLogContent({
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
-      return (
-        <MessageInlineContent text={entry.text} references={entry.references} t={t} />
-      )
+      return <MessageInlineContent text={entry.text} references={entry.references} t={t} />
     }
 
     // Prefer liveRun while streaming — do not re-parse a potentially huge entry.text snapshot.

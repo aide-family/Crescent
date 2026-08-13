@@ -47,10 +47,7 @@ export function snapshotMessageReferences(input: {
   return hasMessageReferences(refs) ? refs : undefined
 }
 
-export function encodeUserMessageText(
-  text: string,
-  references?: AgentMessageReferences
-): string {
+export function encodeUserMessageText(text: string, references?: AgentMessageReferences): string {
   if (!hasMessageReferences(references)) return text
   return `${SENTINEL_PREFIX}${JSON.stringify(references)}-->\n${text}`
 }
@@ -76,10 +73,14 @@ export function decodeUserMessageText(text: string): {
 function normalizeDecodedReferences(value: AgentMessageReferences): AgentMessageReferences {
   return {
     skills: Array.isArray(value.skills)
-      ? value.skills.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string')
+      ? value.skills.filter(
+          (item) => item && typeof item.id === 'string' && typeof item.name === 'string'
+        )
       : [],
     wiki: Array.isArray(value.wiki)
-      ? value.wiki.filter((item) => item && typeof item.id === 'string' && typeof item.title === 'string')
+      ? value.wiki.filter(
+          (item) => item && typeof item.id === 'string' && typeof item.title === 'string'
+        )
       : [],
     tools: Array.isArray(value.tools)
       ? value.tools.filter(
