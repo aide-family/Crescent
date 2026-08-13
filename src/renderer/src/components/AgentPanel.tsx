@@ -1,15 +1,21 @@
-import { type FormEvent, type KeyboardEvent, type RefObject } from 'react'
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 import {
   ArrowUpIcon,
   FileIcon,
   FolderOpenIcon,
   Loader2Icon,
-  MicIcon,
-  MicOffIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
+  PaperclipIcon,
   PlusIcon,
   TriangleAlertIcon
 } from 'lucide-react'
@@ -75,7 +81,6 @@ export function AgentPanel({
   aiState,
   aiStatusText,
   modelValidationError,
-  configured,
   activeAgentPending,
   executionTerminalId,
   pinnedWorkflows,
@@ -113,11 +118,6 @@ export function AgentPanel({
   onRemoveTool,
   onRemoveWiki,
   onPickPathReference,
-  onToggleVoiceInput,
-  voiceInputState = 'idle',
-  voiceInputSupported = true,
-  voiceInputSupportChecking = false,
-  voiceWhisperSupported = true,
   onStopAgent,
   onRetryConnection,
   onReinitTerminal,
@@ -154,7 +154,6 @@ export function AgentPanel({
   aiState: 'ready' | 'pending' | 'not-ready'
   aiStatusText: string
   modelValidationError?: string
-  configured: boolean
   activeAgentPending: boolean
   executionTerminalId?: string
   pinnedWorkflows: AgentPinnedWorkflow[]
@@ -198,11 +197,6 @@ export function AgentPanel({
   onRemoveTool: (id: string) => void
   onRemoveWiki: (id: string) => void
   onPickPathReference: (kind: 'file' | 'directory') => void
-  onToggleVoiceInput?: () => void
-  voiceInputState?: 'idle' | 'recording' | 'transcribing'
-  voiceInputSupported?: boolean
-  voiceInputSupportChecking?: boolean
-  voiceWhisperSupported?: boolean
   onStopAgent: () => void
   onRetryConnection?: () => void
   onReinitTerminal?: () => void
@@ -219,20 +213,27 @@ export function AgentPanel({
   loadingEarlier?: boolean
   onLoadEarlier?: () => void | Promise<void>
 }): React.JSX.Element {
-  const footerStatusText =
-    voiceInputState === 'recording'
-      ? t.input.voiceListening
-      : voiceInputState === 'transcribing'
-        ? t.input.voiceTranscribing
-        : sessionChatTab.agentThinking
-          ? sessionChatTab.thinkingMessage || t.input.thinking
-          : sessionChatTab.agentBusy
-            ? t.input.contextHint
-            : sessionTerminals.length > 1
-              ? `${t.input.currentTerminal}: ${getTerminalDisplayTitle(activeTab, tabs)}`
-              : t.input.currentTerminal
+  const [referenceMenuOpen, setReferenceMenuOpen] = useState(false)
+  const referenceMenuRef = useRef<HTMLDivElement | null>(null)
   const showSendButton =
     activeAgentPending || sessionChatTab.agentBusy || Boolean(sessionChatTab.agentInput.trim())
+
+  useEffect(() => {
+    if (!referenceMenuOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (referenceMenuRef.current?.contains(event.target as Node)) return
+      setReferenceMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') setReferenceMenuOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [referenceMenuOpen])
 
   return (
     <aside className="app-agent-pane relative flex min-h-0 min-w-[360px] flex-1 flex-col">
@@ -414,59 +415,6 @@ export function AgentPanel({
                 </SelectContent>
               </Select>
             )}
-            <Select
-              value={activeModelSelectionValue}
-              onValueChange={onModelChange}
-              disabled={visibleModels.length === 0}
-            >
-              <SelectTrigger className="h-8 min-w-0 flex-1" title={aiStatusText}>
-                <span className="sr-only">
-                  <SelectValue aria-label={t.app.model} />
-                </span>
-                <span className="flex min-w-0 items-center gap-2">
-                  <StatusDot state={aiState} title={aiStatusText} />
-                  <span className="truncate">
-                    {activeModel
-                      ? `${activeModel.name} · ${activeModel.providerName}`
-                      : activeTabModelId}
-                  </span>
-                  {modelValidationError && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span
-                            className="pointer-events-auto inline-flex shrink-0"
-                            aria-label={`${t.app.aiNotReady}: ${modelValidationError}`}
-                            onPointerDown={(event) => event.stopPropagation()}
-                          >
-                            <TriangleAlertIcon
-                              className="size-3.5 text-destructive"
-                              aria-hidden="true"
-                            />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" className="max-w-xs break-words">
-                          {modelValidationError}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-                </span>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>{t.app.model}</SelectLabel>
-                  {visibleModels.map((model) => (
-                    <SelectItem
-                      key={`${model.providerId}:${model.id}`}
-                      value={buildModelSelectionValue(model.providerId, model.id)}
-                    >
-                      {model.name} · {model.providerName}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
           </div>
           <div className="app-composer relative rounded-lg p-1.5">
             <SlashCommandMenu
@@ -519,100 +467,129 @@ export function AgentPanel({
               autoComplete="off"
               className="max-h-40 min-h-16 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
-            <div className="flex items-center gap-2 px-1 pt-1.5 text-xs text-muted-foreground">
-              <div className="flex min-h-5 min-w-0 flex-1 items-center">
-                <span className="truncate">{footerStatusText || '\u00a0'}</span>
+            <div className="app-composer-toolbar flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="flex min-w-0 flex-1 items-center">
+                <Select
+                  value={activeModelSelectionValue}
+                  onValueChange={onModelChange}
+                  disabled={visibleModels.length === 0}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="app-model-trigger"
+                    aria-label={t.app.model}
+                    title={
+                      activeModel
+                        ? `${activeModel.name} · ${activeModel.providerName} · ${aiStatusText}`
+                        : aiStatusText
+                    }
+                  >
+                    <span className="sr-only">
+                      <SelectValue aria-label={t.app.model} />
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <StatusDot state={aiState} title={aiStatusText} />
+                      <span className="truncate">
+                        {activeModel ? activeModel.name : activeTabModelId}
+                      </span>
+                      {modelValidationError && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span
+                                className="pointer-events-auto inline-flex shrink-0"
+                                aria-label={`${t.app.aiNotReady}: ${modelValidationError}`}
+                                onPointerDown={(event) => event.stopPropagation()}
+                              >
+                                <TriangleAlertIcon
+                                  className="size-3.5 text-destructive"
+                                  aria-hidden="true"
+                                />
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-xs break-words">
+                              {modelValidationError}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectGroup>
+                      <SelectLabel>{t.app.model}</SelectLabel>
+                      {visibleModels.map((model) => (
+                        <SelectItem
+                          key={`${model.providerId}:${model.id}`}
+                          value={buildModelSelectionValue(model.providerId, model.id)}
+                        >
+                          {model.name} · {model.providerName}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="ml-auto flex shrink-0 items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.input.referenceFile}
-                  title={t.input.referenceFile}
-                  onClick={() => onPickPathReference('file')}
-                >
-                  <FileIcon aria-hidden="true" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.input.referenceDirectory}
-                  title={t.input.referenceDirectory}
-                  onClick={() => onPickPathReference('directory')}
-                >
-                  <FolderOpenIcon aria-hidden="true" />
-                </Button>
-                <Button
-                  type="button"
-                  variant={voiceInputState === 'recording' ? 'destructive' : 'ghost'}
-                  size="icon-xs"
-                  aria-label={
-                    voiceInputSupportChecking
-                      ? t.input.voiceSupportChecking
-                      : !voiceInputSupported
-                        ? t.input.voiceUnsupported
-                        : voiceInputState === 'recording'
-                          ? t.input.voiceStop
-                          : voiceInputState === 'transcribing'
-                            ? t.input.voiceTranscribing
-                            : !voiceWhisperSupported
-                              ? t.input.voiceStartSpeechOnly
-                              : t.input.voiceStart
-                  }
-                  title={
-                    voiceInputSupportChecking
-                      ? t.input.voiceSupportChecking
-                      : !voiceInputSupported
-                        ? t.input.voiceUnsupported
-                        : voiceInputState === 'recording'
-                          ? t.input.voiceStop
-                          : voiceInputState === 'transcribing'
-                            ? t.input.voiceTranscribing
-                            : !voiceWhisperSupported
-                              ? t.input.voiceStartSpeechOnly
-                              : t.input.voiceStart
-                  }
-                  disabled={
-                    !onToggleVoiceInput ||
-                    voiceInputSupportChecking ||
-                    !voiceInputSupported ||
-                    voiceInputState === 'transcribing' ||
-                    sessionChatTab.agentThinking
-                  }
-                  onClick={() => onToggleVoiceInput?.()}
-                >
-                  {voiceInputSupportChecking || voiceInputState === 'transcribing' ? (
-                    <Loader2Icon className="animate-spin" aria-hidden="true" />
-                  ) : voiceInputState === 'recording' ? (
-                    <MicOffIcon aria-hidden="true" />
-                  ) : (
-                    <MicIcon
-                      aria-hidden="true"
-                      className={!voiceInputSupported ? 'opacity-40' : undefined}
-                    />
-                  )}
-                </Button>
-                <span className="whitespace-nowrap">
-                  {configured ? t.input.toolsConfigured : t.input.chatNoTools}
-                </span>
-                <div className="flex h-7 shrink-0 items-center justify-end gap-1.5">
-                  {sessionChatTab.agentBusy ? (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="xs"
-                      className="h-7 px-2 text-[11px]"
-                      onClick={onStopAgent}
+              <div className="ml-auto flex h-6 shrink-0 items-center gap-1">
+                <div className="relative" ref={referenceMenuRef}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="app-composer-icon"
+                    aria-label={t.input.reference}
+                    title={t.input.reference}
+                    aria-haspopup="menu"
+                    aria-expanded={referenceMenuOpen}
+                    onClick={() => setReferenceMenuOpen((open) => !open)}
+                  >
+                    <PaperclipIcon aria-hidden="true" />
+                  </Button>
+                  {referenceMenuOpen ? (
+                    <div
+                      className="app-reference-menu absolute bottom-full right-0 z-20 mb-1.5"
+                      role="menu"
                     >
-                      {t.common.stop}
-                    </Button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setReferenceMenuOpen(false)
+                          onPickPathReference('file')
+                        }}
+                      >
+                        <FileIcon aria-hidden="true" />
+                        {t.input.referenceFile}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setReferenceMenuOpen(false)
+                          onPickPathReference('directory')
+                        }}
+                      >
+                        <FolderOpenIcon aria-hidden="true" />
+                        {t.input.referenceDirectory}
+                      </button>
+                    </div>
                   ) : null}
+                </div>
+                {sessionChatTab.agentBusy ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="xs"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={onStopAgent}
+                  >
+                    {t.common.stop}
+                  </Button>
+                ) : null}
                 <Button
                   type="submit"
-                  size="icon"
-                  className={`h-7 w-7 rounded-full ${showSendButton ? undefined : 'invisible'}`}
+                  size="icon-xs"
+                  className={`rounded-full ${showSendButton ? undefined : 'invisible'}`}
                   tabIndex={showSendButton ? undefined : -1}
                   aria-hidden={showSendButton ? undefined : true}
                   aria-label={
@@ -633,7 +610,6 @@ export function AgentPanel({
                     <ArrowUpIcon className="size-3.5" aria-hidden="true" />
                   )}
                 </Button>
-                </div>
               </div>
             </div>
           </div>

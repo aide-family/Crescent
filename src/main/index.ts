@@ -149,17 +149,22 @@ app.whenReady().then(async () => {
     { startAttachmentCleanupScheduler },
     { initializeCrescentDatabase },
     { registerStorageIpc },
-    { registerUpdateIpc }
+    { registerUpdateIpc },
+    { configureAboutPanel, installApplicationMenu, registerMenuIpc }
   ] = await Promise.all([
     import('./agent/ipc'),
     import('./connections/ipc'),
     import('./attachment-cleanup'),
     import('./crescent-sqlite'),
     import('./storage/ipc'),
-    import('./update/ipc')
+    import('./update/ipc'),
+    import('./menu')
   ])
 
   app.setName('Crescent')
+  configureAboutPanel(icon)
+  registerMenuIpc()
+  installApplicationMenu()
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(icon)
   app.on('child-process-gone', (_event, details) => {
     if (details.type === 'GPU') {
@@ -196,6 +201,17 @@ app.whenReady().then(async () => {
     })
     notification.show()
     return { ok: true }
+  })
+  ipcMain.handle('app:open-external', async (_event, url: unknown) => {
+    if (typeof url !== 'string' || !url.trim()) return { ok: false }
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false }
+      await shell.openExternal(parsed.toString())
+      return { ok: true }
+    } catch {
+      return { ok: false }
+    }
   })
   initializeCrescentDatabase()
   registerRendererRecoveryIpc(icon)

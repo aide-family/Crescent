@@ -1095,7 +1095,9 @@ function LoginResultCard({
             {rows.map(([key, value]) => (
               <div key={key} className="contents">
                 <dt className="text-muted-foreground/80">{key}</dt>
-                <dd className="break-all font-mono text-[11px] tabular-nums text-foreground/90">{value}</dd>
+                <dd className="break-all font-mono text-[11px] tabular-nums text-foreground/90">
+                  {value}
+                </dd>
               </div>
             ))}
           </dl>

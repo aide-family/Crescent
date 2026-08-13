@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 
 import { OpenApiProfileEditorFields } from '@renderer/components/OpenApiSettingsFields'
-import { AppUpdateCard } from '@renderer/components/AppUpdateCard'
 import { StatusDot } from '@renderer/components/StatusIndicators'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -365,7 +364,6 @@ export function SettingsSheet({
                   />
                 </label>
               </Field>
-              <AppUpdateCard t={t} />
               <Field>
                 <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>
                 <Input

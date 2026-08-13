@@ -177,7 +177,10 @@ export function ConnectionOpsFeedbackPanel({
           const busy = savingId === record.id || deletingId === record.id
 
           return (
-            <div key={record.id} className="rounded-lg border border-border/70 bg-card/70 p-3 text-xs">
+            <div
+              key={record.id}
+              className="rounded-lg border border-border/70 bg-card/70 p-3 text-xs"
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   {editing && draft ? (

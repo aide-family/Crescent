@@ -128,12 +128,6 @@ import {
   type PaneOrder
 } from '@renderer/lib/app-shell'
 import {
-  isBrowserSpeechAvailable,
-  isWhisperUnavailableError,
-  startVoiceInputSession,
-  type VoiceLiveSession
-} from '@renderer/lib/voice-input'
-import {
   appendRunStatusStep,
   classifyPipeCommand,
   recordRecoveryAttempt,
@@ -251,11 +245,9 @@ import {
   getSessionChatTab,
   getSessionGroupId,
   getSessionTerminals,
-  getTerminalDisplayTitle,
   isReservedTerminalTabId,
   resolveConnectTargetTab,
   resolveSessionChatTabId,
-  resolveShellFooterState,
   resolveTabModelSelection,
   retainSettledClarification,
   type AgentLogEntry,
@@ -326,6 +318,7 @@ import {
   shouldShowOnboarding
 } from '@renderer/lib/onboarding'
 import { formatToolNameListText, parseToolNameListText } from '../../shared/tool-policy'
+import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -591,14 +584,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
   const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
-  const [voiceInputState, setVoiceInputState] = useState<'idle' | 'recording' | 'transcribing'>(
-    'idle'
-  )
-  const [voiceWhisperSupported, setVoiceWhisperSupported] = useState(false)
-  const [voiceBrowserSpeechAvailable] = useState(() => isBrowserSpeechAvailable())
-  const [voiceInputSupportChecking, setVoiceInputSupportChecking] = useState(true)
-  const voiceLiveSessionRef = useRef<VoiceLiveSession | null>(null)
-  const voiceInputSupported = voiceWhisperSupported || voiceBrowserSpeechAvailable
+  const [appVersion, setAppVersion] = useState('')
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
+    state: 'idle'
+  })
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
   const [historyTitleDraft, setHistoryTitleDraft] = useState('')
@@ -881,15 +870,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     updateTab,
     t
   })
-  const { configured, modelOptions, visibleModels, settingsProvider, settingsMcpServer } =
-    useSettings({
-      config,
-      models,
-      settingsProviderId,
-      settingsMcpServerId,
-      emptyProvider,
-      emptyMcpServer
-    })
+  const { modelOptions, visibleModels, settingsProvider, settingsMcpServer } = useSettings({
+    config,
+    models,
+    settingsProviderId,
+    settingsMcpServerId,
+    emptyProvider,
+    emptyMcpServer
+  })
   const activeTabProviderId = sessionChatTab.providerId ?? config.providerId
   const activeProviderId = config.providers.some((provider) => provider.id === activeTabProviderId)
     ? (activeTabProviderId ?? config.providers[0]?.id ?? '')
@@ -951,12 +939,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     : modelValidationError
       ? `${t.app.aiNotReady}: ${modelValidationError}`
       : t.app.aiReady
-  const shellState: 'ready' | 'pending' | 'not-ready' = resolveShellFooterState(activeTab)
-  const footerChatTabId = resolveSessionChatTabId(tabsRef.current, activeTab.id)
-  const footerAttempt = connectionAttemptByChatTab[footerChatTabId] ?? createIdleConnectionAttempt()
-  const footerDisconnected =
-    Boolean(activeTab.connectionId || activeTab.isSsh) &&
-    (footerAttempt.phase === 'connecting' || footerAttempt.phase === 'failed')
   const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
   const {
     displayConnections,
@@ -1399,8 +1381,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       }
     },
     [
-      appendRunStatusStep,
-      closeStreamingOpenSteps,
       pendingPostLoginSupplementsRef,
       pruneLiveRuns,
       t,
@@ -1466,13 +1446,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         )
       }
     },
-    [
-      buildPostLoginAgentInput,
-      pendingPostLoginSupplementsRef,
-      resolveLoginContinuation,
-      t,
-      updateLogEntryText
-    ]
+    [pendingPostLoginSupplementsRef, t, updateLogEntryText]
   )
 
   const executeConnectionAutomation = useCallback(
@@ -1830,7 +1804,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         }
       })()
     })
-  }, [appendSystemToRunOrLog, markConnectionFailed, t, updateConnectionAttempt])
+  }, [appendSystemToRunOrLog, t, updateConnectionAttempt])
 
   useEffect(() => {
     if (!passwordPromptRequest) return
@@ -1841,60 +1815,32 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
+    void window.api.app.setLocale(locale)
   }, [locale])
 
   useEffect(() => {
-    return () => {
-      voiceLiveSessionRef.current?.cancel()
-      voiceLiveSessionRef.current = null
-    }
+    return window.api.app.onOpenSettings(() => {
+      setSheetOpen(true)
+    })
   }, [])
 
   useEffect(() => {
     let cancelled = false
-    const providerId = activeProviderId
-    const model = activeTabModelId
-
-    void (async () => {
-      // Voice needs Whisper (/audio/transcriptions) and/or Chromium speech recognition.
-      // Chat multimodal (e.g. Ark Responses input_image) is unrelated to mic input.
-      if (!providerId || !model) {
-        if (cancelled) return
-        setVoiceWhisperSupported(false)
-        setVoiceInputSupportChecking(false)
-        return
+    void window.api.update.getVersion().then((result) => {
+      if (!cancelled) setAppVersion(result.version)
+    })
+    const unsubscribe = window.api.update.onStatus((event) => {
+      setAppUpdateStatus(event)
+      if (event.state === 'downloaded' && event.installerPath) {
+        toast.success(t.app.updateSaved)
       }
-
-      setVoiceInputSupportChecking(true)
-      try {
-        const result = await window.api.agent.checkTranscriptionSupport({
-          providerId,
-          model
-        })
-        if (cancelled) return
-        setVoiceWhisperSupported(result.supported)
-        setVoiceInputSupportChecking(false)
-        if (!result.supported && !voiceBrowserSpeechAvailable) {
-          voiceLiveSessionRef.current?.cancel()
-          voiceLiveSessionRef.current = null
-          setVoiceInputState('idle')
-        }
-      } catch {
-        if (cancelled) return
-        setVoiceWhisperSupported(false)
-        setVoiceInputSupportChecking(false)
-        if (!voiceBrowserSpeechAvailable) {
-          voiceLiveSessionRef.current?.cancel()
-          voiceLiveSessionRef.current = null
-          setVoiceInputState('idle')
-        }
-      }
-    })()
-
+    })
+    void window.api.update.check()
     return () => {
       cancelled = true
+      unsubscribe()
     }
-  }, [activeProviderId, activeTabModelId, config.providers, voiceBrowserSpeechAvailable])
+  }, [t.app.updateSaved])
 
   useEffect(() => {
     localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
@@ -1950,59 +1896,62 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }, [tabMenu])
 
-  const maybeRequestTerminalPassword = useCallback((tabId: string, data: string): void => {
-    const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
-    passwordPromptBuffersRef.current.set(tabId, nextBuffer)
+  const maybeRequestTerminalPassword = useCallback(
+    (tabId: string, data: string): void => {
+      const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
+      passwordPromptBuffersRef.current.set(tabId, nextBuffer)
 
-    const promptLine = extractPasswordPromptLine(nextBuffer)
-    if (!promptLine) return
-    if (automatedLoginTabsRef.current.has(tabId)) {
+      const promptLine = extractPasswordPromptLine(nextBuffer)
+      if (!promptLine) return
+      if (automatedLoginTabsRef.current.has(tabId)) {
+        passwordPromptBuffersRef.current.set(tabId, '')
+        return
+      }
+      if (
+        passwordPromptsByTabRef.current.has(tabId) ||
+        passwordPromptOpenTabsRef.current.has(tabId)
+      ) {
+        return
+      }
+
+      const tab = tabsRef.current.find((current) => current.id === tabId)
+      if (!tab) return
+
+      passwordPromptOpenTabsRef.current.add(tabId)
+      const request = {
+        tabId,
+        title: tab.title,
+        prompt: promptLine
+      }
+      passwordPromptsByTabRef.current.set(tabId, request)
       passwordPromptBuffersRef.current.set(tabId, '')
-      return
-    }
-    if (
-      passwordPromptsByTabRef.current.has(tabId) ||
-      passwordPromptOpenTabsRef.current.has(tabId)
-    ) {
-      return
-    }
 
-    const tab = tabsRef.current.find((current) => current.id === tabId)
-    if (!tab) return
+      if (!passwordPromptRequestRef.current) {
+        passwordPromptRequestRef.current = request
+        setPasswordPromptValue('')
+        setPasswordPromptError('')
+        setPasswordPromptRequest(request)
+        pendingAttentionNotifierRef.current.notifyIfUnfocused(
+          `password:${tabId}`,
+          t.notifications.passwordTitle,
+          t.notifications.passwordBody
+        )
+        return
+      }
 
-    passwordPromptOpenTabsRef.current.add(tabId)
-    const request = {
-      tabId,
-      title: tab.title,
-      prompt: promptLine
-    }
-    passwordPromptsByTabRef.current.set(tabId, request)
-    passwordPromptBuffersRef.current.set(tabId, '')
-
-    if (!passwordPromptRequestRef.current) {
-      passwordPromptRequestRef.current = request
-      setPasswordPromptValue('')
-      setPasswordPromptError('')
-      setPasswordPromptRequest(request)
-      pendingAttentionNotifierRef.current.notifyIfUnfocused(
-        `password:${tabId}`,
-        t.notifications.passwordTitle,
-        t.notifications.passwordBody
+      const activeSession = resolveSessionChatTabId(
+        tabsRef.current,
+        passwordPromptRequestRef.current.tabId
       )
-      return
-    }
-
-    const activeSession = resolveSessionChatTabId(
-      tabsRef.current,
-      passwordPromptRequestRef.current.tabId
-    )
-    const requestSession = resolveSessionChatTabId(tabsRef.current, tabId)
-    // Prefer keeping the currently shown prompt; queue others by tab until it closes.
-    if (activeSession === requestSession && passwordPromptRequestRef.current.tabId === tabId) {
-      passwordPromptRequestRef.current = request
-      setPasswordPromptRequest(request)
-    }
-  }, [])
+      const requestSession = resolveSessionChatTabId(tabsRef.current, tabId)
+      // Prefer keeping the currently shown prompt; queue others by tab until it closes.
+      if (activeSession === requestSession && passwordPromptRequestRef.current.tabId === tabId) {
+        passwordPromptRequestRef.current = request
+        setPasswordPromptRequest(request)
+      }
+    },
+    [t]
+  )
 
   useEffect(() => {
     return window.api.terminal.onData((event) => {
@@ -2315,7 +2264,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         }
       })()
     })
-  }, [ensureSubterminal, executeConnectionAutomation, markChatTabReady])
+  }, [ensureSubterminal, executeConnectionAutomation, markChatTabReady, t])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
@@ -5911,133 +5860,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }))
   }
 
-  async function toggleVoiceInput(): Promise<void> {
-    if (voiceInputState === 'transcribing') return
-    // Allow recording while Whisper is still probing if browser speech works.
-    if (!voiceInputSupported || (voiceInputSupportChecking && !voiceBrowserSpeechAvailable)) {
-      toast.error(t.input.voiceUnsupported, { duration: TOAST_INTERVENTION_DURATION_MS })
-      return
-    }
-
-    if (voiceInputState === 'recording') {
-      const liveSession = voiceLiveSessionRef.current
-      voiceLiveSessionRef.current = null
-      if (!liveSession) {
-        setVoiceInputState('idle')
-        return
-      }
-
-      setVoiceInputState('transcribing')
-      try {
-        const transcript = (await liveSession.stop()).trim()
-        if (!transcript) {
-          toast.error(t.input.voiceEmpty, { duration: TOAST_INTERVENTION_DURATION_MS })
-          setVoiceInputState('idle')
-          return
-        }
-        const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-        flushSync(() => {
-          updateTab(chatTabId, (tab) => ({
-            ...tab,
-            agentInput: transcript
-          }))
-        })
-        setVoiceInputState('idle')
-        await submitAgentMessage(transcript)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : t.input.voiceFailed
-        toast.error(
-          isWhisperUnavailableError(message) ? t.input.voiceProviderUnsupported : message,
-          { duration: TOAST_INTERVENTION_DURATION_MS }
-        )
-        setVoiceInputState('idle')
-      }
-      return
-    }
-
-    try {
-      const permission = await window.api.agent.requestMicrophonePermission()
-      if (!permission.granted) {
-        toast.error(t.input.voicePermissionDenied, { duration: TOAST_INTERVENTION_DURATION_MS })
-        return
-      }
-
-      const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-      let whisperUnavailableNotified = false
-      const useWhisper = voiceWhisperSupported
-      if (!useWhisper && voiceBrowserSpeechAvailable) {
-        toast.message(t.input.voiceProviderUnsupportedFallback)
-      }
-      const session = await startVoiceInputSession({
-        speechLanguage: locale.startsWith('zh')
-          ? 'zh-CN'
-          : locale.startsWith('en')
-            ? 'en-US'
-            : locale,
-        whisperLanguage: locale.startsWith('zh')
-          ? 'zh'
-          : locale.startsWith('en')
-            ? 'en'
-            : undefined,
-        intervalMs: 2800,
-        transcribe: useWhisper
-          ? async ({ base64, mimeType, language: lang }) => {
-              const result = await window.api.agent.transcribeAudio({
-                base64,
-                mimeType,
-                name: `voice-input${extensionForAudioMime(mimeType)}`,
-                language: lang
-              })
-              if (!result.ok) {
-                throw new Error(result.error || t.input.voiceFailed)
-              }
-              return result.text?.trim() || ''
-            }
-          : undefined,
-        onTranscript: (text) => {
-          updateTab(chatTabId, (tab) => ({
-            ...tab,
-            agentInput: text
-          }))
-        },
-        onError: (error) => {
-          if (isWhisperUnavailableError(error.message)) {
-            if (!whisperUnavailableNotified) {
-              whisperUnavailableNotified = true
-              toast.message(t.input.voiceProviderUnsupportedFallback)
-            }
-            return
-          }
-          if (/permission|denied|NotAllowed/i.test(error.message)) {
-            toast.error(t.input.voicePermissionDenied, {
-              duration: TOAST_INTERVENTION_DURATION_MS
-            })
-            voiceLiveSessionRef.current?.cancel()
-            voiceLiveSessionRef.current = null
-            setVoiceInputState('idle')
-            return
-          }
-          toast.error(error.message || t.input.voiceFailed, {
-            duration: TOAST_INTERVENTION_DURATION_MS
-          })
-        }
-      })
-      voiceLiveSessionRef.current = session
-      setVoiceInputState('recording')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t.input.voiceFailed
-      toast.error(
-        /permission|denied|NotAllowed/i.test(message)
-          ? t.input.voicePermissionDenied
-          : isWhisperUnavailableError(message)
-            ? t.input.voiceProviderUnsupported
-            : message,
-        { duration: TOAST_INTERVENTION_DURATION_MS }
-      )
-      setVoiceInputState('idle')
-    }
-  }
-
   function removePathRef(pathRefId: string): void {
     updateTab(sessionChatTab.id, (tab) => ({
       ...tab,
@@ -7088,8 +6910,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         gap={8}
         toastOptions={{
           classNames: {
-            toast:
-              'border border-border bg-card text-foreground shadow-lg shadow-black/20',
+            toast: 'border border-border bg-card text-foreground shadow-lg shadow-black/20',
             title: 'text-foreground',
             description: 'text-muted-foreground',
             closeButton: 'border-border bg-card text-muted-foreground'
@@ -7099,24 +6920,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       <header className="app-titlebar flex h-12 shrink-0 items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <ProductLogo />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold tracking-tight text-pretty">Crescent</span>
-              <Badge
-                variant="outline"
-                className="hidden h-5 rounded-sm px-1.5 font-mono text-[10px] tabular-nums sm:inline-flex"
-              >
-                {activeTab.terminalMode.toUpperCase()}
-              </Badge>
-            </div>
-            <div className="mt-px hidden max-w-[42vw] truncate text-[11px] text-muted-foreground md:block">
-              {getTerminalDisplayTitle(activeTab, tabs)}
-              <span className="text-muted-foreground/50"> · </span>
-              <span className="font-mono tabular-nums">
-                {activeTab.terminalCwd || t.app.shellStarting}
-              </span>
-            </div>
-          </div>
+          <span className="text-sm font-semibold tracking-tight text-pretty">Crescent</span>
         </div>
         <div className="app-commandbar flex items-center gap-0.5">
           <Button
@@ -7378,7 +7182,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             aiState={aiState}
             aiStatusText={aiStatusText}
             modelValidationError={modelValidationError}
-            configured={configured}
             activeAgentPending={activeAgentPending}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
@@ -7560,11 +7363,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onRemoveTool={removeToolRef}
             onRemoveWiki={removeWikiRef}
             onPickPathReference={(kind) => void pickPathReference(kind)}
-            onToggleVoiceInput={() => void toggleVoiceInput()}
-            voiceInputState={voiceInputState}
-            voiceInputSupported={voiceInputSupported}
-            voiceInputSupportChecking={voiceInputSupportChecking && !voiceBrowserSpeechAvailable}
-            voiceWhisperSupported={voiceWhisperSupported}
             onStopAgent={() => stopAgentRun()}
             onRetryConnection={() => void retryActiveConnection()}
             onReinitTerminal={() => void reinitActiveTerminal()}
@@ -7643,13 +7441,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
       />
       <AppFooter
-        shellState={shellState}
-        disconnected={footerDisconnected}
-        activeTab={activeTab}
+        version={appVersion}
+        updateStatus={appUpdateStatus}
         agentMode={config.agentMode}
         t={t}
-        onRetryShell={() => {
-          void restoreLocalTerminal(activeTabIdRef.current)
+        onDownloadUpdate={() => {
+          if (appUpdateStatus.state === 'downloading') return
+          setAppUpdateStatus({
+            state: 'downloading',
+            percent: 0,
+            bytesPerSecond: 0,
+            transferred: 0,
+            total: 0
+          })
+          void window.api.update.downloadInstaller().then((result) => {
+            if (!result.ok) {
+              toast.error(result.error || t.settings.updateDownloadFailed)
+              setAppUpdateStatus({
+                state: 'error',
+                message: result.error || t.settings.updateDownloadFailed
+              })
+            }
+          })
         }}
       />
     </main>
@@ -8093,15 +7906,6 @@ function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): strin
 function buildLogTraceFilename(entry: AgentLogEntry): string {
   const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
   return `crescent-agent-trace-${timestamp}.json`
-}
-
-function extensionForAudioMime(mimeType: string): string {
-  const normalized = mimeType.toLowerCase()
-  if (normalized.includes('wav')) return '.wav'
-  if (normalized.includes('mpeg') || normalized.includes('mp3')) return '.mp3'
-  if (normalized.includes('mp4') || normalized.includes('m4a')) return '.m4a'
-  if (normalized.includes('ogg')) return '.ogg'
-  return '.webm'
 }
 
 export default App

@@ -22,7 +22,13 @@ const zhCN = {
     swapPanes: '交换终端和对话区域位置',
     title: 'Crescent',
     titleDescription: '终端 + SSH + AI 命令工作台',
-    workingDirectory: '目录'
+    workingDirectory: '目录',
+    versionLabel: '版本 {version}',
+    github: 'GitHub',
+    updateAvailable: '发现新版本 {version}',
+    downloadInstaller: '下载 {version} 安装包到下载目录',
+    updateDownloading: '正在下载安装包… {percent}%',
+    updateSaved: '安装包已保存到下载目录'
   },
   onboarding: {
     title: '欢迎使用 Crescent',
@@ -492,6 +498,7 @@ const zhCN = {
     result: '结果',
     referenceDirectory: '引用目录',
     referenceFile: '引用文件',
+    reference: '引用文件或目录',
     voiceStart: '语音输入',
     voiceStartSpeechOnly:
       '语音输入（系统识别）：当前供应商无 Whisper /audio/transcriptions；识图等多模态能力不能代替语音转写',

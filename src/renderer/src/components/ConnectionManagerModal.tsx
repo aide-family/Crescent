@@ -262,7 +262,9 @@ export function ConnectionManagerModal({
           <div className="min-h-0 overflow-auto overscroll-contain p-2.5">
             <FieldGroup className="gap-2.5">
               <Field>
-                <FieldLabel htmlFor="connection-import">{t.connections.copiedConnection}</FieldLabel>
+                <FieldLabel htmlFor="connection-import">
+                  {t.connections.copiedConnection}
+                </FieldLabel>
                 <Textarea
                   id="connection-import"
                   name="connection-import"
@@ -430,7 +432,9 @@ export function ConnectionManagerModal({
                 <FieldDescription>{t.connections.loginActionsDescription}</FieldDescription>
               </Field>
               <Field>
-                <FieldLabel htmlFor="connection-description">{t.connections.description}</FieldLabel>
+                <FieldLabel htmlFor="connection-description">
+                  {t.connections.description}
+                </FieldLabel>
                 <Input
                   id="connection-description"
                   name="connection-description"

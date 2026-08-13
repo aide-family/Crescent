@@ -401,10 +401,7 @@ function renderMarkdownBlocks(
         index += 1
       }
       nodes.push(
-        <blockquote
-          key={nodes.length}
-          className="min-w-0 break-words border-l-2 pl-3"
-        >
+        <blockquote key={nodes.length} className="min-w-0 break-words border-l-2 pl-3">
           {renderInlineMarkdown(quoteLines.join(' '))}
         </blockquote>
       )
@@ -558,7 +555,9 @@ function MermaidBlock({
   const [exportSelectKey, setExportSelectKey] = useState(0)
   const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
 
-  zoomRef.current = zoom
+  useEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
 
   useEffect(() => {
     if (!expanded) return
@@ -621,6 +620,51 @@ function MermaidBlock({
     hasError: Boolean(error)
   })
 
+  const updateZoom = useCallback(
+    (nextZoom: number, anchor?: { clientX: number; clientY: number }): void => {
+      const container = expandedScrollRef.current
+      const previousZoom = zoom
+      const clampedZoom = clampMermaidZoom(nextZoom)
+      if (Math.abs(clampedZoom - previousZoom) < MERMAID_ZOOM_EPSILON) return
+
+      let contentX = 0
+      let contentY = 0
+      let offsetX = 0
+      let offsetY = 0
+
+      if (container) {
+        const rect = container.getBoundingClientRect()
+        offsetX = anchor ? anchor.clientX - rect.left : container.clientWidth / 2
+        offsetY = anchor ? anchor.clientY - rect.top : container.clientHeight / 2
+        const previousContentWidth = Math.max(
+          container.clientWidth,
+          diagramSize.width * previousZoom
+        )
+        const previousContentHeight = Math.max(
+          container.clientHeight,
+          diagramSize.height * previousZoom
+        )
+        contentX = (container.scrollLeft + offsetX) / previousContentWidth
+        contentY = (container.scrollTop + offsetY) / previousContentHeight
+      }
+
+      setZoom(clampedZoom)
+
+      if (container) {
+        window.requestAnimationFrame(() => {
+          const nextContentWidth = Math.max(container.clientWidth, diagramSize.width * clampedZoom)
+          const nextContentHeight = Math.max(
+            container.clientHeight,
+            diagramSize.height * clampedZoom
+          )
+          container.scrollLeft = contentX * nextContentWidth - offsetX
+          container.scrollTop = contentY * nextContentHeight - offsetY
+        })
+      }
+    },
+    [diagramSize.height, diagramSize.width, zoom]
+  )
+
   // Non-passive wheel listener for fullscreen zoom (React onWheel is passive).
   useEffect(() => {
     if (!expanded) return
@@ -638,7 +682,7 @@ function MermaidBlock({
 
     node.addEventListener('wheel', onWheel, { passive: false })
     return () => node.removeEventListener('wheel', onWheel)
-  }, [expanded, zoom, diagramSize.height, diagramSize.width])
+  }, [expanded, updateZoom])
 
   function centerExpandedMermaid(
     container: HTMLDivElement,
@@ -694,42 +738,6 @@ function MermaidBlock({
       resizeObserver?.disconnect()
     }
   }, [expanded, fitExpandedMermaidToViewport, svg])
-
-  function updateZoom(nextZoom: number, anchor?: { clientX: number; clientY: number }): void {
-    const container = expandedScrollRef.current
-    const previousZoom = zoom
-    const clampedZoom = clampMermaidZoom(nextZoom)
-    if (Math.abs(clampedZoom - previousZoom) < MERMAID_ZOOM_EPSILON) return
-
-    let contentX = 0
-    let contentY = 0
-    let offsetX = 0
-    let offsetY = 0
-
-    if (container) {
-      const rect = container.getBoundingClientRect()
-      offsetX = anchor ? anchor.clientX - rect.left : container.clientWidth / 2
-      offsetY = anchor ? anchor.clientY - rect.top : container.clientHeight / 2
-      const previousContentWidth = Math.max(container.clientWidth, diagramSize.width * previousZoom)
-      const previousContentHeight = Math.max(
-        container.clientHeight,
-        diagramSize.height * previousZoom
-      )
-      contentX = (container.scrollLeft + offsetX) / previousContentWidth
-      contentY = (container.scrollTop + offsetY) / previousContentHeight
-    }
-
-    setZoom(clampedZoom)
-
-    if (container) {
-      window.requestAnimationFrame(() => {
-        const nextContentWidth = Math.max(container.clientWidth, diagramSize.width * clampedZoom)
-        const nextContentHeight = Math.max(container.clientHeight, diagramSize.height * clampedZoom)
-        container.scrollLeft = contentX * nextContentWidth - offsetX
-        container.scrollTop = contentY * nextContentHeight - offsetY
-      })
-    }
-  }
 
   function handleExpandedPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     if (event.button !== 0) return
@@ -1080,10 +1088,7 @@ function renderInlineMarkdown(value: string): React.ReactNode[] {
     const token = match[0]
     if (token.startsWith('`')) {
       nodes.push(
-        <code
-          key={nodes.length}
-          className="break-all rounded px-1 py-0.5 font-mono text-[0.9em]"
-        >
+        <code key={nodes.length} className="break-all rounded px-1 py-0.5 font-mono text-[0.9em]">
           {token.slice(1, -1)}
         </code>
       )

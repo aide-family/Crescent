@@ -179,7 +179,10 @@ export function AgentLogList({
                       <span className="font-medium text-foreground/70">
                         {logRoleLabel(entry.kind, t)}
                       </span>
-                      <time className="tabular-nums text-muted-foreground/70" dateTime={entry.createdAt}>
+                      <time
+                        className="tabular-nums text-muted-foreground/70"
+                        dateTime={entry.createdAt}
+                      >
                         {formatLogTime(entry.createdAt)}
                       </time>
                     </div>

@@ -3,6 +3,7 @@ import {
   checkForAppUpdates,
   configureAutoUpdater,
   downloadAppUpdate,
+  downloadInstallerToDownloads,
   getAppVersion,
   installAppUpdate
 } from './updater'
@@ -20,6 +21,10 @@ export function registerUpdateIpc(): void {
 
   ipcMain.handle('update:download', async () => {
     return downloadAppUpdate()
+  })
+
+  ipcMain.handle('update:download-installer', async () => {
+    return downloadInstallerToDownloads()
   })
 
   ipcMain.handle('update:install', async () => {

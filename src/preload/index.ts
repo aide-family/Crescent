@@ -62,6 +62,17 @@ const api = {
       ipcRenderer.invoke('app:export-renderer-diagnostics'),
     reportDiagnosticError: (message: string): void => {
       ipcRenderer.send('renderer:diagnostic-error', { message: message.slice(0, 2048) })
+    },
+    setLocale: (locale: 'zh-CN' | 'en'): Promise<{ ok: boolean; locale: 'zh-CN' | 'en' }> =>
+      ipcRenderer.invoke('app:set-locale', locale),
+    openExternal: (url: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('app:open-external', url),
+    onOpenSettings: (callback: () => void): (() => void) => {
+      const listener = (): void => {
+        callback()
+      }
+      ipcRenderer.on('app:open-settings', listener)
+      return () => ipcRenderer.removeListener('app:open-settings', listener)
     }
   },
   terminal: {
@@ -470,6 +481,8 @@ const api = {
     getVersion: (): Promise<AppUpdateVersionResult> => ipcRenderer.invoke('update:get-version'),
     check: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:check'),
     download: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:download'),
+    downloadInstaller: (): Promise<AppUpdateActionResult> =>
+      ipcRenderer.invoke('update:download-installer'),
     install: (): Promise<AppUpdateActionResult> => ipcRenderer.invoke('update:install'),
     onStatus: (callback: (event: AppUpdateStatusEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AppUpdateStatusEvent): void =>

@@ -37,7 +37,9 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     const { t } = this.props
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
-        <h1 className="text-lg font-semibold text-pretty text-foreground">{t.recovery.errorBoundaryTitle}</h1>
+        <h1 className="text-lg font-semibold text-pretty text-foreground">
+          {t.recovery.errorBoundaryTitle}
+        </h1>
         <p className="max-w-md text-sm leading-relaxed text-pretty text-muted-foreground">
           {t.recovery.errorBoundaryBody}
         </p>
