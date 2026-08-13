@@ -174,7 +174,7 @@ export function SubterminalPanel({
     >
       {!collapsed && (
         <div
-          className="h-1 cursor-row-resize bg-transparent hover:bg-primary/50"
+          className="h-1 cursor-row-resize bg-transparent outline-none hover:bg-primary/50 focus-visible:bg-primary/50"
           role="separator"
           aria-orientation="horizontal"
           aria-label={t.terminal.resizeSubterminalHeight}
@@ -193,7 +193,10 @@ export function SubterminalPanel({
       )}
       <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
         <div className="min-w-0 truncate text-xs font-medium">
-          {t.terminal.temporarySubterminal} · {activeTab.subTerminals.length}
+          {t.terminal.temporarySubterminal}{' '}
+          <span className="tabular-nums text-muted-foreground">
+            · {activeTab.subTerminals.length}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {onOpenLocalSubterminal && (

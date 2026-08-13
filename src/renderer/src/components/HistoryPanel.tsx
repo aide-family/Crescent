@@ -72,15 +72,15 @@ export function HistoryPanel({
           <SheetTitle>{t.history.title}</SheetTitle>
           <SheetDescription>{t.history.description}</SheetDescription>
         </SheetHeader>
-        <div className="app-sheet-list min-h-0 flex-1 space-y-2 overflow-auto px-4">
+        <div className="app-sheet-list min-h-0 flex-1 space-y-1.5 overflow-auto overscroll-contain px-4">
           {loading && (
-            <div className="flex items-center gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
               {t.history.loading}
             </div>
           )}
           {!loading && items.length === 0 && (
-            <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed p-2.5 text-sm text-muted-foreground">
               {t.history.empty}
             </div>
           )}
@@ -91,7 +91,7 @@ export function HistoryPanel({
               return (
                 <div
                   key={item.tabId}
-                  className="rounded-lg border border-border/70 bg-card/70 p-3 text-sm transition-[border-color,background-color] hover:border-border hover:bg-muted/25"
+                  className="rounded-lg border border-border/70 bg-card/70 px-2.5 py-2 text-sm transition-[border-color,background-color] hover:border-border hover:bg-muted/25"
                 >
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1 overflow-hidden">
@@ -138,23 +138,23 @@ export function HistoryPanel({
                       ) : (
                         <button
                           type="button"
-                          className="block w-full min-w-0 overflow-hidden text-left"
+                          className="block w-full min-w-0 overflow-hidden rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                           onClick={() => void onOpenSession(item)}
                           title={item.title}
                         >
                           <div className="flex min-w-0 items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate font-medium">
+                            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                               {item.title}
                             </span>
                             {item.isSsh && (
-                              <Badge variant="secondary" className="shrink-0">
+                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">
                                 SSH
                               </Badge>
                             )}
                           </div>
-                          <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
                             <time
-                              className="shrink-0"
+                              className="shrink-0 tabular-nums"
                               dateTime={item.lastMessageAt ?? item.updatedAt}
                             >
                               {formatHistoryTime(item.lastMessageAt ?? item.updatedAt)}
@@ -162,12 +162,12 @@ export function HistoryPanel({
                             {item.connectionName && (
                               <span className="min-w-0 truncate">· {item.connectionName}</span>
                             )}
-                            <span className="shrink-0">
+                            <span className="shrink-0 tabular-nums">
                               · {item.runCount} {t.history.runs}
                             </span>
                           </div>
                           {(item.summary || item.lastMessage) && (
-                            <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                            <p className="mt-1.5 line-clamp-2 text-[11px] text-muted-foreground">
                               {item.summary ?? summarizeHistoryMessage(item.lastMessage ?? '')}
                             </p>
                           )}
@@ -205,6 +205,7 @@ export function HistoryPanel({
                           type="button"
                           variant="ghost"
                           size="icon-xs"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                           aria-label={`${t.common.delete}: ${item.title}`}
                           title={`${t.common.delete}: ${item.title}`}
                           onClick={() => void onDeleteSession(item)}

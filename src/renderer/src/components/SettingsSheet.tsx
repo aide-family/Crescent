@@ -203,7 +203,7 @@ export function SettingsSheet({
           <SheetDescription>{t.settings.titleDescription}</SheetDescription>
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">
                 {t.settings.providerList} · {config.providers.length}
@@ -230,91 +230,84 @@ export function SettingsSheet({
                   return (
                     <div
                       key={provider.id}
-                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                      className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
                         selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                       }`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onToggleProviderDetails(provider.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          onToggleProviderDetails(provider.id)
-                        }
-                      }}
                     >
-                      <div className="min-w-0 text-left">
-                        <div className="flex min-w-0 items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <StatusDot
-                                state={
-                                  provider.baseUrl.trim() && modelCount > 0 ? 'ready' : 'not-ready'
-                                }
-                              />
-                              <span className="truncate text-sm font-medium">
-                                {provider.name.trim() || provider.id || t.settings.newProvider}
-                              </span>
-                            </div>
-                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {provider.id || '-'}
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1">
-                            {isDefaultProvider && (
-                              <Badge variant="secondary" className="text-[10px]">
-                                {t.settings.model}
-                              </Badge>
-                            )}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={t.common.edit}
-                              title={t.common.edit}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                onToggleProviderDetails(provider.id)
-                              }}
-                            >
-                              <PencilIcon aria-hidden="true" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                              disabled={!canDeleteProvider}
-                              aria-label={t.settings.deleteProvider}
-                              title={
-                                canDeleteProvider
-                                  ? t.settings.deleteProvider
-                                  : t.settings.keepOneProvider
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                          onClick={() => onToggleProviderDetails(provider.id)}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <StatusDot
+                              state={
+                                provider.baseUrl.trim() && modelCount > 0 ? 'ready' : 'not-ready'
                               }
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                onDeleteProvider(provider.id)
-                              }}
-                            >
-                              <Trash2Icon aria-hidden="true" />
-                            </Button>
+                            />
+                            <span className="truncate text-[13px] font-medium">
+                              {provider.name.trim() || provider.id || t.settings.newProvider}
+                            </span>
                           </div>
-                        </div>
-                        <div className="mt-3 truncate font-mono text-[11px] text-muted-foreground">
-                          {provider.baseUrl || '-'}
-                        </div>
-                        <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>
-                            {t.settings.providerModels}: {modelCount}
-                          </span>
-                          <span>·</span>
-                          <span>{hasApiKey ? t.settings.apiKey : '-'}</span>
-                        </div>
-                        {provider.models.length > 0 && (
-                          <div className="mt-2 line-clamp-2 font-mono text-[11px] text-muted-foreground">
-                            {provider.models.map((model) => model.id).join(', ')}
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                            {provider.id || '-'}
                           </div>
-                        )}
+                          <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                            {provider.baseUrl || '-'}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span className="tabular-nums">
+                              {t.settings.providerModels}: {modelCount}
+                            </span>
+                            <span>·</span>
+                            <span>{hasApiKey ? t.settings.apiKey : '-'}</span>
+                          </div>
+                          {provider.models.length > 0 && (
+                            <div className="mt-1 line-clamp-2 font-mono text-[11px] text-muted-foreground">
+                              {provider.models.map((model) => model.id).join(', ')}
+                            </div>
+                          )}
+                        </button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {isDefaultProvider && (
+                            <Badge variant="secondary" className="h-5 text-[10px]">
+                              {t.settings.model}
+                            </Badge>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={t.common.edit}
+                            title={t.common.edit}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onToggleProviderDetails(provider.id)
+                            }}
+                          >
+                            <PencilIcon aria-hidden="true" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            disabled={!canDeleteProvider}
+                            aria-label={t.settings.deleteProvider}
+                            title={
+                              canDeleteProvider
+                                ? t.settings.deleteProvider
+                                : t.settings.keepOneProvider
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onDeleteProvider(provider.id)
+                            }}
+                          >
+                            <Trash2Icon aria-hidden="true" />
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   )
@@ -355,7 +348,7 @@ export function SettingsSheet({
               <Field>
                 <label
                   htmlFor="close-terminal-confirm"
-                  className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                  className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
                 >
                   <span className="space-y-1">
                     <span className="block text-sm font-medium">
@@ -379,7 +372,7 @@ export function SettingsSheet({
                   id="workspace-cwd"
                   value={config.workspaceCwd ?? ''}
                   onChange={(event) => onWorkspaceCwdChange(event.target.value)}
-                  placeholder="~/.crescent/workspace"
+                  placeholder="~/.crescent/workspace…"
                 />
                 <FieldDescription>{t.settings.workspaceCwdHint}</FieldDescription>
               </Field>
@@ -409,45 +402,45 @@ export function SettingsSheet({
                       return (
                         <div
                           key={file.name}
-                          className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                          className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
                             selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
                           }`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => onToggleInstructionDetails(file.name)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              onToggleInstructionDetails(file.name)
-                            }
-                          }}
                         >
-                          <div className="min-w-0 text-left">
+                          <button
+                            type="button"
+                            className="min-w-0 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                            onClick={() => onToggleInstructionDetails(file.name)}
+                          >
                             <div className="flex min-w-0 items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="flex min-w-0 items-center gap-2">
                                   <StatusDot state={file.exists ? 'ready' : 'pending'} />
-                                  <span className="truncate text-sm font-medium">{file.name}</span>
+                                  <span className="truncate text-[13px] font-medium">
+                                    {file.name}
+                                  </span>
                                 </div>
-                                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                                   {file.path}
                                 </div>
                               </div>
-                              <Badge variant="secondary" className="shrink-0 text-[10px]">
+                              <Badge variant="secondary" className="h-5 shrink-0 text-[10px]">
                                 {file.exists
                                   ? t.settings.instructionFileExists
                                   : t.settings.instructionFileNew}
                               </Badge>
                             </div>
-                            <div className="mt-3 text-[11px] text-muted-foreground">
-                              {contentLength} chars
+                            <div className="mt-1.5 tabular-nums text-[11px] text-muted-foreground">
+                              {t.settings.instructionFileCharCount.replace(
+                                '{n}',
+                                String(contentLength)
+                              )}
                             </div>
                             {file.content.trim() && (
-                              <div className="mt-2 line-clamp-2 text-[11px] text-muted-foreground">
+                              <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                                 {file.content.trim().replace(/\s+/g, ' ')}
                               </div>
                             )}
-                          </div>
+                          </button>
                         </div>
                       )
                     })}
@@ -459,7 +452,7 @@ export function SettingsSheet({
                 <div className="rounded-md border bg-muted/40 p-3 text-xs">
                   {validation.ok ? (
                     <div className="space-y-2">
-                      <p className="font-medium text-green-400">
+                      <p className="font-medium text-primary">
                         {t.settings.selectedTools}: {validation.toolCount}
                       </p>
                       <div className="space-y-1 text-muted-foreground">
@@ -522,7 +515,7 @@ export function SettingsSheet({
                   </Button>
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                 <FieldGroup className="gap-4">
                   <div className="grid grid-cols-2 gap-2">
                     <Field>
@@ -531,7 +524,7 @@ export function SettingsSheet({
                         id="provider-id"
                         value={editingProvider.id}
                         onChange={(event) => onUpdateSettingsProvider('id', event.target.value)}
-                        placeholder="provider-id"
+                        placeholder="provider-id…"
                       />
                     </Field>
                     <Field>
@@ -550,7 +543,7 @@ export function SettingsSheet({
                       id="provider-base-url"
                       value={editingProvider.baseUrl}
                       onChange={(event) => onUpdateSettingsProvider('baseUrl', event.target.value)}
-                      placeholder="https://api.deepseek.com"
+                      placeholder="https://api.deepseek.com…"
                     />
                     <FieldDescription>{t.settings.baseUrlHint}</FieldDescription>
                   </Field>
@@ -624,7 +617,7 @@ export function SettingsSheet({
                   </Button>
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                 <OpenApiProfileEditorFields
                   profile={settingsOpenApiProfile}
                   openApiBaseUrl={config.openApiBaseUrl}
@@ -704,7 +697,7 @@ export function SettingsSheet({
                   <XIcon aria-hidden="true" />
                 </Button>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                 <FieldGroup className="gap-4">
                   <Field>
                     <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/10 p-3">
@@ -718,8 +711,11 @@ export function SettingsSheet({
                             : t.settings.instructionFileNew}
                         </FieldDescription>
                       </div>
-                      <Badge variant="secondary" className="shrink-0">
-                        {instructionContent.trim().length} chars
+                      <Badge variant="secondary" className="h-5 shrink-0 tabular-nums text-[10px]">
+                        {t.settings.instructionFileCharCount.replace(
+                          '{n}',
+                          String(instructionContent.trim().length)
+                        )}
                       </Badge>
                     </div>
                   </Field>

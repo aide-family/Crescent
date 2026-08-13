@@ -29,7 +29,7 @@ export function SlashCommandMenu({
             key={command.id}
             type="button"
             data-slash-command-index={index}
-            className={`block w-full rounded-md px-2 py-2 text-left transition-[background-color,color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
+            className={`block w-full rounded-md px-2 py-1.5 text-left transition-[background-color,color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
               index === selectedIndex
                 ? 'bg-primary/12 text-foreground'
                 : 'hover:bg-muted/50'

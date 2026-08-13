@@ -66,17 +66,9 @@ import {
 } from '@renderer/components/ui/sheet'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue
-} from '@renderer/components/ui/select'
-import {
   dictionaries,
   localeOptions,
+  nextLocale,
   resolveInitialLocale,
   type Dictionary,
   type Locale
@@ -1944,12 +1936,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (!tabMenu) return
 
     const closeMenu = (): void => setTabMenu(null)
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') closeMenu()
+    }
     window.addEventListener('click', closeMenu)
     window.addEventListener('blur', closeMenu)
+    window.addEventListener('keydown', onKeyDown)
 
     return () => {
       window.removeEventListener('click', closeMenu)
       window.removeEventListener('blur', closeMenu)
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [tabMenu])
 
@@ -6722,7 +6719,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           <SheetDescription>{t.settings.mcpServersHint}</SheetDescription>
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="app-sheet-main min-w-0 flex-1 space-y-4 overflow-auto">
+          <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">
                 {t.settings.mcpServerList} · {config.mcpServers.length}
@@ -6746,71 +6743,64 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
                   return (
                     <div
                       key={server.id}
-                      className={`flex min-w-0 cursor-pointer flex-col gap-3 rounded-lg border bg-card/70 p-3 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
+                      className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
                         mcpEditorOpen && settingsMcpServerId === server.id
                           ? 'border-primary/50 bg-primary/8'
                           : 'border-border/70'
                       }`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => toggleMcpDetails(server.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          toggleMcpDetails(server.id)
-                        }
-                      }}
                     >
-                      <div className="min-w-0 text-left">
-                        <div className="flex min-w-0 items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <McpStatusDot status={status.state} title={status.label} />
-                              <span className="truncate text-sm font-medium">
-                                {server.name || server.id}
-                              </span>
-                            </div>
-                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {server.id}
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant={server.enabled ? 'destructive' : 'outline'}
-                            size="sm"
-                            className="shrink-0"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              selectSettingsMcpServer(server.id)
-                              updateSettingsMcpServerForId(server.id, 'enabled', !server.enabled)
-                            }}
-                          >
-                            {server.enabled ? (
-                              <TriangleAlertIcon data-icon="inline-start" />
-                            ) : (
-                              <CheckIcon data-icon="inline-start" />
-                            )}
-                            {server.enabled
-                              ? t.settings.disableMcpServer
-                              : t.settings.enableMcpServer}
-                          </Button>
-                        </div>
-                        <div className="mt-3 line-clamp-2 font-mono text-[11px] text-muted-foreground">
-                          {[server.command, ...server.args].filter(Boolean).join(' ') || '-'}
-                        </div>
-                        <div className="mt-2 text-[11px] text-muted-foreground">
-                          {t.settings.mcpToolCount}: {toolCount}
-                        </div>
-                        <div
-                          className={`mt-1 line-clamp-3 text-[11px] ${
-                            status.state === 'not-ready'
-                              ? 'text-destructive'
-                              : 'text-muted-foreground'
-                          }`}
-                          title={status.label}
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                          onClick={() => toggleMcpDetails(server.id)}
                         >
-                          {status.label}
-                        </div>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <McpStatusDot status={status.state} title={status.label} />
+                            <span className="truncate text-[13px] font-medium">
+                              {server.name || server.id}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                            {server.id}
+                          </div>
+                          <div className="mt-1.5 line-clamp-2 font-mono text-[11px] text-muted-foreground">
+                            {[server.command, ...server.args].filter(Boolean).join(' ') || '-'}
+                          </div>
+                          <div className="mt-1 tabular-nums text-[11px] text-muted-foreground">
+                            {t.settings.mcpToolCount}: {toolCount}
+                          </div>
+                          <div
+                            className={`mt-1 line-clamp-3 text-[11px] ${
+                              status.state === 'not-ready'
+                                ? 'text-destructive'
+                                : 'text-muted-foreground'
+                            }`}
+                            title={status.label}
+                          >
+                            {status.label}
+                          </div>
+                        </button>
+                        <Button
+                          type="button"
+                          variant={server.enabled ? 'destructive' : 'outline'}
+                          size="sm"
+                          className="shrink-0"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            selectSettingsMcpServer(server.id)
+                            updateSettingsMcpServerForId(server.id, 'enabled', !server.enabled)
+                          }}
+                        >
+                          {server.enabled ? (
+                            <TriangleAlertIcon data-icon="inline-start" />
+                          ) : (
+                            <CheckIcon data-icon="inline-start" />
+                          )}
+                          {server.enabled
+                            ? t.settings.disableMcpServer
+                            : t.settings.enableMcpServer}
+                        </Button>
                       </div>
                     </div>
                   )
@@ -6840,11 +6830,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
                   <XIcon aria-hidden="true" />
                 </Button>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                 <FieldGroup className="gap-4">
                   <label
                     htmlFor="mcp-enabled"
-                    className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3"
+                    className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
                   >
                     <span className="space-y-1">
                       <span className="block text-sm font-medium">{t.settings.mcpEnabled}</span>
@@ -7193,27 +7183,20 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           >
             <ArrowLeftRightIcon aria-hidden="true" />
           </Button>
-          <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
-            <SelectTrigger
-              size="sm"
-              className="h-8 w-auto min-w-24 justify-start gap-1.5 border-transparent bg-transparent px-2 shadow-none hover:bg-accent hover:text-accent-foreground"
-              aria-label={t.app.language}
-              title={t.app.language}
-            >
-              <LanguagesIcon aria-hidden="true" />
-              <SelectValue aria-label={t.app.language} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>{t.app.language}</SelectLabel>
-                {localeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="w-auto min-w-8 gap-1 px-1.5"
+            aria-label={`${t.app.language}: ${localeOptions.find((option) => option.value === locale)?.label ?? locale}`}
+            title={localeOptions.find((option) => option.value === nextLocale(locale))?.label}
+            onClick={() => setLocale(nextLocale(locale))}
+          >
+            <LanguagesIcon aria-hidden="true" />
+            <span className="text-[10px] font-medium tracking-wide text-muted-foreground">
+              {localeOptions.find((option) => option.value === locale)?.shortLabel}
+            </span>
+          </Button>
           <SettingsSheet
             open={sheetOpen}
             onOpenChange={(open) => {

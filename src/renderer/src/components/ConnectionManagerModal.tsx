@@ -144,7 +144,7 @@ export function ConnectionManagerModal({
         </div>
         <div className="app-connection-grid grid min-h-0 flex-1 grid-cols-[minmax(280px,0.9fr)_minmax(400px,1.1fr)] overflow-hidden">
           <ConnectionList
-            className="min-h-0 border-r bg-muted/10 p-3"
+            className="min-h-0 border-r bg-muted/10 p-2.5"
             connections={connections}
             filteredConnections={filteredConnections}
             query={query}
@@ -259,15 +259,19 @@ export function ConnectionManagerModal({
               </div>
             )}
           />
-          <div className="min-h-0 overflow-auto p-3">
+          <div className="min-h-0 overflow-auto overscroll-contain p-2.5">
             <FieldGroup className="gap-2.5">
               <Field>
-                <FieldLabel>{t.connections.copiedConnection}</FieldLabel>
+                <FieldLabel htmlFor="connection-import">{t.connections.copiedConnection}</FieldLabel>
                 <Textarea
+                  id="connection-import"
+                  name="connection-import"
                   className="min-h-20 resize-y font-mono text-xs"
                   value={connectionImportText}
                   onChange={(event) => onImportTextChange(event.target.value)}
                   placeholder={t.connections.copiedConnectionPlaceholder}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
                 <div className="flex justify-end">
                   <Button
@@ -282,109 +286,160 @@ export function ConnectionManagerModal({
                 </div>
               </Field>
               <Field>
-                <FieldLabel>{t.connections.customConnectionName}</FieldLabel>
+                <FieldLabel htmlFor="connection-name">
+                  {t.connections.customConnectionName}
+                </FieldLabel>
                 <Input
+                  id="connection-name"
+                  name="connection-name"
+                  className="h-8"
                   value={connectionForm.name}
                   onChange={(event) => onFormChange('name', event.target.value)}
                   placeholder={t.connections.namePlaceholder}
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <Field>
-                  <FieldLabel>{t.connections.host}</FieldLabel>
+                  <FieldLabel htmlFor="connection-host">{t.connections.host}</FieldLabel>
                   <Input
+                    id="connection-host"
+                    name="host"
+                    className="h-8 font-mono"
                     value={connectionForm.host}
                     onChange={(event) => onFormChange('host', event.target.value)}
-                    placeholder="10.0.0.8"
+                    placeholder="10.0.0.8…"
                     disabled={!connectionEditing}
+                    autoComplete="off"
+                    spellCheck={false}
                   />
                 </Field>
                 <Field>
-                  <FieldLabel>{t.connections.port}</FieldLabel>
+                  <FieldLabel htmlFor="connection-port">{t.connections.port}</FieldLabel>
                   <Input
+                    id="connection-port"
+                    name="port"
                     type="number"
+                    inputMode="numeric"
+                    className="h-8 font-mono tabular-nums"
                     value={connectionForm.port ?? 22}
                     onChange={(event) => onFormChange('port', Number(event.target.value))}
                     placeholder="22"
                     disabled={!connectionEditing}
+                    autoComplete="off"
                   />
                 </Field>
               </div>
               <Field>
-                <FieldLabel>{t.connections.user}</FieldLabel>
+                <FieldLabel htmlFor="connection-user">{t.connections.user}</FieldLabel>
                 <Input
+                  id="connection-user"
+                  name="username"
+                  className="h-8 font-mono"
                   value={connectionForm.user ?? ''}
                   onChange={(event) => onFormChange('user', event.target.value)}
-                  placeholder="root"
+                  placeholder="root…"
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </Field>
               <Field>
-                <FieldLabel>{t.connections.password}</FieldLabel>
+                <FieldLabel htmlFor="connection-password">{t.connections.password}</FieldLabel>
                 <Input
+                  id="connection-password"
+                  name="connection-password"
                   type="password"
+                  className="h-8"
                   value={connectionForm.password ?? ''}
                   onChange={(event) => onFormChange('password', event.target.value)}
                   placeholder={t.connections.passwordPlaceholder}
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </Field>
               <Field>
-                <FieldLabel>{t.connections.passwordEnvVar}</FieldLabel>
+                <FieldLabel htmlFor="connection-password-env">
+                  {t.connections.passwordEnvVar}
+                </FieldLabel>
                 <Input
+                  id="connection-password-env"
+                  name="connection-password-env"
+                  className="h-8 font-mono"
                   value={connectionForm.passwordEnvVar ?? ''}
                   onChange={(event) => onFormChange('passwordEnvVar', event.target.value)}
                   placeholder={t.connections.passwordEnvVarPlaceholder}
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
                 <FieldDescription>{t.connections.passwordEnvVarDescription}</FieldDescription>
               </Field>
               <Field>
-                <FieldLabel>{t.connections.identityFile}</FieldLabel>
+                <FieldLabel htmlFor="connection-identity">{t.connections.identityFile}</FieldLabel>
                 <Input
+                  id="connection-identity"
+                  name="identity-file"
+                  className="h-8 font-mono"
                   value={connectionForm.identityFile ?? ''}
                   onChange={(event) => onFormChange('identityFile', event.target.value)}
-                  placeholder="~/.ssh/id_rsa"
+                  placeholder="~/.ssh/id_rsa…"
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </Field>
               <Field>
-                <FieldLabel>{t.connections.sshOptions}</FieldLabel>
+                <FieldLabel htmlFor="connection-ssh-options">{t.connections.sshOptions}</FieldLabel>
                 <Textarea
+                  id="connection-ssh-options"
+                  name="ssh-options"
                   className="min-h-28 resize-y font-mono text-xs"
                   value={connectionSshOptionsText}
                   onChange={(event) => onSshOptionsTextChange(event.target.value)}
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                   placeholder={
                     '-o HostKeyAlgorithms=+ssh-rsa\n-o PubkeyAcceptedAlgorithms=+ssh-rsa\n-t\n-o PreferredAuthentications=keyboard-interactive,password\n-o PubkeyAuthentication=no'
                   }
                 />
                 <FieldDescription>{t.connections.sshOptionsDescription}</FieldDescription>
                 {connectionCommandPreview && (
-                  <pre className="overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs text-muted-foreground">
+                  <pre className="overflow-auto rounded-md border border-border/60 bg-muted/15 p-2 font-mono text-[11px] text-muted-foreground">
                     {connectionCommandPreview}
                   </pre>
                 )}
               </Field>
               <Field>
-                <FieldLabel>{t.connections.loginActions}</FieldLabel>
+                <FieldLabel htmlFor="connection-actions">{t.connections.loginActions}</FieldLabel>
                 <Textarea
+                  id="connection-actions"
+                  name="login-actions"
                   className="min-h-32 resize-y font-mono text-xs"
                   value={connectionActionsText}
                   onChange={(event) => onActionsTextChange(event.target.value)}
                   disabled={!connectionEditing}
+                  autoComplete="off"
+                  spellCheck={false}
                   placeholder={'your_password\ncd /srv/app\nkubectl get pods'}
                 />
                 <FieldDescription>{t.connections.loginActionsDescription}</FieldDescription>
               </Field>
               <Field>
-                <FieldLabel>{t.connections.description}</FieldLabel>
+                <FieldLabel htmlFor="connection-description">{t.connections.description}</FieldLabel>
                 <Input
+                  id="connection-description"
+                  name="connection-description"
+                  className="h-8"
                   value={connectionForm.description ?? ''}
                   onChange={(event) => onFormChange('description', event.target.value)}
                   placeholder={t.connections.descriptionPlaceholder}
                   disabled={!connectionEditing}
+                  autoComplete="off"
                 />
                 <FieldDescription>
                   {connectionEditing ? t.connections.storedIn : t.connections.readOnlyHint}
@@ -400,9 +455,9 @@ export function ConnectionManagerModal({
             ) : null}
           </div>
         </div>
-        <div className="shrink-0 border-t px-4 py-3">
+        <div className="shrink-0 border-t px-4 py-2">
           <SkillManageStatus message={connectionSaveMessage} />
-          <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="mt-2 flex items-center justify-between gap-3">
             <Button type="button" variant="outline" onClick={onResetForm}>
               {t.common.new}
             </Button>
