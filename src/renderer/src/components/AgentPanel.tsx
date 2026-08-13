@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 
 import { AgentLogList } from '@renderer/components/AgentLogList'
-import { AgentReferenceBadges } from '@renderer/components/AgentReferenceBadges'
+import { ComposerEditor } from '@renderer/components/ComposerEditor'
 import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
 import {
   PasswordPromptInlineCard,
@@ -40,7 +40,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
-import { Textarea } from '@renderer/components/ui/textarea'
 import {
   Tooltip,
   TooltipContent,
@@ -120,12 +119,9 @@ export function AgentPanel({
   onInsertSlashCommand,
   onInsertPinnedWorkflow,
   onAgentInputChange,
+  onComposerCaretChange,
   onAgentInputKeyDown,
   onAgentInputPaste,
-  onRemoveSkill,
-  onRemovePath,
-  onRemoveTool,
-  onRemoveWiki,
   onPickPathReference,
   onStopAgent,
   onRetryConnection,
@@ -202,6 +198,7 @@ export function AgentPanel({
   onInsertSlashCommand: (option: SlashCommandOption) => void
   onInsertPinnedWorkflow: (workflow: AgentPinnedWorkflow) => void
   onAgentInputChange: (value: string) => void
+  onComposerCaretChange?: (cursor: number) => void
   onAgentInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onAgentInputPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onRemoveSkill: (id: string) => void
@@ -438,17 +435,6 @@ export function AgentPanel({
               t={t}
               onSelect={onInsertSlashCommand}
             />
-            <AgentReferenceBadges
-              skillRefs={sessionChatTab.skillRefs}
-              pathRefs={sessionChatTab.pathRefs}
-              toolRefs={sessionChatTab.toolRefs}
-              wikiRefs={sessionChatTab.wikiRefs}
-              t={t}
-              onRemoveSkill={onRemoveSkill}
-              onRemovePath={onRemovePath}
-              onRemoveTool={onRemoveTool}
-              onRemoveWiki={onRemoveWiki}
-            />
             {pinnedWorkflows.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1">
                 <span className="text-[11px] text-muted-foreground">{t.input.pinnedWorkflows}</span>
@@ -468,18 +454,28 @@ export function AgentPanel({
                 ))}
               </div>
             ) : null}
-            <Textarea
-              ref={agentInputRef}
-              value={sessionChatTab.agentInput}
-              onChange={(event) => onAgentInputChange(event.target.value)}
-              onKeyDown={onAgentInputKeyDown}
-              onPaste={onAgentInputPaste}
-              placeholder={t.input.askPlaceholder}
-              aria-label={t.input.askPlaceholder}
-              name="agent-input"
-              autoComplete="off"
-              className="max-h-40 min-h-16 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
-            />
+            <div
+              className="app-composer-body"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) agentInputRef?.current?.focus()
+              }}
+            >
+              <ComposerEditor
+                value={sessionChatTab.agentInput}
+                placeholder={t.input.askPlaceholder}
+                ariaLabel={t.input.askPlaceholder}
+                t={t}
+                agentInputRef={agentInputRef}
+                skillRefs={sessionChatTab.skillRefs}
+                wikiRefs={sessionChatTab.wikiRefs}
+                toolRefs={sessionChatTab.toolRefs}
+                pathRefs={sessionChatTab.pathRefs}
+                onChange={onAgentInputChange}
+                onCaretChange={onComposerCaretChange}
+                onKeyDown={onAgentInputKeyDown}
+                onPaste={onAgentInputPaste}
+              />
+            </div>
             <div className="app-composer-toolbar flex items-center gap-1.5 text-xs text-muted-foreground">
               <div className="flex min-w-0 flex-1 items-center">
                 <Select
@@ -489,8 +485,9 @@ export function AgentPanel({
                 >
                   <SelectTrigger
                     size="sm"
-                    className="app-model-trigger"
+                    className="app-model-trigger min-w-0 overflow-hidden"
                     aria-label={t.app.model}
+                    aria-haspopup="listbox"
                     title={
                       activeModel
                         ? `${activeModel.name} · ${activeModel.providerName} · ${aiStatusText}`
@@ -528,7 +525,7 @@ export function AgentPanel({
                       )}
                     </span>
                   </SelectTrigger>
-                  <SelectContent align="start">
+                  <SelectContent align="start" position="popper" side="top">
                     <SelectGroup>
                       <SelectLabel>{t.app.model}</SelectLabel>
                       {visibleModels.map((model) => (
@@ -548,15 +545,16 @@ export function AgentPanel({
                 >
                   <SelectTrigger
                     size="sm"
-                    className="app-model-trigger app-style-trigger"
+                    className="app-model-trigger app-style-trigger relative z-10 shrink-0"
                     aria-label={t.settings.agentStyle}
+                    aria-haspopup="listbox"
                     title={agentStyleHint(normalizeAgentStyle(agentStyle), t)}
                   >
                     <span className="truncate">
                       {agentStyleTitle(normalizeAgentStyle(agentStyle), t)}
                     </span>
                   </SelectTrigger>
-                  <SelectContent align="start">
+                  <SelectContent align="start" position="popper" side="top">
                     <SelectGroup>
                       <SelectLabel>{t.settings.agentStyle}</SelectLabel>
                       {agentStyleSelectOptions(t).map((option) => (

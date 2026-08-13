@@ -22,6 +22,7 @@ import {
   type FullAgentRunOverlayTab
 } from '@renderer/components/FullAgentRunOverlay'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { MessageInlineContent } from '@renderer/components/AgentReferenceBadges'
 import { QuotaErrorCard } from '@renderer/components/QuotaErrorCard'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -537,9 +538,7 @@ function UserSupplementStepRow({
         </span>
         <time dateTime={step.createdAt}>{formatLogTime(step.createdAt)}</time>
       </div>
-      <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-        {clampAgentText(step.text, AGENT_RUN_STREAM_MAX_CHARS)}
-      </pre>
+      <MessageInlineContent text={step.text} references={step.references} t={t} />
     </div>
   )
 }

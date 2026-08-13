@@ -1,4 +1,5 @@
 import type { AgentLogEntry, AgentRunStep } from './terminal-tabs'
+import type { AgentMessageReferences } from './agent-message-refs'
 import { wrapSteerSupplementPayload } from '../../../shared/runtime-supplement'
 
 /** Pure helper for busy-path supplement artifacts (testable without App.tsx). */
@@ -7,6 +8,7 @@ export function buildBusySupplementArtifacts(input: {
   runId: string
   createdAt: string
   stepId?: string
+  references?: AgentMessageReferences
 }): {
   logEntry: Omit<Extract<AgentLogEntry, { kind: 'user-supplement' }>, 'id' | 'createdAt'>
   step: Extract<AgentRunStep, { kind: 'user-supplement' }>
@@ -16,13 +18,15 @@ export function buildBusySupplementArtifacts(input: {
     logEntry: {
       kind: 'user-supplement',
       text,
-      runId: input.runId
+      runId: input.runId,
+      references: input.references
     },
     step: {
       id: input.stepId ?? `supplement-${input.createdAt}`,
       kind: 'user-supplement',
       text,
-      createdAt: input.createdAt
+      createdAt: input.createdAt,
+      references: input.references
     }
   }
 }

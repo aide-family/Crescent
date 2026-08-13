@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Loader2Icon, XIcon } from 'lucide-react'
 
+import { MessageInlineContent } from '@renderer/components/AgentReferenceBadges'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
@@ -328,9 +329,9 @@ function FullRunStepRow({ step, t }: { step: AgentRunStep; t: Dictionary }): Rea
   }
   if (step.kind === 'user-supplement') {
     return (
-      <pre className="whitespace-pre-wrap break-words rounded border bg-primary/5 px-2 py-1.5 text-sm">
-        {step.text}
-      </pre>
+      <div className="app-ref-flow rounded border bg-muted/20 px-2 py-1.5">
+        <MessageInlineContent text={step.text} references={step.references} t={t} />
+      </div>
     )
   }
   if (step.kind === 'approval') {

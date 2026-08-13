@@ -1,4 +1,5 @@
 import { AgentRunTimeline } from '@renderer/components/AgentRunTimeline'
+import { MessageInlineContent } from '@renderer/components/AgentReferenceBadges'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import type { Dictionary } from '@renderer/i18n'
 import {
@@ -92,9 +93,7 @@ export function AgentLogContent({
   if (isConversationLog(entry.kind)) {
     if (entry.kind === 'user') {
       return (
-        <pre className="select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-          {clampAgentText(entry.text)}
-        </pre>
+        <MessageInlineContent text={entry.text} references={entry.references} t={t} />
       )
     }
 

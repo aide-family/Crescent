@@ -579,6 +579,7 @@ export interface StoredSessionTab {
   isSsh: boolean
   terminalCwd?: string
   terminalMode?: 'pty' | 'pipe'
+  agentStyle?: AgentStyle
 }
 
 export interface StoredAgentLogEntry {

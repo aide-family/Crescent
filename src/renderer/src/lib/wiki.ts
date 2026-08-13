@@ -4,6 +4,8 @@ import type {
   WikiDocument,
   WikiDocumentSummary
 } from '../../../shared/agent-types'
+import { decodeUserMessageText } from './agent-message-refs'
+import { stripComposerRefTokens } from './composer-ref-tokens'
 
 export function buildWikiContentFromHistory(
   detail: StoredSessionHistoryDetail,
@@ -24,7 +26,12 @@ export function buildWikiContentFromHistory(
   const conversationLines = logs.flatMap((log) => [
     `### ${formatWikiLogKind(log.kind, t)} · ${log.createdAt}`,
     '',
-    truncateWikiContent(log.text.trim(), 6000),
+    truncateWikiContent(
+      stripComposerRefTokens(
+        log.kind === 'user' ? decodeUserMessageText(log.text).text : log.text
+      ).trim(),
+      6000
+    ),
     ''
   ])
 
