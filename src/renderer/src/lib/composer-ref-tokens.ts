@@ -178,7 +178,7 @@ function spliceComposerRange(
   start: number,
   end: number
 ): { value: string; cursor: number } {
-  let left = value.slice(0, start)
+  const left = value.slice(0, start)
   let right = value.slice(end)
   if (/[ \t]$/.test(left) && /^[ \t]/.test(right)) {
     right = right.replace(/^[ \t]+/, '')

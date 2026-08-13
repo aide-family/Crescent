@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.0.5 (2026-08-14)
+
+### Agent / Working Style
+
+- Four working styles (`swift` / `concise` / `guided` / `teach`) control reply density only; execution speed, safety, and read-only batching stay full.
+- Default style is `concise`. Style is stored on the chat tab so a mid-run settings change cannot mix contracts.
+- Slash `/style:` can switch the active session style from the composer.
+
+### Composer / References
+
+- Skill, SOP, tool, and path references insert as inline chips at the caret, so quoted context stays aligned with the prompt text.
+- Composer tokens persist with the message and render as badges in the run log.
+
+### Desktop / Updates
+
+- Native application menu adds About, Check for Updates, and Settings.
+- Check-then-update lives in the menu and footer; installers download to the user’s Downloads folder instead of a prominent in-app update card.
+- Footer shows the current working style and a quieter update affordance.
+
+### UI
+
+- Denser, keyboard-first desktop chrome across lists, forms, terminal tabs, and sheets.
+- Language control is a toggle instead of a select; mermaid diagrams share the markdown dark tokens.
+
+### Terminal / SSH
+
+- First login to an IP (or other unverified target) accepts a non-local hostname prompt so confirm-login can learn the alias instead of waiting out a hostname mismatch.
+
+### Tests / Reliability
+
+- Added and extended tests for working styles, composer ref tokens, native menu, updater/installer download, agent message refs, prompt-host wait, and related prompt policy.
+
 ## v1.0.4 (2026-08-11)
 
 ### Terminal / SSH
