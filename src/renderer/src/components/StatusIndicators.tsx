@@ -73,11 +73,7 @@ export function StatusDot({
   title?: string
 }): React.JSX.Element {
   const className =
-    state === 'ready'
-      ? 'bg-green-500'
-      : state === 'pending'
-        ? 'bg-yellow-400'
-        : 'bg-red-500'
+    state === 'ready' ? 'bg-green-500' : state === 'pending' ? 'bg-yellow-400' : 'bg-red-500'
 
   return (
     <span

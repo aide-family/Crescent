@@ -147,7 +147,10 @@ export function HistoryPanel({
                               {item.title}
                             </span>
                             {item.isSsh && (
-                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">
+                              <Badge
+                                variant="secondary"
+                                className="h-5 shrink-0 px-1.5 text-[10px]"
+                              >
                                 SSH
                               </Badge>
                             )}

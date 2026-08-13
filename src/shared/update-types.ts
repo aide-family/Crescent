@@ -23,7 +23,7 @@ export type AppUpdateStatusEvent =
       transferred: number
       total: number
     }
-  | { state: 'downloaded'; version: string }
+  | { state: 'downloaded'; version: string; installerPath?: string }
   | { state: 'error'; message: string }
 
 export interface AppUpdateVersionResult {
@@ -33,4 +33,5 @@ export interface AppUpdateVersionResult {
 export interface AppUpdateActionResult {
   ok: boolean
   error?: string
+  path?: string
 }

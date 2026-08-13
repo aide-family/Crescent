@@ -135,7 +135,7 @@ export function FullAgentRunOverlay({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
-  const headingIdPrefix = useMemo(() => `full-run-${logId}-`, [])
+  const headingIdPrefix = useMemo(() => `full-run-${logId}-`, [logId])
   const headings = useMemo(
     () => extractMarkdownHeadings(visibleResult, headingIdPrefix),
     [headingIdPrefix, visibleResult]

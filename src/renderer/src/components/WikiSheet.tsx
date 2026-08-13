@@ -215,10 +215,14 @@ function WikiDocumentList({
           </div>
         )}
         {!wikiLoading && wikiDocuments.length === 0 && (
-          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">{t.wiki.empty}</div>
+          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">
+            {t.wiki.empty}
+          </div>
         )}
         {!wikiLoading && wikiDocuments.length > 0 && filteredWikiDocuments.length === 0 && (
-          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">{t.wiki.empty}</div>
+          <div className="rounded-md border p-2.5 text-sm text-muted-foreground">
+            {t.wiki.empty}
+          </div>
         )}
         {filteredWikiDocuments.map((document) => (
           <button

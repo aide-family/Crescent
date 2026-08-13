@@ -13,7 +13,9 @@ export interface TerminalTabMenuState {
 }
 
 function focusTerminalTab(tabId: string): void {
-  document.querySelector<HTMLButtonElement>(`[data-terminal-tab-id="${CSS.escape(tabId)}"]`)?.focus()
+  document
+    .querySelector<HTMLButtonElement>(`[data-terminal-tab-id="${CSS.escape(tabId)}"]`)
+    ?.focus()
 }
 
 export function TerminalTabBar({

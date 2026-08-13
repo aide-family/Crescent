@@ -55,6 +55,9 @@ interface TerminalAgentApi {
     clearRendererRecovery: () => Promise<{ ok: boolean }>
     exportRendererDiagnostics: () => Promise<{ ok: boolean; canceled?: boolean; path?: string }>
     reportDiagnosticError: (message: string) => void
+    setLocale: (locale: 'zh-CN' | 'en') => Promise<{ ok: boolean; locale: 'zh-CN' | 'en' }>
+    openExternal: (url: string) => Promise<{ ok: boolean }>
+    onOpenSettings: (callback: () => void) => () => void
   }
   terminal: {
     start: (options?: {
@@ -284,6 +287,7 @@ interface TerminalAgentApi {
     getVersion: () => Promise<AppUpdateVersionResult>
     check: () => Promise<AppUpdateActionResult>
     download: () => Promise<AppUpdateActionResult>
+    downloadInstaller: () => Promise<AppUpdateActionResult>
     install: () => Promise<AppUpdateActionResult>
     onStatus: (callback: (event: AppUpdateStatusEvent) => void) => () => void
   }

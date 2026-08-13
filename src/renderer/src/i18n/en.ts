@@ -22,7 +22,13 @@ const en = {
     swapPanes: 'Swap terminal and chat panes',
     title: 'Crescent',
     titleDescription: 'Terminal + SSH + AI command workbench',
-    workingDirectory: 'cwd'
+    workingDirectory: 'cwd',
+    versionLabel: 'Version {version}',
+    github: 'GitHub',
+    updateAvailable: 'Update {version} is available',
+    downloadInstaller: 'Download {version} installer to Downloads',
+    updateDownloading: 'Downloading installer… {percent}%',
+    updateSaved: 'Installer saved to Downloads'
   },
   onboarding: {
     title: 'Welcome to Crescent',
@@ -528,6 +534,7 @@ const en = {
     result: 'Result',
     referenceDirectory: 'Reference directory',
     referenceFile: 'Reference file',
+    reference: 'Reference a file or directory',
     voiceStart: 'Voice input',
     voiceStartSpeechOnly:
       'Voice input (system speech): provider has no Whisper /audio/transcriptions; vision/multimodal chat is not speech-to-text',
