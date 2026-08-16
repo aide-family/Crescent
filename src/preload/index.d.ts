@@ -26,6 +26,7 @@ import type {
   LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  SessionTokenUsage,
   OpsHistoryRecord,
   SubmitOpsFeedbackInput,
   SubmitOpsFeedbackResult,
@@ -263,6 +264,8 @@ interface TerminalAgentApi {
     saveAgentRun: (run: StoredAgentRun) => Promise<{ ok: boolean }>
     getAgentRun: (runId: string) => Promise<StoredAgentRun | undefined>
     listAgentRuns: (input: { tabId: string; limit?: number }) => Promise<StoredAgentRun[]>
+    listAllAgentRuns: (tabId: string) => Promise<StoredAgentRun[]>
+    getSessionTokenUsage: (tabId: string) => Promise<SessionTokenUsage>
     listAgentLogs: (input: {
       tabId: string
       beforeLogId?: number

@@ -75,6 +75,12 @@ const en = {
     exportTraceJson: 'Export trace JSON',
     exportTraceJsonTooltip:
       'Export a structured Agent run trace with redacted tool details for debugging',
+    exportSessionTraceJson: 'Export session trace',
+    exportSessionTraceJsonTooltip:
+      'Export a structured trace of every run in this session, with redacted tool details',
+    sessionTokenUsage: 'Session token usage',
+    inputTokens: 'Input tokens',
+    outputTokens: 'Output tokens',
     likeResult: 'Like',
     likeResultTooltip:
       'Approve this ops path for the current SSH connection, or the local terminal when offline (not an SOP)',

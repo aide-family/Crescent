@@ -70,6 +70,11 @@ const zhCN = {
     exportResultMarkdownTooltip: '仅导出助手回答 Markdown',
     exportTraceJson: '导出 Trace JSON',
     exportTraceJsonTooltip: '导出结构化 Agent 运行 Trace（工具细节已脱敏），便于排查调试',
+    exportSessionTraceJson: '导出整会话 Trace',
+    exportSessionTraceJsonTooltip: '导出当前会话全部回合的结构化 Trace（工具细节已脱敏）',
+    sessionTokenUsage: '会话 token 用量',
+    inputTokens: '输入 token',
+    outputTokens: '输出 token',
     likeResult: '赞',
     likeResultTooltip:
       '认可该运维路径；有 SSH 则关联该连接，否则关联本地终端，作为后续同类运维参考（不是写 SOP）',

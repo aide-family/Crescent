@@ -38,6 +38,7 @@ import {
 import { buildPromptText } from '../../shared/agent-run-prompt'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
 import { normalizeAgentStyle, type AgentStyle } from '../../shared/agent-style'
+import { diffSessionTokenUsage, snapshotSessionTokenUsage } from '../../shared/session-token-usage'
 import type { AgentConfig, AgentEvent } from './types'
 import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-prompt'
 
@@ -95,6 +96,8 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
   const abortController = new AbortController()
   activeRuns.set(runId, { runId, sessionKey, abortRequested: false, abortController })
   runIdBySessionKey.set(sessionKey, runId)
+  let usageBaseline: { input: number; output: number } | undefined
+  let usageSession: AgentSession | undefined
 
   try {
     if (!input.executionTabId?.trim()) {
@@ -156,6 +159,31 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       | undefined
     const bridgeLocale = input.locale?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
     hosted.unsubscribe?.()
+
+    const promptText = buildPromptText({
+      ...input,
+      agentStyle: normalizeAgentStyle(input.agentStyle ?? input.config.agentStyle)
+    })
+    // Reused sessions can still be settling after abort; wait before a fresh prompt
+    // so the SDK does not throw "Agent is already processing".
+    if (hosted.session.isStreaming) {
+      try {
+        await Promise.race([
+          hosted.session.waitForIdle(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3_000))
+        ])
+      } catch {
+        // Continue; prompt may still fail and is localized in the renderer.
+      }
+    }
+
+    const statsBefore = readHostedSessionTokenUsage(hosted.session)
+    usageBaseline = statsBefore
+    usageSession = hosted.session
+    const emitUsageDelta = (): void => {
+      emitRunUsageDelta(emit, runId, input.tabId, statsBefore, hosted.session)
+    }
+
     hosted.unsubscribe = hosted.session.subscribe((event) => {
       if (event.type === 'auto_retry_start' && isQuotaExhaustedError(event.errorMessage ?? '')) {
         const classified = classifyProviderError(event.errorMessage ?? '')
@@ -200,24 +228,12 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
         }
         emit(agentEvent)
       }
+
+      if (event.type === 'turn_end' || event.type === 'message_end') {
+        emitUsageDelta()
+      }
     })
 
-    const promptText = buildPromptText({
-      ...input,
-      agentStyle: normalizeAgentStyle(input.agentStyle ?? input.config.agentStyle)
-    })
-    // Reused sessions can still be settling after abort; wait before a fresh prompt
-    // so the SDK does not throw "Agent is already processing".
-    if (hosted.session.isStreaming) {
-      try {
-        await Promise.race([
-          hosted.session.waitForIdle(),
-          new Promise<void>((resolve) => setTimeout(resolve, 3_000))
-        ])
-      } catch {
-        // Continue; prompt may still fail and is localized in the renderer.
-      }
-    }
     await hosted.session.prompt(promptText)
 
     const active = activeRuns.get(runId)
@@ -312,6 +328,13 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     })
     return { ok: false, error: message }
   } finally {
+    try {
+      if (usageBaseline && usageSession) {
+        emitRunUsageDelta(emit, runId, input.tabId, usageBaseline, usageSession)
+      }
+    } catch {
+      // Usage is best-effort; never block run teardown.
+    }
     clearPtyBashExecContext(sessionKey)
     const hosted = hostedSessions.get(sessionKey)
     hosted?.unsubscribe?.()
@@ -436,4 +459,29 @@ function collectSkillRoots(skillRoot: string): string[] {
     roots.push(resolve(configured.replace(/^~(?=$|[/\\])/, homedir())))
   }
   return [...new Set(roots)]
+}
+
+function readHostedSessionTokenUsage(session: AgentSession): { input: number; output: number } {
+  try {
+    return snapshotSessionTokenUsage(session.getSessionStats())
+  } catch {
+    return snapshotSessionTokenUsage(undefined)
+  }
+}
+
+function emitRunUsageDelta(
+  emit: (event: AgentEvent) => void,
+  runId: string,
+  tabId: string | undefined,
+  before: { input: number; output: number },
+  session: AgentSession
+): void {
+  const delta = diffSessionTokenUsage(before, readHostedSessionTokenUsage(session))
+  emit({
+    type: 'usage',
+    input: delta.input,
+    output: delta.output,
+    runId,
+    tabId
+  })
 }

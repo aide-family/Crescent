@@ -27,6 +27,7 @@ import type {
   LocalInstructionDocument,
   StoredAgentLogEntry,
   StoredAgentRun,
+  SessionTokenUsage,
   OpsHistoryRecord,
   SubmitOpsFeedbackInput,
   SubmitOpsFeedbackResult,
@@ -440,6 +441,10 @@ const api = {
       ipcRenderer.invoke('storage:get-agent-run', runId),
     listAgentRuns: (input: { tabId: string; limit?: number }): Promise<StoredAgentRun[]> =>
       ipcRenderer.invoke('storage:list-agent-runs', input),
+    listAllAgentRuns: (tabId: string): Promise<StoredAgentRun[]> =>
+      ipcRenderer.invoke('storage:list-all-agent-runs', tabId),
+    getSessionTokenUsage: (tabId: string): Promise<SessionTokenUsage> =>
+      ipcRenderer.invoke('storage:get-session-token-usage', tabId),
     listAgentLogs: (input: {
       tabId: string
       beforeLogId?: number

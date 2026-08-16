@@ -334,6 +334,7 @@ export function useAgentRuns({
       // After Stop, drop streaming noise — but still accept finish/settle events so
       // interrupted tool cards can update if main emits after the cancel flag.
       if (activeRunCanceledRef.current.has(tabId) && !isPostCancelSettlingEvent(event)) return
+      if (event.type === 'usage') return
 
       if (event.type === 'token') {
         updateAgentRun(

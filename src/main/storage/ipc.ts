@@ -8,6 +8,8 @@ import {
   getAgentRun,
   getOpsHistoryByRunId,
   listAgentRunsForTab,
+  listAllAgentRunsForTab,
+  getSessionTokenUsage,
   listAgentLogs,
   countAgentLogs,
   listOpsHistoryForConnection,
@@ -85,6 +87,14 @@ export function registerStorageIpc(): void {
 
   ipcMain.handle('storage:list-agent-runs', (_, payload?: { tabId?: string; limit?: number }) => {
     return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
+  })
+
+  ipcMain.handle('storage:list-all-agent-runs', (_, tabId?: string) => {
+    return listAllAgentRunsForTab(typeof tabId === 'string' ? tabId : '')
+  })
+
+  ipcMain.handle('storage:get-session-token-usage', (_, tabId?: string) => {
+    return getSessionTokenUsage(typeof tabId === 'string' ? tabId : '')
   })
 
   ipcMain.handle('storage:get-agent-log', (_, payload?: { tabId?: string; logId?: number }) => {

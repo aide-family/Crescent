@@ -9,6 +9,7 @@ import type {
   OpsHistoryRecord,
   StoredAgentLogEntry,
   StoredAgentRun,
+  SessionTokenUsage,
   StoredSessionHistoryDetail,
   StoredSessionHistoryItem,
   StoredSessionTab
@@ -148,6 +149,8 @@ export function initializeCrescentDatabase(): void {
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
   ensureColumn(db, 'agent_runs', 'trace_json', 'TEXT')
+  ensureColumn(db, 'agent_runs', 'input_tokens', 'INTEGER')
+  ensureColumn(db, 'agent_runs', 'output_tokens', 'INTEGER')
   ensureColumn(db, 'ops_history_records', 'connection_id', "TEXT NOT NULL DEFAULT ''")
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ops_history_connection_updated_at
@@ -257,18 +260,50 @@ export function deleteAgentLogs(tabId: string, logIds: number[]): number {
   return removed
 }
 
+const AGENT_RUN_SELECT_COLUMNS = `
+  run_id AS runId,
+  tab_id AS tabId,
+  input,
+  status,
+  connection_id AS connectionId,
+  output,
+  error,
+  started_at AS startedAt,
+  elapsed_ms AS elapsedMs,
+  trace_json AS traceJson,
+  input_tokens AS inputTokens,
+  output_tokens AS outputTokens
+`
+
+interface AgentRunRow {
+  runId: string
+  tabId: string
+  input: string
+  status: StoredAgentRun['status']
+  connectionId?: string | null
+  output?: string | null
+  error?: string | null
+  startedAt?: string | null
+  elapsedMs?: number | null
+  traceJson?: string | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+}
+
 export function saveAgentRun(run: StoredAgentRun): void {
   const db = getDatabase()
   const now = new Date().toISOString()
   const startedAt = run.startedAt ?? (run.status === 'running' ? now : undefined)
   const traceJson = run.trace ? serializeAgentRunTrace(run.trace) : null
+  const inputTokens = optionalTokenCount(run.inputTokens)
+  const outputTokens = optionalTokenCount(run.outputTokens)
 
   db.prepare(
     `
     INSERT INTO agent_runs (
       run_id, tab_id, input, status, connection_id, output, error,
-      started_at, elapsed_ms, trace_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      started_at, elapsed_ms, trace_json, input_tokens, output_tokens, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       status = excluded.status,
       connection_id = excluded.connection_id,
@@ -277,6 +312,8 @@ export function saveAgentRun(run: StoredAgentRun): void {
       started_at = COALESCE(excluded.started_at, agent_runs.started_at),
       elapsed_ms = excluded.elapsed_ms,
       trace_json = COALESCE(excluded.trace_json, agent_runs.trace_json),
+      input_tokens = COALESCE(excluded.input_tokens, agent_runs.input_tokens),
+      output_tokens = COALESCE(excluded.output_tokens, agent_runs.output_tokens),
       updated_at = excluded.updated_at
   `
   ).run(
@@ -290,6 +327,8 @@ export function saveAgentRun(run: StoredAgentRun): void {
     startedAt ?? null,
     typeof run.elapsedMs === 'number' ? run.elapsedMs : null,
     traceJson,
+    inputTokens,
+    outputTokens,
     now,
     now
   )
@@ -302,38 +341,86 @@ export function getAgentRun(runId: string): StoredAgentRun | undefined {
   const row = getDatabase()
     .prepare(
       `
-      SELECT
-        run_id AS runId,
-        tab_id AS tabId,
-        input,
-        status,
-        connection_id AS connectionId,
-        output,
-        error,
-        started_at AS startedAt,
-        elapsed_ms AS elapsedMs,
-        trace_json AS traceJson
+      SELECT ${AGENT_RUN_SELECT_COLUMNS}
       FROM agent_runs
       WHERE run_id = ?
     `
     )
-    .get(normalizedRunId) as
-    | {
-        runId: string
-        tabId: string
-        input: string
-        status: StoredAgentRun['status']
-        connectionId?: string | null
-        output?: string | null
-        error?: string | null
-        startedAt?: string | null
-        elapsedMs?: number | null
-        traceJson?: string | null
-      }
-    | undefined
+    .get(normalizedRunId) as AgentRunRow | undefined
 
   if (!row) return undefined
+  return mapStoredAgentRun(row)
+}
 
+export function listAgentRunsForTab(tabId: string, limit = 50): StoredAgentRun[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT ${AGENT_RUN_SELECT_COLUMNS}
+      FROM agent_runs
+      WHERE tab_id = ?
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `
+    )
+    .all(normalizedTabId, limit) as unknown as AgentRunRow[]
+
+  return rows.map(mapStoredAgentRun)
+}
+
+export function listAllAgentRunsForTab(tabId: string): StoredAgentRun[] {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return []
+
+  const rows = getDatabase()
+    .prepare(
+      `
+      SELECT ${AGENT_RUN_SELECT_COLUMNS}
+      FROM agent_runs
+      WHERE tab_id = ?
+      ORDER BY COALESCE(started_at, created_at) ASC, run_id ASC
+    `
+    )
+    .all(normalizedTabId) as unknown as AgentRunRow[]
+
+  return rows.map(mapStoredAgentRun)
+}
+
+export function getSessionTokenUsage(tabId: string): SessionTokenUsage {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return { input: 0, output: 0 }
+
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT
+        COALESCE(SUM(COALESCE(input_tokens, 0)), 0) AS input,
+        COALESCE(SUM(COALESCE(output_tokens, 0)), 0) AS output
+      FROM agent_runs
+      WHERE tab_id = ?
+    `
+    )
+    .get(normalizedTabId) as { input?: number | null; output?: number | null } | undefined
+
+  return {
+    input: readSqlCount(row?.input),
+    output: readSqlCount(row?.output)
+  }
+}
+
+function readSqlCount(value: unknown): number {
+  if (typeof value === 'bigint') {
+    const numeric = Number(value)
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 0
+  }
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  return 0
+}
+
+function mapStoredAgentRun(row: AgentRunRow): StoredAgentRun {
   return {
     runId: row.runId,
     tabId: row.tabId,
@@ -344,59 +431,15 @@ export function getAgentRun(runId: string): StoredAgentRun | undefined {
     error: row.error ?? undefined,
     startedAt: row.startedAt ?? undefined,
     elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : undefined,
-    trace: parseAgentRunTrace(row.traceJson ?? undefined)
+    trace: parseAgentRunTrace(row.traceJson ?? undefined),
+    inputTokens: typeof row.inputTokens === 'number' ? row.inputTokens : undefined,
+    outputTokens: typeof row.outputTokens === 'number' ? row.outputTokens : undefined
   }
 }
 
-export function listAgentRunsForTab(tabId: string, limit = 50): StoredAgentRun[] {
-  const normalizedTabId = tabId.trim()
-  if (!normalizedTabId) return []
-
-  const rows = getDatabase()
-    .prepare(
-      `
-      SELECT
-        run_id AS runId,
-        tab_id AS tabId,
-        input,
-        status,
-        connection_id AS connectionId,
-        output,
-        error,
-        started_at AS startedAt,
-        elapsed_ms AS elapsedMs,
-        trace_json AS traceJson
-      FROM agent_runs
-      WHERE tab_id = ?
-      ORDER BY updated_at DESC
-      LIMIT ?
-    `
-    )
-    .all(normalizedTabId, limit) as Array<{
-    runId: string
-    tabId: string
-    input: string
-    status: StoredAgentRun['status']
-    connectionId?: string | null
-    output?: string | null
-    error?: string | null
-    startedAt?: string | null
-    elapsedMs?: number | null
-    traceJson?: string | null
-  }>
-
-  return rows.map((row) => ({
-    runId: row.runId,
-    tabId: row.tabId,
-    input: row.input,
-    status: row.status,
-    connectionId: row.connectionId ?? undefined,
-    output: row.output ?? undefined,
-    error: row.error ?? undefined,
-    startedAt: row.startedAt ?? undefined,
-    elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : undefined,
-    trace: parseAgentRunTrace(row.traceJson ?? undefined)
-  }))
+function optionalTokenCount(value: number | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.round(value)
 }
 
 export function upsertOpsHistoryRecord(

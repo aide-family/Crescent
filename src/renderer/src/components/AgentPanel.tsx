@@ -23,6 +23,7 @@ import {
 import { AgentLogList } from '@renderer/components/AgentLogList'
 import { ComposerEditor, type ComposerInputHandle } from '@renderer/components/ComposerEditor'
 import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
+import { SessionUsageBar } from '@renderer/components/SessionUsageBar'
 import {
   PasswordPromptInlineCard,
   type PasswordPromptRequest
@@ -99,6 +100,7 @@ export function AgentPanel({
   onExportResult,
   onExportFull,
   onExportTrace,
+  onExportSessionTrace,
   onOpsFeedback,
   feedbackByLogId,
   feedbackBusyLogId,
@@ -137,7 +139,9 @@ export function AgentPanel({
   onSaveAsSop,
   hasEarlierLogs,
   loadingEarlier,
-  onLoadEarlier
+  onLoadEarlier,
+  sessionInputTokens,
+  sessionOutputTokens
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -178,6 +182,7 @@ export function AgentPanel({
   onExportResult: (entry: AgentLogEntry) => void
   onExportFull: (entry: AgentLogEntry) => void
   onExportTrace: (entry: AgentLogEntry) => void
+  onExportSessionTrace: () => void
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
@@ -221,6 +226,8 @@ export function AgentPanel({
   hasEarlierLogs?: boolean
   loadingEarlier?: boolean
   onLoadEarlier?: () => void | Promise<void>
+  sessionInputTokens: number
+  sessionOutputTokens: number
 }): React.JSX.Element {
   const [referenceMenuOpen, setReferenceMenuOpen] = useState(false)
   const referenceMenuRef = useRef<HTMLDivElement | null>(null)
@@ -321,6 +328,12 @@ export function AgentPanel({
         </div>
       ) : null}
       <div className="app-input-dock space-y-1.5 p-2.5">
+        <SessionUsageBar
+          inputTokens={sessionInputTokens}
+          outputTokens={sessionOutputTokens}
+          t={t}
+          onExportSessionTrace={onExportSessionTrace}
+        />
         <form onSubmit={onSubmit} className="space-y-1.5">
           <div className="flex items-center gap-2">
             <Button

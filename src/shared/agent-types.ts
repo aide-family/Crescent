@@ -514,6 +514,7 @@ export type AgentEvent =
     } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)
+  | ({ type: 'usage'; input: number; output: number } & AgentEventMeta)
   | ({
       type: 'error'
       message: string
@@ -602,6 +603,13 @@ export interface StoredAgentRun {
   startedAt?: string
   elapsedMs?: number
   trace?: AgentRunTrace
+  inputTokens?: number
+  outputTokens?: number
+}
+
+export interface SessionTokenUsage {
+  input: number
+  output: number
 }
 
 export type OpsHistoryRating = 'like' | 'dislike'

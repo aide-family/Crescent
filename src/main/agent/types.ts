@@ -51,6 +51,7 @@ export type {
   PastedAttachmentInput,
   StoredAgentLogEntry,
   StoredAgentRun,
+  SessionTokenUsage,
   OpsHistoryRating,
   OpsHistoryRecord,
   SubmitOpsFeedbackInput,

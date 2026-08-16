@@ -176,7 +176,7 @@ function isSuccessfulApiJson(value: string): boolean {
 }
 
 export function formatAgentEventActionTitle(
-  event: Exclude<AgentEvent, { type: 'token' | 'done' | 'skills' }>,
+  event: Exclude<AgentEvent, { type: 'token' | 'done' | 'skills' | 'usage' }>,
   t: Dictionary
 ): string {
   switch (event.type) {

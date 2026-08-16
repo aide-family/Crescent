@@ -253,6 +253,7 @@ import {
   createTerminalTab,
   getNextTerminalTitle,
   getSessionChatTab,
+  getSessionDisplayTitle,
   getSessionGroupId,
   getSessionTerminals,
   isReservedTerminalTabId,
@@ -313,10 +314,16 @@ import type {
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
+  StoredAgentRun,
   StoredSessionHistoryItem,
   WikiDocument,
   WikiDocumentSummary
 } from '../../shared/agent-types'
+import { addSessionTokenUsage, EMPTY_SESSION_TOKEN_USAGE } from '../../shared/session-token-usage'
+import {
+  buildAgentSessionTrace,
+  serializeAgentSessionTrace
+} from '../../shared/agent-session-trace'
 import {
   normalizeAgentStyle,
   resolveShowAgentThinking,
@@ -606,6 +613,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
   const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
+  const [sessionUsageBaselineByTabId, setSessionUsageBaselineByTabId] = useState<
+    Record<string, { input: number; output: number }>
+  >({})
+  const [liveSessionUsageByTabId, setLiveSessionUsageByTabId] = useState<
+    Record<string, { input: number; output: number }>
+  >({})
+  const liveRunUsageRef = useRef(new Map<string, { input: number; output: number }>())
   const [appVersion, setAppVersion] = useState('')
   const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
     state: 'idle'
@@ -712,6 +726,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     providerId: config.providerId
   })
   const sessionAgentStyle = resolveSessionAgentStyle(sessionChatTab, config)
+  const sessionTokenUsage = addSessionTokenUsage(
+    sessionUsageBaselineByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE,
+    liveSessionUsageByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE
+  )
 
   useEffect(() => {
     const connectionId = resolveOpsConnectionId(
@@ -763,6 +781,18 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     sessionTerminals,
     t
   ])
+
+  useEffect(() => {
+    const tabId = sessionChatTab.id
+    let cancelled = false
+    void window.api.storage.getSessionTokenUsage(tabId).then((usage) => {
+      if (cancelled) return
+      setSessionUsageBaselineByTabId((current) => ({ ...current, [tabId]: usage }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionChatTab.id])
 
   useEffect(() => {
     let cancelled = false
@@ -1306,7 +1336,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           elapsedMs
         }
         updateAgentRun(chatTabId, () => finishedRun)
-        void window.api.storage.saveAgentRun({
+        void persistAgentRun({
           runId,
           tabId: chatTabId,
           input: activeRunInputRef.current.get(chatTabId) ?? '',
@@ -1332,7 +1362,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           elapsedMs
         }
         updateAgentRun(chatTabId, () => finishedRun)
-        void window.api.storage.saveAgentRun({
+        void persistAgentRun({
           runId,
           tabId: chatTabId,
           input: activeRunInputRef.current.get(chatTabId) ?? '',
@@ -2175,6 +2205,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const unsubscribe = window.api.agent.onEvent((event) => {
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
+      if (event.type === 'usage') {
+        const usage = { input: event.input, output: event.output }
+        if (event.runId) liveRunUsageRef.current.set(event.runId, usage)
+        setLiveSessionUsageByTabId((current) => ({ ...current, [chatTabId]: usage }))
+        return
+      }
       if (event.type === 'command' && event.phase === 'started' && event.runId && event.tabId) {
         for (const [ownerTabId, runId] of activeRunIdRef.current) {
           if (runId === event.runId) {
@@ -3414,6 +3450,31 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  function persistAgentRun(run: StoredAgentRun): void {
+    const live = liveRunUsageRef.current.get(run.runId)
+    void window.api.storage
+      .saveAgentRun({
+        ...run,
+        inputTokens: run.inputTokens ?? live?.input,
+        outputTokens: run.outputTokens ?? live?.output
+      })
+      .then(async () => {
+        if (run.status === 'running') return
+        const totals = await window.api.storage.getSessionTokenUsage(run.tabId)
+        liveRunUsageRef.current.delete(run.runId)
+        setSessionUsageBaselineByTabId((current) => ({ ...current, [run.tabId]: totals }))
+        setLiveSessionUsageByTabId((current) => {
+          if (!(run.tabId in current)) return current
+          const next = { ...current }
+          delete next[run.tabId]
+          return next
+        })
+      })
+      .catch(() => {
+        // Persistence is best-effort; the next session load will refresh totals.
+      })
+  }
+
   function stopAgentRun(
     tabId = activeTabIdRef.current,
     options: { reason?: RunStopReason; expectedHost?: string; observedHost?: string } = {}
@@ -3439,7 +3500,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         steps: settleRunningToolStepsAsInterrupted(run.steps ?? [])
       }))
       const canceledRun = activeAgentRunRef.current.get(chatTabId)
-      void window.api.storage.saveAgentRun({
+      void persistAgentRun({
         runId,
         tabId: chatTabId,
         input: activeRunInputRef.current.get(chatTabId) ?? '',
@@ -5148,7 +5209,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           startedAt
         })
         updateAgentRun(chatTabId, (run) => run)
-        void window.api.storage.saveAgentRun({
+        void persistAgentRun({
           runId,
           tabId: chatTabId,
           input: displayInput,
@@ -5228,7 +5289,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       })
       lastLoginRunLogIdRef.current.set(chatTabId, loginRunLogId)
       updateAgentRun(chatTabId, (run) => run)
-      void window.api.storage.saveAgentRun({
+      void persistAgentRun({
         runId: loginRunId,
         tabId: chatTabId,
         input: displayInput,
@@ -5449,7 +5510,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     activeRunIdRef.current.set(chatTabId, runId)
     activeRunInputRef.current.set(chatTabId, displayInput)
     setActiveExecutionTerminal(chatTabId, terminalTabId)
-    void window.api.storage.saveAgentRun({
+    void persistAgentRun({
       runId,
       tabId: chatTabId,
       input: displayInput,
@@ -5580,7 +5641,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             error: resolved.error,
             elapsedMs
           }))
-          void window.api.storage.saveAgentRun({
+          void persistAgentRun({
             runId,
             tabId: chatTabId,
             input: displayInput,
@@ -5608,7 +5669,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             result: clampAgentText(resolved.text ?? '', AGENT_RUN_STREAM_MAX_CHARS),
             elapsedMs
           }))
-          void window.api.storage.saveAgentRun({
+          void persistAgentRun({
             runId,
             tabId: chatTabId,
             input: displayInput,
@@ -5639,7 +5700,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           error: humanError,
           elapsedMs
         }))
-        void window.api.storage.saveAgentRun({
+        void persistAgentRun({
           runId,
           tabId: chatTabId,
           input: displayInput,
@@ -5673,7 +5734,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         error: message,
         elapsedMs
       }))
-      void window.api.storage.saveAgentRun({
+      void persistAgentRun({
         runId,
         tabId: chatTabId,
         input: displayInput,
@@ -6543,6 +6604,25 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     await downloadJson(formatTraceExport(trace), buildLogTraceFilename(entry), t)
   }
 
+  async function exportSessionTrace(): Promise<void> {
+    const tabId = sessionChatTab.id
+    const title = getSessionDisplayTitle(sessionChatTab, tabs, activeTab.id)
+    const [runs, storedUsage] = await Promise.all([
+      window.api.storage.listAllAgentRuns(tabId),
+      window.api.storage.getSessionTokenUsage(tabId)
+    ])
+    const bundle = buildAgentSessionTrace({
+      tabId,
+      title,
+      runs,
+      usage: addSessionTokenUsage(
+        storedUsage,
+        liveSessionUsageByTabId[tabId] ?? EMPTY_SESSION_TOKEN_USAGE
+      )
+    })
+    await downloadJson(serializeAgentSessionTrace(bundle), buildSessionTraceFilename(), t)
+  }
+
   async function resolveRunIdForLogEntry(entry: AgentLogEntry): Promise<string | undefined> {
     for (const run of activeAgentRunRef.current.values()) {
       if (run.logId === entry.id && run.runId) return run.runId
@@ -7340,6 +7420,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onExportResult={(entry) => void exportLogEntryResultMarkdown(entry)}
             onExportFull={(entry) => void exportLogEntryFullMarkdown(entry)}
             onExportTrace={(entry) => void exportLogEntryTrace(entry)}
+            onExportSessionTrace={() => void exportSessionTrace()}
+            sessionInputTokens={sessionTokenUsage.input}
+            sessionOutputTokens={sessionTokenUsage.output}
             onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
             feedbackByLogId={opsFeedbackByLogId}
             feedbackBusyLogId={opsFeedbackBusyLogId}
@@ -8013,6 +8096,15 @@ function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): strin
 function buildLogTraceFilename(entry: AgentLogEntry): string {
   const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
   return `crescent-agent-trace-${timestamp}.json`
+}
+
+function buildSessionTraceFilename(): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .replace(/T/, '_')
+    .replace(/Z$/, '')
+  return `crescent-session-trace-${timestamp}.json`
 }
 
 export default App
