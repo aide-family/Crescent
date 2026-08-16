@@ -7,6 +7,23 @@ alwaysApply: true
 
 Follow these skills as the source of truth. Do not invent APIs or desktop patterns from memory.
 
+Project skills (`.cursor/skills/`): `crescent-host`, `crescent-login-intent`, `crescent-delivery-gate`.
+
+## Host (`crescent-host`)
+
+- Crescent owns SSH, MCP, subterminals, command review, and secrets. Pi is the guest runtime.
+- Do not enable `pi-mcp-adapter` or `pi-subagents` as the product plane. Do not load project `.pi/extensions`.
+- Do not invoke `electron-egg` / `ee-core`.
+
+## Login (`crescent-login-intent`)
+
+- Open SSH only when the user named a connection, explicitly asked to log in, or the session already has that SSH (including same-host drift reconnect).
+- Do not guess lastUsed or the only configured host. `打开` is not login intent.
+
+## Delivery (`crescent-delivery-gate`)
+
+- Non-trivial work: survey first, then implement, then `npm run ci`, then an acceptance checklist. Do not commit unless asked.
+
 ## Pi (`pi-dev`)
 
 - Read installed `@earendil-works/pi-*` docs/types in `node_modules` before changing agent code. Keep those packages on one version.
