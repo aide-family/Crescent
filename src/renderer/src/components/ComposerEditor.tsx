@@ -5,27 +5,33 @@ import {
   useLayoutEffect,
   useRef
 } from 'react'
+import { flushSync } from 'react-dom'
+import { createRoot, type Root } from 'react-dom/client'
 
 import { ComposerRefChip } from '@renderer/components/AgentReferenceBadges'
-import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
 import {
   caretAfterInsertedRef,
-  deleteAdjacentComposerRef,
-  formatComposerRefToken,
-  parseComposerSegments,
-  removeComposerRefToken,
-  resolveComposerTextCaret,
-  serializeComposerSegments,
-  type ComposerRefKind
+  flattenComposerSegmentsForInline,
+  removeComposerRefToken
 } from '@renderer/lib/composer-ref-tokens'
-import { cn } from '@renderer/lib/utils'
+import {
+  getComposerDomCaret,
+  serializeComposerDom,
+  setComposerDomCaret
+} from '@renderer/lib/composer-surface'
 import type { AgentToolReference } from '@renderer/lib/terminal-tabs'
 import type {
   AgentPathReference,
   AgentSkillOption,
   AgentWikiReference
 } from '../../../shared/agent-types'
+
+export interface ComposerInputHandle {
+  focus: () => void
+  readonly value: string
+  setSelectionRange: (start: number, end?: number) => void
+}
 
 export function ComposerEditor({
   value,
@@ -46,228 +52,199 @@ export function ComposerEditor({
   placeholder: string
   ariaLabel: string
   t: Dictionary
-  agentInputRef?: RefObject<HTMLTextAreaElement | null>
+  agentInputRef?: RefObject<ComposerInputHandle | null>
   skillRefs: AgentSkillOption[]
   wikiRefs: AgentWikiReference[]
   toolRefs: AgentToolReference[]
   pathRefs: AgentPathReference[]
   onChange: (value: string) => void
   onCaretChange?: (cursor: number) => void
-  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
-  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
+  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void
+  onPaste: (event: ClipboardEvent<HTMLElement>) => void
 }): React.JSX.Element {
-  const segments = parseComposerSegments(value)
-  const textareasRef = useRef<Array<HTMLTextAreaElement | null>>([])
-  const pendingCaretRef = useRef<number | null>(null)
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const chipRootsRef = useRef<Root[]>([])
+  const lastEmittedRef = useRef(value)
   const previousValueRef = useRef(value)
+  const pendingCaretRef = useRef<number | null>(null)
+  const composingRef = useRef(false)
+  const mountedRef = useRef(false)
+  const lookupsRef = useRef({ skillRefs, wikiRefs, toolRefs, pathRefs, t, onChange, value })
 
   useLayoutEffect(() => {
-    const nodes = textareasRef.current
-    const last = nodes.filter(Boolean).at(-1) ?? null
-    if (agentInputRef) agentInputRef.current = last
+    lookupsRef.current = { skillRefs, wikiRefs, toolRefs, pathRefs, t, onChange, value }
+
+    const surface = surfaceRef.current
+    if (agentInputRef) {
+      if (!surface) agentInputRef.current = null
+      else {
+        agentInputRef.current = {
+          focus: () => surface.focus(),
+          get value() {
+            return serializeComposerDom(surface)
+          },
+          setSelectionRange(start: number, end = start) {
+            setComposerDomCaret(surface, end)
+          }
+        }
+      }
+    }
+    if (!surface || composingRef.current) return
+
+    const isEcho = mountedRef.current && value === lastEmittedRef.current
+    mountedRef.current = true
+    if (isEcho) {
+      previousValueRef.current = value
+      pendingCaretRef.current = null
+      return
+    }
 
     const insertedCaret = caretAfterInsertedRef(previousValueRef.current, value)
     previousValueRef.current = value
     if (insertedCaret != null) pendingCaretRef.current = insertedCaret
 
-    const caret = pendingCaretRef.current
-    if (caret == null) return
+    for (const root of chipRootsRef.current) root.unmount()
+    chipRootsRef.current = []
+    surface.replaceChildren()
 
-    const apply = (): boolean => focusSerializedCaret(value, textareasRef.current, caret)
-    apply()
-    onCaretChange?.(caret)
-    pendingCaretRef.current = null
+    const skillById = new Map(skillRefs.map((item) => [item.id, item]))
+    const wikiById = new Map(wikiRefs.map((item) => [item.id, item]))
+    const toolById = new Map(toolRefs.map((item) => [item.id, item]))
+    const pathById = new Map(pathRefs.map((item) => [item.id, item]))
 
-    const frame = window.requestAnimationFrame(() => {
-      apply()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [agentInputRef, onCaretChange, value])
-
-  const skillById = new Map(skillRefs.map((item) => [item.id, item]))
-  const wikiById = new Map(wikiRefs.map((item) => [item.id, item]))
-  const toolById = new Map(toolRefs.map((item) => [item.id, item]))
-  const pathById = new Map(pathRefs.map((item) => [item.id, item]))
-
-  function serializedOffset(textIndex: number, local = 0): number {
-    let offset = 0
-    let seen = 0
-    for (const segment of segments) {
-      if (segment.type === 'text') {
-        if (seen === textIndex) return offset + local
-        offset += segment.value.length
-        seen += 1
+    for (const part of flattenComposerSegmentsForInline(value)) {
+      if (part.type === 'br') {
+        surface.appendChild(document.createElement('br'))
         continue
       }
-      offset += formatComposerRefToken(segment.kind, segment.id).length
-    }
-    return offset
-  }
-
-  function emitCaret(textIndex: number, local: number): void {
-    onCaretChange?.(serializedOffset(textIndex, local))
-  }
-
-  function handleTextChange(textIndex: number, nextText: string): void {
-    let seen = 0
-    const next = segments.map((segment) => {
-      if (segment.type !== 'text') return segment
-      if (seen === textIndex) {
-        seen += 1
-        return { type: 'text' as const, value: nextText }
+      if (part.type === 'text') {
+        surface.appendChild(document.createTextNode(part.value))
+        continue
       }
-      seen += 1
-      return segment
-    })
-    onChange(serializeComposerSegments(next))
-  }
 
-  function removeRef(kind: ComposerRefKind, id: string): void {
-    onChange(removeComposerRefToken(value, kind, id))
-  }
+      const host = document.createElement('span')
+      host.contentEditable = 'false'
+      host.className = 'app-composer-chip-host'
+      host.dataset.composerRefKind = part.kind
+      host.dataset.composerRefId = part.id
+      surface.appendChild(host)
 
-  const textSegments = segments.filter((segment) => segment.type === 'text')
-  const lastTextIndex = Math.max(0, textSegments.length - 1)
-
-  return (
-    <>
-      {segments.map((segment, index) => {
-        if (segment.type === 'ref') {
-          const label =
-            segment.kind === 'wiki'
-              ? (wikiById.get(segment.id)?.title ?? segment.id)
-              : segment.kind === 'skill'
-                ? (skillById.get(segment.id)?.name ?? segment.id)
-                : segment.kind === 'tool'
-                  ? (toolById.get(segment.id)?.name ?? segment.id)
-                  : (pathById.get(segment.id)?.name ?? segment.id)
-          const tool = toolById.get(segment.id)
-          const path = pathById.get(segment.id)
-          return (
-            <ComposerRefChip
-              key={`ref-${index}-${segment.kind}-${segment.id}`}
-              kind={segment.kind}
-              label={label}
-              t={t}
-              removable
-              isMcp={tool?.source === 'mcp'}
-              pathKind={path?.kind}
-              onRemove={() => removeRef(segment.kind, segment.id)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Backspace' && event.key !== 'Delete') return
-                event.preventDefault()
-                removeRef(segment.kind, segment.id)
-              }}
-            />
-          )
-        }
-
-        const textIndex = segments.slice(0, index).filter((item) => item.type === 'text').length
-        const isLast = textIndex === lastTextIndex
-        return (
-          <Textarea
-            key={`text-${textIndex}-${index}`}
-            ref={(node) => {
-              textareasRef.current[textIndex] = node
-              if (isLast && agentInputRef) agentInputRef.current = node
+      const label =
+        part.kind === 'wiki'
+          ? (wikiById.get(part.id)?.title ?? part.id)
+          : part.kind === 'skill'
+            ? (skillById.get(part.id)?.name ?? part.id)
+            : part.kind === 'tool'
+              ? (toolById.get(part.id)?.name ?? part.id)
+              : (pathById.get(part.id)?.name ?? part.id)
+      const tool = toolById.get(part.id)
+      const path = pathById.get(part.id)
+      const root = createRoot(host)
+      chipRootsRef.current.push(root)
+      flushSync(() => {
+        root.render(
+          <ComposerRefChip
+            kind={part.kind}
+            id={part.id}
+            label={label}
+            t={t}
+            removable
+            atomic
+            isMcp={tool?.source === 'mcp'}
+            pathKind={path?.kind}
+            onRemove={() => {
+              const latest = lookupsRef.current
+              latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
             }}
-            value={segment.value}
-            rows={1}
-            placeholder={isLast && !value.trim() ? placeholder : undefined}
-            aria-label={ariaLabel}
-            name={isLast ? 'agent-input' : undefined}
-            autoComplete="off"
-            onChange={(event) => {
-              handleTextChange(textIndex, event.target.value)
-              emitCaret(textIndex, event.target.selectionStart ?? event.target.value.length)
-            }}
-            onSelect={(event) => {
-              const target = event.currentTarget
-              emitCaret(textIndex, target.selectionStart ?? 0)
-            }}
-            onPaste={onPaste}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing || event.keyCode === 229) {
-                onKeyDown(event)
-                return
-              }
-              const target = event.currentTarget
-              const start = target.selectionStart ?? 0
-              const end = target.selectionEnd ?? 0
-              const atStart = start === 0 && end === 0
-              const atEnd = start === target.value.length && end === target.value.length
-              const offset = serializedOffset(textIndex, start)
-
-              if (event.key === 'Backspace' && atStart) {
-                const result = deleteAdjacentComposerRef(value, offset, 'backward')
-                if (result) {
-                  event.preventDefault()
-                  pendingCaretRef.current = result.cursor
-                  onChange(result.value)
-                  onCaretChange?.(result.cursor)
-                  return
-                }
-                if (textIndex > 0) {
-                  event.preventDefault()
-                  const previous = textareasRef.current[textIndex - 1]
-                  previous?.focus()
-                  const caret = previous?.value.length ?? 0
-                  previous?.setSelectionRange(caret, caret)
-                }
-                return
-              }
-
-              if (event.key === 'Delete' && atEnd) {
-                const result = deleteAdjacentComposerRef(value, offset, 'forward')
-                if (result) {
-                  event.preventDefault()
-                  pendingCaretRef.current = result.cursor
-                  onChange(result.value)
-                  onCaretChange?.(result.cursor)
-                  return
-                }
-              }
-
-              if (event.key === 'ArrowLeft' && atStart && textIndex > 0) {
-                event.preventDefault()
-                const previous = textareasRef.current[textIndex - 1]
-                previous?.focus()
-                const caret = previous?.value.length ?? 0
-                previous?.setSelectionRange(caret, caret)
-                return
-              }
-
-              if (event.key === 'ArrowRight' && atEnd && textIndex < lastTextIndex) {
-                event.preventDefault()
-                const next = textareasRef.current[textIndex + 1]
-                next?.focus()
-                next?.setSelectionRange(0, 0)
-                return
-              }
-
-              onKeyDown(event)
+              if (event.key !== 'Backspace' && event.key !== 'Delete') return
+              event.preventDefault()
+              const latest = lookupsRef.current
+              latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
             }}
-            className={cn(
-              'app-composer-field block max-h-40 w-auto resize-none border-0 bg-transparent px-0 py-0 text-[13px] leading-[1.375rem] shadow-none hover:bg-transparent focus-visible:ring-0 md:text-[13px] dark:bg-transparent dark:hover:bg-transparent min-h-[1.375rem]',
-              isLast ? 'app-composer-input' : 'app-composer-inline-input'
-            )}
           />
         )
-      })}
-    </>
-  )
-}
+      })
+    }
 
-function focusSerializedCaret(
-  value: string,
-  textareas: Array<HTMLTextAreaElement | null>,
-  cursor: number
-): boolean {
-  const { textIndex, local } = resolveComposerTextCaret(value, cursor)
-  const node = textareas[textIndex] ?? textareas.filter(Boolean).at(-1)
-  if (!node) return false
-  node.focus()
-  const nextLocal = Math.max(0, Math.min(node.value.length, local))
-  node.setSelectionRange(nextLocal, nextLocal)
-  return true
+    lastEmittedRef.current = value
+    const caret = pendingCaretRef.current
+    if (caret == null) return
+    setComposerDomCaret(surface, caret)
+    onCaretChange?.(caret)
+    pendingCaretRef.current = null
+  }, [agentInputRef, onCaretChange, onChange, pathRefs, skillRefs, t, toolRefs, value, wikiRefs])
+
+  useLayoutEffect(() => {
+    return () => {
+      for (const root of chipRootsRef.current) root.unmount()
+      chipRootsRef.current = []
+    }
+  }, [])
+
+  function emitFromDom(): void {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const next = serializeComposerDom(surface)
+    lastEmittedRef.current = next
+    onCaretChange?.(getComposerDomCaret(surface))
+    if (next !== value) onChange(next)
+  }
+
+  return (
+    <div
+      ref={(node) => {
+        surfaceRef.current = node
+      }}
+      className="app-composer-body"
+      role="textbox"
+      aria-multiline="true"
+      aria-label={ariaLabel}
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      data-placeholder={placeholder}
+      data-empty={value.length === 0 ? 'true' : undefined}
+      onInput={() => {
+        if (composingRef.current) return
+        emitFromDom()
+      }}
+      onCompositionStart={() => {
+        composingRef.current = true
+      }}
+      onCompositionEnd={() => {
+        composingRef.current = false
+        emitFromDom()
+      }}
+      onSelect={() => {
+        const surface = surfaceRef.current
+        if (!surface) return
+        onCaretChange?.(getComposerDomCaret(surface))
+      }}
+      onPaste={(event) => {
+        onPaste(event)
+        if (event.defaultPrevented) return
+        event.preventDefault()
+        const text = event.clipboardData.getData('text/plain')
+        if (!text) return
+        document.execCommand('insertText', false, text)
+        emitFromDom()
+      }}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) {
+          onKeyDown(event)
+          return
+        }
+
+        onKeyDown(event)
+        if (event.defaultPrevented) return
+
+        if (event.key === 'Enter' && event.shiftKey) {
+          event.preventDefault()
+          document.execCommand('insertText', false, '\n')
+          emitFromDom()
+        }
+      }}
+    />
+  )
 }

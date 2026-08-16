@@ -24,6 +24,7 @@ const zhCN = {
     titleDescription: '终端 + SSH + AI 命令工作台',
     workingDirectory: '目录',
     versionLabel: '版本 {version}',
+    openRelease: '查看 v{version} 发布说明',
     github: 'GitHub',
     updateAvailable: '发现新版本 {version}',
     downloadInstaller: '下载 {version} 安装包到下载目录',

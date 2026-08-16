@@ -15,6 +15,28 @@ export function hasComposerRefTokens(value: string): boolean {
   return COMPOSER_REF_TOKEN_RE.test(value)
 }
 
+export type ComposerInlinePart =
+  | { type: 'text'; value: string }
+  | { type: 'br' }
+  | { type: 'ref'; kind: ComposerRefKind; id: string }
+
+/** Flatten tokens so chips, text, and explicit newlines can render in one inline flow. */
+export function flattenComposerSegmentsForInline(value: string): ComposerInlinePart[] {
+  const parts: ComposerInlinePart[] = []
+  for (const segment of parseComposerSegments(value)) {
+    if (segment.type === 'ref') {
+      parts.push(segment)
+      continue
+    }
+    const lines = segment.value.split('\n')
+    lines.forEach((line, index) => {
+      if (index > 0) parts.push({ type: 'br' })
+      if (line) parts.push({ type: 'text', value: line })
+    })
+  }
+  return parts
+}
+
 export function parseComposerSegments(value: string): ComposerSegment[] {
   const segments: ComposerSegment[] = []
   const pattern = /\{\{@(wiki|skill|tool|path):([^}]+)\}\}/g

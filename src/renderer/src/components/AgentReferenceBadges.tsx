@@ -6,7 +6,11 @@ import type { Dictionary } from '@renderer/i18n'
 import type { AgentMessageReferences } from '@renderer/lib/agent-message-refs'
 import { hasMessageReferences } from '@renderer/lib/agent-message-refs'
 import { clampAgentText } from '@renderer/lib/agent-text-limits'
-import { parseComposerSegments, type ComposerRefKind } from '@renderer/lib/composer-ref-tokens'
+import {
+  flattenComposerSegmentsForInline,
+  parseComposerSegments,
+  type ComposerRefKind
+} from '@renderer/lib/composer-ref-tokens'
 import type { AgentToolReference } from '@renderer/lib/terminal-tabs'
 import type {
   AgentPathReference,
@@ -25,8 +29,10 @@ const TAG_CLASS = {
 
 export function ComposerRefChip({
   kind,
+  id,
   label,
   removable,
+  atomic,
   t,
   pathKind,
   isMcp,
@@ -34,8 +40,10 @@ export function ComposerRefChip({
   onKeyDown
 }: {
   kind: ComposerRefKind
+  id?: string
   label: string
   removable?: boolean
+  atomic?: boolean
   t: Dictionary
   pathKind?: 'file' | 'directory'
   isMcp?: boolean
@@ -77,7 +85,10 @@ export function ComposerRefChip({
     <Badge
       variant="outline"
       translate="no"
-      tabIndex={removable ? 0 : undefined}
+      contentEditable={atomic ? false : undefined}
+      data-composer-ref-kind={id ? kind : undefined}
+      data-composer-ref-id={id}
+      tabIndex={atomic ? -1 : removable ? 0 : undefined}
       className={cn('app-ref-chip', tone, removable && 'pr-1', 'py-0 leading-none')}
       title={label}
       onKeyDown={onKeyDown}
@@ -96,7 +107,11 @@ export function ComposerRefChip({
         {prefix}: {label}
       </span>
       {removable && onRemove ? (
-        <RemoveReferenceButton label={`${removeLabel}: ${label}`} onClick={onRemove} />
+        <RemoveReferenceButton
+          label={`${removeLabel}: ${label}`}
+          onClick={onRemove}
+          keepEditorFocus={atomic}
+        />
       ) : null}
     </Badge>
   )
@@ -131,32 +146,33 @@ export function MessageInlineContent({
 
   return (
     <div className="app-ref-flow min-w-0">
-      {segments.map((segment, index) => {
-        if (segment.type === 'text') {
-          if (!segment.value) return null
+      {flattenComposerSegmentsForInline(text).map((part, index) => {
+        if (part.type === 'br') return <br key={`br-${index}`} />
+        if (part.type === 'text') {
           return (
-            <pre
+            <span
               key={`text-${index}`}
-              className="app-ref-inline-text select-text min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
+              className="app-ref-inline-text select-text whitespace-pre-wrap break-words text-sm text-foreground"
             >
-              {clampAgentText(segment.value)}
-            </pre>
+              {clampAgentText(part.value)}
+            </span>
           )
         }
         const label =
-          segment.kind === 'wiki'
-            ? (wikiById.get(segment.id) ?? segment.id)
-            : segment.kind === 'skill'
-              ? (skillById.get(segment.id) ?? segment.id)
-              : segment.kind === 'tool'
-                ? (toolById.get(segment.id)?.name ?? segment.id)
-                : (pathById.get(segment.id)?.name ?? segment.id)
-        const tool = toolById.get(segment.id)
-        const path = pathById.get(segment.id)
+          part.kind === 'wiki'
+            ? (wikiById.get(part.id) ?? part.id)
+            : part.kind === 'skill'
+              ? (skillById.get(part.id) ?? part.id)
+              : part.kind === 'tool'
+                ? (toolById.get(part.id)?.name ?? part.id)
+                : (pathById.get(part.id)?.name ?? part.id)
+        const tool = toolById.get(part.id)
+        const path = pathById.get(part.id)
         return (
           <ComposerRefChip
-            key={`ref-${segment.kind}-${segment.id}-${index}`}
-            kind={segment.kind}
+            key={`ref-${part.kind}-${part.id}-${index}`}
+            kind={part.kind}
+            id={part.id}
             label={label}
             t={t}
             isMcp={tool?.source === 'mcp'}
@@ -333,10 +349,12 @@ export function AgentReferenceBadges({
 
 function RemoveReferenceButton({
   label,
-  onClick
+  onClick,
+  keepEditorFocus
 }: {
   label: string
   onClick: () => void
+  keepEditorFocus?: boolean
 }): React.JSX.Element {
   return (
     <Button
@@ -346,6 +364,13 @@ function RemoveReferenceButton({
       className="size-4 hover:bg-background/70"
       aria-label={label}
       title={label}
+      onMouseDown={
+        keepEditorFocus
+          ? (event) => {
+              event.preventDefault()
+            }
+          : undefined
+      }
       onClick={onClick}
     >
       <XIcon aria-hidden="true" />

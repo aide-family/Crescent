@@ -4,7 +4,7 @@ import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { agentStyleTitle } from '@renderer/lib/agent-style-ui'
 import { normalizeAgentStyle, type AgentStyle } from '../../../shared/agent-style'
-import { CRESCENT_GITHUB_URL } from '../../../shared/app-links'
+import { CRESCENT_GITHUB_URL, crescentReleaseTagUrl } from '../../../shared/app-links'
 import type { AppUpdateStatusEvent } from '../../../shared/update-types'
 
 function GitHubMark({ className }: { className?: string }): React.JSX.Element {
@@ -50,16 +50,25 @@ export function AppFooter({
     : downloaded
       ? t.app.updateSaved
       : t.app.updateAvailable.replace('{version}', updateVersion)
+  const displayVersion = version || '…'
+  const releaseLabel = t.app.openRelease.replace('{version}', displayVersion)
 
   return (
     <footer className="app-footer flex h-8 shrink-0 items-center justify-between gap-3 px-3 text-[11px] text-muted-foreground">
       <span className="app-footer-cluster">
-        <span
-          className="app-footer-version font-mono tabular-nums"
-          title={t.app.versionLabel.replace('{version}', version || '…')}
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="app-footer-action app-footer-version font-mono tabular-nums"
+          aria-label={releaseLabel}
+          title={releaseLabel}
+          onClick={() => {
+            void window.api.app.openExternal(crescentReleaseTagUrl(version))
+          }}
         >
-          v{version || '…'}
-        </span>
+          v{displayVersion}
+        </Button>
         {showUpdate ? (
           <Button
             type="button"

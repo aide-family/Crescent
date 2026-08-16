@@ -24,6 +24,7 @@ const en = {
     titleDescription: 'Terminal + SSH + AI command workbench',
     workingDirectory: 'cwd',
     versionLabel: 'Version {version}',
+    openRelease: 'Open v{version} release notes',
     github: 'GitHub',
     updateAvailable: 'Update {version} is available',
     downloadInstaller: 'Download {version} installer to Downloads',

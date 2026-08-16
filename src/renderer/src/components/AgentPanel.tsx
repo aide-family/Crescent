@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 
 import { AgentLogList } from '@renderer/components/AgentLogList'
-import { ComposerEditor } from '@renderer/components/ComposerEditor'
+import { ComposerEditor, type ComposerInputHandle } from '@renderer/components/ComposerEditor'
 import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
 import {
   PasswordPromptInlineCard,
@@ -145,7 +145,7 @@ export function AgentPanel({
   activeTab: AgentTerminalTab
   tabs: AgentTerminalTab[]
   agentLogRef: RefObject<HTMLDivElement | null>
-  agentInputRef?: RefObject<HTMLTextAreaElement | null>
+  agentInputRef?: RefObject<ComposerInputHandle | null>
   slashCommandListRef: RefObject<HTMLDivElement | null>
   slashMenuVisible: boolean
   slashCommandOptions: SlashCommandOption[]
@@ -199,8 +199,8 @@ export function AgentPanel({
   onInsertPinnedWorkflow: (workflow: AgentPinnedWorkflow) => void
   onAgentInputChange: (value: string) => void
   onComposerCaretChange?: (cursor: number) => void
-  onAgentInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
-  onAgentInputPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
+  onAgentInputKeyDown: (event: KeyboardEvent<HTMLElement>) => void
+  onAgentInputPaste: (event: React.ClipboardEvent<HTMLElement>) => void
   onRemoveSkill: (id: string) => void
   onRemovePath: (id: string) => void
   onRemoveTool: (id: string) => void
@@ -454,28 +454,21 @@ export function AgentPanel({
                 ))}
               </div>
             ) : null}
-            <div
-              className="app-composer-body"
-              onClick={(event) => {
-                if (event.target === event.currentTarget) agentInputRef?.current?.focus()
-              }}
-            >
-              <ComposerEditor
-                value={sessionChatTab.agentInput}
-                placeholder={t.input.askPlaceholder}
-                ariaLabel={t.input.askPlaceholder}
-                t={t}
-                agentInputRef={agentInputRef}
-                skillRefs={sessionChatTab.skillRefs}
-                wikiRefs={sessionChatTab.wikiRefs}
-                toolRefs={sessionChatTab.toolRefs}
-                pathRefs={sessionChatTab.pathRefs}
-                onChange={onAgentInputChange}
-                onCaretChange={onComposerCaretChange}
-                onKeyDown={onAgentInputKeyDown}
-                onPaste={onAgentInputPaste}
-              />
-            </div>
+            <ComposerEditor
+              value={sessionChatTab.agentInput}
+              placeholder={t.input.askPlaceholder}
+              ariaLabel={t.input.askPlaceholder}
+              t={t}
+              agentInputRef={agentInputRef}
+              skillRefs={sessionChatTab.skillRefs}
+              wikiRefs={sessionChatTab.wikiRefs}
+              toolRefs={sessionChatTab.toolRefs}
+              pathRefs={sessionChatTab.pathRefs}
+              onChange={onAgentInputChange}
+              onCaretChange={onComposerCaretChange}
+              onKeyDown={onAgentInputKeyDown}
+              onPaste={onAgentInputPaste}
+            />
             <div className="app-composer-toolbar flex items-center gap-1.5 text-xs text-muted-foreground">
               <div className="flex min-w-0 flex-1 items-center">
                 <Select

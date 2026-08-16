@@ -31,6 +31,7 @@ import { toast, Toaster } from 'sonner'
 import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 
 import { AgentPanel } from '@renderer/components/AgentPanel'
+import { type ComposerInputHandle } from '@renderer/components/ComposerEditor'
 import { AppFooter } from '@renderer/components/AppFooter'
 import {
   CloseTabsConfirmModal,
@@ -469,7 +470,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const validationRequestRef = useRef(0)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
-  const agentInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const agentInputRef = useRef<ComposerInputHandle | null>(null)
   const passwordPromptInputRef = useRef<HTMLInputElement | null>(null)
   const slashCommandListRef = useRef<HTMLDivElement | null>(null)
   const activeTabIdRef = useRef(initialTerminalTab.id)
@@ -5747,7 +5748,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       activeWikiIds: (merged.activeWikiIds ?? []).filter((id) => ids.wiki.has(id))
     }
   }
-  function handleAgentInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+  function handleAgentInputKeyDown(event: KeyboardEvent<HTMLElement>): void {
     if (event.key === 'Enter' && isComposingInput(event)) return
 
     if (slashMenuVisible) {
@@ -5781,12 +5782,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (event.key !== 'Enter' || event.shiftKey) return
 
     event.preventDefault()
-    event.currentTarget.form?.requestSubmit()
+    event.currentTarget.closest('form')?.requestSubmit()
   }
 
-  async function handleAgentInputPaste(
-    event: ReactClipboardEvent<HTMLTextAreaElement>
-  ): Promise<void> {
+  async function handleAgentInputPaste(event: ReactClipboardEvent<HTMLElement>): Promise<void> {
     const files = Array.from(event.clipboardData.files)
     if (files.length === 0) return
 
@@ -7637,8 +7636,8 @@ function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string
   return next
 }
 
-function isComposingInput(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-  const reactEvent = event as KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean }
+function isComposingInput(event: KeyboardEvent<HTMLElement>): boolean {
+  const reactEvent = event as KeyboardEvent<HTMLElement> & { isComposing?: boolean }
   const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & {
     isComposing?: boolean
     keyCode?: number
