@@ -80,6 +80,71 @@ export async function searchAgentSkills(query: string): Promise<AgentSkillSearch
   return normalizeSkillSearchResults(payload).slice(0, 30)
 }
 
+const GITHUB_OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+const CATALOG_SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+const CATALOG_FETCH_TIMEOUT_MS = 10_000
+
+export function parseGithubOwnerRepo(source: string): { owner: string; repo: string } | undefined {
+  const trimmed = source.trim().replace(/\.git$/i, '')
+  const github = /github\.com[:/]+([^/]+)\/([^/#?]+)/i.exec(trimmed)
+  const ownerRepo = github
+    ? `${github[1]}/${github[2].replace(/\.git$/i, '')}`
+    : trimmed.includes('://')
+      ? ''
+      : trimmed
+  if (!GITHUB_OWNER_REPO_PATTERN.test(ownerRepo)) return undefined
+  const [owner, repo] = ownerRepo.split('/')
+  if (!owner || !repo) return undefined
+  return { owner, repo }
+}
+
+export function catalogSkillMarkdownUrls(input: {
+  installSource: string
+  installSkill?: string
+  name: string
+}): string[] {
+  const parsed = parseGithubOwnerRepo(input.installSource)
+  const skillId = (input.installSkill || input.name).trim()
+  if (!parsed || !CATALOG_SKILL_ID_PATTERN.test(skillId)) return []
+
+  const paths = [
+    `skills/${skillId}/SKILL.md`,
+    `${skillId}/SKILL.md`,
+    `.agents/skills/${skillId}/SKILL.md`,
+    `.claude/skills/${skillId}/SKILL.md`
+  ]
+  const { owner, repo } = parsed
+  return paths.flatMap((path) => [
+    `https://cdn.jsdelivr.net/gh/${owner}/${repo}/${path}`,
+    `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${path}`
+  ])
+}
+
+export async function readCatalogSkillContent(
+  input: { installSource?: string; installSkill?: string; name?: string },
+  skillRoot?: string
+): Promise<string> {
+  const installSource = input.installSource?.trim() ?? ''
+  const installSkill = input.installSkill?.trim() ?? ''
+  const name = input.name?.trim() ?? ''
+  const local = findInstalledCatalogSkill({ installSource, installSkill, name }, skillRoot)
+  if (local) return readSkillContent(local.path)
+
+  const urls = catalogSkillMarkdownUrls({ installSource, installSkill, name })
+  if (urls.length === 0) {
+    throw new Error('Skill documentation source is invalid.')
+  }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), CATALOG_FETCH_TIMEOUT_MS)
+  try {
+    const content = await fetchFirstSkillMarkdown(urls, controller)
+    return content.slice(0, MAX_SKILL_CONTENT_CHARS)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function installAgentSkill(input: {
   installSource?: string
   installSkill?: string
@@ -864,6 +929,57 @@ function tokenizeSearchText(value: string): string[] {
   }
 
   return [...tokens]
+}
+
+function findInstalledCatalogSkill(
+  input: { installSource: string; installSkill: string; name: string },
+  skillRoot?: string
+): AgentSkillOption | undefined {
+  const expected = new Set(
+    [input.installSkill, input.name].map((value) => normalizeSkillName(value)).filter(Boolean)
+  )
+  if (expected.size === 0) return undefined
+  return listAgentSkills(skillRoot).find((skill) => expected.has(normalizeSkillName(skill.name)))
+}
+
+async function fetchFirstSkillMarkdown(
+  urls: string[],
+  controller: AbortController
+): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    let pending = urls.length
+    let settled = false
+
+    for (const url of urls) {
+      void fetchSkillMarkdown(url, controller.signal)
+        .then((text) => {
+          if (settled) return
+          settled = true
+          controller.abort()
+          resolve(text)
+        })
+        .catch(() => {
+          pending -= 1
+          if (!settled && pending === 0) {
+            reject(new Error('Skill documentation was not found.'))
+          }
+        })
+    }
+  })
+}
+
+async function fetchSkillMarkdown(url: string, signal: AbortSignal): Promise<string> {
+  const response = await fetch(url, { signal, redirect: 'follow' })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const text = await response.text()
+  if (!looksLikeSkillMarkdown(text)) throw new Error('Not a SKILL.md document.')
+  return text
+}
+
+function looksLikeSkillMarkdown(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.length < 40 || trimmed.startsWith('<') || trimmed.startsWith('{')) return false
+  return /^---[\s\S]*?\bname\s*:/m.test(trimmed) || /^#\s+\S/m.test(trimmed)
 }
 
 function readSkillContent(path: string): string {

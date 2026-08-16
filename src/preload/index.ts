@@ -252,6 +252,11 @@ const api = {
       ipcRenderer.invoke('agent:delete-skill', path),
     getSkillContent: (path: string): Promise<string> =>
       ipcRenderer.invoke('agent:get-skill-content', path),
+    getCatalogSkillContent: (input: {
+      installSource: string
+      installSkill?: string
+      name: string
+    }): Promise<string> => ipcRenderer.invoke('agent:get-catalog-skill-content', input),
     listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
       ipcRenderer.invoke('agent:list-instruction-files'),
     listWikiDocuments: (): Promise<WikiDocumentSummary[]> =>

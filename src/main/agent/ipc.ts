@@ -26,7 +26,8 @@ import {
   listAgentSkills,
   readAgentSkillContent,
   searchAgentSkills,
-  startAgentSkillInstall
+  startAgentSkillInstall,
+  readCatalogSkillContent
 } from './skills'
 import { generateAndSaveSop } from './generate-sop'
 import { cancelPiAgentRun, runPiAgent, steerPiAgentRun } from './pi-host'
@@ -166,6 +167,20 @@ export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-skill-content', (_, path: string) => {
     return readAgentSkillContent(path ?? '', readAgentConfig().skillRoot)
   })
+
+  ipcMain.handle(
+    'agent:get-catalog-skill-content',
+    (_, payload: { installSource?: string; installSkill?: string; name?: string }) => {
+      return readCatalogSkillContent(
+        {
+          installSource: typeof payload?.installSource === 'string' ? payload.installSource : '',
+          installSkill: typeof payload?.installSkill === 'string' ? payload.installSkill : '',
+          name: typeof payload?.name === 'string' ? payload.name : ''
+        },
+        readAgentConfig().skillRoot
+      )
+    }
+  )
 
   ipcMain.handle('agent:generate-sop', async (_, payload: AgentGenerateSopInput) => {
     return generateAndSaveSop(

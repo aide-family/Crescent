@@ -872,6 +872,7 @@ const en = {
     installSkill: 'Install',
     localSkills: 'Local skills',
     localSkillsSearchPlaceholder: 'Search local skills by name or description…',
+    skillsDiscover: 'Discover',
     modelGroup: 'Model providers',
     noMatchedLocalSkills: 'No matching local skills.',
     noLocalSkills: 'No local skills found.',
@@ -905,6 +906,7 @@ const en = {
     skillInstalls: 'Installs',
     skillPreview: 'Skill preview',
     skillPreviewLoading: 'Loading skill content…',
+    skillCatalogPreviewFailed: 'Could not load this skill’s documentation (SKILL.md).',
     updateSkill: 'Update',
     skillsManagement: 'Skills management',
     skillsManagementHint:

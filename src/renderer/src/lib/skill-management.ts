@@ -48,6 +48,13 @@ export function formatInstallCount(value: number | undefined): string {
   return String(value)
 }
 
+export function catalogSkillPageUrl(result: AgentSkillSearchResult): string {
+  if (result.url?.trim()) return result.url.trim()
+  const source = result.source.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '')
+  const skillId = result.installSkill || result.name
+  return `https://skills.sh/${source}/${skillId}`
+}
+
 function normalizeSkillSearchQuery(value: string): string {
   return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
 }

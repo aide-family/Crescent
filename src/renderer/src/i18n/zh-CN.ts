@@ -814,6 +814,7 @@ const zhCN = {
     installSkill: '安装',
     localSkills: '本地 Skills',
     localSkillsSearchPlaceholder: '搜索本地 Skills：名称或描述…',
+    skillsDiscover: '发现',
     modelGroup: '模型供应商',
     noMatchedLocalSkills: '没有匹配的本地 Skills。',
     noLocalSkills: '未发现本地 Skills。',
@@ -843,6 +844,7 @@ const zhCN = {
     skillInstalls: '安装量',
     skillPreview: 'Skill 预览',
     skillPreviewLoading: '正在加载 Skill 内容…',
+    skillCatalogPreviewFailed: '无法加载该 Skill 的说明文档（SKILL.md）。',
     updateSkill: '更新',
     skillsManagement: 'Skills 管理',
     skillsManagementHint:

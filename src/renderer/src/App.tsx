@@ -45,7 +45,7 @@ import {
 import { TerminalPane } from '@renderer/components/TerminalPane'
 import { HistoryPanel } from '@renderer/components/HistoryPanel'
 import { OnboardingModal } from '@renderer/components/OnboardingModal'
-import { SkillManager } from '@renderer/components/SkillManager'
+import { SkillManager, type SkillPreviewState } from '@renderer/components/SkillManager'
 import { WikiSheet } from '@renderer/components/WikiSheet'
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -217,6 +217,7 @@ import {
 import {
   buildInstalledSkillNameSet,
   buildSkillInstallCommand,
+  catalogSkillPageUrl,
   filterLocalSkills
 } from '@renderer/lib/skill-management'
 import {
@@ -551,10 +552,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     {}
   )
   const [skillInstallLogResultId, setSkillInstallLogResultId] = useState<string | null>(null)
-  const [selectedSkillPreview, setSelectedSkillPreview] = useState<{
-    skill: AgentSkillOption
-    content: string
-  } | null>(null)
+  const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillPreviewState | null>(null)
   const [skillPreviewLoadingPath, setSkillPreviewLoadingPath] = useState<string | null>(null)
   const [copiedSkillInstallLogId, setCopiedSkillInstallLogId] = useState<string | null>(null)
   const [skillInstallCancelingIds, setSkillInstallCancelingIds] = useState<Record<string, boolean>>(
@@ -2805,6 +2803,47 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       })
     } finally {
       setSkillPreviewLoadingPath(null)
+    }
+  }
+
+  async function previewCatalogSkill(result: AgentSkillSearchResult): Promise<void> {
+    const skill: AgentSkillOption = {
+      id: result.id,
+      name: result.name,
+      description: result.description,
+      path: catalogSkillPageUrl(result),
+      source: result.source,
+      removable: true
+    }
+    setSkillPreviewLoadingPath(result.id)
+    setSkillManageMessage(null)
+    setSkillInstallLogResultId(null)
+    setSelectedSkillPreview({ skill, content: '', catalogResultId: result.id })
+    try {
+      const content = await window.api.agent.getCatalogSkillContent({
+        installSource: result.installSource,
+        installSkill: result.installSkill,
+        name: result.name
+      })
+      setSelectedSkillPreview((current) =>
+        current?.catalogResultId === result.id
+          ? { skill, content, catalogResultId: result.id }
+          : current
+      )
+    } catch (error) {
+      setSelectedSkillPreview((current) =>
+        current?.catalogResultId === result.id
+          ? {
+              skill,
+              content: `${t.settings.skillCatalogPreviewFailed}\n\n${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              catalogResultId: result.id
+            }
+          : current
+      )
+    } finally {
+      setSkillPreviewLoadingPath((current) => (current === result.id ? null : current))
     }
   }
 
@@ -6607,6 +6646,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       onCopySelectedSkillInstallLog={() => void copySelectedSkillInstallLog()}
       onDeleteSkill={(skill) => void deleteSkill(skill)}
       onPreviewSkill={(skill) => void previewSkill(skill)}
+      onPreviewCatalogSkill={(result) => void previewCatalogSkill(result)}
       onDeleteSkillInstallLog={deleteSkillInstallLog}
       onSelectedSkillPreviewChange={setSelectedSkillPreview}
       onSkillInstallLogResultIdChange={setSkillInstallLogResultId}
