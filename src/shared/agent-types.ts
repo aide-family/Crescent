@@ -34,7 +34,6 @@ export interface AgentConfig {
   openApiMaxRetries: number
   openApiRetryBackoffMs: number
   skillRoot: string
-  /** @deprecated MCP tools removed from agent loop; retained for settings migration. */
   mcpServers: AgentMcpServerConfig[]
 }
 
@@ -63,15 +62,19 @@ export interface AgentPinnedWorkflow {
   pinned?: boolean
 }
 
-export type AgentMcpTransport = 'stdio'
+export type AgentMcpTransport = 'stdio' | 'http'
 
 export interface AgentMcpServerConfig {
   id: string
   name: string
   transport: AgentMcpTransport
+  /** stdio launch command. Empty for HTTP servers. */
   command: string
   args: string[]
   env: Record<string, string>
+  /** Streamable HTTP / SSE endpoint. Present when transport is `http`. */
+  url?: string
+  headers?: Record<string, string>
   enabled: boolean
   toolAllowList?: string[]
   toolDenyList?: string[]
@@ -412,6 +415,8 @@ export interface AgentValidationResult {
   toolCount?: number
   tools?: ToolCatalogEntry[]
   error?: string
+  /** Per MCP server id; a failed server does not fail model validation. */
+  mcpErrors?: Record<string, string>
 }
 
 export interface AgentModelOption {

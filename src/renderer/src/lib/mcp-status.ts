@@ -1,5 +1,7 @@
 import type { Dictionary } from '@renderer/i18n'
 import type { AgentMcpServerConfig, AgentValidationResult } from '../../../shared/agent-types'
+import { isMcpServerComplete } from '../../../shared/mcp-servers'
+import type { McpServersJsonErrorCode } from '../../../shared/mcp-servers'
 
 export function getMcpServerStatus(
   server: AgentMcpServerConfig,
@@ -9,7 +11,9 @@ export function getMcpServerStatus(
   t: Dictionary
 ): { state: 'ready' | 'pending' | 'not-ready'; label: string } {
   if (!server.enabled) return { state: 'not-ready', label: t.settings.mcpStatusDisabled }
-  if (!server.command.trim()) return { state: 'not-ready', label: t.settings.mcpStatusIncomplete }
+  if (!isMcpServerComplete(server)) {
+    return { state: 'not-ready', label: t.settings.mcpStatusIncomplete }
+  }
   if (validating) return { state: 'pending', label: t.settings.mcpStatusChecking }
   if (toolCount > 0) return { state: 'ready', label: t.settings.mcpStatusConnected }
 
@@ -28,6 +32,9 @@ export function extractMcpServerValidationError(
   server: AgentMcpServerConfig,
   validation: AgentValidationResult | undefined
 ): string {
+  const perServer = validation?.mcpErrors?.[server.id]?.trim()
+  if (perServer) return perServer
+
   const validationError = validation?.ok === false ? (validation.error ?? '') : ''
   if (!validationError) return ''
 
@@ -43,4 +50,11 @@ export function extractMcpServerValidationError(
   const matched = parts.find((part) => serverNames.some((name) => part.includes(name)))
 
   return matched ?? (validationError.includes(prefix) ? mcpError : '')
+}
+
+export function mcpJsonErrorMessage(code: McpServersJsonErrorCode, t: Dictionary): string {
+  if (code === 'empty') return t.settings.mcpJsonEmpty
+  if (code === 'invalid') return t.settings.mcpJsonInvalid
+  if (code === 'missing-servers') return t.settings.mcpJsonMissingServers
+  return t.settings.mcpJsonNeedUrlOrCommand
 }

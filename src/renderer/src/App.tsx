@@ -15,17 +15,11 @@ import {
   ArrowLeftRightIcon,
   BookOpenIcon,
   BotIcon,
-  CheckIcon,
   HistoryIcon,
   LanguagesIcon,
-  Loader2Icon,
   MessageSquareIcon,
   PlugIcon,
-  PlusIcon,
-  ServerIcon,
-  TestTube2Icon,
-  TriangleAlertIcon,
-  XIcon
+  ServerIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
 import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
@@ -42,9 +36,9 @@ import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerMo
 import { extractResultMarkdown } from '@renderer/lib/agent-run-markdown'
 import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
+import { McpServersSheet } from '@renderer/components/McpServersSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
 import {
-  McpStatusDot,
   type SkillInstallLogStatus,
   type SkillManageMessage
 } from '@renderer/components/StatusIndicators'
@@ -53,19 +47,7 @@ import { HistoryPanel } from '@renderer/components/HistoryPanel'
 import { OnboardingModal } from '@renderer/components/OnboardingModal'
 import { SkillManager } from '@renderer/components/SkillManager'
 import { WikiSheet } from '@renderer/components/WikiSheet'
-import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
-import { Input } from '@renderer/components/ui/input'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle
-} from '@renderer/components/ui/sheet'
-import { Textarea } from '@renderer/components/ui/textarea'
 import {
   dictionaries,
   localeOptions,
@@ -112,12 +94,8 @@ import {
 import {
   buildAvailableToolRefs,
   flattenProviderModels,
-  formatMcpArgs,
-  formatMcpEnv,
   formatProviderModels,
   parseCommandWhitelist,
-  parseMcpArgs,
-  parseMcpEnv,
   parseProviderModels
 } from '@renderer/lib/agent-config'
 import {
@@ -229,7 +207,6 @@ import {
   createPendingAttentionNotifier,
   summarizeNotificationBody
 } from '@renderer/lib/pending-attention-notify'
-import { getMcpServerStatus } from '@renderer/lib/mcp-status'
 import {
   copyFeedback,
   copyText,
@@ -340,7 +317,6 @@ import {
   dismissOnboarding,
   shouldShowOnboarding
 } from '@renderer/lib/onboarding'
-import { formatToolNameListText, parseToolNameListText } from '../../shared/tool-policy'
 import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
@@ -595,7 +571,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
   const [openApiEditorOpen, setOpenApiEditorOpen] = useState(false)
   const [instructionEditorOpen, setInstructionEditorOpen] = useState(false)
-  const [mcpEditorOpen, setMcpEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [loadingEarlierLogs, setLoadingEarlierLogs] = useState(false)
@@ -681,8 +656,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     useState<CloseTabsConfirmRequest | null>(null)
   const [settingsProviderId, setSettingsProviderId] = useState('')
   const [settingsMcpServerId, setSettingsMcpServerId] = useState('')
-  const [mcpArgsText, setMcpArgsText] = useState('')
-  const [mcpEnvText, setMcpEnvText] = useState('')
   const [tabs, setTabs] = useState<AgentTerminalTab[]>([initialTerminalTab])
   const [activeTabId, setActiveTabId] = useState(initialTerminalTab.id)
   const [tabMenu, setTabMenu] = useState<{
@@ -924,7 +897,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     updateTab,
     t
   })
-  const { modelOptions, visibleModels, settingsProvider, settingsMcpServer } = useSettings({
+  const { modelOptions, visibleModels, settingsProvider } = useSettings({
     config,
     models,
     settingsProviderId,
@@ -953,27 +926,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
     [availableToolRefs]
   )
-  const mcpServerToolCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const tool of validation?.tools ?? []) {
-      const match = /^mcp:\/\/([^/]+)\//.exec(tool.path)
-      if (!match) continue
-      counts.set(match[1], (counts.get(match[1]) ?? 0) + 1)
-    }
-    return counts
-  }, [validation])
-  const mcpServerTools = useMemo(() => {
-    const tools = new Map<string, NonNullable<AgentValidationResult['tools']>>()
-    for (const tool of validation?.tools ?? []) {
-      const match = /^mcp:\/\/([^/]+)\//.exec(tool.path)
-      if (!match) continue
-      const serverTools = tools.get(match[1]) ?? []
-      serverTools.push(tool)
-      tools.set(match[1], serverTools)
-    }
-    return tools
-  }, [validation])
-  const settingsMcpTools = mcpServerTools.get(settingsMcpServer.id) ?? []
   const filteredWikiDocuments = useMemo(
     () => filterWikiDocuments(wikiDocuments, wikiSearchQuery),
     [wikiDocuments, wikiSearchQuery]
@@ -2150,8 +2102,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         setProviderModelsText(formatProviderModels(firstProvider?.models ?? []))
         const firstMcpServer = (nextConfig.mcpServers ?? [])[0]
         setSettingsMcpServerId(firstMcpServer?.id ?? '')
-        setMcpArgsText(formatMcpArgs(firstMcpServer?.args ?? []))
-        setMcpEnvText(formatMcpEnv(firstMcpServer?.env ?? {}))
         if (!hasConfiguredModelSelection(nextConfig)) {
           setValidation(undefined)
           setValidating(false)
@@ -2872,8 +2822,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       (nextConfig.mcpServers ?? []).find((server) => server.id === settingsMcpServerId) ??
       (nextConfig.mcpServers ?? [])[0]
     setSettingsMcpServerId(nextMcpServer?.id ?? '')
-    setMcpArgsText(formatMcpArgs(nextMcpServer?.args ?? []))
-    setMcpEnvText(formatMcpEnv(nextMcpServer?.env ?? {}))
     return nextConfig
   }
 
@@ -6193,98 +6141,20 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setValidation(undefined)
   }
 
-  function updateSettingsMcpServer<K extends keyof AgentMcpServerConfig>(
-    key: K,
-    value: AgentMcpServerConfig[K]
-  ): void {
-    const nextServerId = key === 'id' ? String(value) : settingsMcpServerId
-    if (
-      key === 'id' &&
-      config.mcpServers.some(
-        (server) => server.id !== settingsMcpServer.id && server.id === nextServerId
-      )
-    ) {
-      return
-    }
-
-    setConfig((current) => ({
-      ...current,
-      mcpServers: current.mcpServers.map((server) =>
-        server.id === settingsMcpServer.id ? { ...server, [key]: value } : server
-      )
-    }))
-    if (key === 'id') setSettingsMcpServerId(nextServerId)
+  function updateSettingsMcpServers(nextServers: AgentMcpServerConfig[]): void {
+    setConfig((current) => ({ ...current, mcpServers: nextServers }))
     setValidation(undefined)
   }
 
-  function updateSettingsMcpServerForId<K extends keyof AgentMcpServerConfig>(
-    serverId: string,
-    key: K,
-    value: AgentMcpServerConfig[K]
-  ): void {
-    const nextServerId = key === 'id' ? String(value) : serverId
-    if (
-      key === 'id' &&
-      config.mcpServers.some((server) => server.id !== serverId && server.id === nextServerId)
-    ) {
-      return
-    }
-
-    setConfig((current) => ({
-      ...current,
-      mcpServers: current.mcpServers.map((server) =>
-        server.id === serverId ? { ...server, [key]: value } : server
-      )
-    }))
-    if (settingsMcpServerId === serverId || key === 'id') setSettingsMcpServerId(nextServerId)
-    setValidation(undefined)
-  }
-
-  function updateSettingsMcpArgs(value: string): void {
-    setMcpArgsText(value)
-    updateSettingsMcpServer('args', parseMcpArgs(value))
-  }
-
-  function updateSettingsMcpEnv(value: string): void {
-    setMcpEnvText(value)
-    updateSettingsMcpServer('env', parseMcpEnv(value))
-  }
-
-  function selectSettingsMcpServer(serverId: string): void {
-    const server = config.mcpServers.find((candidate) => candidate.id === serverId)
-    setSettingsMcpServerId(serverId)
-    setMcpArgsText(formatMcpArgs(server?.args ?? []))
-    setMcpEnvText(formatMcpEnv(server?.env ?? {}))
-  }
-
-  function toggleMcpDetails(serverId: string): void {
-    if (mcpEditorOpen && settingsMcpServerId === serverId) {
-      setMcpEditorOpen(false)
-      return
-    }
-
-    selectSettingsMcpServer(serverId)
-    setMcpEditorOpen(true)
-  }
-
-  function createMcpServer(): void {
-    const id = `mcp-${Date.now()}`
-    const server: AgentMcpServerConfig = {
-      id,
-      name: id,
-      transport: 'stdio',
-      command: '',
-      args: [],
-      env: {},
-      enabled: true
-    }
-
-    setConfig((current) => ({ ...current, mcpServers: [...current.mcpServers, server] }))
-    setSettingsMcpServerId(id)
-    setMcpArgsText('')
-    setMcpEnvText('')
-    setMcpEditorOpen(true)
-    setValidation(undefined)
+  async function saveMcpServers(nextServers: AgentMcpServerConfig[]): Promise<void> {
+    const nextConfig = await saveAgentConfig({
+      ...config,
+      mcpServers: nextServers,
+      commandWhitelist: parseCommandWhitelist(commandWhitelistText)
+    })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1400)
+    void validateConfig(nextConfig)
   }
 
   function updateConnectionForm<K extends keyof ConnectionInput>(
@@ -6744,318 +6614,19 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
 
   const mcpSheet = (
-    <Sheet
+    <McpServersSheet
       open={mcpOpen}
-      onOpenChange={(open) => {
-        setMcpOpen(open)
-        if (!open) setMcpEditorOpen(false)
-      }}
-    >
-      <SheetContent
-        side="right"
-        className={`w-full ${mcpEditorOpen && settingsMcpServer.id ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
-      >
-        <SheetHeader>
-          <SheetTitle>{t.settings.mcpServers}</SheetTitle>
-          <SheetDescription>{t.settings.mcpServersHint}</SheetDescription>
-        </SheetHeader>
-        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
-          <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium text-muted-foreground">
-                {t.settings.mcpServerList} · {config.mcpServers.length}
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={createMcpServer}>
-                <PlusIcon data-icon="inline-start" />
-                {t.settings.newMcpServer}
-              </Button>
-            </div>
-            {config.mcpServers.length === 0 ? (
-              <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
-                <PlugIcon className="mr-2 inline size-3" aria-hidden="true" />
-                {t.settings.noMcpServers}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {config.mcpServers.map((server) => {
-                  const toolCount = mcpServerToolCounts.get(server.id) ?? 0
-                  const status = getMcpServerStatus(server, validation, validating, toolCount, t)
-
-                  return (
-                    <div
-                      key={server.id}
-                      className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
-                        mcpEditorOpen && settingsMcpServerId === server.id
-                          ? 'border-primary/50 bg-primary/8'
-                          : 'border-border/70'
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-start justify-between gap-2">
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                          onClick={() => toggleMcpDetails(server.id)}
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            <McpStatusDot status={status.state} title={status.label} />
-                            <span className="truncate text-[13px] font-medium">
-                              {server.name || server.id}
-                            </span>
-                          </div>
-                          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                            {server.id}
-                          </div>
-                          <div className="mt-1.5 line-clamp-2 font-mono text-[11px] text-muted-foreground">
-                            {[server.command, ...server.args].filter(Boolean).join(' ') || '-'}
-                          </div>
-                          <div className="mt-1 tabular-nums text-[11px] text-muted-foreground">
-                            {t.settings.mcpToolCount}: {toolCount}
-                          </div>
-                          <div
-                            className={`mt-1 line-clamp-3 text-[11px] ${
-                              status.state === 'not-ready'
-                                ? 'text-destructive'
-                                : 'text-muted-foreground'
-                            }`}
-                            title={status.label}
-                          >
-                            {status.label}
-                          </div>
-                        </button>
-                        <Button
-                          type="button"
-                          variant={server.enabled ? 'destructive' : 'outline'}
-                          size="sm"
-                          className="shrink-0"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            selectSettingsMcpServer(server.id)
-                            updateSettingsMcpServerForId(server.id, 'enabled', !server.enabled)
-                          }}
-                        >
-                          {server.enabled ? (
-                            <TriangleAlertIcon data-icon="inline-start" />
-                          ) : (
-                            <CheckIcon data-icon="inline-start" />
-                          )}
-                          {server.enabled
-                            ? t.settings.disableMcpServer
-                            : t.settings.enableMcpServer}
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          {mcpEditorOpen && settingsMcpServer.id ? (
-            <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
-              <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">
-                    {t.settings.mcpServers}: {settingsMcpServer.name || settingsMcpServer.id}
-                  </div>
-                  <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
-                    {settingsMcpServer.id}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.common.close}
-                  title={t.common.close}
-                  onClick={() => setMcpEditorOpen(false)}
-                >
-                  <XIcon aria-hidden="true" />
-                </Button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                <FieldGroup className="gap-4">
-                  <label
-                    htmlFor="mcp-enabled"
-                    className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
-                  >
-                    <span className="space-y-1">
-                      <span className="block text-sm font-medium">{t.settings.mcpEnabled}</span>
-                      <FieldDescription>{t.settings.mcpEnabledHint}</FieldDescription>
-                    </span>
-                    <Input
-                      id="mcp-enabled"
-                      type="checkbox"
-                      checked={settingsMcpServer.enabled}
-                      onChange={(event) => updateSettingsMcpServer('enabled', event.target.checked)}
-                      className="mt-0.5 size-4 shrink-0 accent-primary"
-                    />
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field>
-                      <FieldLabel htmlFor="mcp-id">{t.settings.mcpServerId}</FieldLabel>
-                      <Input
-                        id="mcp-id"
-                        value={settingsMcpServer.id}
-                        onChange={(event) => updateSettingsMcpServer('id', event.target.value)}
-                        placeholder="filesystem"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="mcp-name">{t.settings.mcpServerName}</FieldLabel>
-                      <Input
-                        id="mcp-name"
-                        value={settingsMcpServer.name}
-                        onChange={(event) => updateSettingsMcpServer('name', event.target.value)}
-                        placeholder={t.settings.mcpServerName}
-                      />
-                    </Field>
-                  </div>
-                  <Field>
-                    <FieldLabel htmlFor="mcp-command">{t.settings.mcpCommand}</FieldLabel>
-                    <Input
-                      id="mcp-command"
-                      value={settingsMcpServer.command}
-                      onChange={(event) => updateSettingsMcpServer('command', event.target.value)}
-                      placeholder="npx"
-                    />
-                    <FieldDescription>{t.settings.mcpCommandHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="mcp-args">{t.settings.mcpArgs}</FieldLabel>
-                    <Textarea
-                      id="mcp-args"
-                      className="min-h-24 resize-y font-mono text-xs"
-                      value={mcpArgsText}
-                      onChange={(event) => updateSettingsMcpArgs(event.target.value)}
-                      placeholder={'-y\n@modelcontextprotocol/server-filesystem\n~/Documents'}
-                    />
-                    <FieldDescription>{t.settings.mcpArgsHint}</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="mcp-env">{t.settings.mcpEnv}</FieldLabel>
-                    <Textarea
-                      id="mcp-env"
-                      className="min-h-24 resize-y font-mono text-xs"
-                      value={mcpEnvText}
-                      onChange={(event) => updateSettingsMcpEnv(event.target.value)}
-                      placeholder={'API_KEY=value\nNODE_ENV=production'}
-                    />
-                    <FieldDescription>{t.settings.mcpEnvHint}</FieldDescription>
-                  </Field>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Field>
-                      <FieldLabel htmlFor="mcp-tool-allow">
-                        {t.settings.mcpToolAllowList}
-                      </FieldLabel>
-                      <Textarea
-                        id="mcp-tool-allow"
-                        className="min-h-20 resize-y font-mono text-xs"
-                        value={formatToolNameListText(settingsMcpServer.toolAllowList)}
-                        onChange={(event) =>
-                          updateSettingsMcpServer(
-                            'toolAllowList',
-                            parseToolNameListText(event.target.value)
-                          )
-                        }
-                        placeholder={t.settings.toolNameListPlaceholder}
-                      />
-                      <FieldDescription>{t.settings.mcpToolAllowListHint}</FieldDescription>
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="mcp-tool-deny">{t.settings.mcpToolDenyList}</FieldLabel>
-                      <Textarea
-                        id="mcp-tool-deny"
-                        className="min-h-20 resize-y font-mono text-xs"
-                        value={formatToolNameListText(settingsMcpServer.toolDenyList)}
-                        onChange={(event) =>
-                          updateSettingsMcpServer(
-                            'toolDenyList',
-                            parseToolNameListText(event.target.value)
-                          )
-                        }
-                        placeholder={t.settings.toolNameListPlaceholder}
-                      />
-                      <FieldDescription>{t.settings.mcpToolDenyListHint}</FieldDescription>
-                    </Field>
-                  </div>
-                  <Field>
-                    <div className="flex items-center justify-between gap-2">
-                      <FieldLabel>{t.settings.mcpTools}</FieldLabel>
-                      <span className="text-xs text-muted-foreground">
-                        {settingsMcpTools.length}
-                      </span>
-                    </div>
-                    {settingsMcpTools.length === 0 ? (
-                      <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
-                        {t.settings.noMcpTools}
-                      </div>
-                    ) : (
-                      <div className="max-h-56 space-y-2 overflow-auto rounded-md border bg-muted/10 p-2">
-                        {settingsMcpTools.map((tool) => (
-                          <div
-                            key={`${tool.method}:${tool.path}:${tool.name}`}
-                            className="min-w-0 rounded-md border bg-background p-2 text-xs"
-                          >
-                            <div className="flex min-w-0 items-center justify-between gap-2">
-                              <span className="min-w-0 truncate font-medium">{tool.name}</span>
-                              <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
-                                {tool.method.toUpperCase()}
-                              </Badge>
-                            </div>
-                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                              {tool.path}
-                            </div>
-                            {tool.description ? (
-                              <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
-                                {tool.description}
-                              </div>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </Field>
-                </FieldGroup>
-              </div>
-              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
-                <Button
-                  type="button"
-                  onClick={async () => {
-                    await saveConfig()
-                    setMcpEditorOpen(false)
-                  }}
-                >
-                  {saved ? (
-                    <CheckIcon data-icon="inline-start" />
-                  ) : (
-                    <PlugIcon data-icon="inline-start" />
-                  )}
-                  {saved ? t.settings.saved : t.settings.saveSettings}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <SheetFooter className="gap-2 sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => validateConfig()}
-            disabled={validating}
-          >
-            {validating ? (
-              <Loader2Icon className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <TestTube2Icon data-icon="inline-start" />
-            )}
-            {validating ? t.settings.validating : t.settings.validateTools}
-          </Button>
-          <Button onClick={saveConfig}>
-            {saved ? <CheckIcon data-icon="inline-start" /> : <PlugIcon data-icon="inline-start" />}
-            {saved ? t.settings.saved : t.settings.saveSettings}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+      onOpenChange={setMcpOpen}
+      t={t}
+      servers={config.mcpServers}
+      selectedServerId={settingsMcpServerId}
+      validation={validation}
+      validating={validating}
+      saved={saved}
+      onServersChange={updateSettingsMcpServers}
+      onSelectedServerIdChange={setSettingsMcpServerId}
+      onSave={saveMcpServers}
+    />
   )
 
   const historySheet = (
@@ -7251,7 +6822,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             }
             instructionEditorOpen={instructionEditorOpen}
             validation={validation}
-            validating={validating}
             saved={saved}
             importingOpenApi={importingOpenApi}
             closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
@@ -7294,7 +6864,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               setInstructionSaved(false)
             }}
             onSaveInstructionFile={saveInstructionFile}
-            onValidateConfig={validateConfig}
             onSaveConfig={saveConfig}
           />
         </div>

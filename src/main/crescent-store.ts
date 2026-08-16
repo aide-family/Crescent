@@ -17,13 +17,12 @@ import {
   projectOpenApiProfileFields,
   resolveActiveOpenApiProfile
 } from '../shared/openapi-profiles'
-import { normalizeToolNameList } from '../shared/tool-policy'
+import { normalizeMcpServers } from '../shared/mcp-servers'
 import { DEFAULT_AGENT_STYLE, normalizeAgentStyle } from '../shared/agent-style'
 import type {
   AgentConfig,
   AgentLongTermMemory,
   AgentMemoryRecord,
-  AgentMcpServerConfig,
   AgentProviderConfig,
   AgentProviderModelConfig,
   ConnectionConfig,
@@ -261,56 +260,6 @@ function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
 
   return value.map((item) => String(item).trim()).filter(Boolean)
-}
-
-function normalizeMcpServers(value: unknown): AgentMcpServerConfig[] {
-  if (!Array.isArray(value)) return []
-
-  const seen = new Set<string>()
-  return value.map(normalizeMcpServer).filter((server) => {
-    if (!server.id || seen.has(server.id)) return false
-    seen.add(server.id)
-    return true
-  })
-}
-
-function normalizeMcpServer(value: unknown): AgentMcpServerConfig {
-  const record = isRecord(value) ? value : {}
-  const name = String(record.name || record.id || '').trim()
-  const id = sanitizeConfigId(String(record.id || name || '').trim())
-
-  return {
-    id,
-    name: name || id,
-    transport: 'stdio',
-    command: String(record.command || '').trim(),
-    args: normalizeStringList(record.args),
-    env: normalizeStringMap(record.env),
-    enabled: record.enabled !== false,
-    ...(normalizeToolNameList(record.toolAllowList).length
-      ? { toolAllowList: normalizeToolNameList(record.toolAllowList) }
-      : {}),
-    ...(normalizeToolNameList(record.toolDenyList).length
-      ? { toolDenyList: normalizeToolNameList(record.toolDenyList) }
-      : {})
-  }
-}
-
-function normalizeStringMap(value: unknown): Record<string, string> {
-  if (!isRecord(value)) return {}
-
-  return Object.fromEntries(
-    Object.entries(value)
-      .map(([key, mapValue]) => [key.trim(), String(mapValue ?? '')] as const)
-      .filter(([key]) => Boolean(key))
-  )
-}
-
-function sanitizeConfigId(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
 }
 
 function normalizeAgentProviders(config: Partial<AgentConfig>): AgentProviderConfig[] {

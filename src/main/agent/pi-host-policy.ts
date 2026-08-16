@@ -4,11 +4,18 @@
  * without dragging in the Electron-heavy session wiring.
  */
 
+import { hostedMcpToolFingerprint } from '../../shared/mcp-servers'
+import type { AgentMcpServerConfig } from '../../shared/agent-types'
+
 export const HOSTED_SESSION_TOOL_PROFILE = 'pty-bash-open-subterminal-v2'
 
 export interface HostedSessionSnapshot {
   cwd: string
   toolProfile: string
+}
+
+export function hostedSessionToolProfile(mcpServers: AgentMcpServerConfig[] = []): string {
+  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}`
 }
 
 /**
@@ -17,11 +24,9 @@ export interface HostedSessionSnapshot {
  */
 export function shouldReuseHostedSession(
   existing: HostedSessionSnapshot | undefined,
-  cwd: string
+  next: { cwd: string; toolProfile: string }
 ): boolean {
-  return Boolean(
-    existing && existing.toolProfile === HOSTED_SESSION_TOOL_PROFILE && existing.cwd === cwd
-  )
+  return Boolean(existing && existing.toolProfile === next.toolProfile && existing.cwd === next.cwd)
 }
 
 /**

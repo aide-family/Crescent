@@ -12,6 +12,7 @@ import {
   resolveThinkingLevelForModel,
   syncCrescentProvidersToModelRuntime
 } from './pi-model-runtime'
+import { loadMcpPiTools } from './pi-mcp-tools'
 import { loadPiCodingAgent, type PiCodingAgentModule } from './pi-sdk'
 import {
   clearPtyBashExecContext,
@@ -25,7 +26,7 @@ import {
   OPEN_SUBTERMINAL_DISCIPLINE
 } from './pi-open-subterminal'
 import {
-  HOSTED_SESSION_TOOL_PROFILE,
+  hostedSessionToolProfile,
   needsModelChange,
   shouldReuseHostedSession
 } from './pi-host-policy'
@@ -54,6 +55,7 @@ interface HostedSession {
   cwd: string
   toolProfile: string
   unsubscribe?: () => void
+  closeMcp?: () => Promise<void>
 }
 
 interface ActiveRun {
@@ -386,16 +388,12 @@ async function ensureHostedSession(
 ): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
-  if (shouldReuseHostedSession(existing, cwd)) {
+  const toolProfile = hostedSessionToolProfile(config.mcpServers)
+  if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
     return existing as HostedSession
   }
   if (existing) {
-    try {
-      existing.unsubscribe?.()
-      existing.session.dispose()
-    } catch {
-      // ignore dispose errors when recreating for tool profile upgrades
-    }
+    await disposeHostedSession(existing)
     hostedSessions.delete(sessionKey)
   }
 
@@ -428,6 +426,7 @@ async function ensureHostedSession(
   await resourceLoader.reload()
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
+  const mcp = await loadMcpPiTools(pi, config.mcpServers)
 
   const { session } = await pi.createAgentSession({
     cwd,
@@ -436,8 +435,8 @@ async function ensureHostedSession(
     thinkingLevel: resolveThinkingLevelForModel(model ?? undefined),
     modelRuntime,
     resourceLoader,
-    tools: [...ACTIVE_TOOLS],
-    customTools: [ptyBashTool as never, openSubterminalTool as never],
+    tools: [...ACTIVE_TOOLS, ...mcp.toolNames],
+    customTools: [ptyBashTool as never, openSubterminalTool as never, ...(mcp.tools as never[])],
     sessionManager: pi.SessionManager.inMemory(cwd),
     settingsManager
   })
@@ -446,10 +445,30 @@ async function ensureHostedSession(
     sessionKey,
     session,
     cwd,
-    toolProfile: HOSTED_SESSION_TOOL_PROFILE
+    toolProfile,
+    closeMcp: mcp.close
   }
   hostedSessions.set(sessionKey, hosted)
   return hosted
+}
+
+async function disposeHostedSession(hosted: HostedSession): Promise<void> {
+  try {
+    hosted.unsubscribe?.()
+    hosted.unsubscribe = undefined
+  } catch {
+    // ignore unsubscribe errors when recreating
+  }
+  try {
+    await hosted.closeMcp?.()
+  } catch {
+    // ignore MCP close errors when recreating
+  }
+  try {
+    hosted.session.dispose()
+  } catch {
+    // ignore dispose errors when recreating for tool profile upgrades
+  }
 }
 
 function collectSkillRoots(skillRoot: string): string[] {

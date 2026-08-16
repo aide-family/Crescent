@@ -16,7 +16,8 @@ const piPackages = [
   '@earendil-works/pi-client',
   '@earendil-works/pi-protocol',
   '@silvia-odwyer/photon-node',
-  '@mariozechner/clipboard'
+  '@mariozechner/clipboard',
+  '@modelcontextprotocol/sdk'
 ]
 
 export default defineConfig({

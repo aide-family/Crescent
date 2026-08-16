@@ -752,14 +752,32 @@ const zhCN = {
     mcpCommand: 'MCP 命令',
     mcpCommandHint: '用于启动 stdio MCP 服务的命令，例如 npx、node 或 python。',
     mcpEnabled: '启用 MCP 服务',
-    mcpEnabledHint: '启用后会在工具验证和 Agent 运行时启动该 MCP 服务。',
+    mcpEnabledHint: '启用后会在 Agent 运行时启动该 MCP 服务。',
     mcpEnv: 'MCP 环境变量',
     mcpEnvHint: '每行一个 KEY=value，仅保存在本地。',
     mcpServerId: 'MCP 服务 ID',
     mcpServerList: 'MCP 服务列表',
     mcpServerName: 'MCP 服务名称',
     mcpServers: 'MCP 服务',
-    mcpServersHint: '添加自定义 stdio MCP 服务，把服务提供的工具暴露给 Agent。',
+    mcpServersHint:
+      '粘贴 Cursor 格式的 mcpServers JSON 以添加 HTTP 或 stdio 服务。保存后会把工具暴露给 Agent。',
+    mcpPasteJson: '从 JSON 添加',
+    mcpPasteJsonHint:
+      '粘贴 { "mcpServers": { "name": { "url" } } } 或 { "command", "args" }。同名覆盖，新名追加。',
+    mcpPasteJsonPlaceholder: `{
+  "mcpServers": {
+    "amap-maps-streamableHTTP": {
+      "url": "https://mcp.amap.com/mcp?key=你的Key"
+    }
+  }
+}`,
+    mcpAddFromJson: '添加',
+    mcpJsonEmpty: 'JSON 为空。',
+    mcpJsonInvalid: 'JSON 无效。',
+    mcpJsonMissingServers: '需要 { "mcpServers": { "<名称>": { "url" 或 "command" } } }。',
+    mcpJsonNeedUrlOrCommand: 'MCP 配置需要 url 或 command。',
+    mcpConfigJson: 'MCP 配置',
+    mcpConfigJsonHint: '该服务的 Cursor 格式 JSON。保存后生效并刷新工具。',
     mcpStatusChecking: '检查中',
     mcpStatusConnected: '已连接',
     mcpStatusDisabled: '已禁用',
@@ -768,7 +786,7 @@ const zhCN = {
     mcpStatusNotChecked: '未检查',
     mcpToolCount: '工具数',
     mcpTools: 'MCP 工具',
-    noMcpTools: '当前 MCP 服务还没有加载到工具。保存配置后执行验证即可刷新。',
+    noMcpTools: '当前 MCP 服务还没有加载到工具。保存配置后会自动刷新。',
     model: '模型',
     modelHint: '配置 OpenAI 兼容模型供应商；API Key 仅保存在本地。',
     modelListHint:
@@ -852,9 +870,7 @@ const zhCN = {
     updateInstall: '重启并安装',
     updateCheckFailed: '检查更新失败',
     updateDownloadFailed: '下载更新失败',
-    updateInstallFailed: '安装更新失败',
-    validateTools: '验证工具',
-    validating: '验证中…'
+    updateInstallFailed: '安装更新失败'
   },
   notifications: {
     approvalTitle: '需要审批命令',

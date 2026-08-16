@@ -2,11 +2,9 @@ import {
   BotIcon,
   CheckIcon,
   FileTextIcon,
-  Loader2Icon,
   PencilIcon,
   PlusIcon,
   SettingsIcon,
-  TestTube2Icon,
   Trash2Icon,
   XIcon
 } from 'lucide-react'
@@ -89,7 +87,6 @@ export interface SettingsSheetProps {
   settingsOpenApiProfile: AgentOpenApiProfile | undefined
   instructionEditorOpen: boolean
   validation: AgentValidationResult | undefined
-  validating: boolean
   saved: boolean
   importingOpenApi: boolean
   closeTerminalConfirmEnabled: boolean
@@ -121,7 +118,6 @@ export interface SettingsSheetProps {
   onInstructionEditorOpenChange: (open: boolean) => void
   onInstructionContentChange: (value: string) => void
   onSaveInstructionFile: () => void | Promise<void>
-  onValidateConfig: () => void | Promise<void>
   onSaveConfig: () => void | Promise<void>
 }
 
@@ -145,7 +141,6 @@ export function SettingsSheet({
   settingsOpenApiProfile,
   instructionEditorOpen,
   validation,
-  validating,
   saved,
   importingOpenApi,
   closeTerminalConfirmEnabled,
@@ -174,7 +169,6 @@ export function SettingsSheet({
   onInstructionEditorOpenChange,
   onInstructionContentChange,
   onSaveInstructionFile,
-  onValidateConfig,
   onSaveConfig
 }: SettingsSheetProps): React.JSX.Element {
   const defaultModelSelection =
@@ -809,20 +803,7 @@ export function SettingsSheet({
             </div>
           ) : null}
         </div>
-        <SheetFooter className="gap-2 sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void onValidateConfig()}
-            disabled={validating}
-          >
-            {validating ? (
-              <Loader2Icon className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <TestTube2Icon data-icon="inline-start" />
-            )}
-            {validating ? t.settings.validating : t.settings.validateTools}
-          </Button>
+        <SheetFooter className="gap-2 sm:justify-end">
           <Button onClick={() => void onSaveConfig()}>
             {saved ? <CheckIcon data-icon="inline-start" /> : <BotIcon data-icon="inline-start" />}
             {saved ? t.settings.saved : t.settings.saveSettings}

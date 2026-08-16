@@ -20,6 +20,8 @@ asarUnpack:
   - '**/node-pty/prebuilds/**'
   # Pi is ESM-only and loaded via dynamic import(); keep it outside asar.
   - '**/@earendil-works/**'
+  # MCP SDK is ESM-first and loaded via dynamic import().
+  - '**/@modelcontextprotocol/**'
   # Pi optional image tooling (WASM) must be readable outside asar.
   - '**/@silvia-odwyer/photon-node/**'
 extraResources:

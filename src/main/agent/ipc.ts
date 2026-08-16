@@ -37,6 +37,7 @@ import {
 } from './pi-model-runtime'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
+import { listMcpToolCatalog } from './pi-mcp-tools'
 import { normalizeAgentStyle } from '../../shared/agent-style'
 import { rejectPendingApprovalsForTab, resolveCommandApprovalDecision } from './command-approval'
 import { resolveAgentSubterminalReady } from './pi-open-subterminal'
@@ -305,18 +306,22 @@ export function registerAgentIpc(): void {
     try {
       await validateModel(nextConfig)
       const cwd = resolveAgentWorkspaceCwd(nextConfig)
+      const mcpCatalog = await listMcpToolCatalog(nextConfig.mcpServers)
+      const builtInTools = BUILT_IN_TOOL_CATALOG.map((tool) =>
+        tool.name === 'bash'
+          ? {
+              ...tool,
+              description: `Run a local bash command in ${cwd}.`
+            }
+          : tool
+      )
+      const tools = [...builtInTools, ...mcpCatalog.tools]
       return {
         ok: true,
         modelOk: true,
-        toolCount: BUILT_IN_TOOL_CATALOG.length,
-        tools: BUILT_IN_TOOL_CATALOG.map((tool) =>
-          tool.name === 'bash'
-            ? {
-                ...tool,
-                description: `Run a local bash command in ${cwd}.`
-              }
-            : tool
-        )
+        toolCount: tools.length,
+        tools,
+        ...(Object.keys(mcpCatalog.errors).length ? { mcpErrors: mcpCatalog.errors } : {})
       }
     } catch (error) {
       return {

@@ -809,14 +809,32 @@ const en = {
     mcpCommand: 'MCP command',
     mcpCommandHint: 'Command used to start the stdio MCP server, such as npx, node, or python.',
     mcpEnabled: 'Enable MCP server',
-    mcpEnabledHint: 'Enabled MCP servers are started during tool validation and agent runs.',
+    mcpEnabledHint: 'Enabled MCP servers are started during agent runs.',
     mcpEnv: 'MCP environment variables',
     mcpEnvHint: 'One KEY=value pair per line. Values are only stored locally.',
     mcpServerId: 'MCP server ID',
     mcpServerList: 'MCP server list',
     mcpServerName: 'MCP server name',
     mcpServers: 'MCP servers',
-    mcpServersHint: 'Add custom stdio MCP servers to expose their tools to the agent.',
+    mcpServersHint:
+      'Paste Cursor-format mcpServers JSON to add HTTP or stdio servers. Their tools are exposed to the agent after save.',
+    mcpPasteJson: 'Add from JSON',
+    mcpPasteJsonHint:
+      'Paste { "mcpServers": { "name": { "url" } } } or { "command", "args" }. Same names overwrite; new names are appended.',
+    mcpPasteJsonPlaceholder: `{
+  "mcpServers": {
+    "amap-maps-streamableHTTP": {
+      "url": "https://mcp.amap.com/mcp?key=YOUR_KEY"
+    }
+  }
+}`,
+    mcpAddFromJson: 'Add',
+    mcpJsonEmpty: 'JSON is empty.',
+    mcpJsonInvalid: 'Invalid JSON.',
+    mcpJsonMissingServers: 'Expected { "mcpServers": { "<name>": { "url" or "command" } } }.',
+    mcpJsonNeedUrlOrCommand: 'MCP config needs a url or a command.',
+    mcpConfigJson: 'MCP config',
+    mcpConfigJsonHint: 'Cursor-format JSON for this server. Save to apply and refresh tools.',
     mcpStatusChecking: 'Checking',
     mcpStatusConnected: 'Connected',
     mcpStatusDisabled: 'Disabled',
@@ -826,7 +844,7 @@ const en = {
     mcpToolCount: 'Tools',
     mcpTools: 'MCP tools',
     noMcpTools:
-      'No tools loaded for this MCP server. Run validation after saving the configuration.',
+      'No tools loaded for this MCP server. Tools refresh after you save the configuration.',
     model: 'Model',
     modelHint: 'Configure OpenAI-compatible providers; API keys stay local.',
     modelListHint:
@@ -916,9 +934,7 @@ const en = {
     updateInstall: 'Restart and install',
     updateCheckFailed: 'Update check failed',
     updateDownloadFailed: 'Update download failed',
-    updateInstallFailed: 'Update install failed',
-    validateTools: 'Validate tools',
-    validating: 'Validating…'
+    updateInstallFailed: 'Update install failed'
   },
   notifications: {
     approvalTitle: 'Command approval needed',
