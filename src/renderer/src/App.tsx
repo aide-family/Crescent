@@ -19,6 +19,7 @@ import {
   LanguagesIcon,
   MessageSquareIcon,
   PlugIcon,
+  PuzzleIcon,
   ServerIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
@@ -46,6 +47,8 @@ import { TerminalPane } from '@renderer/components/TerminalPane'
 import { HistoryPanel } from '@renderer/components/HistoryPanel'
 import { OnboardingModal } from '@renderer/components/OnboardingModal'
 import { SkillManager, type SkillPreviewState } from '@renderer/components/SkillManager'
+import { ExtensionManager } from '@renderer/components/ExtensionManager'
+import { ExtensionUiDialog } from '@renderer/components/ExtensionUiDialog'
 import { WikiSheet } from '@renderer/components/WikiSheet'
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -171,7 +174,6 @@ import {
   isActiveLoggedInTerminal,
   prioritizeClarifyOptions,
   routeConnection,
-  looksLikeRemoteOpsIntent,
   formatConnectionClarifyOptions,
   resolveConnectionClarifyConfirm,
   routeForcedConnection,
@@ -254,6 +256,7 @@ import {
 } from '@renderer/lib/wiki'
 import {
   buildConnectionSlashCommand,
+  buildExtSlashCommand,
   buildMcpSlashCommand,
   buildSkillSlashCommand,
   buildSlashCommandOptions,
@@ -262,11 +265,13 @@ import {
   buildWikiSlashCommand,
   getSlashCommandQuery,
   isConnectionSlashQuery,
+  isExtSlashQuery,
   isMcpSlashQuery,
   isStyleSlashQuery,
   isToolSlashQuery,
   isWikiSlashQuery,
   matchesConnectionSlashCommand,
+  matchesExtSlashCommand,
   matchesMcpSlashCommand,
   matchesSkillSlashCommand,
   matchesSlashCommand,
@@ -287,7 +292,10 @@ import type {
   AgentSkillSearchResult,
   AgentValidationResult,
   AgentSkillOption,
+  AgentExtensionOption,
+  AgentPiPackageSearchResult,
   AgentWikiReference,
+  ExtensionUiRequest,
   AgentConnectionIntentResult,
   ConnectionConfig,
   ConnectionInput,
@@ -336,6 +344,7 @@ const emptyConfig: AgentConfig = {
   openApiMaxRetries: 2,
   openApiRetryBackoffMs: 300,
   skillRoot: '~/.agents/skills',
+  disabledExtensions: [],
   mcpServers: []
 }
 const emptyProvider: AgentProviderConfig = {
@@ -535,6 +544,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
+  const [extensions, setExtensions] = useState<AgentExtensionOption[]>([])
+  const [extensionCommands, setExtensionCommands] = useState<
+    Array<{ name: string; description: string }>
+  >([])
+  const [extensionSearchQuery, setExtensionSearchQuery] = useState('')
+  const [extensionCatalogQuery, setExtensionCatalogQuery] = useState('')
+  const [extensionCatalogResults, setExtensionCatalogResults] = useState<
+    AgentPiPackageSearchResult[]
+  >([])
+  const [extensionCatalogLoading, setExtensionCatalogLoading] = useState(false)
+  const [extensionInstallingSource, setExtensionInstallingSource] = useState<string | null>(null)
+  const [extensionManageMessage, setExtensionManageMessage] = useState<SkillManageMessage | null>(
+    null
+  )
+  const [extensionDeletingPath, setExtensionDeletingPath] = useState<string | null>(null)
+  const [selectedExtensionPreview, setSelectedExtensionPreview] = useState<{
+    extension: AgentExtensionOption
+    content: string
+  } | null>(null)
+  const [extensionPreviewLoadingPath, setExtensionPreviewLoadingPath] = useState<string | null>(
+    null
+  )
+  const [extensionUiRequest, setExtensionUiRequest] = useState<ExtensionUiRequest | null>(null)
   const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
   const [skillSearchQuery, setSkillSearchQuery] = useState('')
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillSearchResult[]>([])
@@ -564,6 +596,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [skillOpen, setSkillOpen] = useState(false)
+  const [extensionOpen, setExtensionOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
   const [mcpOpen, setMcpOpen] = useState(false)
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
@@ -990,6 +1023,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         .map((skill) => buildSkillSlashCommand(skill, t))
         .filter((command) => matchesSkillSlashCommand(command, slashCommandQuery))
     }
+    if (isExtSlashQuery(slashCommandQuery)) {
+      return extensionCommands
+        .map((command) => buildExtSlashCommand(command, t))
+        .filter((command) => matchesExtSlashCommand(command, slashCommandQuery ?? ''))
+    }
     if (isConnectionSlashQuery(slashCommandQuery)) {
       return connections
         .map((connection) => buildConnectionSlashCommand(connection, t))
@@ -999,7 +1037,16 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     return buildSlashCommandOptions(t).filter((command) =>
       matchesSlashCommand(command, slashCommandQuery)
     )
-  }, [availableToolRefs, connections, mcpToolRefs, skills, slashCommandQuery, t, wikiDocuments])
+  }, [
+    availableToolRefs,
+    connections,
+    extensionCommands,
+    mcpToolRefs,
+    skills,
+    slashCommandQuery,
+    t,
+    wikiDocuments
+  ])
   const slashMenuVisible =
     slashCommandOpen && slashCommandQuery !== undefined && slashCommandOptions.length > 0
   const selectedSlashCommandIndex = slashCommandOptions.length
@@ -1018,6 +1065,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     )
     selectedItem?.scrollIntoView({ block: 'nearest' })
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
+
+  useEffect(() => {
+    if (!isExtSlashQuery(slashCommandQuery)) return
+    void window.api.agent
+      .listExtensionCommands(sessionChatTab.id)
+      .then(setExtensionCommands)
+      .catch(() => setExtensionCommands([]))
+  }, [sessionChatTab.id, slashCommandQuery])
 
   const filteredLocalSkills = useMemo(
     () => filterLocalSkills(skills, localSkillSearchQuery),
@@ -2133,6 +2188,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       .then(setSkills)
       .catch(() => setSkills([]))
     window.api.agent
+      .listExtensions()
+      .then(setExtensions)
+      .catch(() => setExtensions([]))
+    window.api.agent
+      .listExtensionCommands()
+      .then(setExtensionCommands)
+      .catch(() => setExtensionCommands([]))
+    window.api.agent
       .listInstructionFiles()
       .then((files) => {
         setInstructionFiles(files)
@@ -2172,6 +2235,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     return unsubscribe
   }, [appendAgentEvent])
+
+  useEffect(() => {
+    return window.api.agent.onExtensionUiRequest((request) => {
+      if (request.method === 'notify') {
+        if (request.notifyType === 'error') toast.error(request.message)
+        else if (request.notifyType === 'warning') toast.warning(request.message)
+        else toast.message(request.message)
+        return
+      }
+      setExtensionUiRequest(request)
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.api.agent.onExtensionUiDismiss((payload) => {
+      setExtensionUiRequest((current) => (current?.id === payload.requestId ? null : current))
+    })
+  }, [])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalRequest((request) => {
@@ -2562,6 +2643,136 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       setSkillManageMessage({ type: 'success', text: t.settings.skillsRefreshed })
     } catch (error) {
       setSkillManageMessage({ type: 'error', text: String(error) })
+    }
+  }
+
+  async function refreshExtensions(): Promise<void> {
+    try {
+      setExtensions(await window.api.agent.listExtensions())
+      setExtensionCommands(await window.api.agent.listExtensionCommands(sessionChatTab.id))
+      setExtensionManageMessage({ type: 'success', text: t.settings.extensionsRefreshed })
+    } catch (error) {
+      setExtensionManageMessage({ type: 'error', text: String(error) })
+    }
+  }
+
+  async function importExtension(): Promise<void> {
+    try {
+      const result = await window.api.agent.importExtension()
+      if (result.canceled) return
+      if (!result.ok) {
+        setExtensionManageMessage({
+          type: 'error',
+          text: result.error || t.settings.extensionCommandFailed
+        })
+        return
+      }
+      setExtensions(result.extensions ?? (await window.api.agent.listExtensions()))
+      setExtensionManageMessage({ type: 'success', text: t.settings.extensionImported })
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  async function deleteExtension(extension: AgentExtensionOption): Promise<void> {
+    setExtensionDeletingPath(extension.path)
+    try {
+      setExtensions(await window.api.agent.deleteExtension(extension.path))
+      if (selectedExtensionPreview?.extension.path === extension.path) {
+        setSelectedExtensionPreview(null)
+      }
+      setExtensionManageMessage({
+        type: 'success',
+        text: `${t.settings.extensionDeleted}: ${extension.name}`
+      })
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setExtensionDeletingPath(null)
+    }
+  }
+
+  async function toggleExtensionEnabled(
+    extension: AgentExtensionOption,
+    enabled: boolean
+  ): Promise<void> {
+    try {
+      setExtensions(await window.api.agent.setExtensionEnabled({ id: extension.id, enabled }))
+      setConfig((current) => ({
+        ...current,
+        disabledExtensions: enabled
+          ? current.disabledExtensions.filter((id) => id !== extension.id)
+          : [...new Set([...current.disabledExtensions, extension.id])]
+      }))
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  async function previewExtension(extension: AgentExtensionOption): Promise<void> {
+    setExtensionPreviewLoadingPath(extension.path)
+    try {
+      const content = await window.api.agent.getExtensionContent(extension.path)
+      setSelectedExtensionPreview({ extension, content })
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setExtensionPreviewLoadingPath((current) => (current === extension.path ? null : current))
+    }
+  }
+
+  async function searchExtensionCatalog(): Promise<void> {
+    setExtensionCatalogLoading(true)
+    setExtensionManageMessage({ type: 'info', text: t.settings.extensionsSearching })
+    try {
+      const results = await window.api.agent.searchExtensionPackages(extensionCatalogQuery)
+      setExtensionCatalogResults(results)
+      setExtensionManageMessage(
+        results.length
+          ? { type: 'success', text: t.settings.extensionsSearchComplete }
+          : { type: 'info', text: t.settings.noExtensionCatalogResults }
+      )
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setExtensionCatalogLoading(false)
+    }
+  }
+
+  async function installExtensionPackage(result: AgentPiPackageSearchResult): Promise<void> {
+    setExtensionInstallingSource(result.source)
+    setExtensionManageMessage({
+      type: 'info',
+      text: `${t.settings.extensionInstalling}: ${result.name}`
+    })
+    try {
+      setExtensions(await window.api.agent.installExtensionPackage(result.source))
+      setExtensionManageMessage({
+        type: 'success',
+        text: `${t.settings.extensionInstalledPackage}: ${result.name}`
+      })
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setExtensionInstallingSource(null)
     }
   }
 
@@ -4731,7 +4942,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       activeTab: terminalTab,
       sessionTabs,
       connections,
-      lastUsedConnectionId: lastUsedConnectionId || undefined,
       resumeRequested,
       explicitNonTerminal: explicitNonTerminalRequest,
       explicitLocalFile: explicitLocalFileRequest,
@@ -4792,89 +5002,34 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           currentConnectionName: terminalTab?.connectionName,
           terminalSummary
         })
-        // Remote ops must not proceed without a target — never let the main model invent login methods.
+        // User asked to log in but the model did not pick a target — ask, do not
+        // guess lastUsed / the only configured host.
         if (
-          looksLikeRemoteOpsIntent(intentSourceInput) &&
+          isExplicitConnectionRequest(intentSourceInput) &&
           connectionIntent.analysis &&
           !connectionIntent.analysis.needsClarification &&
           !connectionIntent.analysis.shouldConnect
         ) {
-          const explicitlyNamedTarget =
-            isExplicitConnectionRequest(intentSourceInput) && !connectionIntent.connection
-          if (connections.length === 1 && !explicitlyNamedTarget) {
-            connectionIntent = {
-              analysis: {
-                ok: true,
-                shouldConnect: true,
-                connectionId: connections[0].id,
-                confidence: 100,
-                executeAfterLogin: true,
-                matchBasis: 'name',
-                reason: `${t.terminal.connectionMatched}: ${connections[0].name}`
-              },
-              connection: connections[0]
-            }
-          } else if (lastUsedConnectionId && !explicitlyNamedTarget) {
-            const last = connections.find((c) => c.id === lastUsedConnectionId)
-            if (last) {
-              connectionIntent = {
-                analysis: {
-                  ok: true,
-                  shouldConnect: true,
-                  connectionId: last.id,
-                  confidence: 90,
-                  executeAfterLogin: true,
-                  matchBasis: 'name',
-                  reason: `${t.terminal.connectionMatched}: ${last.name}`
-                },
-                connection: last
-              }
-            } else {
-              connectionIntent = {
-                analysis: {
-                  ok: false,
-                  shouldConnect: false,
-                  confidence: 0,
-                  needsClarification: true,
-                  clarificationQuestion:
-                    connections.length > 0
-                      ? t.terminal.connectionClarifyPickOne.replace(
-                          '{options}',
-                          formatConnectionClarifyOptions(
-                            prioritizeClarifyOptions(
-                              connections.map((c) => ({ id: c.id, label: c.name })),
-                              terminalTab?.connectionId,
-                              t.terminal.clarifyCurrentBadge
-                            )
-                          )
-                        )
-                      : t.terminal.connectionNoneConfigured,
-                  reason: 'llm-no-connect-remote'
-                }
-              }
-            }
-          } else {
-            connectionIntent = {
-              analysis: {
-                ok: false,
-                shouldConnect: false,
-                confidence: 0,
-                needsClarification: true,
-                clarificationQuestion:
-                  connections.length > 0
-                    ? t.terminal.connectionClarifyPickOne.replace(
-                        '{options}',
-                        formatConnectionClarifyOptions(
-                          prioritizeClarifyOptions(
-                            connections.map((c) => ({ id: c.id, label: c.name })),
-                            terminalTab?.connectionId,
-                            t.terminal.clarifyCurrentBadge
-                          )
+          connectionIntent = {
+            analysis: {
+              ok: false,
+              shouldConnect: false,
+              confidence: 0,
+              needsClarification: true,
+              clarificationQuestion:
+                connections.length > 0
+                  ? t.terminal.connectionClarifyPickOne.replace(
+                      '{options}',
+                      formatConnectionClarifyOptions(
+                        prioritizeClarifyOptions(
+                          connections.map((c) => ({ id: c.id, label: c.name })),
+                          terminalTab?.connectionId,
+                          t.terminal.clarifyCurrentBadge
                         )
                       )
-                    : t.terminal.connectionNoneConfigured,
-                reason: 'llm-no-connect-remote'
-              }
+                    )
+                  : t.terminal.connectionNoneConfigured,
+              reason: 'llm-no-connect-login'
             }
           }
         }
@@ -5020,13 +5175,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       !explicitNonTerminalRequest &&
       !isExplicitConnectionRequest(displayInput)
 
-    // Remote ops without a resolved connection must not fall through to the main model
-    // when configured connections exist (would otherwise invent "pick a login method").
-    // Skip when the active terminal is already logged in — stay on that target.
+    // Explicit login without a resolved target must not fall through to the main
+    // model (it would otherwise invent a login method). Non-login work proceeds.
     if (
       !activeLoggedIn &&
       !connectionIntent?.analysis?.shouldConnect &&
-      looksLikeRemoteOpsIntent(intentSourceInput) &&
+      isExplicitConnectionRequest(intentSourceInput) &&
       connections.length > 0 &&
       !(
         tabsRef.current.find((candidate) => candidate.id === executionTerminalId)?.connectionId ||
@@ -5861,6 +6015,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   function insertSlashCommand(command: SlashCommandOption): void {
     const shouldOpenStyleList = command.id === 'style'
     const shouldOpenSkillList = command.id === 'skill'
+    const shouldOpenExtList = command.id === 'ext'
     const shouldOpenConnectionList = command.id === 'connection'
     const shouldOpenToolList = command.id === 'tool'
     const shouldOpenMcpList = command.id === 'mcp'
@@ -5958,6 +6113,36 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
+    if (command.extensionCommand) {
+      const extensionCommand = command.extensionCommand
+      updateTab(sessionChatTab.id, (tab) =>
+        applyComposerInput(
+          tab,
+          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
+        )
+      )
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      void window.api.agent
+        .runExtensionCommand({
+          name: extensionCommand.name,
+          tabId: sessionChatTab.id
+        })
+        .then((result) => {
+          if (result.busy) {
+            toast.message(t.settings.extensionCommandBusy)
+            return
+          }
+          if (!result.ok) {
+            toast.error(result.error || t.settings.extensionCommandFailed)
+          }
+        })
+        .catch((error) => {
+          toast.error(error instanceof Error ? error.message : t.settings.extensionCommandFailed)
+        })
+      return
+    }
+
     updateTab(sessionChatTab.id, (tab) => {
       const replacement = command.skill
         ? formatComposerRefToken('skill', command.skill.id)
@@ -5976,6 +6161,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setSlashCommandOpen(
       shouldOpenStyleList ||
         shouldOpenSkillList ||
+        shouldOpenExtList ||
         shouldOpenConnectionList ||
         shouldOpenToolList ||
         shouldOpenMcpList ||
@@ -6653,6 +6839,34 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     />
   )
 
+  const extensionSheet = (
+    <ExtensionManager
+      open={extensionOpen}
+      onOpenChange={setExtensionOpen}
+      t={t}
+      extensions={extensions}
+      searchQuery={extensionSearchQuery}
+      catalogQuery={extensionCatalogQuery}
+      catalogResults={extensionCatalogResults}
+      catalogLoading={extensionCatalogLoading}
+      installingSource={extensionInstallingSource}
+      manageMessage={extensionManageMessage}
+      deletingPath={extensionDeletingPath}
+      preview={selectedExtensionPreview}
+      previewLoadingPath={extensionPreviewLoadingPath}
+      onSearchQueryChange={setExtensionSearchQuery}
+      onCatalogQueryChange={setExtensionCatalogQuery}
+      onRefresh={() => void refreshExtensions()}
+      onImport={() => void importExtension()}
+      onSearchCatalog={() => void searchExtensionCatalog()}
+      onInstallPackage={(result) => void installExtensionPackage(result)}
+      onDelete={(extension) => void deleteExtension(extension)}
+      onToggleEnabled={(extension, enabled) => void toggleExtensionEnabled(extension, enabled)}
+      onPreview={(extension) => void previewExtension(extension)}
+      onPreviewChange={setSelectedExtensionPreview}
+    />
+  )
+
   const mcpSheet = (
     <McpServersSheet
       open={mcpOpen}
@@ -6787,6 +7001,16 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label={t.settings.extensionsManagement}
+            title={t.settings.extensionsManagement}
+            onClick={() => setExtensionOpen(true)}
+          >
+            <PuzzleIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             aria-label={t.history.title}
             title={t.history.title}
             onClick={() => setHistorySheetOpen(true)}
@@ -6909,6 +7133,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         </div>
       </header>
       {skillSheet}
+      {extensionSheet}
       {mcpSheet}
       {historySheet}
       {wikiSheet}
@@ -7257,6 +7482,22 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             current ? { ...current, dontAskAgain: checked } : current
           )
         }
+      />
+      <ExtensionUiDialog
+        key={extensionUiRequest?.id ?? 'extension-ui-idle'}
+        request={extensionUiRequest}
+        t={t}
+        onResolve={(input) => {
+          const request = extensionUiRequest
+          if (!request) return
+          setExtensionUiRequest(null)
+          void window.api.agent.resolveExtensionUi({
+            requestId: request.id,
+            cancelled: input.cancelled,
+            confirmed: input.confirmed,
+            value: input.value
+          })
+        }}
       />
       <OnboardingModal
         open={onboardingOpen}

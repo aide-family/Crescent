@@ -70,6 +70,7 @@ export const defaultAgentConfig: AgentConfig = {
   openApiMaxRetries: 2,
   openApiRetryBackoffMs: 300,
   skillRoot: '~/.agents/skills',
+  disabledExtensions: [],
   mcpServers: []
 }
 
@@ -246,6 +247,7 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     openApiProfileId: openApi.openApiProfileId,
     ...openApiFields,
     skillRoot: normalizeSkillRoot(config.skillRoot),
+    disabledExtensions: normalizeDisabledExtensionIds(config.disabledExtensions),
     mcpServers: normalizeMcpServers(config.mcpServers)
   }
 }
@@ -254,6 +256,19 @@ function normalizeSkillRoot(value: unknown): string {
   const skillRoot = String(value ?? '').trim()
 
   return skillRoot || defaultAgentConfig.skillRoot
+}
+
+function normalizeDisabledExtensionIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+
+  return [
+    ...new Set(
+      value
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .map((item) => item.replace(/\.ts$/i, ''))
+    )
+  ].sort()
 }
 
 function normalizeStringList(value: unknown): string[] {

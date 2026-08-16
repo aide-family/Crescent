@@ -26,3 +26,11 @@ export function getCrescentPiSkillsDir(): string {
   }
   return dir
 }
+
+export function getCrescentPiExtensionsDir(): string {
+  const dir = join(getCrescentPiAgentDir(), 'extensions')
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}

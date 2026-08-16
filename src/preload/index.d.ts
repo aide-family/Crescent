@@ -16,11 +16,16 @@ import type {
   AgentSkillInstallResult,
   AgentSkillOption,
   AgentSkillSearchResult,
+  AgentExtensionOption,
+  AgentPiPackageSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalDismiss,
   CommandApprovalPurposeUpdate,
   CommandApprovalRequest,
+  ExtensionUiDecision,
+  ExtensionUiDismiss,
+  ExtensionUiRequest,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
@@ -170,6 +175,30 @@ interface TerminalAgentApi {
       installSkill?: string
       name: string
     }) => Promise<string>
+    listExtensions: () => Promise<AgentExtensionOption[]>
+    listExtensionCommands: (
+      sessionKey?: string
+    ) => Promise<Array<{ name: string; description: string }>>
+    importExtension: () => Promise<{
+      ok: boolean
+      canceled?: boolean
+      error?: string
+      extensions?: AgentExtensionOption[]
+    }>
+    deleteExtension: (path: string) => Promise<AgentExtensionOption[]>
+    setExtensionEnabled: (input: {
+      id: string
+      enabled: boolean
+    }) => Promise<AgentExtensionOption[]>
+    getExtensionContent: (path: string) => Promise<string>
+    searchExtensionPackages: (query: string) => Promise<AgentPiPackageSearchResult[]>
+    installExtensionPackage: (source: string) => Promise<AgentExtensionOption[]>
+    runExtensionCommand: (input: {
+      name: string
+      args?: string
+      tabId?: string
+    }) => Promise<{ ok: boolean; busy?: boolean; error?: string }>
+    resolveExtensionUi: (input: ExtensionUiDecision) => Promise<{ ok: boolean }>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
     listWikiDocuments: () => Promise<WikiDocumentSummary[]>
     getWikiDocument: (id: string) => Promise<WikiDocument | undefined>
@@ -243,6 +272,8 @@ interface TerminalAgentApi {
       }) => void
     ) => () => void
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
+    onExtensionUiRequest: (callback: (request: ExtensionUiRequest) => void) => () => void
+    onExtensionUiDismiss: (callback: (payload: ExtensionUiDismiss) => void) => () => void
   }
   connections: {
     list: () => Promise<ConnectionConfig[]>

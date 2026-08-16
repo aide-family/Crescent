@@ -14,8 +14,12 @@ export interface HostedSessionSnapshot {
   toolProfile: string
 }
 
-export function hostedSessionToolProfile(mcpServers: AgentMcpServerConfig[] = []): string {
-  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}`
+export function hostedSessionToolProfile(
+  mcpServers: AgentMcpServerConfig[] = [],
+  extensionFingerprint = 'none'
+): string {
+  const ext = extensionFingerprint.trim() || 'none'
+  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}:ext:${ext}`
 }
 
 /**

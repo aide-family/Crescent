@@ -26,6 +26,7 @@ export interface SlashCommandOption {
   wikiRef?: AgentWikiReference
   wikiDocument?: WikiDocumentSummary
   templateInput?: string
+  extensionCommand?: { name: string }
 }
 
 /** Trailing `/token` at start of input or after whitespace (last line). */
@@ -256,6 +257,13 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['skill', 'skills']
     },
     {
+      id: 'ext',
+      title: t.input.slashExt,
+      description: t.input.slashExtDescription,
+      value: '/ext:',
+      keywords: ['ext', 'extension', 'extensions', 'command', '扩展']
+    },
+    {
       id: 'create-skill',
       title: t.input.slashCreateSkill,
       description: t.input.slashCreateSkillDescription,
@@ -264,6 +272,39 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       templateInput: t.input.createSkillPrompt
     }
   ]
+}
+
+export function isExtSlashQuery(query: string | undefined): boolean {
+  if (query === undefined) return false
+  return query.startsWith('ext:')
+}
+
+export function matchesExtSlashCommand(command: SlashCommandOption, query: string): boolean {
+  const extQuery = query
+    .replace(/^ext:?/, '')
+    .trim()
+    .toLowerCase()
+  if (!extQuery) return true
+
+  const searchable = [command.title, command.description, ...command.keywords]
+    .join(' ')
+    .toLowerCase()
+
+  return searchable.includes(extQuery)
+}
+
+export function buildExtSlashCommand(
+  command: { name: string; description: string },
+  t: Dictionary
+): SlashCommandOption {
+  return {
+    id: `ext:${command.name}`,
+    title: command.name,
+    description: command.description || t.input.slashExtDescription,
+    value: '',
+    keywords: ['ext', 'extension', 'command', command.name, command.description],
+    extensionCommand: { name: command.name }
+  }
 }
 
 export function buildSkillSlashCommand(skill: AgentSkillOption, t: Dictionary): SlashCommandOption {

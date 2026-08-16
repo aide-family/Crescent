@@ -159,6 +159,8 @@ export const CONNECTION_INTENT_SYSTEM_PROMPT = [
   'Return strict JSON only: {"shouldConnect":true|false,"connectionId":"..."|null,"confidence":0-100,"executeAfterLogin":true|false,"userGoal":"...","matchBasis":"name|host|user|description|none","needsClarification":true|false,"clarificationQuestion":"..."|null,"reason":"..."}.',
   'Interpret the user request with the provided conversation context, current terminal summary, and configured connections. Do not rely on fixed business rules for a specific cluster or site.',
   'Set needsClarification=true and provide one short clarificationQuestion when the target connection, whether to login first, or whether to stay in the current terminal is ambiguous. In that case set shouldConnect=false and connectionId=null.',
+  'Set shouldConnect=true only when the user is asking to log in, open SSH, or clearly work on a named remote host/connection. If they did not ask to log in and did not name a connection, set shouldConnect=false and stay on the current terminal.',
+  'Do not guess a last-used host or the only configured connection when login intent is absent. Generic verbs such as 打开/open are not login intent by themselves.',
   'Set shouldConnect=false for general chat, local-only work, or when clarification is required.',
   'Local-only work includes local paths such as /etc/hosts, ~, $HOME, pasted local shell prompts, and requests that explicitly say the work is local/this machine — including viewing a local git repo.',
   'Do not treat path fragments such as aide-family as a connection named aide. IP addresses inside pasted file contents are data to edit, not SSH targets.',

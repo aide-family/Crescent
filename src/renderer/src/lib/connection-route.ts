@@ -39,8 +39,6 @@ export interface ConnectionRouteContext {
   /** Peer tabs in the same session (including active). */
   sessionTabs: AgentTerminalTab[]
   connections: ConnectionConfig[]
-  /** Soft default from crescent-store (last successful SSH). */
-  lastUsedConnectionId?: string
   resumeRequested?: boolean
   explicitNonTerminal?: boolean
   explicitLocalFile?: boolean
@@ -59,7 +57,6 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     activeTab,
     sessionTabs,
     connections,
-    lastUsedConnectionId,
     resumeRequested,
     explicitNonTerminal,
     explicitLocalFile
@@ -171,14 +168,15 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     })
   }
 
-  // --- Remote ops without a named target: session / unique / lastUsed / clarify ---
-  if (looksLikeRemoteOpsIntent(message)) {
+  // Unnamed remote work: reuse an already-open session. Opening a new SSH
+  // login requires identified login intent (named connection above, or an
+  // explicit login request below) — never lastUsed / unique-host guessing.
+  if (looksLikeRemoteOpsIntent(message) || isExplicitConnectionRequest(message)) {
     const remotePick = resolveRemoteOpsWithoutName({
       activeTabId,
       activeTab,
       sessionTabs,
       connections,
-      lastUsedConnectionId,
       activeLabel,
       message
     })
@@ -371,19 +369,10 @@ function resolveRemoteOpsWithoutName(input: {
   activeTab?: AgentTerminalTab
   sessionTabs: AgentTerminalTab[]
   connections: ConnectionConfig[]
-  lastUsedConnectionId?: string
   activeLabel: string
   message: string
 }): ConnectionRouteResult | undefined {
-  const {
-    activeTabId,
-    activeTab,
-    sessionTabs,
-    connections,
-    lastUsedConnectionId,
-    activeLabel,
-    message
-  } = input
+  const { activeTabId, activeTab, sessionTabs, connections, activeLabel, message } = input
 
   // Already on a connected tab — reuse (do not ask how to log in).
   if (activeTab?.connectionId || activeTab?.isSsh) {
@@ -411,6 +400,12 @@ function resolveRemoteOpsWithoutName(input: {
     }
   }
 
+  // No existing session to reuse. Only an explicit login/connect request may
+  // open a new SSH session, and then only after the user picks the target.
+  if (!isExplicitConnectionRequest(message)) {
+    return undefined
+  }
+
   if (connections.length === 0) {
     return {
       targetTabId: activeTabId,
@@ -421,64 +416,13 @@ function resolveRemoteOpsWithoutName(input: {
     }
   }
 
-  // The user explicitly asked to log into / connect to a named target that did
-  // not match any configured connection (e.g. "登录demo集群" when the only
-  // matching name is "demo测试集群"). Never guess with the last-used
-  // connection — ask which connection is intended.
-  if (isExplicitConnectionRequest(message)) {
-    return {
-      targetTabId: activeTabId,
-      action: 'clarify',
-      label: activeLabel,
-      reason: 'explicit-unnamed-request',
-      clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
-    }
-  }
-
-  if (connections.length === 1) {
-    const only = connections[0]
-    return {
-      targetTabId: activeTabId,
-      connectionId: only.id,
-      connection: only,
-      action: 'connect',
-      label: only.name,
-      executeAfterLogin: true,
-      reason: 'remote-unique-connect'
-    }
-  }
-
-  if (lastUsedConnectionId) {
-    const last = connections.find((c) => c.id === lastUsedConnectionId)
-    if (last) {
-      const peer = sessionTabs.find((tab) => tab.connectionId === last.id)
-      if (peer) {
-        return {
-          targetTabId: peer.id,
-          connectionId: last.id,
-          connection: last,
-          action: peer.id === activeTabId ? 'reuse' : 'switch',
-          label: last.name,
-          reason: 'remote-last-used-peer'
-        }
-      }
-      return {
-        targetTabId: activeTabId,
-        connectionId: last.id,
-        connection: last,
-        action: 'connect',
-        label: last.name,
-        executeAfterLogin: true,
-        reason: 'remote-last-used-connect'
-      }
-    }
-  }
-
+  // Named target did not match any configured connection (e.g. "登录demo集群"
+  // when the configured name is "demo测试集群"). Ask — do not guess lastUsed.
   return {
     targetTabId: activeTabId,
     action: 'clarify',
     label: activeLabel,
-    reason: 'remote-ambiguous',
+    reason: 'explicit-unnamed-request',
     clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
   }
 }
@@ -527,12 +471,13 @@ export function resolveAtMention(
 
 /**
  * True when the message looks like cluster/host ops that typically need SSH/k8s context.
+ * Generic verbs such as 打开/open are not login intent by themselves.
  */
 export function looksLikeRemoteOpsIntent(message: string): boolean {
   return (
     /(?:kubectl|kubeadm|helm|k9s|\bk8s\b|kubernetes)/i.test(message) ||
     /(?:集群|命名空间|命名空間|pod|pods|节点|node|nodes|deployment|namespace)/i.test(message) ||
-    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到|打开)/i.test(message) ||
+    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到)/i.test(message) ||
     /(?:巡检|健康检查|架构图|拓扑|网络架构)/i.test(message)
   )
 }

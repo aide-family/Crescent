@@ -17,11 +17,16 @@ import type {
   AgentSkillInstallResult,
   AgentSkillOption,
   AgentSkillSearchResult,
+  AgentExtensionOption,
+  AgentPiPackageSearchResult,
   AgentValidationResult,
   CommandApprovalDecision,
   CommandApprovalDismiss,
   CommandApprovalPurposeUpdate,
   CommandApprovalRequest,
+  ExtensionUiDecision,
+  ExtensionUiDismiss,
+  ExtensionUiRequest,
   ConnectionConfig,
   ConnectionInput,
   LocalInstructionDocument,
@@ -257,6 +262,38 @@ const api = {
       installSkill?: string
       name: string
     }): Promise<string> => ipcRenderer.invoke('agent:get-catalog-skill-content', input),
+    listExtensions: (): Promise<AgentExtensionOption[]> =>
+      ipcRenderer.invoke('agent:list-extensions'),
+    listExtensionCommands: (
+      sessionKey?: string
+    ): Promise<Array<{ name: string; description: string }>> =>
+      ipcRenderer.invoke('agent:list-extension-commands', sessionKey),
+    importExtension: (): Promise<{
+      ok: boolean
+      canceled?: boolean
+      error?: string
+      extensions?: AgentExtensionOption[]
+    }> => ipcRenderer.invoke('agent:import-extension'),
+    deleteExtension: (path: string): Promise<AgentExtensionOption[]> =>
+      ipcRenderer.invoke('agent:delete-extension', path),
+    setExtensionEnabled: (input: {
+      id: string
+      enabled: boolean
+    }): Promise<AgentExtensionOption[]> => ipcRenderer.invoke('agent:set-extension-enabled', input),
+    getExtensionContent: (path: string): Promise<string> =>
+      ipcRenderer.invoke('agent:get-extension-content', path),
+    searchExtensionPackages: (query: string): Promise<AgentPiPackageSearchResult[]> =>
+      ipcRenderer.invoke('agent:search-extension-packages', query),
+    installExtensionPackage: (source: string): Promise<AgentExtensionOption[]> =>
+      ipcRenderer.invoke('agent:install-extension-package', source),
+    runExtensionCommand: (input: {
+      name: string
+      args?: string
+      tabId?: string
+    }): Promise<{ ok: boolean; busy?: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:run-extension-command', input),
+    resolveExtensionUi: (input: ExtensionUiDecision): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:resolve-extension-ui', input),
     listInstructionFiles: (): Promise<LocalInstructionDocument[]> =>
       ipcRenderer.invoke('agent:list-instruction-files'),
     listWikiDocuments: (): Promise<WikiDocumentSummary[]> =>
@@ -408,6 +445,20 @@ const api = {
 
       ipcRenderer.on('agent:skill-install-event', listener)
       return () => ipcRenderer.removeListener('agent:skill-install-event', listener)
+    },
+    onExtensionUiRequest: (callback: (request: ExtensionUiRequest) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, request: ExtensionUiRequest): void =>
+        callback(request)
+
+      ipcRenderer.on('agent:extension-ui-request', listener)
+      return () => ipcRenderer.removeListener('agent:extension-ui-request', listener)
+    },
+    onExtensionUiDismiss: (callback: (payload: ExtensionUiDismiss) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, payload: ExtensionUiDismiss): void =>
+        callback(payload)
+
+      ipcRenderer.on('agent:extension-ui-dismiss', listener)
+      return () => ipcRenderer.removeListener('agent:extension-ui-dismiss', listener)
     }
   },
   connections: {
