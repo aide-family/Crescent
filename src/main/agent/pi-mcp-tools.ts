@@ -253,7 +253,7 @@ async function connectWithTransport(
     | InstanceType<Awaited<ReturnType<typeof loadMcpSdk>>['SSEClientTransport']>
     | InstanceType<Awaited<ReturnType<typeof loadMcpSdk>>['StdioClientTransport']>
 ): Promise<McpRuntimeClient> {
-  const client = new sdk.Client({ name: 'crescent', version: '1.0.5' })
+  const client = new sdk.Client({ name: 'crescent', version: '1.0.6' })
   const timeout = AbortSignal.timeout(MCP_CONNECT_TIMEOUT_MS)
   await client.connect(transport, { signal: timeout, timeout: MCP_CONNECT_TIMEOUT_MS })
   return {

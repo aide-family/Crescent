@@ -18,9 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Working styles (`swift` / `concise` / `guided` / `teach`) control how much the agent talks without slowing execution, safety checks, or batching. Default is concise, and the style stays bound to the current chat.
-- Composer references for skills, SOPs, tools, and paths insert as inline chips at the caret so quoted context stays aligned with the prompt.
-- Native application menu plus quieter updates: check-then-update from the menu or footer, and installers download to Downloads.
+- SSH opens only on identified login intent: generic verbs like 打开 do not guess lastUsed, and local git paths are not treated as connection names.
+- Paste Cursor `mcpServers` JSON to add HTTP or stdio MCP tools, and load local or catalog Pi extensions into the next agent run.
+- Skill manager cards preview SKILL.md before install; the chat dock shows session token usage and can export a redacted session trace. Composer chips wrap with typed text and keep newlines; the footer version opens the matching GitHub Release.
 
 ## Install Notes
 

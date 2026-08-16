@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.0.6 (2026-08-17)
+
+### Terminal / SSH
+
+- SSH connections open only when the user named a host, explicitly asked to log in, or the session already has that SSH. Generic verbs like 打开 no longer guess `lastUsed`.
+- Local inspect requests and git path fragments (for example `aide-family`) are not treated as SSH connection names.
+
+### Agent / MCP / Extensions
+
+- Paste Cursor `mcpServers` JSON to add HTTP or stdio MCP servers as cards; their tools join the Pi agent loop after save.
+- Local and catalog Pi extensions load into the next agent run.
+
+### Skills
+
+- Skill manager uses scannable cards instead of nested sheets, and search results open a SKILL.md preview before install.
+
+### Session / Observability
+
+- Chat dock shows cumulative input/output token usage for the session.
+- Export a redacted JSON trace of every run in the current session.
+
+### Composer / Desktop
+
+- Composer reference chips wrap in the same flow as typed text, keep a newline after a chip, and the empty input keeps three lines of height.
+- Footer version opens the matching GitHub Release page.
+
+### Tests / Reliability
+
+- Added and extended tests for login intent, local-path SSH false positives, MCP wiring, extensions, skill preview, token usage, and session trace export.
+
 ## v1.0.5 (2026-08-14)
 
 ### Agent / Working Style
