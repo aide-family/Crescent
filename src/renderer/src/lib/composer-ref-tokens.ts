@@ -134,10 +134,10 @@ export function insertComposerRefTokenAt(
   id: string
 ): string {
   const token = formatComposerRefToken(kind, id)
-  const before = value.slice(0, cursor).trimEnd()
+  const before = value.slice(0, cursor).replace(/[ \t]+$/, '')
   const after = value.slice(cursor).replace(/^[ \t]+/, '')
-  const left = before ? `${before} ` : ''
-  const right = after ? ` ${after}` : ' '
+  const left = before && !/\s$/.test(before) ? `${before} ` : before
+  const right = after ? (/^\s/.test(after) ? after : ` ${after}`) : ' '
   return `${left}${token}${right}`
 }
 

@@ -1,6 +1,7 @@
 import { formatComposerRefToken, type ComposerRefKind } from './composer-ref-tokens'
 
 const REF_KINDS = new Set<ComposerRefKind>(['wiki', 'skill', 'tool', 'path'])
+const COMPOSER_PAD_ATTR = 'data-composer-pad'
 
 export function readComposerRefFromElement(
   element: Element
@@ -9,6 +10,16 @@ export function readComposerRefFromElement(
   const id = element.getAttribute('data-composer-ref-id')
   if (!kind || !id || !REF_KINDS.has(kind as ComposerRefKind)) return null
   return { kind: kind as ComposerRefKind, id }
+}
+
+export function createComposerPadBr(): HTMLBRElement {
+  const br = document.createElement('br')
+  br.setAttribute(COMPOSER_PAD_ATTR, 'true')
+  return br
+}
+
+function isComposerPadBr(element: HTMLElement): boolean {
+  return element.tagName === 'BR' && element.getAttribute(COMPOSER_PAD_ATTR) === 'true'
 }
 
 export function serializeComposerDom(root: HTMLElement): string {
@@ -27,7 +38,7 @@ export function serializeComposerDom(root: HTMLElement): string {
       return
     }
     if (element.tagName === 'BR') {
-      result += '\n'
+      if (!isComposerPadBr(element)) result += '\n'
       return
     }
 
@@ -40,7 +51,6 @@ export function serializeComposerDom(root: HTMLElement): string {
   }
 
   walk(root, true)
-  if (result === '\n') return ''
   if (endsWithBlockNewline(root) && result.endsWith('\n')) result = result.slice(0, -1)
   return result
 }
@@ -59,6 +69,28 @@ export function getComposerDomCaret(root: HTMLElement): number {
   const holder = document.createElement('div')
   holder.appendChild(prefix.cloneContents())
   return serializeComposerDom(holder).length
+}
+
+export function insertComposerNewline(root: HTMLElement): void {
+  const br = document.createElement('br')
+  const selection = window.getSelection()
+  const pad = lastComposerPadBr(root)
+  if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
+    if (pad) root.insertBefore(br, pad)
+    else root.appendChild(br)
+    setComposerDomCaret(root, serializeComposerDom(root).length)
+    return
+  }
+
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  const insertAt = rangeAfterComposerRef(range, root)
+  insertAt.insertNode(br)
+  const after = document.createRange()
+  after.setStartAfter(br)
+  after.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(after)
 }
 
 export function setComposerDomCaret(root: HTMLElement, offset: number): void {
@@ -114,6 +146,10 @@ export function setComposerDomCaret(root: HTMLElement, offset: number): void {
       return false
     }
     if (element.tagName === 'BR') {
+      if (isComposerPadBr(element)) {
+        if (remaining <= 0) return placeBefore(element)
+        return false
+      }
       if (remaining === 0) return placeBefore(element)
       if (remaining <= 1) return placeAfter(element)
       remaining -= 1
@@ -130,14 +166,33 @@ export function setComposerDomCaret(root: HTMLElement, offset: number): void {
   }
 
   if (!walk(root, true)) {
-    const range = document.createRange()
-    range.selectNodeContents(root)
-    range.collapse(false)
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range)
+    const pad = lastComposerPadBr(root)
+    if (pad) {
+      placeBefore(pad)
+    } else {
+      const range = document.createRange()
+      range.selectNodeContents(root)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }
   }
   root.focus()
+}
+
+function rangeAfterComposerRef(range: Range, root: HTMLElement): Range {
+  let node: Node | null = range.startContainer
+  while (node && node !== root) {
+    if (node.nodeType === Node.ELEMENT_NODE && readComposerRefFromElement(node as Element)) {
+      const after = document.createRange()
+      after.setStartAfter(node)
+      after.collapse(true)
+      return after
+    }
+    node = node.parentNode
+  }
+  return range
 }
 
 function isBlockElement(element: HTMLElement): boolean {
@@ -145,8 +200,24 @@ function isBlockElement(element: HTMLElement): boolean {
 }
 
 function endsWithBlockNewline(root: HTMLElement): boolean {
-  const last = lastElementChild(root)
+  const last = lastSignificantElement(root)
   return Boolean(last && isBlockElement(last))
+}
+
+function lastComposerPadBr(root: HTMLElement): HTMLElement | null {
+  const last = lastElementChild(root)
+  return last && isComposerPadBr(last) ? last : null
+}
+
+function lastSignificantElement(root: HTMLElement): HTMLElement | null {
+  for (let index = root.childNodes.length - 1; index >= 0; index -= 1) {
+    const node = root.childNodes[index]
+    if (node?.nodeType !== Node.ELEMENT_NODE) continue
+    const element = node as HTMLElement
+    if (isComposerPadBr(element)) continue
+    return element
+  }
+  return null
 }
 
 function lastElementChild(root: HTMLElement): HTMLElement | null {

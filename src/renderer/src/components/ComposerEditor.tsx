@@ -16,7 +16,9 @@ import {
   removeComposerRefToken
 } from '@renderer/lib/composer-ref-tokens'
 import {
+  createComposerPadBr,
   getComposerDomCaret,
+  insertComposerNewline,
   serializeComposerDom,
   setComposerDomCaret
 } from '@renderer/lib/composer-surface'
@@ -167,6 +169,8 @@ export function ComposerEditor({
       })
     }
 
+    surface.appendChild(createComposerPadBr())
+
     lastEmittedRef.current = value
     const caret = pendingCaretRef.current
     if (caret == null) return
@@ -241,7 +245,7 @@ export function ComposerEditor({
 
         if (event.key === 'Enter' && event.shiftKey) {
           event.preventDefault()
-          document.execCommand('insertText', false, '\n')
+          insertComposerNewline(event.currentTarget)
           emitFromDom()
         }
       }}

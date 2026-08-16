@@ -168,18 +168,22 @@ export function replaceSlashCommandInput(
   const clamped = Math.max(0, Math.min(cursor, value.length))
   const before = value.slice(0, clamped)
   const after = value.slice(clamped)
-  const match = TRAILING_SLASH_COMMAND.exec(before)
-  const prefix = (match ? before.slice(0, match.index) : before).trimEnd()
+  const lastLineStart = before.lastIndexOf('\n') + 1
+  const lastLine = before.slice(lastLineStart)
+  const match = TRAILING_SLASH_COMMAND.exec(lastLine)
+  const linePrefix = match ? lastLine.slice(0, match.index) : lastLine
+  const prefix = `${before.slice(0, lastLineStart)}${linePrefix}`.replace(/[ \t]+$/, '')
   const next = replacement.trim()
   if (!next) return `${prefix}${after}`
   if (!prefix) {
     const body = next.startsWith('{{@') ? `${next} ` : next
     return `${body}${after}`
   }
-  if (next.startsWith('/')) return `${prefix} ${next}${after}`
+  const joined = /\s$/.test(prefix) ? `${prefix}${next}` : `${prefix} ${next}`
+  if (next.startsWith('/')) return `${joined}${after}`
   if (next.startsWith('{{@')) {
     const rest = after.replace(/^[ \t]+/, '')
-    return `${prefix} ${next}${rest ? ` ${rest}` : ' '}`
+    return `${joined}${rest ? (/^\s/.test(rest) ? rest : ` ${rest}`) : ' '}`
   }
   return `${prefix}\n${next}${after}`
 }
