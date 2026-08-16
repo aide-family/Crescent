@@ -3,7 +3,9 @@ const LOCAL_WORDING_PATTERN =
 
 const HOSTS_FILE_PATTERN = /(?:\/etc\/hosts\b|hosts\s*文件|hosts\s*file)/i
 const LOCAL_PATH_PATTERN =
-  /(?:^|[\s`"'([{<:：])(?:~(?:\/|\s|$)|\$HOME(?:\/|\s|$)|\/Users\/[^\s`"'<>]+|\/etc\/hosts\b)/i
+  /(?:~\/|~(?:\s|$)|\$HOME(?:\/|\s|$)|\/Users\/[^\s`"'<>]+|\/home\/[^\s`"'<>]+|\/etc\/hosts\b)/i
+const LOCAL_INSPECT_PATTERN =
+  /(?:查看|看看|看一下|列出|显示|git|\blog\b|diff|status|提交记录|提交历史|仓库)/i
 const FILE_OPERATION_PATTERN =
   /(?:修改|改为|替换|调整|更新|编辑|删除|移除|写入|保存|change|replace|update|edit|modify|remove|delete|write|save)/i
 const LOCAL_PROMPT_FILE_READ_PATTERN =
@@ -37,10 +39,19 @@ export function hasExplicitLocalFileOperationIntent(input: string): boolean {
   return true
 }
 
+/** Local inspect/edit that must not trigger SSH matching or login. */
+export function hasExplicitLocalWorkIntent(input: string): boolean {
+  if (hasExplicitLocalFileOperationIntent(input)) return true
+  const value = input.trim()
+  if (!value) return false
+  if (!LOCAL_WORDING_PATTERN.test(value)) return false
+  return LOCAL_PATH_PATTERN.test(value) || LOCAL_INSPECT_PATTERN.test(value)
+}
+
 export function explainLocalFileOperationBypass(): string {
   return [
-    'Request is classified as local file work.',
-    'Local wording, a local shell prompt, local path, or pasted file contents take precedence over configured SSH connection host matches.',
-    'IP addresses inside file contents are treated as data to edit, not remote connection targets.'
+    'Request is classified as local work.',
+    'Local wording, a local path (~, $HOME, /Users), a local shell prompt, or pasted file contents take precedence over configured SSH connection name or host matches.',
+    'Path fragments such as aide-family are not connection names. IP addresses inside file contents are treated as data to edit, not remote connection targets.'
   ].join(' ')
 }

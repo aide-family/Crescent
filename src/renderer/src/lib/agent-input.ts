@@ -10,7 +10,7 @@ import type {
   AgentWikiReference,
   ConnectionConfig
 } from '../../../shared/agent-types'
-import { hasExplicitLocalFileOperationIntent } from '../../../shared/agent-local-intent'
+import { hasExplicitLocalWorkIntent } from '../../../shared/agent-local-intent'
 
 export function isContinueIntent(value: string): boolean {
   const normalized = value
@@ -74,22 +74,42 @@ export function findDirectlyMentionedConnection(
   input: string,
   connections: ConnectionConfig[]
 ): ConnectionConfig | undefined {
-  if (hasExplicitLocalFileOperationIntent(input)) return undefined
-
-  const normalizedInput = normalizeConnectionMentionText(input)
-  if (!normalizedInput) return undefined
+  if (hasExplicitLocalWorkIntent(input)) return undefined
 
   const allowHostOrUserMatch = isExplicitConnectionRequest(input)
   const matches = connections.filter((connection) => {
     const nameTokens = getConnectionNameMentionTokens(connection)
-    if (nameTokens.some((token) => normalizedInput.includes(token))) return true
+    if (nameTokens.some((token) => connectionNameTokenAppearsInInput(input, token))) return true
     if (!allowHostOrUserMatch) return false
 
     return getConnectionHostUserMentionTokens(connection).some((token) =>
-      normalizedInput.includes(token)
+      connectionNameTokenAppearsInInput(input, token)
     )
   })
   return matches.length === 1 ? matches[0] : undefined
+}
+
+const FILESYSTEM_PATH_SPAN_RE =
+  /(?:~|\$HOME|\/Users\/|\/home\/|\/opt\/|\/var\/|\/tmp\/|\/etc\/|[A-Za-z]:\\)[^\s`"'<>，。]+/gi
+
+export function stripFilesystemPathSpans(input: string): string {
+  return input.replace(FILESYSTEM_PATH_SPAN_RE, ' ')
+}
+
+/** True when a connection name token is a real mention, not a path fragment like aide-family. */
+export function connectionNameTokenAppearsInInput(input: string, token: string): boolean {
+  if (!token) return false
+  const searchable = stripFilesystemPathSpans(input)
+  if (/^\p{Script=Han}+$/u.test(token)) {
+    return normalizeConnectionMentionText(searchable).includes(
+      normalizeConnectionMentionText(token)
+    )
+  }
+  if (/^[a-z0-9]+$/i.test(token)) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[^A-Za-z0-9_-])${escaped}([^A-Za-z0-9_-]|$)`, 'i').test(searchable)
+  }
+  return normalizeConnectionMentionText(searchable).includes(normalizeConnectionMentionText(token))
 }
 
 export function isSameConnectionTab(

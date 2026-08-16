@@ -173,7 +173,7 @@ import {
   stripComposerRefTokens
 } from '@renderer/lib/composer-ref-tokens'
 import { buildFallbackSopSeed, buildSopGenerationSummary } from '@renderer/lib/sop-summary'
-import { hasExplicitLocalFileOperationIntent } from '../../shared/agent-local-intent'
+import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
 import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
 import {
   buildConnectionCommands,
@@ -4670,7 +4670,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
 
     const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
-    const explicitLocalFileRequest = hasExplicitLocalFileOperationIntent(intentSourceInput)
+    const explicitLocalFileRequest = hasExplicitLocalWorkIntent(intentSourceInput)
     const sessionTabs = getSessionTerminals(
       tabsRef.current,
       getSessionGroupId(tab ?? terminalTab ?? { id: terminalTabId, sessionGroupId: terminalTabId })

@@ -5,7 +5,8 @@ import {
   isConnectionOnlyRequest,
   isExplicitConnectionRequest,
   isSameConnectionTab,
-  normalizeConnectionMentionText
+  normalizeConnectionMentionText,
+  connectionNameTokenAppearsInInput
 } from './agent-input'
 import type { AgentTerminalTab } from './terminal-tabs'
 
@@ -568,12 +569,11 @@ function findSoftConnectionMatches(
   message: string,
   connections: ConnectionConfig[]
 ): ConnectionConfig[] {
-  const normalized = normalizeConnectionMentionText(message)
-  if (!normalized) return []
+  if (!message.trim()) return []
 
   return connections.filter((connection) =>
     getConnectionNameMentionTokens(connection).some(
-      (token) => token.length >= 3 && normalized.includes(token)
+      (token) => token.length >= 3 && connectionNameTokenAppearsInInput(message, token)
     )
   )
 }

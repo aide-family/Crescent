@@ -1,6 +1,6 @@
 import {
   explainLocalFileOperationBypass,
-  hasExplicitLocalFileOperationIntent
+  hasExplicitLocalWorkIntent
 } from '../../shared/agent-local-intent'
 import { parseJsonFromModelContent } from '../../shared/json-parse'
 import type { AgentConnectionIntentResult, ConnectionConfig } from './types'
@@ -8,7 +8,7 @@ import type { AgentConnectionIntentResult, ConnectionConfig } from './types'
 export function buildLocalOnlyConnectionIntentResult(
   input: string
 ): AgentConnectionIntentResult | undefined {
-  if (!hasExplicitLocalFileOperationIntent(input)) return undefined
+  if (!hasExplicitLocalWorkIntent(input)) return undefined
 
   return {
     ok: false,
@@ -160,8 +160,8 @@ export const CONNECTION_INTENT_SYSTEM_PROMPT = [
   'Interpret the user request with the provided conversation context, current terminal summary, and configured connections. Do not rely on fixed business rules for a specific cluster or site.',
   'Set needsClarification=true and provide one short clarificationQuestion when the target connection, whether to login first, or whether to stay in the current terminal is ambiguous. In that case set shouldConnect=false and connectionId=null.',
   'Set shouldConnect=false for general chat, local-only work, or when clarification is required.',
-  'Local-only work includes local paths such as /etc/hosts, ~, $HOME, pasted local shell prompts, and requests that explicitly say the work is local/this machine.',
-  'IP addresses inside pasted file contents are data to edit, not SSH targets.',
+  'Local-only work includes local paths such as /etc/hosts, ~, $HOME, pasted local shell prompts, and requests that explicitly say the work is local/this machine — including viewing a local git repo.',
+  'Do not treat path fragments such as aide-family as a connection named aide. IP addresses inside pasted file contents are data to edit, not SSH targets.',
   'Set executeAfterLogin=true when the user asks for any concrete task beyond merely logging in or opening the connection.',
   'Matching priority: a clear unique connection-name match wins first; then host/alias/user when the user clearly asks for a remote connection; description is weak context only.',
   'Chinese shorthand like "登录aide集群" or "检查aide状态" should match a connection named aide when that name is unique among configured connections.',
