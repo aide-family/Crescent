@@ -4,6 +4,7 @@ out
 .DS_Store
 .eslintcache
 *.log*
+*.tsbuildinfo
 build/icons/preview/
 build/icons/Crescent.iconset/
 
