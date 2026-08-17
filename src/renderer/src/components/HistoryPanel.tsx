@@ -72,27 +72,22 @@ export function HistoryPanel({
           <SheetTitle>{t.history.title}</SheetTitle>
           <SheetDescription>{t.history.description}</SheetDescription>
         </SheetHeader>
-        <div className="app-sheet-list min-h-0 flex-1 space-y-1.5 overflow-auto overscroll-contain px-4">
+        <div className="app-sheet-list min-h-0 flex-1 space-y-1 overflow-auto overscroll-contain px-4">
           {loading && (
-            <div className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+            <div className="app-empty-state flex items-center gap-2">
+              <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
               {t.history.loading}
             </div>
           )}
           {!loading && items.length === 0 && (
-            <div className="rounded-lg border border-dashed p-2.5 text-sm text-muted-foreground">
-              {t.history.empty}
-            </div>
+            <div className="app-empty-state">{t.history.empty}</div>
           )}
           {!loading &&
             items.map((item) => {
               const editing = titleEditingId === item.tabId
 
               return (
-                <div
-                  key={item.tabId}
-                  className="rounded-lg border border-border/70 bg-card/70 px-2.5 py-2 text-sm transition-[border-color,background-color] hover:border-border hover:bg-muted/25"
-                >
+                <div key={item.tabId} className="app-list-row text-sm">
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1 overflow-hidden">
                       {editing ? (

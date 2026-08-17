@@ -18,9 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- SSH EnvGuard stays stable across hops; attention notifications jump to needing tabs with a pulse cue.
+- SSH EnvGuard stays stable across hops; destination parsing ignores `-p 22` ports; attention notifications jump to needing tabs with a pulse cue.
 - Command review classifies inspection pipelines by argv0 (awk `$5>0` / echo separators no longer false-high); real redirects and writes still need approval.
-- Settings preferences autosave; the footer Save button is gone. Provider / OpenAPI / instruction editors still save on their own.
+- Settings preferences autosave; denser extensions/connections/history/markdown chrome. Provider / OpenAPI / instruction editors still save on their own.
 
 ## Install Notes
 

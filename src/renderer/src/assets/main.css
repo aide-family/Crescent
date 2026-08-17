@@ -495,9 +495,7 @@
 }
 
 .app-sheet-main [role='button']:hover,
-.app-sheet-list > div:hover,
-.app-wiki-grid button:hover,
-.app-connection-grid .rounded-md.border:hover {
+.app-wiki-grid button:hover {
   background: var(--accent);
 }
 
@@ -589,19 +587,112 @@
   border-color: var(--app-markdown-border);
 }
 
+.app-section-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.app-list-row {
+  min-width: 0;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklch, var(--card) 72%, transparent);
+  padding: 0.5rem 0.625rem;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.app-list-row:hover {
+  border-color: var(--border);
+  background: color-mix(in oklch, var(--muted) 26%, transparent);
+}
+
+.app-list-row[data-selected='true'] {
+  border-color: color-mix(in oklch, var(--primary) 48%, transparent);
+  background: color-mix(in oklch, var(--primary) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.app-empty-state {
+  border: 1px dashed color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklch, var(--muted) 12%, transparent);
+  padding: 0.625rem 0.75rem;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.app-search-field {
+  position: relative;
+}
+
+.app-search-field > svg {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 0.625rem;
+  width: 0.875rem;
+  height: 0.875rem;
+  transform: translateY(-50%);
+  color: var(--muted-foreground);
+}
+
+.app-search-field > input {
+  height: 2rem;
+  padding-left: 2rem;
+}
+
 .app-code-panel,
 .app-mermaid-panel {
+  overflow: hidden;
   border-color: var(--app-markdown-border);
   box-shadow: none;
   background: var(--app-markdown-canvas);
   color: var(--app-markdown-text);
 }
 
-.app-code-panel > :first-child,
-.app-mermaid-panel > :first-child {
+.app-code-panel-header,
+.app-mermaid-panel > :first-child,
+.app-code-panel > :first-child {
+  min-height: 2rem;
   border-bottom-color: var(--app-markdown-border);
   background: var(--app-terminal-rail);
   color: var(--app-markdown-muted);
+}
+
+.app-code-panel-lang {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--app-markdown-muted);
+}
+
+.app-code-panel-body {
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  padding: 0.75rem 1rem;
+  font-family: var(--app-mono, 'JetBrains Mono', Menlo, Monaco, Consolas, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  color: var(--app-markdown-text);
+}
+
+.app-code-panel-body code {
+  font: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
 }
 
 .app-mermaid-expanded {

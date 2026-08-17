@@ -34,10 +34,7 @@ import {
 import { formatInstallCount } from '@renderer/lib/skill-management'
 import type { AgentExtensionOption, AgentPiPackageSearchResult } from '../../../shared/agent-types'
 
-const CARD_CLASS =
-  'flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25'
-const CARD_SELECTED_CLASS = 'border-primary/50 bg-primary/8'
-const CARD_IDLE_CLASS = 'border-border/70'
+const CARD_CLASS = 'app-list-row flex min-w-0 flex-col text-xs'
 
 type ExtensionManagerPane = 'installed' | 'discover'
 
@@ -131,7 +128,7 @@ export function ExtensionManager({
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <p className="mb-2 shrink-0 rounded-md border border-amber-500/35 bg-amber-500/8 px-2.5 py-2 text-xs text-muted-foreground">
+            <p className="mb-2 shrink-0 rounded-md border border-amber-500/25 bg-amber-500/6 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">
               {t.settings.extensionsSecurityWarning}
             </p>
             <div className="flex shrink-0 items-center justify-between gap-2 pb-2">
@@ -185,16 +182,18 @@ export function ExtensionManager({
             </p>
             {pane === 'installed' ? (
               <>
-                <Input
-                  type="search"
-                  className="mb-2 shrink-0"
-                  value={searchQuery}
-                  onChange={(event) => onSearchQueryChange(event.target.value)}
-                  placeholder={t.settings.extensionsSearchPlaceholder}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label={t.settings.extensionsSearchPlaceholder}
-                />
+                <div className="app-search-field mb-2 shrink-0">
+                  <SearchIcon aria-hidden="true" />
+                  <Input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => onSearchQueryChange(event.target.value)}
+                    placeholder={t.settings.extensionsSearchPlaceholder}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={t.settings.extensionsSearchPlaceholder}
+                  />
+                </div>
                 <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
                   {extensions.length === 0 ? (
                     <EmptyState text={t.settings.noExtensions} />
@@ -210,7 +209,8 @@ export function ExtensionManager({
                         return (
                           <div
                             key={extension.path}
-                            className={`${CARD_CLASS} ${selected ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS}`}
+                            data-selected={selected ? 'true' : undefined}
+                            className={CARD_CLASS}
                           >
                             <div className="flex min-w-0 items-start gap-1">
                               <button
@@ -248,13 +248,18 @@ export function ExtensionManager({
                               </button>
                               <Button
                                 type="button"
-                                variant={extension.enabled ? 'secondary' : 'outline'}
+                                variant={extension.enabled ? 'outline' : 'secondary'}
                                 size="xs"
+                                aria-label={
+                                  extension.enabled
+                                    ? t.settings.extensionDisabled
+                                    : t.settings.extensionEnabled
+                                }
                                 onClick={() => onToggleEnabled(extension, !extension.enabled)}
                               >
                                 {extension.enabled
-                                  ? t.settings.extensionEnabled
-                                  : t.settings.extensionDisabled}
+                                  ? t.settings.extensionDisabled
+                                  : t.settings.extensionEnabled}
                               </Button>
                               <Button
                                 type="button"
@@ -305,21 +310,24 @@ export function ExtensionManager({
             ) : (
               <>
                 <div className="flex shrink-0 gap-2 pb-1.5">
-                  <Input
-                    id="extension-catalog-search"
-                    type="search"
-                    value={catalogQuery}
-                    onChange={(event) => onCatalogQueryChange(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter') return
-                      event.preventDefault()
-                      onSearchCatalog()
-                    }}
-                    placeholder={t.settings.extensionsCatalogSearchPlaceholder}
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-label={t.settings.extensionsCatalogSearchPlaceholder}
-                  />
+                  <div className="app-search-field min-w-0 flex-1">
+                    <SearchIcon aria-hidden="true" />
+                    <Input
+                      id="extension-catalog-search"
+                      type="search"
+                      value={catalogQuery}
+                      onChange={(event) => onCatalogQueryChange(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') return
+                        event.preventDefault()
+                        onSearchCatalog()
+                      }}
+                      placeholder={t.settings.extensionsCatalogSearchPlaceholder}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label={t.settings.extensionsCatalogSearchPlaceholder}
+                    />
+                  </div>
                   <Button
                     type="button"
                     variant="outline"
@@ -349,7 +357,7 @@ export function ExtensionManager({
                         const installed = isPiPackageSearchResultInstalled(result, extensions)
                         const installing = installingSource === result.source
                         return (
-                          <div key={result.id} className={`${CARD_CLASS} ${CARD_IDLE_CLASS}`}>
+                          <div key={result.id} className={CARD_CLASS}>
                             <div className="flex min-w-0 items-start gap-2">
                               <PuzzleIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
                               <div className="min-w-0 flex-1">
@@ -502,7 +510,5 @@ function PaneTab({
 }
 
 function EmptyState({ text }: { text: string }): React.JSX.Element {
-  return (
-    <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">{text}</div>
-  )
+  return <div className="app-empty-state">{text}</div>
 }

@@ -197,6 +197,7 @@ import {
   resolveLoginContinuation
 } from '@renderer/lib/busy-supplement'
 import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
+import { resolveFinalSshTarget } from '../../shared/ssh-destination'
 import {
   buildTerminalNotReadyClarifyOptions,
   CLARIFY_MANUAL_CONTINUE_ID,
@@ -1636,7 +1637,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // Multi-hop login: the final `ssh <host>` action is the true target.
         // Wait for that host's prompt (not the jump box's) before confirming,
         // otherwise confirm-login anchors the wrong runtime environment.
-        const finalTargetHost = resolveFinalSshTarget(commands, connection)
+        const finalTargetHost = resolveFinalSshTarget(commands, connection.host)
         const lastAction = commands.length > 1 ? commands[commands.length - 1] : undefined
         const lastActionIsSsh = Boolean(lastAction && /^\s*ssh\b/i.test(lastAction))
         const preConfirm = await window.api.terminal.getContext(targetTabId)
@@ -8078,26 +8079,6 @@ async function waitForPromptHostOrTimeout(
 
 function sendTerminalInput(value: string, tabId: string): void {
   window.api.terminal.write(`${value}\r`, tabId)
-}
-
-
-/**
- * Multi-hop login target: scan the connection command list for the LAST
- * `ssh <host>` (login action or the leading ssh command) and return that host.
- * This is the true environment the session is expected to end on; the
- * configured connection.host is only the jump box.
- */
-function resolveFinalSshTarget(
-  commands: string[],
-  connection: ConnectionConfig
-): string | undefined {
-  let target: string | undefined
-  for (const command of commands) {
-    const trimmed = command.trim()
-    const match = trimmed.match(/^ssh(?:\s+-[A-Za-z0-9][^\s]*)*\s+([^\s]+)/)
-    if (match?.[1]) target = match[1].replace(/^['"]|['"]$/g, '')
-  }
-  return target || connection.host || undefined
 }
 
 function getSelectedTextWithinLog(logId: number): string {

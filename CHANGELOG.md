@@ -5,6 +5,7 @@
 ### Terminal / SSH
 
 - Stabilize SSH EnvGuard across hop transitions so prompt-host checks stay aligned with the live session.
+- Parse SSH destinations correctly so `-p 22` is not treated as the host; port-like runtime anchors no longer poison EnvGuard alignment.
 - Attention notifications can jump to the needing tab, and those tabs pulse for quicker focus.
 
 ### Agent / Command Review
@@ -14,6 +15,7 @@
 ### Settings / Desktop
 
 - Settings prefs (agent style, thinking toggle, workspace cwd) autosave; the global footer Save button is removed. Provider, OpenAPI, and instruction editors still save explicitly.
+- Dense list/sheet chrome for extensions, connections, history, and markdown code blocks; extension toggle buttons show the next action (enable/disable).
 
 ### Chores
 

@@ -43,15 +43,12 @@ function ConnectionIdentity({
       <p className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
         {formatConnectionTarget(connection)}
       </p>
-      <p className="truncate text-[11px] text-muted-foreground">
+      <p className="truncate text-[10px] text-muted-foreground/90">
         {connectionSourceLabel(connection, t)}
+        {showCustomMetadata && connection.source === 'custom'
+          ? ` · ${connection.sshOptions?.length || 0} ${t.connections.sshOptionsCount} · ${connection.actions?.length || 0} ${t.connections.actionsCount}`
+          : ''}
       </p>
-      {showCustomMetadata && connection.source === 'custom' && (
-        <p className="tabular-nums text-[11px] text-muted-foreground">
-          {connection.sshOptions?.length || 0} {t.connections.sshOptionsCount} ·{' '}
-          {connection.actions?.length || 0} {t.connections.actionsCount}
-        </p>
-      )}
     </>
   )
 }
@@ -106,9 +103,7 @@ export function ConnectionList({
       <div className="connection-list-header shrink-0 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h3 className="text-pretty text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t.connections.existing}
-            </h3>
+            <h3 className="app-section-label">{t.connections.existing}</h3>
             <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
               {filteredConnections.length}/{connections.length}
             </p>
@@ -117,41 +112,30 @@ export function ConnectionList({
             <div className="flex shrink-0 items-center gap-2">{headerAction}</div>
           ) : null}
         </div>
-        <div className="relative">
-          <SearchIcon
-            className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
+        <div className="app-search-field">
+          <SearchIcon aria-hidden="true" />
           <Input
             type="search"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={t.connections.searchPlaceholder}
-            className="h-8 pl-8"
             aria-label={t.connections.searchPlaceholder}
             autoComplete="off"
             spellCheck={false}
           />
         </div>
       </div>
-      <div className="connection-list-scroll min-h-0 flex-1 space-y-1.5 overflow-auto overscroll-contain pt-2">
+      <div className="connection-list-scroll min-h-0 flex-1 space-y-1 overflow-auto overscroll-contain pt-2">
         {connections.length === 0 ? (
-          <p className="rounded-lg border border-dashed bg-muted/10 p-2.5 text-xs text-muted-foreground">
-            {t.connections.noConnections}
-          </p>
+          <p className="app-empty-state">{t.connections.noConnections}</p>
         ) : filteredConnections.length === 0 ? (
-          <p className="rounded-lg border border-dashed bg-muted/10 p-2.5 text-xs text-muted-foreground">
-            {t.connections.noSearchResults}
-          </p>
+          <p className="app-empty-state">{t.connections.noSearchResults}</p>
         ) : (
           filteredConnections.map((connection) => (
             <div
               key={connection.id}
-              className={`rounded-lg border px-2.5 py-2 text-xs transition-[border-color,background-color] ${
-                selectedConnectionId === connection.id
-                  ? 'border-primary/50 bg-primary/8'
-                  : 'border-border/70 bg-card/60 hover:border-border hover:bg-muted/25'
-              }`}
+              data-selected={selectedConnectionId === connection.id ? 'true' : undefined}
+              className="app-list-row text-xs"
             >
               <div className="flex items-start justify-between gap-2">
                 {onSelectConnection ? (

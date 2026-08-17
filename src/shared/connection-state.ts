@@ -1,9 +1,16 @@
+import { isPlausibleSshHost } from './ssh-destination'
 import {
   findNewestPromptSignal,
   isLocalShellPromptVisible,
   isPromptHostAligned,
   normalizeHostToken
 } from './terminal-prompt-host'
+
+/** Runtime EnvGuard anchor; port-like leftovers (`22` from `-p 22`) are ignored. */
+export function runtimeAnchorHost(state: ConnectionState): string | undefined {
+  const runtime = normalizeHostToken(state.runtimeExpectedHost ?? '')
+  return runtime && isPlausibleSshHost(runtime) ? runtime : undefined
+}
 
 /**
  * Single source of truth for per-terminal connection state (main process).
@@ -132,7 +139,7 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
 export function resolveGateAlignment(state: ConnectionState, output: string): TerminalAlignment {
   const resolved = resolveSessionAlignment({
     output,
-    expectedHost: state.runtimeExpectedHost ?? state.expectedHost,
+    expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
     aliases: state.aliases
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
@@ -149,7 +156,7 @@ export function isReturnToJumpHost(
   observedHost: string | undefined
 ): boolean {
   const observed = normalizeHostToken(observedHost ?? '')
-  const runtime = normalizeHostToken(state.runtimeExpectedHost ?? '')
+  const runtime = runtimeAnchorHost(state)
   if (!observed || observed === 'local-shell' || !runtime) return false
   if (isPromptHostAligned(observed, runtime)) return false
 
@@ -184,7 +191,7 @@ export function evaluateInjectionGuard(
   output: string,
   options: { localHost?: string } = {}
 ): InjectionGuardVerdict {
-  const effectiveExpectedHost = state.runtimeExpectedHost ?? state.expectedHost
+  const effectiveExpectedHost = runtimeAnchorHost(state) ?? state.expectedHost
   if (!effectiveExpectedHost) {
     return { alignment: 'unknown', shouldReanchor: false }
   }
@@ -223,7 +230,7 @@ export function evaluateInjectionGuard(
   // prompt is the legitimate login destination (e.g. web1.zhangke after
   // `ssh web1.zhangke`).
   if (
-    !state.runtimeExpectedHost &&
+    !runtimeAnchorHost(state) &&
     observedHost !== 'local-shell' &&
     !isPromptHostAligned(observedHost, options.localHost ?? '')
   ) {
@@ -249,7 +256,7 @@ export function evaluateInjectionGuard(
   // Treating every peer hop as drift caused environment-drift recovery loops
   // and OOM. Jump-box return is handled above; exit-to-local still drifts below.
   if (
-    state.runtimeExpectedHost &&
+    runtimeAnchorHost(state) &&
     observedHost !== 'local-shell' &&
     !isPromptHostAligned(observedHost, options.localHost ?? '')
   ) {
@@ -433,7 +440,7 @@ export function autoLearnUnverifiedLogin(
   if (!observed || observed === 'local-shell' || state.ready) return undefined
   // Once a runtime anchor exists the session was verified; EnvGuard may set
   // ready=false on hop/drift — never auto-heal that into a new anchor.
-  if (state.runtimeExpectedHost) return undefined
+  if (runtimeAnchorHost(state)) return undefined
   const local = normalizeHostToken(options.localHost ?? '')
   if (local && isPromptHostAligned(observed, local)) return undefined
   const learned = learnHostAlias(state, observed)

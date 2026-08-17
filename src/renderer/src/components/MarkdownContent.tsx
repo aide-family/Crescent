@@ -493,29 +493,30 @@ function MarkdownCodeBlock({
   }
 
   return (
-    <div className="app-code-panel min-w-0 rounded-lg border">
-      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px]">
+    <div className="app-code-panel group min-w-0 overflow-hidden rounded-lg border">
+      <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center justify-between gap-2 pr-1 pl-3">
+        <span className="app-code-panel-lang min-w-0 truncate">
           {closed ? label : `${label || 'text'}…`}
         </span>
         <Button
           type="button"
           variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 shrink-0 text-[var(--app-markdown-muted)] hover:bg-white/8 hover:text-[var(--app-markdown-text)]"
+          size="xs"
+          className="h-7 shrink-0 gap-1 px-2 text-[11px] text-[var(--app-markdown-muted)] hover:bg-white/8 hover:text-[var(--app-markdown-text)]"
           aria-label={copied ? t.common.copied : t.common.copy}
           title={copied ? t.common.copied : t.common.copy}
           onClick={() => void copyCode()}
         >
           {copied ? (
-            <CheckIcon className="text-primary" aria-hidden="true" />
+            <CheckIcon className="size-3.5 text-primary" aria-hidden="true" />
           ) : (
-            <CopyIcon aria-hidden="true" />
+            <CopyIcon className="size-3.5" aria-hidden="true" />
           )}
+          {copied ? t.common.copied : t.common.copy}
         </Button>
       </div>
-      <pre className="min-w-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed">
-        <code className="break-words">{code}</code>
+      <pre className="app-code-panel-body">
+        <code>{code}</code>
       </pre>
     </div>
   )
@@ -851,8 +852,8 @@ function MermaidBlock({
 
   return (
     <div className="app-mermaid-panel min-w-0 rounded-lg border">
-      <div className="app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 truncate font-mono text-[11px]">mermaid</span>
+      <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b pr-1 pl-3">
+        <span className="app-code-panel-lang min-w-0 truncate">mermaid</span>
         <div className="flex shrink-0 items-center gap-1">
           {svg ? (
             <>

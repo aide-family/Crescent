@@ -127,12 +127,12 @@ export function ConnectionManagerModal({
       }}
     >
       <div className="app-modal-panel flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border bg-background">
-        <div className="app-modal-header flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
-          <div>
+        <div className="app-modal-header flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2.5">
+          <div className="min-w-0">
             <h2 id="connection-modal-title" className="text-sm font-semibold text-pretty">
               {t.connections.sshConnections}
             </h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] leading-snug text-muted-foreground">
               {t.connections.sshConnectionsDescription}
             </p>
           </div>
@@ -274,12 +274,10 @@ export function ConnectionManagerModal({
               </div>
             )}
           />
-          <div className="min-h-0 overflow-auto overscroll-contain p-2.5">
+          <div className="min-h-0 overflow-auto overscroll-contain p-3">
             <FieldGroup className="gap-2.5">
+              <p className="app-section-label">{t.connections.copiedConnection}</p>
               <Field>
-                <FieldLabel htmlFor="connection-import">
-                  {t.connections.copiedConnection}
-                </FieldLabel>
                 <Textarea
                   id="connection-import"
                   name="connection-import"
@@ -287,6 +285,7 @@ export function ConnectionManagerModal({
                   value={connectionImportText}
                   onChange={(event) => onImportTextChange(event.target.value)}
                   placeholder={t.connections.copiedConnectionPlaceholder}
+                  aria-label={t.connections.copiedConnection}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -426,7 +425,7 @@ export function ConnectionManagerModal({
                 />
                 <FieldDescription>{t.connections.sshOptionsDescription}</FieldDescription>
                 {connectionCommandPreview && (
-                  <pre className="overflow-auto rounded-md border border-border/60 bg-muted/15 p-2 font-mono text-[11px] text-muted-foreground">
+                  <pre className="app-code-panel-body overflow-x-auto rounded-md border border-[var(--app-markdown-border)]">
                     {connectionCommandPreview}
                   </pre>
                 )}

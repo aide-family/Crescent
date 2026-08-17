@@ -57,6 +57,7 @@
   --app-markdown-muted: #8fa7b8;
   --app-markdown-border: rgba(203, 213, 225, 0.18);
   --app-markdown-accent: #13c2c2;
+  --app-mono: 'JetBrains Mono', Menlo, Monaco, Consolas, ui-monospace, monospace;
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 12px 32px rgb(18 24 31 / 12%);
@@ -93,6 +94,7 @@
   --app-markdown-muted: #8fa7b8;
   --app-markdown-border: rgba(203, 213, 225, 0.18);
   --app-markdown-accent: #13c2c2;
+  --app-mono: 'JetBrains Mono', Menlo, Monaco, Consolas, ui-monospace, monospace;
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 16px 40px rgb(0 0 0 / 28%);

@@ -19,9 +19,11 @@ import {
   promoteSubterminalLogin,
   resolveGateAlignment,
   resolveSessionAlignment,
+  runtimeAnchorHost,
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
+import { isIpv4Literal, sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import { createPendingCommandController } from './pending-command'
 
@@ -831,7 +833,7 @@ export function registerTerminalIpc(): void {
       const key = getSessionKey(event.sender.id, tabId)
       sessionWebContents.set(key, event.sender)
       const localHost = payload?.localHost?.trim() || hostname()
-      const expectedTargetHost = payload?.expectedTargetHost?.trim()
+      const expectedTargetHost = sanitizeExpectedTargetHost(payload?.expectedTargetHost)
       const jumpPromptHost = payload?.jumpPromptHost?.trim()
 
       const confirmOn = (targetTabId: string): ConnectionState | undefined => {
@@ -852,12 +854,18 @@ export function registerTerminalIpc(): void {
               jumpPromptHost: normalizeHostToken(jumpPromptHost) || result.state.jumpPromptHost
             }
           : result.state
-        const anchored = expectedTargetHost
-          ? {
-              ...withJump,
-              runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
-            }
-          : withJump
+        const learnedRuntime = runtimeAnchorHost(withJump)
+        const keepLearnedHostname =
+          Boolean(learnedRuntime) &&
+          !isIpv4Literal(learnedRuntime ?? '') &&
+          isIpv4Literal(expectedTargetHost ?? '')
+        const anchored =
+          expectedTargetHost && !keepLearnedHostname
+            ? {
+                ...withJump,
+                runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
+              }
+            : withJump
         connectionStates.set(targetKey, anchored)
         return result.ok ? anchored : undefined
       }
@@ -1070,7 +1078,7 @@ export function registerTerminalIpc(): void {
     const output = key ? (terminalOutputBuffers.get(key) ?? '') : ''
     // Match injection-guard: prefer the runtime anchor learned after login so
     // IP-configured connections that show a hostname prompt stay aligned.
-    const effectiveExpectedHost = state?.runtimeExpectedHost ?? state?.expectedHost ?? ''
+    const effectiveExpectedHost = (state ? runtimeAnchorHost(state) : undefined) ?? expectedHost
     let resolved = state
       ? resolveSessionAlignment({
           output,
@@ -1085,7 +1093,7 @@ export function registerTerminalIpc(): void {
       state &&
       key &&
       !state.jumpPromptHost &&
-      !state.runtimeExpectedHost &&
+      !runtimeAnchorHost(state) &&
       resolved?.promptHost &&
       resolved.promptHost !== 'local-shell'
     ) {
@@ -1105,7 +1113,7 @@ export function registerTerminalIpc(): void {
       state &&
       key &&
       !state.ready &&
-      !state.runtimeExpectedHost &&
+      !runtimeAnchorHost(state) &&
       resolved?.promptHost &&
       resolved.promptHost !== 'local-shell'
     ) {
@@ -1117,7 +1125,7 @@ export function registerTerminalIpc(): void {
         state = learned
         resolved = resolveSessionAlignment({
           output,
-          expectedHost: learned.runtimeExpectedHost ?? learned.expectedHost,
+          expectedHost: runtimeAnchorHost(learned) ?? learned.expectedHost,
           aliases: learned.aliases
         })
       }
@@ -1130,7 +1138,7 @@ export function registerTerminalIpc(): void {
       state &&
       key &&
       state.ready &&
-      state.runtimeExpectedHost &&
+      runtimeAnchorHost(state) &&
       resolved?.alignment === 'drifted' &&
       resolved.promptHost &&
       resolved.promptHost !== 'local-shell' &&
@@ -1149,7 +1157,7 @@ export function registerTerminalIpc(): void {
       state = healed
       resolved = resolveSessionAlignment({
         output,
-        expectedHost: healed.runtimeExpectedHost ?? healed.expectedHost,
+        expectedHost: runtimeAnchorHost(healed) ?? healed.expectedHost,
         aliases: healed.aliases
       })
     }
