@@ -20,7 +20,6 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
   SheetTrigger
@@ -118,7 +117,6 @@ export interface SettingsSheetProps {
   onInstructionEditorOpenChange: (open: boolean) => void
   onInstructionContentChange: (value: string) => void
   onSaveInstructionFile: () => void | Promise<void>
-  onSaveConfig: () => void | Promise<void>
 }
 
 export function SettingsSheet({
@@ -168,8 +166,7 @@ export function SettingsSheet({
   onSaveOpenApiEditor,
   onInstructionEditorOpenChange,
   onInstructionContentChange,
-  onSaveInstructionFile,
-  onSaveConfig
+  onSaveInstructionFile
 }: SettingsSheetProps): React.JSX.Element {
   const defaultModelSelection =
     modelOptions.find(
@@ -200,26 +197,33 @@ export function SettingsSheet({
       <SheetContent className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}>
         <SheetHeader>
           <SheetTitle>{t.settings.title}</SheetTitle>
-          <SheetDescription>{t.settings.titleDescription}</SheetDescription>
+          <SheetDescription>
+            {t.settings.titleDescription}
+            {saved ? (
+              <span className="ml-2 text-primary" aria-live="polite">
+                {t.settings.saved}
+              </span>
+            ) : null}
+          </SheetDescription>
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium text-muted-foreground">
+              <p className="app-section-label">
                 {t.settings.providerList} · {config.providers.length}
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={onCreateProvider}>
+              </p>
+              <Button type="button" variant="outline" size="xs" onClick={onCreateProvider}>
                 <PlusIcon data-icon="inline-start" />
                 {t.settings.newProvider}
               </Button>
             </div>
             {config.providers.length === 0 ? (
-              <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+              <div className="app-empty-state">
                 <BotIcon className="mr-2 inline size-3" aria-hidden="true" />
                 {t.settings.modelHint}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {config.providers.map((provider) => {
                   const selected = providerEditorOpen && settingsProviderId === provider.id
                   const isDefaultProvider = config.providerId === provider.id
@@ -230,9 +234,8 @@ export function SettingsSheet({
                   return (
                     <div
                       key={provider.id}
-                      className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
-                        selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
-                      }`}
+                      data-selected={selected ? 'true' : undefined}
+                      className="app-list-row flex min-w-0 flex-col text-xs"
                     >
                       <div className="flex min-w-0 items-start justify-between gap-2">
                         <button
@@ -375,7 +378,7 @@ export function SettingsSheet({
               <Field>
                 <label
                   htmlFor="show-agent-thinking"
-                  className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
+                  className="app-list-row flex items-start justify-between gap-3"
                 >
                   <span className="space-y-1">
                     <span className="block text-sm font-medium">
@@ -402,7 +405,7 @@ export function SettingsSheet({
               <Field>
                 <label
                   htmlFor="close-terminal-confirm"
-                  className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-2"
+                  className="app-list-row flex items-start justify-between gap-3"
                 >
                   <span className="space-y-1">
                     <span className="block text-sm font-medium">
@@ -442,12 +445,12 @@ export function SettingsSheet({
                 </div>
                 <FieldDescription>{t.settings.instructionFilesHint}</FieldDescription>
                 {instructionFiles.length === 0 ? (
-                  <div className="rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground">
+                  <div className="app-empty-state">
                     <FileTextIcon className="mr-2 inline size-3" aria-hidden="true" />
                     {t.settings.instructionFilePlaceholder}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                     {instructionFiles.map((file) => {
                       const selected =
                         instructionEditorOpen && file.name === selectedInstructionName
@@ -456,9 +459,8 @@ export function SettingsSheet({
                       return (
                         <div
                           key={file.name}
-                          className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
-                            selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
-                          }`}
+                          data-selected={selected ? 'true' : undefined}
+                          className="app-list-row flex min-w-0 flex-col text-xs"
                         >
                           <button
                             type="button"
@@ -803,12 +805,6 @@ export function SettingsSheet({
             </div>
           ) : null}
         </div>
-        <SheetFooter className="gap-2 sm:justify-end">
-          <Button onClick={() => void onSaveConfig()}>
-            {saved ? <CheckIcon data-icon="inline-start" /> : <BotIcon data-icon="inline-start" />}
-            {saved ? t.settings.saved : t.settings.saveSettings}
-          </Button>
-        </SheetFooter>
       </SheetContent>
     </Sheet>
   )

@@ -546,6 +546,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
+  const configRef = useRef(config)
+  const commandWhitelistTextRef = useRef(commandWhitelistText)
+  const workspaceCwdSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingWorkspaceCwdRef = useRef<string | null>(null)
   const [providerModelsText, setProviderModelsText] = useState(
     formatProviderModels(emptyConfig.providers[0]?.models ?? [])
   )
@@ -1969,6 +1973,23 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }, [closeTerminalConfirmEnabled])
 
   useEffect(() => {
+    configRef.current = config
+  }, [config])
+
+  useEffect(() => {
+    commandWhitelistTextRef.current = commandWhitelistText
+  }, [commandWhitelistText])
+
+  useEffect(() => {
+    return () => {
+      if (workspaceCwdSaveTimerRef.current) {
+        clearTimeout(workspaceCwdSaveTimerRef.current)
+        workspaceCwdSaveTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     const handleConnectionShortcut = (event: globalThis.KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey)) return
 
@@ -2634,13 +2655,61 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }, [activeTabId, updateTab])
 
-  async function saveConfig(): Promise<void> {
-    await saveAgentConfig({
-      ...config,
-      commandWhitelist: parseCommandWhitelist(commandWhitelistText)
-    })
+  function flashSettingsSaved(): void {
     setSaved(true)
     setTimeout(() => setSaved(false), 1400)
+  }
+
+  async function persistAgentConfigPatch(patch: Partial<AgentConfig>): Promise<AgentConfig> {
+    const optimisticConfig = {
+      ...configRef.current,
+      ...patch,
+      commandWhitelist: parseCommandWhitelist(commandWhitelistTextRef.current)
+    }
+    setConfig(optimisticConfig)
+    setValidation(undefined)
+    const nextConfig = await saveAgentConfig(optimisticConfig)
+    flashSettingsSaved()
+    void validateConfig(nextConfig)
+    return nextConfig
+  }
+
+  async function saveConfig(): Promise<void> {
+    await persistAgentConfigPatch({})
+  }
+
+  function persistAgentStyle(style: AgentStyle): void {
+    void persistAgentConfigPatch({ agentStyle: style })
+  }
+
+  function persistShowAgentThinking(value: boolean | undefined): void {
+    void persistAgentConfigPatch({ showAgentThinking: value })
+  }
+
+  function scheduleWorkspaceCwdPersist(value: string): void {
+    updateConfig('workspaceCwd', value.trim() || undefined)
+    pendingWorkspaceCwdRef.current = value
+    if (workspaceCwdSaveTimerRef.current) {
+      clearTimeout(workspaceCwdSaveTimerRef.current)
+    }
+    workspaceCwdSaveTimerRef.current = setTimeout(() => {
+      workspaceCwdSaveTimerRef.current = null
+      const pending = pendingWorkspaceCwdRef.current
+      pendingWorkspaceCwdRef.current = null
+      if (pending === null) return
+      void persistAgentConfigPatch({ workspaceCwd: pending.trim() || undefined })
+    }, 400)
+  }
+
+  function flushWorkspaceCwdPersist(): void {
+    if (workspaceCwdSaveTimerRef.current) {
+      clearTimeout(workspaceCwdSaveTimerRef.current)
+      workspaceCwdSaveTimerRef.current = null
+    }
+    const pending = pendingWorkspaceCwdRef.current
+    if (pending === null) return
+    pendingWorkspaceCwdRef.current = null
+    void persistAgentConfigPatch({ workspaceCwd: pending.trim() || undefined })
   }
 
   async function saveSkillRoot(): Promise<void> {
@@ -7164,6 +7233,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onOpenChange={(open) => {
               setSheetOpen(open)
               if (!open) {
+                flushWorkspaceCwdPersist()
                 setProviderEditorOpen(false)
                 setOpenApiEditorOpen(false)
                 setInstructionEditorOpen(false)
@@ -7198,11 +7268,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onDeleteProvider={deleteSettingsProvider}
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
-            onAgentStyleChange={(style) => updateConfig('agentStyle', style)}
-            onShowAgentThinkingChange={(value) => updateConfig('showAgentThinking', value)}
-            onWorkspaceCwdChange={(value) =>
-              updateConfig('workspaceCwd', value.trim() || undefined)
-            }
+            onAgentStyleChange={persistAgentStyle}
+            onShowAgentThinkingChange={persistShowAgentThinking}
+            onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
             onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
             onCommandWhitelistChange={(text) => {
               setCommandWhitelistText(text)
@@ -7232,7 +7300,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               setInstructionSaved(false)
             }}
             onSaveInstructionFile={saveInstructionFile}
-            onSaveConfig={saveConfig}
           />
         </div>
       </header>
@@ -8012,6 +8079,7 @@ async function waitForPromptHostOrTimeout(
 function sendTerminalInput(value: string, tabId: string): void {
   window.api.terminal.write(`${value}\r`, tabId)
 }
+
 
 /**
  * Multi-hop login target: scan the connection command list for the LAST
