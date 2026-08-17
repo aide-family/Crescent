@@ -95,7 +95,9 @@ export function ComposerEditor({
 
     const isEcho = mountedRef.current && value === lastEmittedRef.current
     mountedRef.current = true
-    if (isEcho) {
+    // When empty, always rebuild so a leftover browser <br> cannot hide the
+    // CSS placeholder (echo skip would leave non-pad BR in the DOM).
+    if (isEcho && value.length > 0) {
       previousValueRef.current = value
       pendingCaretRef.current = null
       return
@@ -208,7 +210,7 @@ export function ComposerEditor({
       suppressContentEditableWarning
       spellCheck={false}
       data-placeholder={placeholder}
-      data-empty={value.length === 0 ? 'true' : undefined}
+      data-empty={value.trim().length === 0 ? 'true' : undefined}
       onInput={() => {
         if (composingRef.current) return
         emitFromDom()

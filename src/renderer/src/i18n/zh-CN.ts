@@ -101,6 +101,7 @@ const zhCN = {
     new: '新建',
     save: '保存',
     saveAndConnect: '保存并连接',
+    connecting: '连接中…',
     send: '发送',
     settings: '设置',
     stop: '停止',

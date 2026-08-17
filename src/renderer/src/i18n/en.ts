@@ -107,6 +107,7 @@ const en = {
     new: 'New',
     save: 'Save',
     saveAndConnect: 'Save and connect',
+    connecting: 'Connecting…',
     send: 'Send',
     settings: 'Settings',
     stop: 'Stop',

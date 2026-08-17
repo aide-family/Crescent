@@ -98,8 +98,8 @@ export function mapPiSessionEventToAgentEvents(
         classified.retryAfterMs != null
           ? formatRetryAfterLabel(classified.retryAfterMs, locale)
           : locale === 'zh'
-            ? '等待恢复'
-            : 'waiting to recover'
+            ? '模型服务连接失败，正在重试…'
+            : 'model service connection failed; retrying…'
       return [
         {
           type: 'status',

@@ -135,6 +135,7 @@ const api = {
       sourceTabId?: string
       localHost?: string
       expectedTargetHost?: string
+      jumpPromptHost?: string
     }): Promise<{
       ok: boolean
       tabId?: string

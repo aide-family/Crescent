@@ -1,5 +1,5 @@
 import type { RefObject } from 'react'
-import { ServerIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, ServerIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 
 import { ConnectionList } from '@renderer/components/ConnectionList'
 import {
@@ -27,6 +27,7 @@ export function TerminalPane({
   displayConnections,
   filteredDisplayConnections,
   connectionSearchQuery,
+  connectionActionBusy = false,
   terminalHostRef,
   subterminalCollapsed,
   subterminalPanelHeight,
@@ -64,6 +65,7 @@ export function TerminalPane({
   displayConnections: ConnectionConfig[]
   filteredDisplayConnections: ConnectionConfig[]
   connectionSearchQuery: string
+  connectionActionBusy?: boolean
   terminalHostRef: RefObject<HTMLDivElement | null>
   subterminalCollapsed: boolean
   subterminalPanelHeight: number
@@ -141,11 +143,19 @@ export function TerminalPane({
                 <Button
                   type="button"
                   size="icon-xs"
-                  aria-label={t.connections.connect}
-                  title={t.connections.connect}
-                  onClick={() => onConnect(connection)}
+                  aria-label={connectionActionBusy ? t.common.connecting : t.connections.connect}
+                  title={connectionActionBusy ? t.common.connecting : t.connections.connect}
+                  disabled={connectionActionBusy}
+                  onClick={() => {
+                    if (connectionActionBusy) return
+                    onConnect(connection)
+                  }}
                 >
-                  <ServerIcon aria-hidden="true" />
+                  {connectionActionBusy ? (
+                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <ServerIcon aria-hidden="true" />
+                  )}
                 </Button>
               )}
             />

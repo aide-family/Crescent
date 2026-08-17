@@ -668,6 +668,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [connectionSaveMessage, setConnectionSaveMessage] = useState<SkillManageMessage | null>(
     null
   )
+  const [connectionActionBusy, setConnectionActionBusy] = useState(false)
+  const connectionActionBusyRef = useRef(false)
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
@@ -1647,7 +1649,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           ? await window.api.terminal.confirmLogin({
               tabId: subterminal ? subterminal.parentTabId : targetTabId,
               sourceTabId: subterminal ? targetTabId : undefined,
-              expectedTargetHost: finalTargetHost
+              expectedTargetHost: finalTargetHost,
+              jumpPromptHost: previousHost
             })
           : undefined
         if (verified && !verified.ok && loginSignal === 'local') {
@@ -1767,6 +1770,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
   useEffect(() => {
     return window.api.terminal.onEnvironmentDrift((event) => {
+      // Main only emits for true session breaks (exit-to-local / jump-box
+      // fall-back). Peer hops are re-anchored in-process and never reach here.
+      // Recover + re-run the interrupted agent input on the restored target.
+
       const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
       const driftKey = event.driftKey ?? `${event.expectedHost}|${event.observedHost}`
       const budget = recoveryBudgetByTabRef.current.get(chatTabId) ?? {
@@ -4639,21 +4646,35 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function connectFromConnectionManager(connection: ConnectionConfig): void {
-    if (isLocalConnection(connection)) {
-      openLocalTerminal()
-      if (connectionModalOpen) setConnectionModalOpen(false)
-      return
+    if (connectionActionBusyRef.current) return
+    connectionActionBusyRef.current = true
+    setConnectionActionBusy(true)
+    const releaseBusy = (): void => {
+      connectionActionBusyRef.current = false
+      setConnectionActionBusy(false)
     }
 
-    if (connectionModalOpen) {
-      openConnectionTerminal(connection)
-      setConnectionModalOpen(false)
-      return
-    }
+    try {
+      if (isLocalConnection(connection)) {
+        openLocalTerminal()
+        if (connectionModalOpen) setConnectionModalOpen(false)
+        releaseBusy()
+        return
+      }
 
-    void connectToConnection(connection)
-    setHiddenPane(null)
-    setTerminalPage('terminal')
+      if (connectionModalOpen) {
+        openConnectionTerminal(connection)
+        setConnectionModalOpen(false)
+        releaseBusy()
+        return
+      }
+
+      setHiddenPane(null)
+      setTerminalPage('terminal')
+      void connectToConnection(connection).finally(releaseBusy)
+    } catch {
+      releaseBusy()
+    }
   }
 
   function openNewConnectionForm(): void {
@@ -4662,6 +4683,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   async function saveConnection(connectAfterSave = false): Promise<void> {
+    if (connectionActionBusyRef.current) return
     const normalizedInput = normalizeConnectionInputForSave(
       connectionForm,
       connectionActionsText,
@@ -4673,6 +4695,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       ? normalizedInput
       : { ...normalizedInput, id: createCustomConnectionId() }
 
+    connectionActionBusyRef.current = true
+    setConnectionActionBusy(true)
     setConnectionSaveMessage(null)
 
     try {
@@ -4694,7 +4718,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       })
 
       if (connectAfterSave && savedConnection) {
-        connectFromConnectionManager(savedConnection)
+        // Busy flag already held; open terminal without re-entering the guard.
+        if (isLocalConnection(savedConnection)) {
+          openLocalTerminal()
+        } else {
+          openConnectionTerminal(savedConnection)
+        }
         setConnectionModalOpen(false)
         resetConnectionForm()
         return
@@ -4708,6 +4737,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         type: 'error',
         text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
       })
+    } finally {
+      connectionActionBusyRef.current = false
+      setConnectionActionBusy(false)
     }
   }
 
@@ -4905,8 +4937,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       `tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
     )
     if (terminalContext.sessionAligned === 'drifted') {
-      // Remote side closed the SSH session while the outer PTY stayed alive.
-      // Mark the tab not-ready and surface the reconnect state before routing.
+      // Dead or off-target session: local-shell OR jump-box fall-back. Mark the
+      // tab not ready so routing/recovery reconnect to the operation target
+      // instead of injecting on the wrong host.
       const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
       updateConnectionAttempt(driftedChatTabId, (state) =>
         markConnectionFailed(state, { reason: t.terminal.connectionDriftedReconnecting })
@@ -4945,7 +4978,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       resumeRequested,
       explicitNonTerminal: explicitNonTerminalRequest,
       explicitLocalFile: explicitLocalFileRequest,
-      sessionAligned: terminalContext.sessionAligned
+      sessionAligned: terminalContext.sessionAligned,
+      promptHost: terminalContext.promptHost
     })
     connTrace(
       'route',
@@ -7171,6 +7205,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             displayConnections={displayConnections}
             filteredDisplayConnections={filteredDisplayConnections}
             connectionSearchQuery={connectionSearchQuery}
+            connectionActionBusy={connectionActionBusy}
             terminalHostRef={terminalHostRef}
             subterminalCollapsed={subterminalCollapsed}
             subterminalPanelHeight={subterminalPanelHeight}
@@ -7445,6 +7480,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         connectionCommandPreview={connectionCommandPreview}
         connectionFormReady={connectionFormReady}
         connectionSaveMessage={connectionSaveMessage}
+        connectionActionBusy={connectionActionBusy}
         t={t}
         formatConnectionTarget={formatConnectionTarget}
         onClose={() => setConnectionModalOpen(false)}
@@ -7851,7 +7887,7 @@ function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
  * remote host style). A freshly spawned PTY is ready only after the shell
  * finishes its startup files; pasting earlier loses the command in zsh.
  */
-async function waitForShellInteractive(tabId: string, timeoutMs = 10_000): Promise<boolean> {
+async function waitForShellInteractive(tabId: string, timeoutMs = 2_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {

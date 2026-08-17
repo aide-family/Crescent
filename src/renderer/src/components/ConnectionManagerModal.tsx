@@ -3,6 +3,7 @@ import {
   CopyIcon,
   CopyPlusIcon,
   Layers2Icon,
+  Loader2Icon,
   PanelBottomIcon,
   PencilIcon,
   ServerIcon,
@@ -39,6 +40,7 @@ export function ConnectionManagerModal({
   connectionCommandPreview,
   connectionFormReady,
   connectionSaveMessage,
+  connectionActionBusy = false,
   t,
   formatConnectionTarget,
   onClose,
@@ -73,6 +75,7 @@ export function ConnectionManagerModal({
   connectionCommandPreview: string
   connectionFormReady: boolean
   connectionSaveMessage: SkillManageMessage | null
+  connectionActionBusy?: boolean
   t: Dictionary
   formatConnectionTarget: (connection: ConnectionConfig) => string
   onClose: () => void
@@ -109,7 +112,9 @@ export function ConnectionManagerModal({
     (connection) => connection.id === selectedConnectionId
   )
   const canEditConnection = !selectedConnection || selectedConnection.source === 'custom'
-  const canSaveConnection = connectionEditing && connectionFormReady && canEditConnection
+  const canSaveConnection =
+    connectionEditing && connectionFormReady && canEditConnection && !connectionActionBusy
+  const connectDisabled = connectionActionBusy
 
   return (
     <div
@@ -220,8 +225,10 @@ export function ConnectionManagerModal({
                   size="icon-xs"
                   aria-label={t.connections.connectInSession}
                   title={t.connections.connectInSessionDescription}
+                  disabled={connectDisabled}
                   onClick={(event) => {
                     event.stopPropagation()
+                    if (connectionActionBusy) return
                     onConnectInSession(connection)
                     onClose()
                   }}
@@ -234,8 +241,10 @@ export function ConnectionManagerModal({
                   size="icon-xs"
                   aria-label={t.terminal.openSubterminalInSession}
                   title={t.terminal.openSubterminalInSessionDescription}
+                  disabled={connectDisabled}
                   onClick={(event) => {
                     event.stopPropagation()
+                    if (connectionActionBusy) return
                     onConnectInSubterminal(connection)
                     onClose()
                   }}
@@ -246,15 +255,21 @@ export function ConnectionManagerModal({
                   type="button"
                   variant="default"
                   size="icon-xs"
-                  aria-label={t.connections.connect}
-                  title={t.connections.connect}
+                  aria-label={connectionActionBusy ? t.common.connecting : t.connections.connect}
+                  title={connectionActionBusy ? t.common.connecting : t.connections.connect}
+                  disabled={connectDisabled}
                   onClick={(event) => {
                     event.stopPropagation()
+                    if (connectionActionBusy) return
                     onConnect(connection)
                     onClose()
                   }}
                 >
-                  <ServerIcon aria-hidden="true" />
+                  {connectionActionBusy ? (
+                    <Loader2Icon className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <ServerIcon aria-hidden="true" />
+                  )}
                 </Button>
               </div>
             )}
@@ -477,11 +492,18 @@ export function ConnectionManagerModal({
                 onClick={() => onSave(false)}
                 disabled={!canSaveConnection}
               >
+                {connectionActionBusy ? (
+                  <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                ) : null}
                 {t.common.save}
               </Button>
               <Button type="button" onClick={() => onSave(true)} disabled={!canSaveConnection}>
-                <ServerIcon data-icon="inline-start" />
-                {t.common.saveAndConnect}
+                {connectionActionBusy ? (
+                  <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                ) : (
+                  <ServerIcon data-icon="inline-start" />
+                )}
+                {connectionActionBusy ? t.common.connecting : t.common.saveAndConnect}
               </Button>
             </div>
           </div>

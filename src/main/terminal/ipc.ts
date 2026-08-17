@@ -7,13 +7,17 @@ import { spawn as spawnPty } from 'node-pty'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
-import { normalizeHostToken } from '../../shared/terminal-prompt-host'
+import { normalizeHostToken, isPromptHostAligned } from '../../shared/terminal-prompt-host'
 import {
+  autoLearnUnverifiedLogin,
   classifyPipeCommand,
   confirmLoginState,
   createConnectionState,
   evaluateInjectionGuard,
+  isReturnToJumpHost,
+  learnHostAlias,
   promoteSubterminalLogin,
+  resolveGateAlignment,
   resolveSessionAlignment,
   setConnectionExpectedHost,
   type ConnectionState
@@ -111,7 +115,7 @@ const sessions = new Map<string, TerminalSession>()
 let nextSessionId = 1
 const PIPE_PROMPT_PREFIX = '__TERMINAL_AGENT_PROMPT__'
 const MAX_CONTEXT_BUFFER = 24_000
-const TERMINAL_COMMAND_TIMEOUT_MS = 600_000
+const TERMINAL_COMMAND_TIMEOUT_MS = 60_000
 const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
 const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const TERMINAL_COMMAND_INTERRUPT_GRACE_MS = 2_000
@@ -807,6 +811,7 @@ export function registerTerminalIpc(): void {
         sourceTabId?: string
         localHost?: string
         expectedTargetHost?: string
+        jumpPromptHost?: string
       }
     ): {
       ok: boolean
@@ -827,6 +832,7 @@ export function registerTerminalIpc(): void {
       sessionWebContents.set(key, event.sender)
       const localHost = payload?.localHost?.trim() || hostname()
       const expectedTargetHost = payload?.expectedTargetHost?.trim()
+      const jumpPromptHost = payload?.jumpPromptHost?.trim()
 
       const confirmOn = (targetTabId: string): ConnectionState | undefined => {
         const targetKey = getSessionKey(event.sender.id, targetTabId)
@@ -840,12 +846,18 @@ export function registerTerminalIpc(): void {
           aliases: state.aliases
         }).promptHost
         const result = confirmLoginState(state, promptHost, { localHost })
-        const anchored = expectedTargetHost
+        const withJump = jumpPromptHost
           ? {
               ...result.state,
-              runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
+              jumpPromptHost: normalizeHostToken(jumpPromptHost) || result.state.jumpPromptHost
             }
           : result.state
+        const anchored = expectedTargetHost
+          ? {
+              ...withJump,
+              runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
+            }
+          : withJump
         connectionStates.set(targetKey, anchored)
         return result.ok ? anchored : undefined
       }
@@ -1053,30 +1065,110 @@ export function registerTerminalIpc(): void {
   ipcMain.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     const key = tabId ? getSessionKey(event.sender.id, tabId) : ''
-    const state = key ? connectionStates.get(key) : undefined
+    let state = key ? connectionStates.get(key) : undefined
     const expectedHost = state?.expectedHost ?? ''
     const output = key ? (terminalOutputBuffers.get(key) ?? '') : ''
-    const resolved = state
+    // Match injection-guard: prefer the runtime anchor learned after login so
+    // IP-configured connections that show a hostname prompt stay aligned.
+    const effectiveExpectedHost = state?.runtimeExpectedHost ?? state?.expectedHost ?? ''
+    let resolved = state
       ? resolveSessionAlignment({
           output,
-          expectedHost: state.expectedHost,
+          expectedHost: effectiveExpectedHost || state.expectedHost,
           aliases: state.aliases
         })
       : undefined
-    const alignment = resolved?.alignment ?? 'unknown'
-    // Resolve promptHost live from the output buffer instead of relying on the
-    // cached state field, which is only written after confirm-login. Login
-    // completion watchers poll this to finish as soon as the remote prompt
-    // appears, otherwise they burn the whole timeout waiting for the cache.
+
+    // Remember the jump-box hostname while logging in (often differs from the
+    // configured IP expectedHost). Used later to detect fall-back-to-jump drift.
+    if (
+      state &&
+      key &&
+      !state.jumpPromptHost &&
+      !state.runtimeExpectedHost &&
+      resolved?.promptHost &&
+      resolved.promptHost !== 'local-shell'
+    ) {
+      const withJump: ConnectionState = {
+        ...state,
+        jumpPromptHost: normalizeHostToken(resolved.promptHost)
+      }
+      connectionStates.set(key, withJump)
+      state = withJump
+    }
+
+    // Manual / slow confirm-login often leaves ready=false with an empty alias
+    // list while the PTY already shows a remote prompt. Learn that host here so
+    // submit routing does not treat a live shell as drifted and reconnect.
+    // Never re-learn after a runtime anchor exists (EnvGuard drift / hop).
+    if (
+      state &&
+      key &&
+      !state.ready &&
+      !state.runtimeExpectedHost &&
+      resolved?.promptHost &&
+      resolved.promptHost !== 'local-shell'
+    ) {
+      const learned = autoLearnUnverifiedLogin(state, resolved.promptHost, {
+        localHost: hostname()
+      })
+      if (learned) {
+        connectionStates.set(key, learned)
+        state = learned
+        resolved = resolveSessionAlignment({
+          output,
+          expectedHost: learned.runtimeExpectedHost ?? learned.expectedHost,
+          aliases: learned.aliases
+        })
+      }
+    }
+
+    // Peer hop while verified: learn the live remote prompt as an alias so
+    // status stays aligned. Never heal a fall-back to the jump box / laptop —
+    // those must stay drifted so recovery can restore the operation target.
+    if (
+      state &&
+      key &&
+      state.ready &&
+      state.runtimeExpectedHost &&
+      resolved?.alignment === 'drifted' &&
+      resolved.promptHost &&
+      resolved.promptHost !== 'local-shell' &&
+      !isPromptHostAligned(resolved.promptHost, hostname()) &&
+      !isReturnToJumpHost(state, resolved.promptHost)
+    ) {
+      const learned = learnHostAlias(state, resolved.promptHost)
+      const healed: ConnectionState = {
+        ...learned,
+        promptHost: resolved.promptHost,
+        alignment: 'aligned',
+        ready: true,
+        lastError: undefined
+      }
+      connectionStates.set(key, healed)
+      state = healed
+      resolved = resolveSessionAlignment({
+        output,
+        expectedHost: healed.runtimeExpectedHost ?? healed.expectedHost,
+        aliases: healed.aliases
+      })
+    }
+
     const promptHost = resolved?.promptHost ?? state?.promptHost
+    const gateAlignment = state
+      ? resolveGateAlignment(state, output)
+      : (resolved?.alignment ?? 'unknown')
+    const alignment = gateAlignment
     const sessionAligned = expectedHost ? alignment : 'unknown'
+    const ready = Boolean(state?.ready) && alignment !== 'drifted'
     connTrace(
       'getContext',
       `tab=${tabId}`,
       `aligned=${alignment}`,
       `expected=${expectedHost || '-'}`,
+      `runtime=${state?.runtimeExpectedHost || '-'}`,
       `aliases=${state?.aliases.join(',') || '-'}`,
-      `ready=${state?.ready ? 'yes' : 'no'}`,
+      `ready=${ready ? 'yes' : 'no'}`,
       `tail=${output.slice(-120).replace(/\n/g, '\\n')}`
     )
 
@@ -1095,7 +1187,7 @@ export function registerTerminalIpc(): void {
         alignment,
         promptHost,
         aliases: state?.aliases ?? [],
-        ready: Boolean(state?.ready)
+        ready
       }
     }
 
@@ -1110,7 +1202,7 @@ export function registerTerminalIpc(): void {
       alignment,
       promptHost,
       aliases: state?.aliases ?? [],
-      ready: Boolean(state?.ready)
+      ready
     }
   })
 
@@ -1185,8 +1277,9 @@ function detectEnvironmentDriftForSession(
   const verdict = evaluateInjectionGuard(state, buffer, { localHost: hostname() })
   if (verdict.alignment !== 'drifted') {
     if (verdict.shouldReanchor && verdict.observedHost) {
+      const learned = learnHostAlias(state, verdict.observedHost)
       const anchored: ConnectionState = {
-        ...state,
+        ...learned,
         promptHost: verdict.observedHost,
         runtimeExpectedHost: verdict.observedHost,
         alignment: 'aligned',
@@ -1215,6 +1308,8 @@ function detectEnvironmentDriftForSession(
   const anchorHost = verdict.effectiveExpectedHost
   if (!observedHost || !anchorHost) return undefined
 
+  // Only exit-to-local (or laptop hostname) is a real session break. Remote→
+  // remote hops are healed above via shouldReanchor; never fire recovery for them.
   connectionStates.set(key, { ...state, promptHost: observedHost, ready: false })
   const driftKey = `${anchorHost}|${observedHost}`
 

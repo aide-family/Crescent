@@ -52,7 +52,12 @@ export function serializeComposerDom(root: HTMLElement): string {
 
   walk(root, true)
   if (endsWithBlockNewline(root) && result.endsWith('\n')) result = result.slice(0, -1)
-  return result
+  return normalizeComposerSerializedValue(result)
+}
+
+/** Collapse whitespace-only / leftover BR serialization to empty for placeholder. */
+export function normalizeComposerSerializedValue(value: string): string {
+  return value.trim().length === 0 ? '' : value
 }
 
 export function getComposerDomCaret(root: HTMLElement): number {

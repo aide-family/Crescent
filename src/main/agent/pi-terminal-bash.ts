@@ -140,7 +140,10 @@ export function createPtyBashToolDefinition(
         const result = await executeReviewedPtyCommand({
           context,
           command,
-          timeoutMs: options.timeout,
+          timeoutMs:
+            typeof options.timeout === 'number' && Number.isFinite(options.timeout)
+              ? options.timeout * 1000
+              : undefined,
           signal: combinedSignal
         })
 
@@ -365,9 +368,18 @@ function normalizeInteractivePrivilegeCommand(command: string): string {
 
 function normalizeTimeout(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return 600_000
+    return 60_000
   }
   return Math.min(Math.max(Math.floor(timeoutMs), 1_000), 10 * 60_000)
+}
+
+/** Exported for unit tests — Pi bash `timeout` is seconds; Crescent uses ms. */
+export function timeoutSecondsToMs(timeoutSeconds: number | undefined): number {
+  return normalizeTimeout(
+    typeof timeoutSeconds === 'number' && Number.isFinite(timeoutSeconds)
+      ? timeoutSeconds * 1000
+      : undefined
+  )
 }
 
 function combineAbortSignals(

@@ -33,6 +33,12 @@ export interface ConnectionState {
    * static configured host which only reflects the jump host.
    */
   runtimeExpectedHost?: string
+  /**
+   * Hostname prompt observed on the jump box during login (often differs from
+   * the configured IP `expectedHost`). Returning here after a deeper runtime
+   * anchor is environment drift, not a peer hop.
+   */
+  jumpPromptHost?: string
   /** Last observed prompt host (normalized). */
   promptHost?: string
   /** Learned aliases: observed prompt hosts that proved to be on target. */
@@ -47,6 +53,8 @@ export interface ConnectionState {
 
 export const RECOVERY_WINDOW_MS = 60_000
 export const RECOVERY_MAX_ATTEMPTS = 2
+/** Cap learned hop hosts so long cluster sessions cannot grow aliases unboundedly. */
+export const MAX_HOST_ALIASES = 48
 
 /** Minimal state shape for recovery-brake decisions (ConnectionState satisfies). */
 export interface RecoveryStateLike {
@@ -77,6 +85,7 @@ export function setConnectionExpectedHost(
       ...state,
       expectedHost: undefined,
       runtimeExpectedHost: undefined,
+      jumpPromptHost: undefined,
       alignment: 'unknown',
       ready: false,
       lastError: undefined
@@ -86,6 +95,7 @@ export function setConnectionExpectedHost(
     ...state,
     expectedHost: expected,
     runtimeExpectedHost: undefined,
+    jumpPromptHost: undefined,
     alignment: 'unknown',
     ready: false,
     lastError: undefined
@@ -117,6 +127,7 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
  * Gate verdict for a buffer given the current SSOT. A hostless prompt is only
  * treated as drift when the session was previously verified with a hostname
  * prompt (exit-to-local); unverified hostless prompts stay unknown.
+ * Falling back to the jump box after a deeper runtime anchor is always drift.
  */
 export function resolveGateAlignment(state: ConnectionState, output: string): TerminalAlignment {
   const resolved = resolveSessionAlignment({
@@ -125,7 +136,31 @@ export function resolveGateAlignment(state: ConnectionState, output: string): Te
     aliases: state.aliases
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
+  if (resolved.promptHost && isReturnToJumpHost(state, resolved.promptHost)) return 'drifted'
   return resolved.alignment
+}
+
+/**
+ * True when the session had a deeper runtime target and the live prompt is
+ * back on the configured jump box (IP expectedHost and/or jumpPromptHost).
+ */
+export function isReturnToJumpHost(
+  state: ConnectionState,
+  observedHost: string | undefined
+): boolean {
+  const observed = normalizeHostToken(observedHost ?? '')
+  const runtime = normalizeHostToken(state.runtimeExpectedHost ?? '')
+  if (!observed || observed === 'local-shell' || !runtime) return false
+  if (isPromptHostAligned(observed, runtime)) return false
+
+  const jump = normalizeHostToken(state.expectedHost ?? '')
+  const jumpPrompt = normalizeHostToken(state.jumpPromptHost ?? '')
+  if (jump && isPromptHostAligned(runtime, jump)) return false
+  if (jumpPrompt && isPromptHostAligned(runtime, jumpPrompt)) return false
+
+  if (jump && isPromptHostAligned(observed, jump)) return true
+  if (jumpPrompt && isPromptHostAligned(observed, jumpPrompt)) return true
+  return false
 }
 
 export interface InjectionGuardVerdict {
@@ -186,9 +221,35 @@ export function evaluateInjectionGuard(
 
   // Multi-hop login: before a runtime anchor exists, a non-local, non-localhost
   // prompt is the legitimate login destination (e.g. web1.zhangke after
-  // `ssh web1.zhangke`). After anchoring, a different host still drifts.
+  // `ssh web1.zhangke`).
   if (
     !state.runtimeExpectedHost &&
+    observedHost !== 'local-shell' &&
+    !isPromptHostAligned(observedHost, options.localHost ?? '')
+  ) {
+    return {
+      effectiveExpectedHost,
+      observedHost,
+      alignment: 'aligned',
+      shouldReanchor: true
+    }
+  }
+
+  // Fell back to the jump box after a deeper runtime target — block + recover.
+  if (isReturnToJumpHost(state, observedHost)) {
+    return {
+      effectiveExpectedHost,
+      observedHost,
+      alignment: 'drifted',
+      shouldReanchor: false
+    }
+  }
+
+  // Peer remote hop (cluster node ↔ node): re-anchor instead of blocking.
+  // Treating every peer hop as drift caused environment-drift recovery loops
+  // and OOM. Jump-box return is handled above; exit-to-local still drifts below.
+  if (
+    state.runtimeExpectedHost &&
     observedHost !== 'local-shell' &&
     !isPromptHostAligned(observedHost, options.localHost ?? '')
   ) {
@@ -213,7 +274,11 @@ export function learnHostAlias(state: ConnectionState, observedHost: string): Co
   const normalized = normalizeHostToken(observedHost)
   if (!normalized) return state
   if (state.aliases.some((alias) => isPromptHostAligned(normalized, alias))) return state
-  return { ...state, aliases: [...state.aliases, normalized] }
+  const aliases = [...state.aliases, normalized]
+  return {
+    ...state,
+    aliases: aliases.length > MAX_HOST_ALIASES ? aliases.slice(-MAX_HOST_ALIASES) : aliases
+  }
 }
 
 /** Latest prompt host in a PTY buffer, normalized. */
@@ -355,8 +420,9 @@ export function confirmLoginState(
  * Auto-learn for unverified logins: the first non-local prompt observed after
  * an expected host was set is treated as the target (covers password/manual
  * logins where confirm-login had no prompt host yet). Returns undefined when
- * the observed host is the local machine (failed ssh) or the session is
- * already verified, so the caller keeps gating.
+ * the observed host is the local machine (failed ssh), the session is already
+ * verified (`ready`), or a runtime anchor already exists (verified-then-drifted
+ * — re-learning would thrash EnvGuard across hop hosts and blow memory).
  */
 export function autoLearnUnverifiedLogin(
   state: ConnectionState,
@@ -365,6 +431,9 @@ export function autoLearnUnverifiedLogin(
 ): ConnectionState | undefined {
   const observed = normalizeHostToken(observedHost ?? '')
   if (!observed || observed === 'local-shell' || state.ready) return undefined
+  // Once a runtime anchor exists the session was verified; EnvGuard may set
+  // ready=false on hop/drift — never auto-heal that into a new anchor.
+  if (state.runtimeExpectedHost) return undefined
   const local = normalizeHostToken(options.localHost ?? '')
   if (local && isPromptHostAligned(observed, local)) return undefined
   const learned = learnHostAlias(state, observed)
@@ -392,6 +461,7 @@ export function promoteSubterminalLogin(
     promptHost: source.promptHost ?? parent.promptHost,
     runtimeExpectedHost:
       source.runtimeExpectedHost ?? source.promptHost ?? parent.runtimeExpectedHost,
+    jumpPromptHost: source.jumpPromptHost ?? parent.jumpPromptHost,
     alignment: 'aligned',
     ready: true,
     lastError: undefined

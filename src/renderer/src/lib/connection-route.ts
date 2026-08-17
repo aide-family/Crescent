@@ -44,6 +44,8 @@ export interface ConnectionRouteContext {
   explicitLocalFile?: boolean
   /** Authoritative session/host alignment from main (terminal:get-context). */
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  /** Newest prompt host from get-context; used to distinguish local vs hop drift. */
+  promptHost?: string
 }
 
 /**
@@ -101,7 +103,8 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       sessionTabs,
       connections,
       activeLabel,
-      sessionAligned: ctx.sessionAligned
+      sessionAligned: ctx.sessionAligned,
+      promptHost: ctx.promptHost
     })
   }
 
@@ -111,7 +114,8 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     shouldPreferActiveLoggedIn({
       activeTab,
       mentionedConnection: undefined,
-      sessionAligned: ctx.sessionAligned
+      sessionAligned: ctx.sessionAligned,
+      promptHost: ctx.promptHost
     })
   ) {
     return {
@@ -124,10 +128,9 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
-  // Active remote session has drifted (e.g. SSH closed by the remote side while
-  // the outer PTY stayed alive). Reconnect the same connection through its
-  // configured login actions instead of reusing a dead session or letting the
-  // agent improvise a raw ssh command.
+  // Active remote session has left the operation target (exit-to-local or
+  // fall-back to the jump box). Reconnect through configured login actions so
+  // the agent re-executes on the restored target — not the wrong host.
   if (ctx.sessionAligned === 'drifted' && activeTab?.connectionId) {
     const connection = connections.find((c) => c.id === activeTab.connectionId)
     if (connection) {
@@ -164,7 +167,8 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       connections,
       activeLabel,
       soft: true,
-      sessionAligned: ctx.sessionAligned
+      sessionAligned: ctx.sessionAligned,
+      promptHost: ctx.promptHost
     })
   }
 
@@ -222,13 +226,20 @@ export function isActiveLoggedInTerminal(
         'terminalReady' | 'connectionId' | 'isSsh' | 'sessionId' | 'terminalStartError'
       >
     | undefined,
-  options?: { sessionAligned?: 'aligned' | 'drifted' | 'unknown' }
+  options?: {
+    sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+    promptHost?: string
+  }
 ): boolean {
   if (!tab) return false
   if (tab.terminalStartError?.trim()) return false
   if (!tab.terminalReady) return false
   if (!(tab.connectionId || tab.isSsh)) return false
-  if (options?.sessionAligned === 'drifted') return false
+  // Any EnvGuard drift (exit-to-local OR fall-back to jump) means the PTY is
+  // not on the operation target — do not treat as a ready logged-in session.
+  if (options?.sessionAligned === 'drifted') {
+    return false
+  }
   return true
 }
 
@@ -240,8 +251,14 @@ export function shouldPreferActiveLoggedIn(input: {
   activeTab?: AgentTerminalTab
   mentionedConnection?: ConnectionConfig
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
 }): boolean {
-  if (!isActiveLoggedInTerminal(input.activeTab, { sessionAligned: input.sessionAligned })) {
+  if (
+    !isActiveLoggedInTerminal(input.activeTab, {
+      sessionAligned: input.sessionAligned,
+      promptHost: input.promptHost
+    })
+  ) {
     return false
   }
   if (
@@ -251,6 +268,10 @@ export function shouldPreferActiveLoggedIn(input: {
     return false
   }
   return true
+}
+
+function isLocalShellPromptHost(promptHost: string | undefined): boolean {
+  return !promptHost || promptHost === 'local-shell'
 }
 
 /** Put the active connection first and optionally mark it as current. */
@@ -304,6 +325,7 @@ function resolveNamedConnection(input: {
   activeLabel: string
   soft?: boolean
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
 }): ConnectionRouteResult {
   const {
     mentioned,
@@ -313,12 +335,13 @@ function resolveNamedConnection(input: {
     sessionTabs,
     activeLabel,
     soft,
-    sessionAligned
+    sessionAligned,
+    promptHost
   } = input
   const prefix = soft ? 'soft' : 'mention'
 
   if (isSameConnectionTab(activeTab, mentioned)) {
-    if (sessionAligned === 'drifted') {
+    if (sessionAligned === 'drifted' && isLocalShellPromptHost(promptHost)) {
       return {
         targetTabId: activeTabId,
         connectionId: mentioned.id,
