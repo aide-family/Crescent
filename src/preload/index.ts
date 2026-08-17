@@ -58,8 +58,13 @@ import type {
 // Custom APIs for renderer
 const api = {
   app: {
-    notifyAttention: (input: { title: string; body: string }): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('app:notify-attention', input),
+    notifyAttention: (input: {
+      title: string
+      body: string
+      pendingId?: string
+      tabId?: string
+      chatTabId?: string
+    }): Promise<{ ok: boolean }> => ipcRenderer.invoke('app:notify-attention', input),
     getRendererRecoveryMode: (): Promise<{ mode: 'none' | 'pending' | 'crash-loop' }> =>
       ipcRenderer.invoke('app:get-renderer-recovery-mode'),
     clearRendererRecovery: (): Promise<{ ok: boolean }> =>
@@ -79,6 +84,18 @@ const api = {
       }
       ipcRenderer.on('app:open-settings', listener)
       return () => ipcRenderer.removeListener('app:open-settings', listener)
+    },
+    onAttentionClicked: (
+      callback: (payload: { pendingId?: string; tabId?: string; chatTabId?: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        payload: { pendingId?: string; tabId?: string; chatTabId?: string }
+      ): void => {
+        callback(payload)
+      }
+      ipcRenderer.on('app:attention-clicked', listener)
+      return () => ipcRenderer.removeListener('app:attention-clicked', listener)
     }
   },
   terminal: {

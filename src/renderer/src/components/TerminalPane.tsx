@@ -22,6 +22,7 @@ export function TerminalPane({
   activeTabId,
   executionTerminalId,
   agentPending,
+  attentionTabIds,
   activeTab,
   tabMenu,
   displayConnections,
@@ -60,6 +61,7 @@ export function TerminalPane({
   activeTabId: string
   executionTerminalId?: string
   agentPending?: boolean
+  attentionTabIds?: ReadonlySet<string> | readonly string[]
   activeTab: AgentTerminalTab
   tabMenu: TerminalTabMenuState | null
   displayConnections: ConnectionConfig[]
@@ -113,6 +115,7 @@ export function TerminalPane({
         activeTabId={activeTabId}
         executionTerminalId={executionTerminalId}
         agentPending={agentPending}
+        attentionTabIds={attentionTabIds}
         tabMenu={tabMenu}
         t={t}
         onNewConnection={onNewConnection}

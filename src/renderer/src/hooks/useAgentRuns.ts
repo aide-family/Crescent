@@ -234,6 +234,7 @@ export function useAgentRuns({
   const attachApprovalRequest = useCallback(
     (chatTabId: string, request: CommandApprovalRequest): void => {
       const isHigh = request.audit.risk === 'high'
+      const executionTabId = request.tabId?.trim() || chatTabId
       updateAgentRun(chatTabId, (run) => {
         const steps = [...(run.steps ?? [])]
         const index = steps.findIndex(
@@ -246,6 +247,7 @@ export function useAgentRuns({
           steps[index] = {
             ...steps[index],
             requestId: request.id,
+            tabId: executionTabId,
             command: request.command,
             auditSummary: request.audit.summary,
             operationReason: request.audit.operationReason,
@@ -267,6 +269,7 @@ export function useAgentRuns({
               id: createStepId('approval'),
               kind: 'approval',
               requestId: request.id,
+              tabId: executionTabId,
               command: request.command,
               phase: 'pending',
               auditSummary: request.audit.summary,

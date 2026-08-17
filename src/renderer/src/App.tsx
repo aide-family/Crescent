@@ -210,6 +210,12 @@ import {
   summarizeNotificationBody
 } from '@renderer/lib/pending-attention-notify'
 import {
+  collectAttentionTabIds,
+  normalizeAttentionClickedPayload,
+  pendingApprovalTabIdsFromRuns,
+  resolveAttentionJumpTabId
+} from '../../shared/attention-notify'
+import {
   copyFeedback,
   copyText,
   downloadJson,
@@ -460,6 +466,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     Record<string, string>
   >({})
   const passwordPromptsByTabRef = useRef(new Map<string, PasswordPromptRequest>())
+  const [passwordAttentionTabIds, setPasswordAttentionTabIds] = useState<string[]>([])
   const validationRequestRef = useRef(0)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
@@ -1909,6 +1916,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }, [])
 
   useEffect(() => {
+    return window.api.app.onAttentionClicked((raw) => {
+      const target = normalizeAttentionClickedPayload(raw)
+      const jumpTabId = resolveAttentionJumpTabId(
+        target,
+        tabsRef.current.map((tab) => tab.id)
+      )
+      if (!jumpTabId) return
+
+      selectSessionTab(jumpTabId)
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, jumpTabId)
+      setActiveExecutionTerminal(chatTabId, jumpTabId)
+
+      const passwordRequest = passwordPromptsByTabRef.current.get(jumpTabId)
+      if (passwordRequest) {
+        passwordPromptRequestRef.current = passwordRequest
+        setPasswordPromptValue('')
+        setPasswordPromptError('')
+        setPasswordPromptRequest(passwordRequest)
+      }
+    })
+  }, [selectSessionTab])
+
+  useEffect(() => {
     let cancelled = false
     void window.api.update.getVersion().then((result) => {
       if (!cancelled) setAppVersion(result.version)
@@ -2008,8 +2038,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         prompt: promptLine
       }
       passwordPromptsByTabRef.current.set(tabId, request)
+      setPasswordAttentionTabIds((current) =>
+        current.includes(tabId) ? current : [...current, tabId]
+      )
       passwordPromptBuffersRef.current.set(tabId, '')
 
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
       if (!passwordPromptRequestRef.current) {
         passwordPromptRequestRef.current = request
         setPasswordPromptValue('')
@@ -2018,7 +2052,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         pendingAttentionNotifierRef.current.notifyIfUnfocused(
           `password:${tabId}`,
           t.notifications.passwordTitle,
-          t.notifications.passwordBody
+          t.notifications.passwordBody,
+          { tabId, chatTabId }
         )
         return
       }
@@ -2027,7 +2062,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         tabsRef.current,
         passwordPromptRequestRef.current.tabId
       )
-      const requestSession = resolveSessionChatTabId(tabsRef.current, tabId)
+      const requestSession = chatTabId
       // Prefer keeping the currently shown prompt; queue others by tab until it closes.
       if (activeSession === requestSession && passwordPromptRequestRef.current.tabId === tabId) {
         passwordPromptRequestRef.current = request
@@ -2282,7 +2317,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         `approval:${request.id}`,
         t.notifications.approvalTitle,
         t.notifications.approvalBody,
-        { runId: request.runId }
+        {
+          runId: request.runId,
+          tabId: request.tabId?.trim() || chatTabId,
+          chatTabId
+        }
       )
     })
   }, [attachApprovalRequest, t.commandReview.sessionClosedRejection, t.notifications])
@@ -2452,6 +2491,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
     return undefined
   }, [activeTab?.agentLog, liveRunByLogId])
+
+  const attentionTabIds = useMemo(() => {
+    const clarifyTabIds = tabs
+      .filter((tab) => Boolean(tab.pendingClarification) && !tab.pendingClarification?.settled)
+      .map((tab) => tab.id)
+    return collectAttentionTabIds({
+      passwordTabIds: passwordAttentionTabIds,
+      pendingApprovalTabIds: pendingApprovalTabIdsFromRuns(Object.values(liveRunByLogId)),
+      clarifyTabIds
+    })
+  }, [liveRunByLogId, passwordAttentionTabIds, tabs])
 
   const userScrollingRef = useRef(false)
   const userScrollIdleTimerRef = useRef<number | null>(null)
@@ -3646,6 +3696,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       passwordPromptsByTabRef.current.delete(tabId)
       passwordPromptOpenTabsRef.current.delete(tabId)
     }
+    if (closedTabIds.length > 0) {
+      const closed = new Set(closedTabIds)
+      setPasswordAttentionTabIds((current) => current.filter((id) => !closed.has(id)))
+    }
 
     if (
       passwordPromptRequestRef.current &&
@@ -3781,6 +3835,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
     passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
     pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
+    setPasswordAttentionTabIds((current) =>
+      current.filter((id) => id !== passwordPromptRequest.tabId)
+    )
     setPasswordPromptValue('')
     setPasswordPromptError('')
     showNextPasswordPrompt(passwordPromptRequest.tabId)
@@ -3792,6 +3849,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
       passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
       pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
+      setPasswordAttentionTabIds((current) =>
+        current.filter((id) => id !== passwordPromptRequest.tabId)
+      )
     }
     setPasswordPromptValue('')
     setPasswordPromptError('')
@@ -5193,7 +5253,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       pendingAttentionNotifierRef.current.notifyIfUnfocused(
         `clarify:${chatTabId}`,
         t.notifications.clarifyTitle,
-        t.notifications.clarifyBody
+        t.notifications.clarifyBody,
+        { tabId: chatTabId, chatTabId }
       )
       return
     }
@@ -5271,7 +5332,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       pendingAttentionNotifierRef.current.notifyIfUnfocused(
         `clarify:${chatTabId}`,
         t.notifications.clarifyTitle,
-        t.notifications.clarifyBody
+        t.notifications.clarifyBody,
+        { tabId: chatTabId, chatTabId }
       )
       return
     }
@@ -5593,7 +5655,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         pendingAttentionNotifierRef.current.notifyIfUnfocused(
           `clarify:${chatTabId}`,
           t.notifications.clarifyTitle,
-          t.notifications.clarifyBody
+          t.notifications.clarifyBody,
+          { tabId: chatTabId, chatTabId }
         )
         return
       }
@@ -5799,7 +5862,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         const body =
           summarizeNotificationBody(summaryText) ||
           (outcome === 'success' ? t.input.done : t.input.failed)
-        pendingAttentionNotifierRef.current.notifyRunComplete(runId, title, body)
+        pendingAttentionNotifierRef.current.notifyRunComplete(runId, title, body, {
+          tabId: executionTabId,
+          chatTabId
+        })
       }
 
       if (result.ok) {
@@ -5932,7 +5998,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       pendingAttentionNotifierRef.current.notifyRunComplete(
         runId,
         t.notifications.runFailedTitle,
-        summarizeNotificationBody(message) || t.input.failed
+        summarizeNotificationBody(message) || t.input.failed,
+        {
+          tabId: activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId,
+          chatTabId
+        }
       )
     } finally {
       // Only tear down if this run is still the active one (stop→resubmit race).
@@ -7200,6 +7270,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             activeTabId={activeTabId}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             agentPending={activeAgentPending}
+            attentionTabIds={attentionTabIds}
             activeTab={activeTab}
             tabMenu={tabMenu}
             displayConnections={displayConnections}

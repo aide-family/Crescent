@@ -8,6 +8,7 @@ import {
   attachRendererCrashRecovery,
   registerRendererRecoveryIpc
 } from './renderer-recovery'
+import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -184,20 +185,32 @@ app.whenReady().then(async () => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  ipcMain.handle('app:notify-attention', (_, payload?: { title?: string; body?: string }) => {
-    const title = payload?.title?.trim() || 'Crescent'
-    const body = payload?.body?.trim() || ''
+  ipcMain.handle('app:notify-attention', (event, payload?: unknown) => {
+    const normalized = normalizeAttentionNotifyPayload(payload)
     if (!Notification.isSupported()) return { ok: false }
 
     const notification = new Notification(
-      process.platform === 'darwin' ? { title, body } : { title, body, icon }
+      process.platform === 'darwin'
+        ? { title: normalized.title, body: normalized.body }
+        : { title: normalized.title, body: normalized.body, icon }
     )
+    const requester = BrowserWindow.fromWebContents(event.sender)
+    const clickTarget = {
+      pendingId: normalized.pendingId,
+      tabId: normalized.tabId,
+      chatTabId: normalized.chatTabId
+    }
     notification.on('click', () => {
-      const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
-      if (!target) return
+      const target =
+        (requester && !requester.isDestroyed() ? requester : null) ??
+        BrowserWindow.getFocusedWindow() ??
+        BrowserWindow.getAllWindows()[0] ??
+        null
+      if (!target || target.isDestroyed()) return
       if (target.isMinimized()) target.restore()
       target.show()
       target.focus()
+      target.webContents.send('app:attention-clicked', clickTarget)
     })
     notification.show()
     return { ok: true }

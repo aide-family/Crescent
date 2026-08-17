@@ -56,7 +56,13 @@ import type {
 
 interface TerminalAgentApi {
   app: {
-    notifyAttention: (input: { title: string; body: string }) => Promise<{ ok: boolean }>
+    notifyAttention: (input: {
+      title: string
+      body: string
+      pendingId?: string
+      tabId?: string
+      chatTabId?: string
+    }) => Promise<{ ok: boolean }>
     getRendererRecoveryMode: () => Promise<{ mode: 'none' | 'pending' | 'crash-loop' }>
     clearRendererRecovery: () => Promise<{ ok: boolean }>
     exportRendererDiagnostics: () => Promise<{ ok: boolean; canceled?: boolean; path?: string }>
@@ -64,6 +70,9 @@ interface TerminalAgentApi {
     setLocale: (locale: 'zh-CN' | 'en') => Promise<{ ok: boolean; locale: 'zh-CN' | 'en' }>
     openExternal: (url: string) => Promise<{ ok: boolean }>
     onOpenSettings: (callback: () => void) => () => void
+    onAttentionClicked: (
+      callback: (payload: { pendingId?: string; tabId?: string; chatTabId?: string }) => void
+    ) => () => void
   }
   terminal: {
     start: (options?: {

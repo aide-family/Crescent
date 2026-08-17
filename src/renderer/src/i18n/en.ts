@@ -992,6 +992,7 @@ const en = {
     clarifyBody: 'Crescent needs you to confirm the connection target.',
     runCompleteTitle: 'Task complete',
     runFailedTitle: 'Task ended (error)',
+    attentionTabLabel: 'Needs your attention',
     rendererRecoveredTitle: 'Renderer recovered',
     rendererRecoveredBody:
       'The UI process crashed and was restarted. Open History if you need a previous chat.'

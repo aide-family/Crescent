@@ -925,6 +925,7 @@ const zhCN = {
     clarifyBody: 'Crescent 需要你确认连接目标。',
     runCompleteTitle: '任务完成',
     runFailedTitle: '任务结束（出错）',
+    attentionTabLabel: '需要处理',
     rendererRecoveredTitle: '渲染进程异常，已恢复',
     rendererRecoveredBody: '界面已自动恢复；如有需要可从历史会话打开最近对话。'
   },

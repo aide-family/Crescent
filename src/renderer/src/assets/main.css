@@ -621,6 +621,23 @@
   background: color-mix(in oklch, var(--primary) 14%, transparent);
 }
 
+@keyframes app-tab-attention-pulse {
+  0%,
+  100% {
+    border-color: color-mix(in oklch, var(--primary) 45%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 18%, transparent);
+  }
+  50% {
+    border-color: color-mix(in oklch, var(--primary) 92%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 55%, transparent);
+  }
+}
+
+.app-tabbar button.app-tab-attention {
+  border-color: color-mix(in oklch, var(--primary) 70%, transparent);
+  animation: app-tab-attention-pulse 1.1s ease-in-out infinite;
+}
+
 .app-agent-pane details,
 .app-agent-pane section {
   border-color: var(--border);

@@ -25,6 +25,7 @@ export function TerminalTabBar({
   activeTabId,
   executionTerminalId,
   agentPending,
+  attentionTabIds,
   tabMenu,
   t,
   onNewConnection,
@@ -40,6 +41,7 @@ export function TerminalTabBar({
   activeTabId: string
   executionTerminalId?: string
   agentPending?: boolean
+  attentionTabIds?: ReadonlySet<string> | readonly string[]
   tabMenu: TerminalTabMenuState | null
   t: Dictionary
   onNewConnection: () => void
@@ -51,6 +53,8 @@ export function TerminalTabBar({
 }): React.JSX.Element {
   const titleSource = labelTabs ?? tabs
   const activeTabRef = useRef<HTMLButtonElement>(null)
+  const attentionSet =
+    attentionTabIds instanceof Set ? attentionTabIds : new Set(attentionTabIds ?? [])
 
   useEffect(() => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -130,6 +134,7 @@ export function TerminalTabBar({
                 Boolean(agentPending) &&
                 Boolean(executionTerminalId) &&
                 tab.id === executionTerminalId
+              const needsAttention = attentionSet.has(tab.id)
               const title = getTerminalDisplayTitle(tab, titleSource)
 
               return (
@@ -139,10 +144,18 @@ export function TerminalTabBar({
                     type="button"
                     role="tab"
                     data-terminal-tab-id={tab.id}
+                    data-attention={needsAttention ? 'true' : undefined}
                     aria-selected={selected}
+                    aria-label={
+                      needsAttention ? `${title} — ${t.notifications.attentionTabLabel}` : undefined
+                    }
                     tabIndex={selected ? 0 : -1}
-                    title={title}
+                    title={
+                      needsAttention ? `${title} — ${t.notifications.attentionTabLabel}` : title
+                    }
                     className={`inline-flex h-7 max-w-48 items-center gap-1.5 rounded-md border py-0 pr-6 pl-2 text-xs transition-[background-color,border-color,color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
+                      needsAttention ? 'app-tab-attention' : ''
+                    } ${
                       selected
                         ? 'border-primary/50 bg-primary/12 text-foreground'
                         : executing

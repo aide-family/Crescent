@@ -1,3 +1,11 @@
+import type { AttentionNotifyPayload } from '../../../shared/attention-notify'
+
+export type AttentionNotifyOptions = {
+  runId?: string
+  tabId?: string
+  chatTabId?: string
+}
+
 /**
  * Deduped OS attention notifications for pending user interventions
  * and one-shot run-complete notifications.
@@ -5,15 +13,20 @@
  */
 export function createPendingAttentionNotifier(input?: {
   isWindowFocused?: () => boolean
-  notify?: (payload: { title: string; body: string }) => void | Promise<unknown>
+  notify?: (payload: AttentionNotifyPayload) => void | Promise<unknown>
 }): {
   notifyIfUnfocused: (
     pendingId: string,
     title: string,
     body: string,
-    options?: { runId?: string }
+    options?: AttentionNotifyOptions
   ) => void
-  notifyRunComplete: (runId: string, title: string, body: string) => void
+  notifyRunComplete: (
+    runId: string,
+    title: string,
+    body: string,
+    options?: Omit<AttentionNotifyOptions, 'runId'>
+  ) => void
   clear: (pendingId: string) => void
   clearApproval: (requestId: string) => void
   clearRunAttention: (runId: string) => void
@@ -33,7 +46,7 @@ export function createPendingAttentionNotifier(input?: {
     })
   const notify =
     input?.notify ??
-    ((payload: { title: string; body: string }) => {
+    ((payload: AttentionNotifyPayload) => {
       void window.api.app.notifyAttention(payload)
     })
 
@@ -57,7 +70,18 @@ export function createPendingAttentionNotifier(input?: {
     const set = pendingIdsByRun.get(trimmed)
     if (set) {
       for (const id of set) notified.delete(id)
-      pendingIdsByRun.delete(trimmed)
+    }
+    pendingIdsByRun.delete(trimmed)
+  }
+
+  function routingFields(
+    options?: AttentionNotifyOptions
+  ): Pick<AttentionNotifyPayload, 'tabId' | 'chatTabId'> {
+    const tabId = options?.tabId?.trim()
+    const chatTabId = options?.chatTabId?.trim()
+    return {
+      ...(tabId ? { tabId } : {}),
+      ...(chatTabId ? { chatTabId } : {})
     }
   }
 
@@ -70,9 +94,14 @@ export function createPendingAttentionNotifier(input?: {
       if (isWindowFocused()) return
       notified.add(id)
       if (runId) trackPendingForRun(runId, id)
-      void notify({ title, body })
+      void notify({
+        title,
+        body,
+        pendingId: id,
+        ...routingFields(options)
+      })
     },
-    notifyRunComplete(runId, title, body) {
+    notifyRunComplete(runId, title, body, options) {
       const trimmed = runId.trim()
       if (!trimmed) return
       completedRuns.add(trimmed)
@@ -86,7 +115,12 @@ export function createPendingAttentionNotifier(input?: {
         return
       }
       notified.add(id)
-      void notify({ title, body })
+      void notify({
+        title,
+        body,
+        pendingId: id,
+        ...routingFields(options)
+      })
     },
     clear(pendingId) {
       notified.delete(pendingId.trim())

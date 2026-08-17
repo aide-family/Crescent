@@ -121,6 +121,8 @@ export type AgentRunStep =
       requestId: string
       command: string
       phase: 'pending' | 'approved' | 'rejected'
+      /** Execution terminal tab where the command will run. */
+      tabId?: string
       auditSummary?: string
       operationReason?: string
       /** Async human-readable purpose for HIGH cards. */
