@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0.7 (2026-08-18)
+
+### Terminal / SSH
+
+- Stabilize SSH EnvGuard across hop transitions so prompt-host checks stay aligned with the live session.
+- Attention notifications can jump to the needing tab, and those tabs pulse for quicker focus.
+
+### Agent / Command Review
+
+- Classify inspection scripts by each simple command’s argv0 and real file redirects, so awk comparisons like `$5>0` and `echo` separators stay low-risk while writes still require approval.
+
+### Settings / Desktop
+
+- Settings prefs (agent style, thinking toggle, workspace cwd) autosave; the global footer Save button is removed. Provider, OpenAPI, and instruction editors still save explicitly.
+
+### Chores
+
+- Ignore TypeScript incremental `*.tsbuildinfo` files in git.
+
 ## v1.0.6 (2026-08-17)
 
 ### Terminal / SSH

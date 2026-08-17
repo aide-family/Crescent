@@ -18,9 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- SSH opens only on identified login intent: generic verbs like 打开 do not guess lastUsed, and local git paths are not treated as connection names.
-- Paste Cursor `mcpServers` JSON to add HTTP or stdio MCP tools, and load local or catalog Pi extensions into the next agent run.
-- Skill manager cards preview SKILL.md before install; the chat dock shows session token usage and can export a redacted session trace. Composer chips wrap with typed text and keep newlines; the footer version opens the matching GitHub Release.
+- SSH EnvGuard stays stable across hops; attention notifications jump to needing tabs with a pulse cue.
+- Command review classifies inspection pipelines by argv0 (awk `$5>0` / echo separators no longer false-high); real redirects and writes still need approval.
+- Settings preferences autosave; the footer Save button is gone. Provider / OpenAPI / instruction editors still save on their own.
 
 ## Install Notes
 
