@@ -9,8 +9,8 @@ export const COMMAND_AUDIT_TIMEOUT_MS = 10_000
 const AUDIT_SYSTEM_PROMPT = [
   '你是命令安全审核器，只判断不执行。严格输出一行 JSON，无解释：',
   '{"level":"low|high","reason":"一句话说明执行后果（≤80字）"}',
-  'low：纯只读查询/读日志/网络 GET，及其 && 与 | 组合。',
-  'high：含任何写、删、改状态、改权限、输出重定向；读写混合；不确定。',
+  'low：纯只读查询/读日志/网络 GET，及其 && 与 | 组合。echo 分段标题、awk/test 比较（如 $5>0）不是写操作。',
+  'high：含任何写、删、改状态、改权限、shell 文件重定向（> file）；读写混合；不确定。',
   'high 的 reason 必须写明具体影响：会修改/删除/覆盖什么，影响哪些主机、路径或数据。'
 ].join('\n')
 

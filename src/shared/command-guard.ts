@@ -1,15 +1,17 @@
+import { collectSimpleCommands, type SimpleCommand } from './shell-command'
+
 /**
  * kubectl may place flags/args between the binary and the verb
  * (`kubectl -n ns get cm`). Match non-greedily up to the first verb token.
  */
 const KUBECTL_BEFORE_VERB = String.raw`\bkubectl(?:\s+[^\s]+)*?\s+`
 
-/** Destructive / state-changing shell patterns (checked before READONLY). */
+/** Destructive / state-changing shell verbs (substring regex; redirects use the AST). */
 export const HIGH = new RegExp(
   String.raw`\b(rm|mv|dd|kill|reboot)\b|systemctl\s+(restart|stop|start|enable|disable)|` +
     KUBECTL_BEFORE_VERB +
     String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec)|` +
-    String.raw`docker\s+(rm|rmi|restart|stop|run)|\b(chmod|chown|tee)\b|(?<!2)>(?!\/dev\/null)`
+    String.raw`docker\s+(rm|rmi|restart|stop|run)|\b(chmod|chown|tee)\b`
 )
 
 /** Clearly read-only inspection patterns. */
@@ -19,7 +21,7 @@ export const READONLY = new RegExp(
     String.raw`docker\s+(ps|inspect|logs|images|stats|version|info|history|port)|` +
     String.raw`docker\s+compose\s+(ps|logs|config)|` +
     String.raw`systemctl\s+(status|is-active|list-units|show|list-timers)|journalctl|` +
-    String.raw`\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which|find|stat|id|pwd|env|printenv|lsof|du|uptime|ip)\b|` +
+    String.raw`\b(cat|ls|echo|hostname|whoami|uname|ps|df|free|top|ss|awk|grep|head|tail|wc|which|find|stat|id|pwd|env|printenv|lsof|du|uptime|ip|sort|uniq|cut|tr|column|date|hostnamectl|jq|printf|sed)\b|` +
     String.raw`curl\s+(-[a-zA-Z]*s|--max-time)`
 )
 export type StaticCommandLevel = 'high' | 'low' | 'gray'
@@ -102,6 +104,16 @@ const PRESERVE_TOKENS = new Set([
   'du',
   'uptime',
   'ip',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'column',
+  'date',
+  'hostnamectl',
+  'jq',
+  'printf',
+  'sed',
   'mv',
   'dd',
   'kill',
@@ -135,18 +147,124 @@ const PRESERVE_TOKENS = new Set([
   '2>&1'
 ])
 
-/**
- * Classify with static rules only: HIGH first, then READONLY, else gray.
- */
-export function classifyByStaticRules(cmd: string): StaticCommandLevel {
-  if (HIGH.test(cmd)) return 'high'
-  if (READONLY.test(cmd)) return 'low'
-  return 'gray'
+const KUBECTL_WRITE = new Set([
+  'delete',
+  'apply',
+  'patch',
+  'edit',
+  'rollout',
+  'scale',
+  'drain',
+  'cordon',
+  'create',
+  'replace',
+  'exec',
+  'port-forward'
+])
+const KUBECTL_READ = new Set([
+  'get',
+  'describe',
+  'logs',
+  'top',
+  'explain',
+  'cluster-info',
+  'version',
+  'api-resources',
+  'config',
+  'auth',
+  'diff',
+  'wait'
+])
+const DOCKER_WRITE = new Set(['rm', 'rmi', 'restart', 'stop', 'run'])
+const DOCKER_READ = new Set([
+  'ps',
+  'inspect',
+  'logs',
+  'images',
+  'stats',
+  'version',
+  'info',
+  'history',
+  'port'
+])
+const DOCKER_COMPOSE_READ = new Set(['ps', 'logs', 'config'])
+const SYSTEMCTL_WRITE = new Set(['restart', 'stop', 'start', 'enable', 'disable'])
+const SYSTEMCTL_READ = new Set(['status', 'is-active', 'list-units', 'show', 'list-timers'])
+const SIMPLE_WRITE = new Set(['rm', 'mv', 'dd', 'kill', 'reboot', 'chmod', 'chown', 'tee', 'sudo'])
+const SIMPLE_READ = new Set([
+  'cat',
+  'ls',
+  'echo',
+  'printf',
+  'hostname',
+  'hostnamectl',
+  'whoami',
+  'uname',
+  'ps',
+  'df',
+  'free',
+  'top',
+  'ss',
+  'awk',
+  'grep',
+  'egrep',
+  'fgrep',
+  'head',
+  'tail',
+  'wc',
+  'which',
+  'find',
+  'stat',
+  'id',
+  'pwd',
+  'env',
+  'printenv',
+  'lsof',
+  'du',
+  'uptime',
+  'ip',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'column',
+  'date',
+  'jq',
+  'sed',
+  'journalctl',
+  'test',
+  '[',
+  'true',
+  'false',
+  ':'
+])
+const DURATION = /^(?:\d+(?:\.\d+)?)[smhd]?$/
+
+interface SimpleCommandRisk {
+  level: StaticCommandLevel
+  verb: string
 }
 
-/** True when the command matches HIGH (used for timeout fallback). */
+/**
+ * Classify with static rules only: walk every simple command (including `$(...)`).
+ * HIGH if any write verb or file redirect; LOW only if every command is inspection.
+ */
+export function classifyByStaticRules(cmd: string): StaticCommandLevel {
+  const commands = collectSimpleCommands(cmd)
+  if (!commands || commands.length === 0) return 'gray'
+
+  let sawGray = false
+  for (const command of commands) {
+    const risk = classifySimpleCommand(command)
+    if (risk.level === 'high') return 'high'
+    if (risk.level === 'gray') sawGray = true
+  }
+  return sawGray ? 'gray' : 'low'
+}
+
+/** True when the command is statically HIGH (used for timeout fallback). */
 export function hasHighWriteVerb(cmd: string): boolean {
-  return HIGH.test(cmd)
+  return classifyByStaticRules(cmd) === 'high'
 }
 
 /**
@@ -155,49 +273,221 @@ export function hasHighWriteVerb(cmd: string): boolean {
  * instead of the opaque label `change`.
  */
 export function extractRiskVerb(cmd: string): string {
-  const kubectlWrite = cmd.match(
-    new RegExp(
-      KUBECTL_BEFORE_VERB +
-        String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec|port-forward)\b`,
-      'i'
-    )
-  )
-  if (kubectlWrite) return `kubectl ${kubectlWrite[1].toLowerCase()}`
+  const commands = collectSimpleCommands(cmd)
+  if (!commands || commands.length === 0) return 'change'
 
-  const docker = cmd.match(/\bdocker\s+(rm|rmi|restart|stop|run)\b/i)
-  if (docker) return `docker ${docker[1].toLowerCase()}`
-
-  const systemctl = cmd.match(/\bsystemctl\s+(restart|stop|start|enable|disable)\b/i)
-  if (systemctl) return `systemctl ${systemctl[1].toLowerCase()}`
-
-  const simple = cmd.match(/\b(rm|mv|dd|kill|reboot|chmod|chown|tee)\b/i)
-  if (simple) return simple[1].toLowerCase()
-
-  if (/(?<!2)>(?!\/dev\/null)/.test(cmd)) return '>'
-
-  const kubectlRead = cmd.match(
-    new RegExp(
-      KUBECTL_BEFORE_VERB +
-        String.raw`(get|describe|logs|top|explain|cluster-info|version|api-resources|config|auth|diff|wait)\b`,
-      'i'
-    )
-  )
-  if (kubectlRead) return `kubectl ${kubectlRead[1].toLowerCase()}`
-
-  const dockerComposeRead = cmd.match(/\bdocker\s+compose\s+(ps|logs|config)\b/i)
-  if (dockerComposeRead) return `docker compose ${dockerComposeRead[1].toLowerCase()}`
-
-  const dockerRead = cmd.match(
-    /\bdocker\s+(ps|inspect|logs|images|stats|version|info|history|port)\b/i
-  )
-  if (dockerRead) return `docker ${dockerRead[1].toLowerCase()}`
-
-  return 'change'
+  let firstLow: string | undefined
+  let firstToolLow: string | undefined
+  for (const command of commands) {
+    const risk = classifySimpleCommand(command)
+    if (risk.level === 'high') return risk.verb
+    if (risk.level !== 'low') continue
+    firstLow ??= risk.verb
+    if (!firstToolLow && /^(kubectl|docker|systemctl)\b/.test(risk.verb)) {
+      firstToolLow = risk.verb
+    }
+  }
+  return firstToolLow ?? firstLow ?? 'change'
 }
 
-/** True when static READONLY matches and HIGH does not. */
+/** True when every simple command is a known inspection command. */
 export function isStaticallyReadonly(cmd: string): boolean {
-  return !HIGH.test(cmd) && READONLY.test(cmd)
+  return classifyByStaticRules(cmd) === 'low'
+}
+
+function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
+  if (command.redirects.some((redirect) => redirect.kind === 'file')) {
+    return { level: 'high', verb: '>' }
+  }
+
+  let argv = stripWrappers(command.argv)
+  if (argv[0] === '!') argv = argv.slice(1)
+  const argv0 = commandBasename(argv[0] ?? '')
+  if (!argv0) return { level: 'gray', verb: 'change' }
+
+  if (SIMPLE_WRITE.has(argv0)) return { level: 'high', verb: argv0 }
+
+  if (argv0 === 'kubectl') {
+    const verb = firstKnownVerb(argv, KUBECTL_WRITE, KUBECTL_READ)
+    if (verb && KUBECTL_WRITE.has(verb)) return { level: 'high', verb: `kubectl ${verb}` }
+    if (verb && KUBECTL_READ.has(verb)) return { level: 'low', verb: `kubectl ${verb}` }
+    return { level: 'gray', verb: 'kubectl' }
+  }
+
+  if (argv0 === 'docker') {
+    const parsed = dockerSubcommand(argv)
+    if (parsed.compose) {
+      if (DOCKER_COMPOSE_READ.has(parsed.verb)) {
+        return { level: 'low', verb: `docker compose ${parsed.verb}` }
+      }
+      return { level: 'gray', verb: 'docker compose' }
+    }
+    if (DOCKER_WRITE.has(parsed.verb)) return { level: 'high', verb: `docker ${parsed.verb}` }
+    if (DOCKER_READ.has(parsed.verb)) return { level: 'low', verb: `docker ${parsed.verb}` }
+    return { level: 'gray', verb: 'docker' }
+  }
+
+  if (argv0 === 'systemctl') {
+    const verb = firstKnownVerb(argv, SYSTEMCTL_WRITE, SYSTEMCTL_READ)
+    if (verb && SYSTEMCTL_WRITE.has(verb)) return { level: 'high', verb: `systemctl ${verb}` }
+    if (verb && SYSTEMCTL_READ.has(verb)) return { level: 'low', verb: `systemctl ${verb}` }
+    return { level: 'gray', verb: 'systemctl' }
+  }
+
+  if (argv0 === 'sed' && hasSedInPlace(argv)) return { level: 'high', verb: 'sed' }
+  if (argv0 === 'sysctl' && isSysctlWrite(argv)) return { level: 'high', verb: 'sysctl' }
+  if (argv0 === 'sysctl') return { level: 'low', verb: 'sysctl' }
+  if (argv0 === 'find' && hasFindMutation(argv)) return { level: 'high', verb: 'find' }
+  if ((argv0 === 'jq' && argv.includes('--in-place')) || (argv0 === 'yq' && hasYqInPlace(argv))) {
+    return { level: 'high', verb: argv0 }
+  }
+  if (argv0 === 'yq') return { level: 'low', verb: 'yq' }
+  if (argv0 === 'curl') {
+    return isReadonlyCurl(argv) ? { level: 'low', verb: 'curl' } : { level: 'gray', verb: 'curl' }
+  }
+  if (SIMPLE_READ.has(argv0)) return { level: 'low', verb: argv0 }
+  return { level: 'gray', verb: argv0 }
+}
+
+function stripWrappers(argv: string[]): string[] {
+  let current = [...argv]
+  for (let guard = 0; guard < 8 && current.length > 0; guard++) {
+    const cmd = commandBasename(current[0] ?? '')
+    if (cmd === 'timeout') {
+      current = skipTimeout(current)
+      continue
+    }
+    if (cmd === 'command') {
+      current = current.slice(1)
+      while (current[0]?.startsWith('-')) current = current.slice(1)
+      continue
+    }
+    if (cmd === 'nice' || cmd === 'stdbuf' || cmd === 'nohup' || cmd === 'time') {
+      current = current.slice(1)
+      while (current[0]?.startsWith('-')) {
+        const flag = current[0]
+        if (
+          (flag === '-n' || flag === '-e' || flag === '-o' || flag === '-i') &&
+          !flag.includes('=')
+        ) {
+          current = current.slice(2)
+          continue
+        }
+        current = current.slice(1)
+      }
+      continue
+    }
+    if (cmd === 'env') {
+      let i = 1
+      while (i < current.length && current[i]?.startsWith('-') && !ASSIGN.test(current[i] ?? '')) {
+        if (current[i] === '-u' || current[i] === '--unset') i += 2
+        else i += 1
+      }
+      while (i < current.length && ASSIGN.test(current[i] ?? '')) i += 1
+      if (i >= current.length) return current
+      current = current.slice(i)
+      continue
+    }
+    break
+  }
+  return current
+}
+
+const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+function skipTimeout(argv: string[]): string[] {
+  let i = 1
+  while (i < argv.length && argv[i]?.startsWith('-')) {
+    const flag = argv[i] ?? ''
+    if (
+      (flag === '-k' || flag === '--kill-after' || flag === '-s' || flag === '--signal') &&
+      !flag.includes('=')
+    ) {
+      i += 2
+      continue
+    }
+    i += 1
+  }
+  if (i < argv.length && DURATION.test(argv[i] ?? '')) i += 1
+  return argv.slice(i)
+}
+
+function commandBasename(token: string): string {
+  const parts = token.replace(/\\/g, '/').split('/')
+  return (parts[parts.length - 1] ?? token).toLowerCase()
+}
+
+function firstKnownVerb(argv: string[], write: Set<string>, read: Set<string>): string | undefined {
+  for (let i = 1; i < argv.length; i++) {
+    const token = argv[i] ?? ''
+    if (token === '--') break
+    if (token.startsWith('-')) continue
+    const lower = token.toLowerCase()
+    if (write.has(lower) || read.has(lower)) return lower
+  }
+  return undefined
+}
+
+function dockerSubcommand(argv: string[]): { compose: boolean; verb: string } {
+  let i = 1
+  while (i < argv.length && argv[i]?.startsWith('-')) {
+    const flag = argv[i] ?? ''
+    if (
+      (flag === '-H' || flag === '--host' || flag === '--context' || flag === '-c') &&
+      !flag.includes('=')
+    ) {
+      i += 2
+      continue
+    }
+    i += 1
+  }
+  if ((argv[i] ?? '').toLowerCase() === 'compose') {
+    i += 1
+    while (i < argv.length && argv[i]?.startsWith('-')) i += 1
+    return { compose: true, verb: (argv[i] ?? '').toLowerCase() }
+  }
+  return { compose: false, verb: (argv[i] ?? '').toLowerCase() }
+}
+
+function hasSedInPlace(argv: string[]): boolean {
+  return argv
+    .slice(1)
+    .some((arg) => arg === '-i' || arg.startsWith('--in-place') || /^-i./.test(arg))
+}
+
+function isSysctlWrite(argv: string[]): boolean {
+  return argv
+    .slice(1)
+    .some(
+      (arg) => arg === '-w' || arg === '--write' || (/^[^=-]+=/.test(arg) && !arg.startsWith('-'))
+    )
+}
+
+function hasFindMutation(argv: string[]): boolean {
+  return argv.some(
+    (arg) =>
+      arg === '-delete' ||
+      arg === '-exec' ||
+      arg === '-ok' ||
+      arg === '-execdir' ||
+      arg === '-okdir'
+  )
+}
+
+function hasYqInPlace(argv: string[]): boolean {
+  return argv.includes('-i') || argv.includes('--inplace') || argv.includes('--in-place')
+}
+
+function isReadonlyCurl(argv: string[]): boolean {
+  return argv
+    .slice(1)
+    .some(
+      (arg) =>
+        arg === '--silent' ||
+        arg === '--max-time' ||
+        arg.startsWith('--max-time=') ||
+        (arg.startsWith('-') && !arg.startsWith('--') && arg.includes('s'))
+    )
 }
 
 /**

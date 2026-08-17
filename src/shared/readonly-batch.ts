@@ -31,13 +31,10 @@ export interface BatchedCommandPart {
  * and backticks (toggle, non-nesting) are preserved.
  *
  * Security dossier (HIGH anchoring):
- * `command-guard` HIGH is unanchored (no `^`/`$`); it substring-matches with `\b`.
- * `classifyByStaticRules` / `isStaticallyReadonly` call `HIGH.test(cmd)` on the raw
- * string (not after `normalizeCommand`). Example: `echo $(kubectl delete pod x)` still
- * hits HIGH via the `kubectl … delete` substring — both raw and after normalize
- * (tokens keep `$(kubectl` / `x)`). Keeping substitution as one segment therefore does
- * not weaken HIGH detection; the whole script stays `high` and `planReadonlyBatch`
- * will not inject separators.
+ * `classifyByStaticRules` / `isStaticallyReadonly` walk every simple command
+ * (including `$(...)`) by argv[0] and real file redirects. Example:
+ * `echo $(kubectl delete pod x)` stays HIGH via the inner `kubectl delete`.
+ * Quoted awk comparisons such as `$5>0` are not file redirects.
  */
 export function splitShellSegments(script: string): string[] {
   const segments: string[] = []

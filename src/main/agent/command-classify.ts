@@ -1,10 +1,4 @@
-import {
-  HIGH,
-  READONLY,
-  extractRiskVerb,
-  hasHighWriteVerb,
-  isStaticallyReadonly
-} from '../../shared/command-guard'
+import { extractRiskVerb, hasHighWriteVerb, isStaticallyReadonly } from '../../shared/command-guard'
 import type { CommandAuditSource } from '../../shared/agent-types'
 import { CommandAuditor, CommandAuditTimeoutError } from './command-auditor'
 import { matchCommandWhitelist } from './command-whitelist'
@@ -34,7 +28,7 @@ export async function classifyCommand(
 ): Promise<ClassifyCommandResult> {
   const startedAt = Date.now()
 
-  if (HIGH.test(cmd)) {
+  if (hasHighWriteVerb(cmd)) {
     const elapsedMs = Date.now() - startedAt
     const audit = buildRuleAudit('high', 'rule', elapsedMs, ctx.locale, undefined, cmd)
     return { level: 'high', source: 'rule', elapsedMs, audit }
@@ -47,7 +41,7 @@ export async function classifyCommand(
     return { level: 'low', source: 'whitelist', elapsedMs, audit, whitelistRule }
   }
 
-  if (READONLY.test(cmd)) {
+  if (isStaticallyReadonly(cmd)) {
     const elapsedMs = Date.now() - startedAt
     const audit = buildRuleAudit('low', 'rule', elapsedMs, ctx.locale)
     return { level: 'low', source: 'rule', elapsedMs, audit }
