@@ -1,4 +1,13 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { spawn } from 'child_process'
 import { homedir, tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
@@ -599,6 +608,76 @@ function sanitizeInstallChunk(value: string): string {
     .replace(ANSI_OSC_PATTERN, '')
     .replace(/\r/g, '\n')
     .replace(/\[[0-9]+[A-Z]/g, '')
+}
+
+export interface CreateAgentSkillInput {
+  content: string
+  name?: string
+  skillRoot?: string
+  overwrite?: boolean
+}
+
+export type CreateAgentSkillResult =
+  | { ok: true; skill: AgentSkillOption; conflict?: undefined }
+  | {
+      ok: false
+      conflict: true
+      existingPath: string
+      skillName: string
+      error?: undefined
+    }
+  | { ok: false; conflict?: undefined; error: string }
+
+export function createAgentSkill(input: CreateAgentSkillInput): CreateAgentSkillResult {
+  const content = input.content.trim()
+  if (!content) return { ok: false, error: 'Skill content is empty.' }
+
+  const root = resolveSkillRoot(input.skillRoot)
+  const systemRoot = resolve(ensureBuiltInOperationSkills())
+  const extractedName = extractSkillName(content) || input.name?.trim() || ''
+  const dirName = sanitizeSkillDirName(extractedName)
+  const skillDir = resolve(join(root, dirName))
+  const skillPath = join(skillDir, 'SKILL.md')
+
+  if (!skillDir.startsWith(root)) {
+    return { ok: false, error: 'Skill path is outside the configured skill root.' }
+  }
+  if (skillDir === systemRoot || skillDir.startsWith(`${systemRoot}/`)) {
+    return { ok: false, error: 'Built-in skills cannot be overwritten.' }
+  }
+
+  if (existsSync(skillPath) && !input.overwrite) {
+    return {
+      ok: false,
+      conflict: true,
+      existingPath: skillPath,
+      skillName: dirName
+    }
+  }
+
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(skillPath, content.endsWith('\n') ? content : `${content}\n`, 'utf8')
+  return { ok: true, skill: readSkill(skillPath, root, true) }
+}
+
+export function sanitizeSkillDirName(name: string): string {
+  const trimmed = name.trim()
+  const ascii = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (ascii.length >= 2) return ascii.slice(0, 80)
+  const safe = [...trimmed]
+    .map((char) => {
+      const code = char.charCodeAt(0)
+      if (code < 32 || '<>:"/\\|?*'.includes(char)) return '-'
+      return char
+    })
+    .join('')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  return safe || 'skill'
 }
 
 export function deleteAgentSkill(path: string, skillRoot?: string): AgentSkillOption[] {

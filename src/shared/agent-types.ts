@@ -247,6 +247,10 @@ export interface AgentGenerateSopInput {
   fallbackTitle?: string
   /** Seed content when model generation fails. */
   fallbackContent?: string
+  /** Existing draft to revise instead of generating from scratch. */
+  draft?: string
+  /** Operator notes for AI refinement. */
+  notes?: string
 }
 
 export interface AgentGenerateSopResult {
@@ -257,6 +261,61 @@ export interface AgentGenerateSopResult {
   generated?: boolean
   error?: string
   timedOut?: boolean
+}
+
+export type CaptureKind = 'sop' | 'skill'
+export type CaptureScope = 'turn' | 'session'
+
+export interface AgentReloadRuntimeInput {
+  sessionKey?: string
+}
+
+export interface AgentReloadRuntimeResult {
+  ok: boolean
+  reloaded: number
+  skippedBusy: number
+  busySessionKeys: string[]
+  error?: string
+}
+
+export interface AgentGenerateCaptureDraftInput {
+  kind: CaptureKind
+  summary: string
+  locale?: string
+  draft?: string
+  notes?: string
+}
+
+export interface AgentGenerateCaptureDraftResult {
+  ok: boolean
+  kind: CaptureKind
+  title?: string
+  content?: string
+  skillName?: string
+  generated?: boolean
+  error?: string
+  timedOut?: boolean
+}
+
+export interface AgentCommitCaptureDraftInput {
+  kind: CaptureKind
+  title: string
+  content: string
+  skillName?: string
+  overwrite?: boolean
+}
+
+export interface AgentCommitCaptureDraftResult {
+  ok: boolean
+  kind: CaptureKind
+  title?: string
+  content?: string
+  document?: WikiDocument
+  skill?: AgentSkillOption
+  conflict?: boolean
+  existingPath?: string
+  skillName?: string
+  error?: string
 }
 
 export interface AgentConnectionIntentInput {

@@ -1,4 +1,4 @@
-import { FileTextIcon, Loader2Icon, PencilIcon, Trash2Icon } from 'lucide-react'
+import { FileTextIcon, Loader2Icon, PencilIcon, SparklesIcon, Trash2Icon } from 'lucide-react'
 
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -25,6 +25,7 @@ export interface HistoryPanelProps {
   titleDraft: string
   titleSavingId: string | null
   savingWikiTabId: string | null
+  savingSkillTabId: string | null
   onTitleDraftChange: (value: string) => void
   onRefresh: () => void
   onOpenSession: (item: StoredSessionHistoryItem) => void
@@ -32,6 +33,7 @@ export interface HistoryPanelProps {
   onCancelRename: () => void
   onSaveTitle: (item: StoredSessionHistoryItem) => void
   onSaveToWiki: (item: StoredSessionHistoryItem) => void
+  onSaveToSkill: (item: StoredSessionHistoryItem) => void
   onDeleteSession: (item: StoredSessionHistoryItem) => void
 }
 
@@ -56,6 +58,7 @@ export function HistoryPanel({
   titleDraft,
   titleSavingId,
   savingWikiTabId,
+  savingSkillTabId,
   onTitleDraftChange,
   onRefresh,
   onOpenSession,
@@ -63,6 +66,7 @@ export function HistoryPanel({
   onCancelRename,
   onSaveTitle,
   onSaveToWiki,
+  onSaveToSkill,
   onDeleteSession
 }: HistoryPanelProps): React.JSX.Element {
   return (
@@ -190,13 +194,32 @@ export function HistoryPanel({
                           size="icon-xs"
                           aria-label={`${t.wiki.saveFromHistory}: ${item.title}`}
                           title={`${t.wiki.saveFromHistory}: ${item.title}`}
-                          disabled={savingWikiTabId === item.tabId}
+                          disabled={
+                            savingWikiTabId === item.tabId || savingSkillTabId === item.tabId
+                          }
                           onClick={() => void onSaveToWiki(item)}
                         >
                           {savingWikiTabId === item.tabId ? (
                             <Loader2Icon className="animate-spin" aria-hidden="true" />
                           ) : (
                             <FileTextIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`${t.wiki.saveSkillFromHistory}: ${item.title}`}
+                          title={`${t.wiki.saveSkillFromHistory}: ${item.title}`}
+                          disabled={
+                            savingWikiTabId === item.tabId || savingSkillTabId === item.tabId
+                          }
+                          onClick={() => void onSaveToSkill(item)}
+                        >
+                          {savingSkillTabId === item.tabId ? (
+                            <Loader2Icon className="animate-spin" aria-hidden="true" />
+                          ) : (
+                            <SparklesIcon aria-hidden="true" />
                           )}
                         </Button>
                         <Button

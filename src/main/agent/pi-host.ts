@@ -454,6 +454,60 @@ export async function runPiExtensionCommand(input: {
   }
 }
 
+export interface ReloadCrescentRuntimeInput {
+  sessionKey?: string
+  config: AgentConfig
+}
+
+export interface ReloadCrescentRuntimeResult {
+  ok: boolean
+  reloaded: number
+  skippedBusy: number
+  busySessionKeys: string[]
+}
+
+function isHostedSessionBusy(sessionKey: string, hosted: HostedSession): boolean {
+  if (runIdBySessionKey.has(sessionKey)) return true
+  try {
+    return Boolean(hosted.session.isStreaming)
+  } catch {
+    return false
+  }
+}
+
+export async function reloadCrescentRuntime(
+  input: ReloadCrescentRuntimeInput
+): Promise<ReloadCrescentRuntimeResult> {
+  const busySessionKeys: string[] = []
+  const toDispose: string[] = []
+  for (const [sessionKey, hosted] of hostedSessions) {
+    if (isHostedSessionBusy(sessionKey, hosted)) {
+      busySessionKeys.push(sessionKey)
+      continue
+    }
+    toDispose.push(sessionKey)
+  }
+
+  for (const sessionKey of toDispose) {
+    const hosted = hostedSessions.get(sessionKey)
+    if (!hosted) continue
+    await disposeHostedSession(hosted)
+    hostedSessions.delete(sessionKey)
+  }
+
+  const warmupKey = input.sessionKey?.trim()
+  if (warmupKey && !busySessionKeys.includes(warmupKey)) {
+    await ensureHostedSession(warmupKey, input.config)
+  }
+
+  return {
+    ok: true,
+    reloaded: toDispose.length,
+    skippedBusy: busySessionKeys.length,
+    busySessionKeys
+  }
+}
+
 export function listHostedExtensionCommands(
   sessionKey: string
 ): Array<{ name: string; description: string }> {

@@ -1,8 +1,18 @@
 import type { Dictionary } from '@renderer/i18n'
+import { decodeUserMessageText } from './agent-message-refs'
 import { parseAgentRunDocument } from './agent-run-document'
+import { stripComposerRefTokens } from './composer-ref-tokens'
 import type { AgentLogEntry, AgentRunStep, AgentRunViewState } from './terminal-tabs'
+import type { CaptureScope } from '../../../shared/agent-types'
+import type { StoredAgentLogEntry } from '../../../shared/agent-types'
 
 const SUMMARY_MAX_CHARS = 12_000
+
+export interface CaptureLogEntry {
+  id: number
+  kind: string
+  text: string
+}
 
 function summarizeToolSteps(steps: AgentRunStep[]): string[] {
   const lines: string[] = []
@@ -26,33 +36,69 @@ function summarizeToolSteps(steps: AgentRunStep[]): string[] {
   return lines
 }
 
-/** Build a compact turn summary for SOP generation (no secrets assumed beyond session text). */
-export function buildSopGenerationSummary(input: {
-  log: AgentLogEntry[]
-  entry: AgentLogEntry
-  liveRun?: AgentRunViewState
-  t: Dictionary
-}): string {
-  const { log, entry, liveRun, t } = input
-  const entryIndex = log.findIndex((item) => item.id === entry.id)
-  const userMessages: string[] = []
-  for (let i = 0; i < (entryIndex >= 0 ? entryIndex : log.length); i++) {
-    const item = log[i]
-    if (item?.kind === 'user' && item.text.trim()) {
-      userMessages.push(item.text.trim())
+function normalizeLogText(kind: string, text: string): string {
+  const decoded = kind === 'user' ? decodeUserMessageText(text).text : text
+  return stripComposerRefTokens(decoded).trim()
+}
+
+function collectUserGoals(
+  log: CaptureLogEntry[],
+  entryIndex: number,
+  scope: CaptureScope
+): string[] {
+  const end = entryIndex >= 0 ? entryIndex : log.length
+  const userIndexes: number[] = []
+  for (let i = 0; i < end; i++) {
+    if (log[i]?.kind === 'user' && normalizeLogText('user', log[i]!.text)) {
+      userIndexes.push(i)
     }
   }
+  const selected =
+    scope === 'session'
+      ? userIndexes
+      : userIndexes.length
+        ? [userIndexes[userIndexes.length - 1]!]
+        : []
+  return selected.map((index) => normalizeLogText('user', log[index]!.text))
+}
+
+/** Build a compact turn or session summary for SOP/skill generation. */
+export function buildCaptureSummary(input: {
+  log: CaptureLogEntry[]
+  entry?: CaptureLogEntry
+  liveRun?: AgentRunViewState
+  scope?: CaptureScope
+  seedText?: string
+  t: Dictionary
+}): string {
+  const { log, liveRun, t } = input
+  const scope = input.scope ?? 'turn'
+  const entry = input.entry ?? [...log].reverse().find((item) => item.kind === 'assistant')
+  const entryIndex = entry ? log.findIndex((item) => item.id === entry.id) : log.length
+  const userMessages = collectUserGoals(log, entryIndex, scope)
+  const seed = input.seedText?.trim()
+  if (seed && !userMessages.includes(seed)) userMessages.push(seed)
 
   let steps: AgentRunStep[] = liveRun?.steps ?? []
   let resultMarkdown = liveRun?.result?.trim() ?? ''
-  if ((!steps.length || !resultMarkdown) && entry.kind === 'assistant') {
+  if (entry && (!steps.length || !resultMarkdown) && entry.kind === 'assistant') {
     const parsed = parseAgentRunDocument(entry.text, t)
     if (parsed) {
       if (!steps.length) steps = parsed.steps
       if (!resultMarkdown) resultMarkdown = parsed.resultMarkdown.trim()
     } else if (!resultMarkdown && entry.text.trim()) {
-      resultMarkdown = entry.text.trim().slice(0, 2000)
+      resultMarkdown = normalizeLogText('assistant', entry.text).slice(0, 2000)
     }
+  }
+
+  if (scope === 'session') {
+    const extra: AgentRunStep[] = []
+    for (const item of log) {
+      if (item.kind !== 'assistant' || item.id === entry?.id) continue
+      const parsed = parseAgentRunDocument(item.text, t)
+      if (parsed?.steps.length) extra.push(...parsed.steps)
+    }
+    if (extra.length) steps = [...extra, ...steps]
   }
 
   const commandLines = summarizeToolSteps(steps)
@@ -74,8 +120,48 @@ export function buildSopGenerationSummary(input: {
   return summary
 }
 
+export function buildSopGenerationSummary(input: {
+  log: AgentLogEntry[]
+  entry: AgentLogEntry
+  liveRun?: AgentRunViewState
+  t: Dictionary
+  scope?: CaptureScope
+  seedText?: string
+}): string {
+  return buildCaptureSummary({
+    log: input.log,
+    entry: input.entry,
+    liveRun: input.liveRun,
+    t: input.t,
+    scope: input.scope ?? 'turn',
+    seedText: input.seedText
+  })
+}
+
+export function historyLogsToCaptureEntries(logs: StoredAgentLogEntry[]): CaptureLogEntry[] {
+  return logs
+    .filter((log) => log.kind === 'user' || log.kind === 'assistant' || log.kind === 'error')
+    .map((log) => ({
+      id: log.logId,
+      kind: log.kind,
+      text: log.text
+    }))
+}
+
+export function hasCaptureableContent(input: {
+  log: CaptureLogEntry[]
+  seedText?: string
+}): boolean {
+  if (input.seedText?.trim()) return true
+  return input.log.some(
+    (entry) =>
+      (entry.kind === 'user' || entry.kind === 'assistant') &&
+      normalizeLogText(entry.kind, entry.text)
+  )
+}
+
 export function buildFallbackSopSeed(userText: string): { title: string; content: string } {
-  const seed = userText.trim()
+  const seed = stripComposerRefTokens(userText).trim()
   return {
     title: seed.slice(0, 20) || 'SOP',
     content: seed

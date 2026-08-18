@@ -46,9 +46,11 @@ import {
   searchPiPackageCatalog
 } from './pi-packages'
 import { generateAndSaveSop } from './generate-sop'
+import { commitCaptureDraft, generateCaptureDraft } from './generate-capture'
 import {
   cancelPiAgentRun,
   listHostedExtensionCommands,
+  reloadCrescentRuntime,
   runPiAgent,
   runPiExtensionCommand,
   steerPiAgentRun
@@ -89,6 +91,8 @@ import type {
   AgentConnectionIntentInput,
   AgentConnectionIntentResult,
   AgentGenerateSopInput,
+  AgentGenerateCaptureDraftInput,
+  AgentCommitCaptureDraftInput,
   AgentPathReference,
   AgentRunInput,
   CommandApprovalDecision,
@@ -294,9 +298,50 @@ export function registerAgentIpc(): void {
         summary: payload?.summary ?? '',
         locale: payload?.locale,
         fallbackTitle: payload?.fallbackTitle,
-        fallbackContent: payload?.fallbackContent
+        fallbackContent: payload?.fallbackContent,
+        draft: payload?.draft,
+        notes: payload?.notes
       },
       { config: readAgentConfig() }
+    )
+  })
+
+  ipcMain.handle('agent:reload-runtime', async (_, payload?: { sessionKey?: string }) => {
+    const sessionKey = typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : ''
+    return reloadCrescentRuntime({
+      sessionKey: sessionKey || undefined,
+      config: readAgentConfig()
+    })
+  })
+
+  ipcMain.handle(
+    'agent:generate-capture-draft',
+    async (_, payload: AgentGenerateCaptureDraftInput) => {
+      const kind = payload?.kind === 'skill' ? 'skill' : 'sop'
+      return generateCaptureDraft(
+        {
+          kind,
+          summary: typeof payload?.summary === 'string' ? payload.summary : '',
+          locale: typeof payload?.locale === 'string' ? payload.locale : undefined,
+          draft: typeof payload?.draft === 'string' ? payload.draft : undefined,
+          notes: typeof payload?.notes === 'string' ? payload.notes : undefined
+        },
+        { config: readAgentConfig() }
+      )
+    }
+  )
+
+  ipcMain.handle('agent:commit-capture-draft', async (_, payload: AgentCommitCaptureDraftInput) => {
+    const kind = payload?.kind === 'skill' ? 'skill' : 'sop'
+    return commitCaptureDraft(
+      {
+        kind,
+        title: typeof payload?.title === 'string' ? payload.title : '',
+        content: typeof payload?.content === 'string' ? payload.content : '',
+        skillName: typeof payload?.skillName === 'string' ? payload.skillName : undefined,
+        overwrite: Boolean(payload?.overwrite)
+      },
+      { skillRoot: readAgentConfig().skillRoot }
     )
   })
 

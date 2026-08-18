@@ -9,6 +9,12 @@ import type {
   AgentEvent,
   AgentGenerateSopInput,
   AgentGenerateSopResult,
+  AgentReloadRuntimeInput,
+  AgentReloadRuntimeResult,
+  AgentGenerateCaptureDraftInput,
+  AgentGenerateCaptureDraftResult,
+  AgentCommitCaptureDraftInput,
+  AgentCommitCaptureDraftResult,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -381,6 +387,16 @@ const api = {
       ipcRenderer.invoke('agent:resolve-connection-intent', input),
     generateSop: (input: AgentGenerateSopInput): Promise<AgentGenerateSopResult> =>
       ipcRenderer.invoke('agent:generate-sop', input),
+    reloadRuntime: (input?: AgentReloadRuntimeInput): Promise<AgentReloadRuntimeResult> =>
+      ipcRenderer.invoke('agent:reload-runtime', input ?? {}),
+    generateCaptureDraft: (
+      input: AgentGenerateCaptureDraftInput
+    ): Promise<AgentGenerateCaptureDraftResult> =>
+      ipcRenderer.invoke('agent:generate-capture-draft', input),
+    commitCaptureDraft: (
+      input: AgentCommitCaptureDraftInput
+    ): Promise<AgentCommitCaptureDraftResult> =>
+      ipcRenderer.invoke('agent:commit-capture-draft', input),
     run: (input: AgentRunInput): Promise<{ ok: boolean; text?: string; error?: string }> =>
       ipcRenderer.invoke('agent:run', input),
     cancel: (runId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:cancel', runId),

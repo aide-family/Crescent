@@ -50,6 +50,7 @@ import { SkillManager, type SkillPreviewState } from '@renderer/components/Skill
 import { ExtensionManager } from '@renderer/components/ExtensionManager'
 import { ExtensionUiDialog } from '@renderer/components/ExtensionUiDialog'
 import { WikiSheet } from '@renderer/components/WikiSheet'
+import { CaptureDraftSheet } from '@renderer/components/CaptureDraftSheet'
 import { Button } from '@renderer/components/ui/button'
 import {
   dictionaries,
@@ -153,7 +154,11 @@ import {
   removeComposerRefToken,
   stripComposerRefTokens
 } from '@renderer/lib/composer-ref-tokens'
-import { buildFallbackSopSeed, buildSopGenerationSummary } from '@renderer/lib/sop-summary'
+import {
+  buildCaptureSummary,
+  hasCaptureableContent,
+  historyLogsToCaptureEntries
+} from '@renderer/lib/sop-summary'
 import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
 import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
 import {
@@ -256,11 +261,7 @@ import {
   type AgentTerminalTab,
   type AgentToolReference
 } from '@renderer/lib/terminal-tabs'
-import {
-  buildWikiContentFromHistory,
-  filterWikiDocuments,
-  upsertWikiSummary
-} from '@renderer/lib/wiki'
+import { filterWikiDocuments, upsertWikiSummary } from '@renderer/lib/wiki'
 import {
   buildConnectionSlashCommand,
   buildExtSlashCommand,
@@ -302,6 +303,7 @@ import type {
   AgentExtensionOption,
   AgentPiPackageSearchResult,
   AgentWikiReference,
+  CaptureKind,
   ExtensionUiRequest,
   AgentConnectionIntentResult,
   ConnectionConfig,
@@ -333,6 +335,7 @@ import {
   dismissOnboarding,
   shouldShowOnboarding
 } from '@renderer/lib/onboarding'
+import { parseCaptureIntent } from '../../shared/capture-intent'
 import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
@@ -631,6 +634,36 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
   const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
+  const [savingHistorySkillTabId, setSavingHistorySkillTabId] = useState<string | null>(null)
+  const [captureDraft, setCaptureDraft] = useState<{
+    open: boolean
+    kind: CaptureKind
+    title: string
+    content: string
+    skillName: string
+    notes: string
+    overwrite: boolean
+    generating: boolean
+    refining: boolean
+    committing: boolean
+    error: string | null
+    conflict: boolean
+    summary: string
+  }>({
+    open: false,
+    kind: 'sop',
+    title: '',
+    content: '',
+    skillName: '',
+    notes: '',
+    overwrite: false,
+    generating: false,
+    refining: false,
+    committing: false,
+    error: null,
+    conflict: false,
+    summary: ''
+  })
   const [sessionUsageBaselineByTabId, setSessionUsageBaselineByTabId] = useState<
     Record<string, { input: number; output: number }>
   >({})
@@ -2783,6 +2816,70 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  async function reloadApplicationRuntime(): Promise<void> {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    updateTab(chatTabId, (tab) => applyComposerInput(tab, ''))
+    setSlashCommandIndex(0)
+    setSlashCommandOpen(false)
+    const loadingToast = toast.loading(t.input.slashReload)
+    try {
+      const result = await window.api.agent.reloadRuntime({ sessionKey: chatTabId })
+      const nextConfig = await window.api.agent.getConfig()
+      setConfig(nextConfig)
+      setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
+      setModels(flattenProviderModels(nextConfig.providers))
+      const [
+        nextSkills,
+        nextExtensions,
+        nextCommands,
+        nextWiki,
+        nextFiles,
+        nextConnections,
+        nextModels
+      ] = await Promise.all([
+        window.api.agent.listSkills().catch(() => [] as AgentSkillOption[]),
+        window.api.agent.listExtensions().catch(() => [] as AgentExtensionOption[]),
+        window.api.agent.listExtensionCommands(chatTabId).catch(() => []),
+        window.api.agent.listWikiDocuments().catch(() => [] as WikiDocumentSummary[]),
+        window.api.agent.listInstructionFiles().catch(() => [] as LocalInstructionDocument[]),
+        window.api.connections.list().catch(() => [] as ConnectionConfig[]),
+        window.api.agent.getModels().catch(() => [])
+      ])
+      setSkills(nextSkills)
+      setExtensions(nextExtensions)
+      setExtensionCommands(nextCommands)
+      setWikiDocuments(nextWiki)
+      setInstructionFiles(nextFiles)
+      setConnections(nextConnections)
+      if (nextModels.length) setModels(nextModels)
+      if (hasConfiguredModelSelection(nextConfig)) {
+        const requestId = validationRequestRef.current + 1
+        validationRequestRef.current = requestId
+        setValidating(true)
+        void window.api.agent
+          .validateConfig(nextConfig)
+          .then((validationResult) => {
+            if (validationRequestRef.current === requestId) setValidation(validationResult)
+          })
+          .finally(() => {
+            if (validationRequestRef.current === requestId) setValidating(false)
+          })
+      }
+      toast.dismiss(loadingToast)
+      if (result.skippedBusy > 0) {
+        toast.message(t.capture.reloadBusy.replace('{n}', String(result.skippedBusy)))
+      } else {
+        toast.success(t.capture.reloadOk)
+      }
+    } catch (error) {
+      toast.dismiss(loadingToast)
+      toast.error(
+        `${t.capture.reloadFailed}: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: TOAST_INTERVENTION_DURATION_MS }
+      )
+    }
+  }
+
   async function importExtension(): Promise<void> {
     try {
       const result = await window.api.agent.importExtension()
@@ -3290,96 +3387,202 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recoveryMode])
 
+  async function generateCaptureDraftFromSummary(input: {
+    kind: CaptureKind
+    summary: string
+    draft?: string
+    notes?: string
+    refining?: boolean
+  }): Promise<void> {
+    setCaptureDraft((current) => ({
+      ...current,
+      open: true,
+      kind: input.kind,
+      generating: !input.refining,
+      refining: Boolean(input.refining),
+      error: null,
+      conflict: false,
+      summary: input.summary
+    }))
+    try {
+      const generated = await window.api.agent.generateCaptureDraft({
+        kind: input.kind,
+        summary: input.summary,
+        locale,
+        draft: input.draft,
+        notes: input.notes
+      })
+      if (!generated.ok || !generated.content?.trim()) {
+        throw new Error(generated.error || t.capture.failed)
+      }
+      setCaptureDraft((current) => ({
+        ...current,
+        title: generated.title ?? current.title,
+        content: generated.content ?? '',
+        skillName: generated.skillName ?? current.skillName,
+        generating: false,
+        refining: false,
+        error: null
+      }))
+      toast.success(t.capture.generated)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setCaptureDraft((current) => ({
+        ...current,
+        generating: false,
+        refining: false,
+        error: `${t.capture.failed}: ${message}`
+      }))
+      toast.error(`${t.capture.failed}: ${message}`, { duration: TOAST_INTERVENTION_DURATION_MS })
+    }
+  }
+
+  function startCaptureFromCurrentSession(
+    kind: CaptureKind,
+    scope: 'turn' | 'session',
+    seedText = ''
+  ): void {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
+    if (!hasCaptureableContent({ log, seedText })) {
+      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
+      return
+    }
+    const entry = [...log].reverse().find((item) => item.kind === 'assistant')
+    const summary = buildCaptureSummary({
+      log,
+      entry,
+      liveRun: entry ? liveRunByLogId[entry.id] : undefined,
+      scope,
+      seedText,
+      t
+    })
+    void generateCaptureDraftFromSummary({ kind, summary })
+  }
+
   async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
     if (savingSopLogId === entry.id) return
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
-    const entryIndex = log.findIndex((item) => item.id === entry.id)
-    let userText = ''
-    for (let i = entryIndex - 1; i >= 0; i--) {
-      const item = log[i]
-      if (item?.kind === 'user') {
-        userText = item.text
-        break
-      }
-    }
-    const seed = userText.trim()
-    if (!seed) {
-      toast.error(t.wiki.saveFailed, { duration: TOAST_INTERVENTION_DURATION_MS })
+    if (!hasCaptureableContent({ log })) {
+      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
       return
     }
-
     setSavingSopLogId(entry.id)
-    setWikiMessage(null)
-    const savingToast = toast.loading(t.common.saveAsSopSaving)
     try {
-      const summary = buildSopGenerationSummary({
+      const summary = buildCaptureSummary({
         log,
         entry,
         liveRun: liveRunByLogId[entry.id],
+        scope: 'turn',
         t
       })
-      const fallback = buildFallbackSopSeed(seed)
-      const generated = await window.api.agent.generateSop({
-        summary,
-        locale,
-        fallbackTitle: fallback.title,
-        fallbackContent: fallback.content
-      })
-      toast.dismiss(savingToast)
-      if (!generated.ok || !generated.document) {
-        throw new Error(generated.error || t.wiki.saveFailed)
-      }
-      const document = generated.document
-      setWikiDocuments((current) => upsertWikiSummary(current, document))
-      setSelectedWikiDocument(document)
-      setWikiEditContent(document.content)
-      setWikiEditing(true)
-      setWikiPreviewWidth(getDefaultWikiPreviewWidth())
-      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
-      toast.success(`${t.common.saveAsSopSaved}: ${document.title}`)
-      setWikiOpen(true)
-    } catch (error) {
-      toast.dismiss(savingToast)
-      setWikiMessage({
-        type: 'error',
-        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
-      })
-      toast.error(
-        `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`,
-        { duration: TOAST_INTERVENTION_DURATION_MS }
-      )
+      await generateCaptureDraftFromSummary({ kind: 'sop', summary })
     } finally {
       setSavingSopLogId(null)
     }
   }
 
-  async function saveHistorySessionToWiki(item: StoredSessionHistoryItem): Promise<void> {
-    setSavingHistoryWikiTabId(item.tabId)
-    setWikiMessage(null)
+  async function saveHistorySessionToCapture(
+    item: StoredSessionHistoryItem,
+    kind: CaptureKind
+  ): Promise<void> {
+    if (kind === 'skill') setSavingHistorySkillTabId(item.tabId)
+    else setSavingHistoryWikiTabId(item.tabId)
     try {
       const detail = await window.api.storage.getSessionHistory(item.tabId)
       if (!detail) return
-
-      const title = `${detail.title} SOP`
-      const document = await window.api.agent.saveWikiDocument({
-        title,
-        content: buildWikiContentFromHistory(detail, t)
+      const log = historyLogsToCaptureEntries(detail.logs)
+      if (!hasCaptureableContent({ log, seedText: detail.title })) {
+        toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
+        return
+      }
+      const summary = buildCaptureSummary({
+        log,
+        scope: 'session',
+        seedText: detail.title,
+        t
       })
-      setWikiDocuments((current) => upsertWikiSummary(current, document))
-      setSelectedWikiDocument(document)
-      setWikiEditContent(document.content)
-      setWikiEditing(false)
-      setWikiPreviewWidth(getDefaultWikiPreviewWidth())
-      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
-      setWikiOpen(true)
+      await generateCaptureDraftFromSummary({ kind, summary })
     } catch (error) {
-      setWikiMessage({
-        type: 'error',
-        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
-      })
+      toast.error(
+        `${t.capture.failed}: ${error instanceof Error ? error.message : String(error)}`,
+        { duration: TOAST_INTERVENTION_DURATION_MS }
+      )
     } finally {
       setSavingHistoryWikiTabId(null)
+      setSavingHistorySkillTabId(null)
+    }
+  }
+
+  async function saveHistorySessionToWiki(item: StoredSessionHistoryItem): Promise<void> {
+    await saveHistorySessionToCapture(item, 'sop')
+  }
+
+  async function saveHistorySessionToSkill(item: StoredSessionHistoryItem): Promise<void> {
+    await saveHistorySessionToCapture(item, 'skill')
+  }
+
+  async function refineCaptureDraft(): Promise<void> {
+    if (!captureDraft.summary.trim() || !captureDraft.content.trim()) return
+    await generateCaptureDraftFromSummary({
+      kind: captureDraft.kind,
+      summary: captureDraft.summary,
+      draft: captureDraft.content,
+      notes: captureDraft.notes,
+      refining: true
+    })
+  }
+
+  async function commitCaptureDraft(): Promise<void> {
+    if (!captureDraft.content.trim() || captureDraft.committing) return
+    setCaptureDraft((current) => ({ ...current, committing: true, error: null }))
+    try {
+      const result = await window.api.agent.commitCaptureDraft({
+        kind: captureDraft.kind,
+        title: captureDraft.title,
+        content: captureDraft.content,
+        skillName: captureDraft.skillName,
+        overwrite: captureDraft.overwrite
+      })
+      if (result.conflict) {
+        setCaptureDraft((current) => ({
+          ...current,
+          committing: false,
+          conflict: true,
+          error: t.capture.conflict
+        }))
+        return
+      }
+      if (!result.ok) {
+        throw new Error(result.error || t.wiki.saveFailed)
+      }
+      if (result.document) {
+        setWikiDocuments((current) => upsertWikiSummary(current, result.document!))
+        setSelectedWikiDocument(result.document)
+        setWikiEditContent(result.document.content)
+        setWikiEditing(true)
+        setWikiPreviewWidth(getDefaultWikiPreviewWidth())
+        setWikiMessage({ type: 'success', text: `${t.capture.savedSop}: ${result.document.title}` })
+        toast.success(`${t.capture.savedSop}: ${result.document.title}`)
+      }
+      if (result.skill) {
+        setSkills(await window.api.agent.listSkills())
+        updateTab(sessionChatTab.id, (tab) => ({
+          ...tab,
+          skillRefs: addUniqueSkillRef(tab.skillRefs, result.skill!)
+        }))
+        toast.success(`${t.capture.savedSkill}: ${result.skill.name}`)
+      }
+      setCaptureDraft((current) => ({ ...current, open: false, committing: false }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setCaptureDraft((current) => ({
+        ...current,
+        committing: false,
+        error: message
+      }))
+      toast.error(message, { duration: TOAST_INTERVENTION_DURATION_MS })
     }
   }
 
@@ -4957,6 +5160,22 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
+    if (/^\/reload$/i.test(displayInput)) {
+      void reloadApplicationRuntime()
+      return
+    }
+
+    const captureIntent = parseCaptureIntent(displayInput)
+    if (captureIntent) {
+      updateTab(chatTabId, (current) => applyComposerInput(current, ''))
+      startCaptureFromCurrentSession(
+        captureIntent.kind,
+        captureIntent.scope,
+        captureIntent.seedText
+      )
+      return
+    }
+
     const skillRefs = tab?.skillRefs ?? []
     const pathRefs = tab?.pathRefs ?? []
     const toolRefs = tab?.toolRefs ?? []
@@ -6202,6 +6421,26 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
+    if (command.id === 'reload') {
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      void reloadApplicationRuntime()
+      return
+    }
+
+    if (command.id === 'create-skill' || command.id === 'sop') {
+      updateTab(sessionChatTab.id, (tab) =>
+        applyComposerInput(
+          tab,
+          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
+        )
+      )
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      startCaptureFromCurrentSession(command.id === 'create-skill' ? 'skill' : 'sop', 'turn')
+      return
+    }
+
     if (command.pathReferenceKind) {
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
@@ -7068,6 +7307,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       titleDraft={historyTitleDraft}
       titleSavingId={historyTitleSavingId}
       savingWikiTabId={savingHistoryWikiTabId}
+      savingSkillTabId={savingHistorySkillTabId}
       onTitleDraftChange={setHistoryTitleDraft}
       onRefresh={() => void refreshSessionHistory()}
       onOpenSession={(item) => void openHistorySession(item)}
@@ -7075,6 +7315,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       onCancelRename={cancelRenameHistorySession}
       onSaveTitle={(item) => void saveHistorySessionTitle(item)}
       onSaveToWiki={(item) => void saveHistorySessionToWiki(item)}
+      onSaveToSkill={(item) => void saveHistorySessionToSkill(item)}
       onDeleteSession={(item) => void deleteHistorySession(item)}
     />
   )
@@ -7309,6 +7550,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       {mcpSheet}
       {historySheet}
       {wikiSheet}
+      <CaptureDraftSheet
+        open={captureDraft.open}
+        kind={captureDraft.kind}
+        t={t}
+        title={captureDraft.title}
+        content={captureDraft.content}
+        skillName={captureDraft.skillName}
+        notes={captureDraft.notes}
+        overwrite={captureDraft.overwrite}
+        generating={captureDraft.generating}
+        refining={captureDraft.refining}
+        committing={captureDraft.committing}
+        error={captureDraft.error}
+        conflict={captureDraft.conflict}
+        onOpenChange={(open) => setCaptureDraft((current) => ({ ...current, open }))}
+        onTitleChange={(title) => setCaptureDraft((current) => ({ ...current, title }))}
+        onContentChange={(content) => setCaptureDraft((current) => ({ ...current, content }))}
+        onSkillNameChange={(skillName) => setCaptureDraft((current) => ({ ...current, skillName }))}
+        onNotesChange={(notes) => setCaptureDraft((current) => ({ ...current, notes }))}
+        onOverwriteChange={(overwrite) => setCaptureDraft((current) => ({ ...current, overwrite }))}
+        onRefine={() => void refineCaptureDraft()}
+        onCommit={() => void commitCaptureDraft()}
+      />
       <section
         className={`app-frame relative flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
       >

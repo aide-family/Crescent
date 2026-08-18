@@ -8,6 +8,12 @@ import type {
   AgentEvent,
   AgentGenerateSopInput,
   AgentGenerateSopResult,
+  AgentReloadRuntimeInput,
+  AgentReloadRuntimeResult,
+  AgentGenerateCaptureDraftInput,
+  AgentGenerateCaptureDraftResult,
+  AgentCommitCaptureDraftInput,
+  AgentCommitCaptureDraftResult,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -254,6 +260,13 @@ interface TerminalAgentApi {
       input: AgentConnectionIntentInput
     ) => Promise<AgentConnectionIntentResult>
     generateSop: (input: AgentGenerateSopInput) => Promise<AgentGenerateSopResult>
+    reloadRuntime: (input?: AgentReloadRuntimeInput) => Promise<AgentReloadRuntimeResult>
+    generateCaptureDraft: (
+      input: AgentGenerateCaptureDraftInput
+    ) => Promise<AgentGenerateCaptureDraftResult>
+    commitCaptureDraft: (
+      input: AgentCommitCaptureDraftInput
+    ) => Promise<AgentCommitCaptureDraftResult>
     run: (input: AgentRunInput) => Promise<{ ok: boolean; text?: string; error?: string }>
     cancel: (runId: string) => Promise<{ ok: boolean }>
     rejectApprovalsForTab: (tabId: string) => Promise<{ ok: boolean }>

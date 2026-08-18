@@ -199,6 +199,13 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['new', 'session', 'chat', 'conversation', '新建', '会话', '新会话']
     },
     {
+      id: 'reload',
+      title: t.input.slashReload,
+      description: t.input.slashReloadDescription,
+      value: '/reload',
+      keywords: ['reload', 'refresh', 'config', '重载', '刷新', '配置']
+    },
+    {
       id: 'style',
       title: t.input.slashStyle,
       description: t.input.slashStyleDescription,
@@ -268,8 +275,14 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       title: t.input.slashCreateSkill,
       description: t.input.slashCreateSkillDescription,
       value: '/create-skill',
-      keywords: ['create-skill', 'skill', 'skills', 'custom'],
-      templateInput: t.input.createSkillPrompt
+      keywords: ['create-skill', 'skill', 'skills', 'custom', '转成skill']
+    },
+    {
+      id: 'sop',
+      title: t.input.slashSop,
+      description: t.input.slashSopDescription,
+      value: '/sop',
+      keywords: ['sop', 'wiki', 'knowledge', '知识库']
     }
   ]
 }

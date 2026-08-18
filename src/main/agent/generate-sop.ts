@@ -10,6 +10,10 @@ export interface GenerateSopInput {
   /** Used when completion fails or returns empty; title auto-prefixed SOP： when saved. */
   fallbackTitle?: string
   fallbackContent?: string
+  /** Existing draft to revise. */
+  draft?: string
+  /** Operator notes for AI refinement. */
+  notes?: string
 }
 
 export interface GenerateSopResult {
@@ -151,7 +155,7 @@ export async function generateSopFromSummary(
       temperature: 0.2,
       messages: [
         { role: 'system' as const, content: system },
-        { role: 'user' as const, content: summary }
+        { role: 'user' as const, content: buildGenerateSopUserMessage(input) }
       ]
     })
 
@@ -176,9 +180,27 @@ export async function generateSopFromSummary(
   }
 }
 
+export function buildGenerateSopUserMessage(input: GenerateSopInput): string {
+  const parts = ['# Session summary', input.summary.trim()]
+  const draft = input.draft?.trim()
+  if (draft) {
+    parts.push('', '# Current draft', draft)
+  }
+  const notes = input.notes?.trim()
+  if (notes) {
+    parts.push('', '# Operator notes', notes)
+  }
+  if (draft || notes) {
+    parts.push(
+      '',
+      'Revise the current draft using the operator notes. Keep the required SOP sections.'
+    )
+  }
+  return parts.join('\n')
+}
+
 /**
- * Deterministic SOP save path: completion (no tools) → main saveWikiDocument under ~/.crescent/wiki.
- * On completion failure, saves fallback seed content when provided.
+ * Save a generated SOP via saveWikiDocument. Does not fall back to raw seed text.
  */
 export async function generateAndSaveSop(
   input: GenerateSopInput,
@@ -190,19 +212,7 @@ export async function generateAndSaveSop(
   }
 ): Promise<GenerateSopResult> {
   const generated = await generateSopFromSummary(input, options)
-  const fallbackTitle = input.fallbackTitle?.trim()
-  const fallbackContent = input.fallbackContent?.trim()
-
-  const title =
-    generated.ok && generated.title?.trim()
-      ? generated.title.trim()
-      : ensureSopTitle(fallbackTitle || 'SOP')
-  const content =
-    generated.ok && generated.content?.trim()
-      ? generated.content.trim()
-      : fallbackContent || fallbackTitle || ''
-
-  if (!content.trim()) {
+  if (!generated.ok || !generated.title?.trim() || !generated.content?.trim()) {
     return {
       ok: false,
       error: generated.error || 'No SOP content to save.',
@@ -212,15 +222,13 @@ export async function generateAndSaveSop(
   }
 
   const save = options?.save ?? ((payload) => saveWikiDocument(payload))
-  const document = await save({ title, content })
+  const document = await save({ title: generated.title.trim(), content: generated.content.trim() })
 
   return {
     ok: true,
     title: document.title,
     content: document.content,
     document,
-    generated: Boolean(generated.ok && generated.generated),
-    error: generated.ok ? undefined : generated.error,
-    timedOut: generated.timedOut
+    generated: true
   }
 }
