@@ -43,6 +43,11 @@ import {
 } from '../../../shared/openapi-profiles'
 import { formatToolNameListText, parseToolNameListText } from '../../../shared/tool-policy'
 import { normalizeAgentStyle, resolveShowAgentThinking } from '../../../shared/agent-style'
+import {
+  SYSTEM_LOG_LEVELS,
+  normalizeSystemLogLevel,
+  type SystemLogLevel
+} from '../../../shared/log-levels'
 import type {
   AgentConfig,
   AgentModelOption,
@@ -65,6 +70,14 @@ export type OpenApiProfilePatch = Partial<{
   toolAllowList: string[]
   toolDenyList: string[]
 }>
+
+const LOG_LEVEL_LABEL_KEYS: Record<SystemLogLevel, keyof Dictionary['settings']> = {
+  off: 'logLevelOff',
+  debug: 'logLevelDebug',
+  info: 'logLevelInfo',
+  warn: 'logLevelWarn',
+  error: 'logLevelError'
+}
 
 export interface SettingsSheetProps {
   open: boolean
@@ -95,6 +108,7 @@ export interface SettingsSheetProps {
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onAgentStyleChange: (style: AgentStyle) => void
+  onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
   onMaxActiveToolsChange: (value: number) => void
@@ -147,6 +161,7 @@ export function SettingsSheet({
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
+  onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
   onMaxActiveToolsChange: _onMaxActiveToolsChange,
@@ -374,6 +389,28 @@ export function SettingsSheet({
                   </SelectContent>
                 </Select>
                 <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="log-level">{t.settings.logLevel}</FieldLabel>
+                <Select
+                  value={normalizeSystemLogLevel(config.logLevel)}
+                  onValueChange={(value) => onLogLevelChange(normalizeSystemLogLevel(value))}
+                >
+                  <SelectTrigger id="log-level" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t.settings.logLevel}</SelectLabel>
+                      {SYSTEM_LOG_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {t.settings[LOG_LEVEL_LABEL_KEYS[level]]}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{t.settings.logLevelHint}</FieldDescription>
               </Field>
               <Field>
                 <label

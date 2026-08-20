@@ -25,6 +25,7 @@ import {
 } from '../shared/openapi-profiles'
 import { normalizeMcpServers } from '../shared/mcp-servers'
 import { DEFAULT_AGENT_STYLE, normalizeAgentStyle } from '../shared/agent-style'
+import { normalizeSystemLogLevel } from '../shared/log-levels'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -78,7 +79,8 @@ export const defaultAgentConfig: AgentConfig = {
   skillRoot: CRESCENT_USER_SKILLS_TILDE,
   loadGlobalAgentSkills: false,
   disabledExtensions: [],
-  mcpServers: []
+  mcpServers: [],
+  logLevel: 'info'
 }
 
 export const defaultMemoryFile: CrescentMemoryFile = {
@@ -344,7 +346,8 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     skillRoot: normalizeSkillRoot(config.skillRoot),
     loadGlobalAgentSkills: normalizeLoadGlobalAgentSkills(config),
     disabledExtensions: normalizeDisabledExtensionIds(config.disabledExtensions),
-    mcpServers: normalizeMcpServers(config.mcpServers)
+    mcpServers: normalizeMcpServers(config.mcpServers),
+    logLevel: normalizeSystemLogLevel(config.logLevel)
   }
 }
 

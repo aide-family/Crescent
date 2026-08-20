@@ -90,6 +90,7 @@ import {
 } from '../crescent-store'
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
+import { setSystemLogLevel } from '../logging'
 import type {
   AgentConfig,
   AgentConnectionIntentInput,
@@ -477,7 +478,9 @@ export function registerAgentIpc(): void {
       ...config
     })
 
-    return writeAgentConfig(nextConfig)
+    const saved = writeAgentConfig(nextConfig)
+    setSystemLogLevel(saved.logLevel ?? 'info')
+    return saved
   })
 
   ipcMain.handle('agent:validate-config', async (_, config: Partial<AgentConfig>) => {

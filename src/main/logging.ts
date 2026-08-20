@@ -2,8 +2,13 @@ import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
 
 import { getCrescentLogsDir } from './crescent-paths'
+import {
+  normalizeSystemLogLevel,
+  shouldRecordLogLevel,
+  type SystemLogLevel
+} from '../shared/log-levels'
 
-export type SystemLogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type { SystemLogLevel } from '../shared/log-levels'
 
 const LOG_PREFIX = 'crescent-'
 const LOG_SUFFIX = '.log'
@@ -13,6 +18,21 @@ const RETENTION_DAYS = 3
 
 let currentDay = ''
 let currentFilePath = ''
+let logThreshold: SystemLogLevel = 'info'
+
+/** Change the minimum level recorded to the daily log file (runtime switch). */
+export function setSystemLogLevel(level: SystemLogLevel): void {
+  const next = normalizeSystemLogLevel(level, logThreshold)
+  if (next === logThreshold) return
+  logThreshold = next
+  if (shouldRecordLogLevel('info', logThreshold)) {
+    writeSystemLog('info', `system log level changed to ${next}`)
+  }
+}
+
+export function getSystemLogLevel(): SystemLogLevel {
+  return logThreshold
+}
 
 function dayStamp(date = new Date()): string {
   const year = date.getFullYear()
@@ -87,6 +107,11 @@ export function getCurrentLogFilePath(): string {
  * Call once at startup, before other modules start logging.
  */
 export function initSystemLogging(): void {
+  const envLevel = process.env.CRESCENT_LOG_LEVEL?.trim()
+  if (envLevel) {
+    logThreshold = normalizeSystemLogLevel(envLevel)
+  }
+
   const originalConsole = {
     debug: console.debug.bind(console),
     log: console.log.bind(console),
@@ -102,7 +127,7 @@ export function initSystemLogging(): void {
       const text = args
         .map((arg) => (arg instanceof Error ? (arg.stack ?? arg.message) : String(arg)))
         .join(' ')
-      if (text) writeSystemLog(level, text)
+      if (text && shouldRecordLogLevel(level, logThreshold)) writeSystemLog(level, text)
     }
 
   console.debug = capture('debug', originalConsole.debug)
@@ -119,8 +144,10 @@ export function initSystemLogging(): void {
     writeSystemLog('error', `unhandledRejection: ${String(reason)}`)
   })
 
-  writeSystemLog(
-    'info',
-    `Crescent started (pid=${process.pid}, platform=${process.platform}, arch=${process.arch})`
-  )
+  if (shouldRecordLogLevel('info', logThreshold)) {
+    writeSystemLog(
+      'info',
+      `Crescent started (pid=${process.pid}, platform=${process.platform}, arch=${process.arch})`
+    )
+  }
 }

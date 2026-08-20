@@ -1,4 +1,5 @@
 import type { AgentStyle } from './agent-style'
+import type { SystemLogLevel } from './log-levels'
 
 /** @deprecated Plan/react modes removed; Pi session loop is the only runtime. */
 export type AgentMode = 'react' | 'plan-execute'
@@ -39,6 +40,8 @@ export interface AgentConfig {
   /** Extension ids (file/dir basename) that should not be loaded. */
   disabledExtensions: string[]
   mcpServers: AgentMcpServerConfig[]
+  /** Minimum level recorded to ~/.crescent/logs (default: info). */
+  logLevel?: SystemLogLevel
 }
 
 export interface AgentOpenApiProfile {

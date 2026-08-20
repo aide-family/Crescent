@@ -7685,6 +7685,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
             onAgentStyleChange={persistAgentStyle}
+            onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
             onShowAgentThinkingChange={persistShowAgentThinking}
             onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
             onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}

@@ -778,6 +778,14 @@ const en = {
     showAgentThinking: 'Show thinking process',
     showAgentThinkingHint:
       'Overrides the style default. Swift/Concise/Guided hide thinking; Teach shows it.',
+    logLevel: 'System log level',
+    logLevelHint:
+      'Minimum level written to ~/.crescent/logs, split daily and kept 3 days. Default: info.',
+    logLevelOff: 'Off',
+    logLevelDebug: 'Debug',
+    logLevelInfo: 'Info',
+    logLevelWarn: 'Warn',
+    logLevelError: 'Error',
     apiKey: 'OpenAI API key',
     baseUrl: 'OpenAI-compatible base URL',
     baseUrlHint:

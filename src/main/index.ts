@@ -9,7 +9,8 @@ import {
   registerRendererRecoveryIpc
 } from './renderer-recovery'
 import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
-import { initSystemLogging } from './logging'
+import { initSystemLogging, setSystemLogLevel } from './logging'
+import { readAgentConfig } from './crescent-store'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -146,6 +147,11 @@ function createWindow(): BrowserWindow {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  // Apply the persisted log level unless an env override was requested.
+  if (!process.env.CRESCENT_LOG_LEVEL) {
+    setSystemLogLevel(readAgentConfig().logLevel ?? 'info')
+  }
+
   const [
     { registerAgentIpc },
     { registerConnectionIpc },
