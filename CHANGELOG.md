@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.0.8 (2026-08-20)
+
+### Capture / Knowledge
+
+- Capture a turn or session as an SOP or Skill draft (`/sop`, `/create-skill`, or phrases like 存成 SOP / 转成 skill). The host intercepts the request, generates in the background, and writes only after confirm.
+- Open a ready draft from the chat row or a pin while the agent is busy; edit the markdown, add notes for AI refine, and overwrite a same-named skill if needed.
+- History can turn a stored session into a Skill draft as well as a wiki SOP.
+- SOP generation waits up to 180s, revises from operator notes, and requires a specific title. Failed generation no longer saves raw seed text into the wiki.
+
+### Skills
+
+- Default skill root is `~/.crescent/skills`. Configurations still pointing at `~/.agents/skills` migrate automatically; optionally load that global directory read-only.
+- New skills from capture save into the configured skill root; built-in skills cannot be overwritten.
+- Skill manager preview strips YAML frontmatter and renders the SKILL.md body.
+
+### Slash / Runtime
+
+- `/reload` rebuilds idle agent runtimes so skills, wiki, MCP, and extensions pick up without restarting the app. Busy sessions are left as-is.
+- Agent prompt rules treat SOP/Skill capture as a host draft flow; the model must not write SOP or SKILL.md via bash or file tools.
+
+### Terminal / SSH
+
+- Multi-step SSH login actions wait until a password or host-key prompt is consumed before typing the next line.
+- Prompt-host and terminal-ready checks use the newest prompt signal so a password prompt is not treated as a ready shell.
+- Saving a custom connection with a duplicate name offers rename or overwrite instead of inserting a second card.
+
+### Desktop
+
+- IME-safe fields keep in-progress pinyin composition in capture drafts and password prompts.
+- Connection form fields stay selectable while read-only.
+- Footer no longer shows the working-style label; style remains in Settings.
+
+### Tests / Reliability
+
+- Added and extended tests for capture intent, draft UI, skill generation, IME commit, login-action wait, connection-name conflict, and skill-root migration.
+
 ## v1.0.7 (2026-08-18)
 
 ### Terminal / SSH

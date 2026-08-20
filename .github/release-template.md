@@ -18,9 +18,9 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- SSH EnvGuard stays stable across hops; destination parsing ignores `-p 22` ports; attention notifications jump to needing tabs with a pulse cue.
-- Command review classifies inspection pipelines by argv0 (awk `$5>0` / echo separators no longer false-high); real redirects and writes still need approval.
-- Settings preferences autosave; denser extensions/connections/history/markdown chrome. Provider / OpenAPI / instruction editors still save on their own.
+- Capture SOP/Skill from a session as a confirm-before-write draft (`/sop`, `/create-skill`, or natural language). Edit, refine with notes, then save.
+- `/reload` rebuilds idle agent runtimes so skills, wiki, MCP, and extensions pick up without restarting. Busy sessions stay as-is.
+- User skills default to `~/.crescent/skills` (old `~/.agents/skills` migrates); optional read-only load of global `~/.agents/skills`. SSH login actions wait for password/host-key prompts; custom connection names can be renamed or overwritten on conflict.
 
 ## Install Notes
 
