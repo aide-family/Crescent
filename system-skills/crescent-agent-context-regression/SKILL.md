@@ -31,7 +31,7 @@ Use this skill when changing or reviewing Crescent Agent behavior around context
 
 Cover these cases before shipping a related change:
 
-- **Local hosts edit**: user pastes `cat /etc/hosts` output and asks to replace `192.0.2.10` with `192.0.2.11`. Treat IPs inside pasted file content as data. Do not match the `aide@192.0.2.10` SSH connection unless the user explicitly asks to connect to `aide` or that host.
+- **Local hosts edit**: user pastes `cat /etc/hosts` output and asks to replace `192.0.2.10` with `192.0.2.11`. Treat IPs inside pasted file content as data. Do not match the `user@192.0.2.10` SSH connection unless the user explicitly asks to connect to that host.
 - **Explicit local target precedence**: phrases such as `本地`, `local`, `this machine`, `/etc/hosts`, `~`, `$HOME`, `/Users`, and local shell prompts such as `➜  ~` override memory, previous cluster work, loaded skills, terminal history, and configured connection IPs.
 - **Remote intent**: requests like `登录到 aide 集群，做一次巡检` may match the configured connection, but must clearly show why the connection was selected and continue only after login context is correct.
 - **Artifact destination**: shell snippets such as `2>/dev/null`, `>/dev/null`, or command output mentioning `/dev/null` are redirection/noise unless the user explicitly asks to save a document there. Never attempt to create directories under `/dev/null`.

@@ -270,6 +270,8 @@ const en = {
   },
   terminal: {
     connectionAction: 'Typed login action',
+    connectionActionSkipped: 'Skipped login action',
+    connectionActionSkippedReason: 'Already at a host prompt; secret not required.',
     connectionIntentResult: 'Matched a connection from your input and started login.',
     connectionIntentWithTaskResult:
       'Matched a connection from your input. After login completes, the agent will continue the requested task and load matching skills.',
@@ -304,8 +306,9 @@ const en = {
     connectionClarifyTitle: 'Connection target needs confirmation',
     connectionClarifyReplyPrefix: 'User clarification:',
     connectionNotReadyClarify:
-      'The terminal is still connecting or not ready for agent commands. Confirm the connection target, wait for login to finish, or say if you want to stay in the current terminal.',
-    clarifyManualContinue: 'I already logged in manually in the terminal — continue',
+      'The current terminal is not logged in yet, so agent commands cannot run. Retry the current connection, confirm you already logged in manually, or open connection settings.',
+    clarifyManualContinue: 'I already logged in manually in the terminal, continue',
+    clarifyRetryCurrent: 'Retry current connection: {label}',
     clarifyOpenConnections: 'Open connection settings',
     clarifySelectConnection: 'Select connection target',
     clarifyConfirm: 'Confirm',

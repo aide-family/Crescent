@@ -73,10 +73,24 @@ export function buildTerminalNotReadyClarifyOptions(input: {
   connections: Array<{ id: string; label: string }>
   manualContinueLabel: string
   openConnectionsLabel: string
+  retryCurrentLabel?: string
+  currentConnectionId?: string
 }): Array<{ id: string; label: string }> {
-  return [
+  const currentId = input.currentConnectionId?.trim()
+  const current = currentId
+    ? input.connections.find((connection) => connection.id === currentId)
+    : undefined
+  const retryLabel = input.retryCurrentLabel?.trim()
+  const options: Array<{ id: string; label: string }> = []
+  if (current) {
+    options.push({
+      id: current.id,
+      label: retryLabel || current.label
+    })
+  }
+  options.push(
     { id: CLARIFY_MANUAL_CONTINUE_ID, label: input.manualContinueLabel },
-    { id: CLARIFY_OPEN_CONNECTIONS_ID, label: input.openConnectionsLabel },
-    ...input.connections
-  ]
+    { id: CLARIFY_OPEN_CONNECTIONS_ID, label: input.openConnectionsLabel }
+  )
+  return options
 }

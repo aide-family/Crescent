@@ -260,6 +260,8 @@ export interface TemporarySubterminal {
   terminalReady?: boolean
 }
 
+// A known problematic PTY title leaked a bare `topology` token; block any
+// title carrying it instead of hardcoding a site-specific name.
 const BLOCKED_TERMINAL_TITLE_PATTERN = /topology/i
 /** Reserved ids historically collided across sessions; never mint or accept these. */
 const RESERVED_TERMINAL_TAB_IDS = new Set(['default', 'local'])

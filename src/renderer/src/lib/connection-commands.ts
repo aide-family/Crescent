@@ -44,6 +44,14 @@ export function buildConnectionLoginActions(connection: ConnectionConfig): strin
   return [...passwordActions, ...(connection.actions ?? [])]
 }
 
+export function stripStoredPassword(connection: ConnectionConfig): ConnectionConfig {
+  return {
+    ...connection,
+    password: undefined,
+    resolvedPassword: undefined
+  }
+}
+
 export function isPasswordEnvVarMissing(connection: ConnectionConfig): boolean {
   return Boolean(connection.passwordEnvVar && !connection.password && !connection.resolvedPassword)
 }
@@ -51,9 +59,16 @@ export function isPasswordEnvVarMissing(connection: ConnectionConfig): boolean {
 export function formatConnectionActionLog(
   command: string,
   actionIndex: number,
-  t: Dictionary
+  t: Dictionary,
+  options?: { forceMask?: boolean }
 ): string {
-  return `${t.terminal.connectionAction} ${actionIndex}\n${maskPotentialSecret(command)}`
+  return `${t.terminal.connectionAction} ${actionIndex}\n${
+    options?.forceMask ? '<hidden>' : maskPotentialSecret(command)
+  }`
+}
+
+export function formatConnectionActionSkippedLog(actionIndex: number, t: Dictionary): string {
+  return `${t.terminal.connectionActionSkipped} ${actionIndex}\n${t.terminal.connectionActionSkippedReason}`
 }
 
 export function maskPotentialSecret(value: string): string {
@@ -63,9 +78,16 @@ export function maskPotentialSecret(value: string): string {
   return value
 }
 
+/**
+ * Login-action lines that should be typed at a shell prompt.
+ * Passwords are almost always a single token; any whitespace means a command.
+ */
 export function looksLikeCommand(value: string): boolean {
-  return /^(ssh|sudo|su|cd|ls|pwd|kubectl|docker|systemctl|journalctl|cat|tail|grep|vim|vi|export)\b/.test(
-    value.trim()
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (/\s/.test(trimmed)) return true
+  return /^(ssh|sudo|su|cd|ls|pwd|kubectl|docker|systemctl|journalctl|cat|tail|grep|vim|vi|export|bash|zsh|sh|fish|enable|exit|tmux|screen|source|passwd|env|unset|alias|history|clear|whoami|id|hostname)\b/.test(
+    trimmed
   )
 }
 

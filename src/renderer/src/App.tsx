@@ -143,7 +143,8 @@ import {
   hasUsableCurrentTerminal,
   isContinueIntent,
   isExplicitConnectionRequest,
-  isExplicitNonTerminalAgentRequest
+  isExplicitNonTerminalAgentRequest,
+  isPasswordChangedReconnectRequest
 } from '@renderer/lib/agent-input'
 import { decodeUserMessageText, snapshotMessageReferences } from '@renderer/lib/agent-message-refs'
 import {
@@ -182,9 +183,11 @@ import {
   buildConnectionLoginActions,
   createCustomConnectionId,
   formatConnectionActionLog,
+  formatConnectionActionSkippedLog,
   isPasswordEnvVarMissing,
   looksLikeCommand,
-  mergeConnectionInput
+  mergeConnectionInput,
+  stripStoredPassword
 } from '@renderer/lib/connection-commands'
 import {
   applyConnectionNameOverwrite,
@@ -193,10 +196,13 @@ import {
 import {
   LOGIN_ACTION_CONSUMED_TIMEOUT_MS,
   LOGIN_TYPE_READY_TIMEOUT_MS,
+  resolveLoginActionConsumed,
   resolveLoginTypeReady,
+  shouldSkipSecretOnHost,
   waitForLoginActionConsumed,
   waitForLoginTypeReady,
   type LoginActionWaitDeps,
+  type LoginStepConsumed,
   type LoginTypeReady
 } from '@renderer/lib/login-action-wait'
 import {
@@ -232,7 +238,7 @@ import {
   resolveLoginContinuation
 } from '@renderer/lib/busy-supplement'
 import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
-import { resolveFinalSshTarget } from '../../shared/ssh-destination'
+import { isSshCommandLine, resolveFinalSshTarget } from '../../shared/ssh-destination'
 import {
   buildTerminalNotReadyClarifyOptions,
   CLARIFY_MANUAL_CONTINUE_ID,
@@ -540,6 +546,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
   const skipConnectionReconnectRef = useRef(new Set<string>())
+  const skipStoredPasswordTabsRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
   const stopAgentRunRef = useRef<
     | ((
@@ -1252,6 +1259,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             agentThinking: false,
             thinkingMessage: undefined
           }))
+          pruneLiveRuns([task.reuseRun.logId])
           continue
         }
         appendLog(
@@ -1263,7 +1271,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         )
       }
     },
-    [appendLog, t, updateAgentRun, updateTab]
+    [appendLog, pruneLiveRuns, t, updateAgentRun, updateTab]
   )
 
   /**
@@ -1608,6 +1616,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       includeSshCommand: boolean
     ): Promise<boolean> => {
       const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      skipConnectionReconnectRef.current.delete(targetTabId)
       let resolvedConnection = connection
       try {
         const refreshed = await window.api.connections.resolve(connection.id)
@@ -1621,11 +1630,16 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         resolvedConnection = connection
       }
 
-      const commands = includeSshCommand
-        ? buildConnectionCommands(resolvedConnection)
-        : buildConnectionLoginActions(resolvedConnection)
+      const skipStoredPassword = skipStoredPasswordTabsRef.current.delete(resolvedConnection.id)
+      const loginConnection = skipStoredPassword
+        ? stripStoredPassword(resolvedConnection)
+        : resolvedConnection
 
-      if (isPasswordEnvVarMissing(resolvedConnection)) {
+      const commands = includeSshCommand
+        ? buildConnectionCommands(loginConnection)
+        : buildConnectionLoginActions(loginConnection)
+
+      if (!skipStoredPassword && isPasswordEnvVarMissing(resolvedConnection)) {
         const message = `${t.connections.passwordEnvVarMissing}: ${resolvedConnection.passwordEnvVar}`
         appendLog({ kind: 'error', text: message }, chatTabId)
         abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
@@ -1662,7 +1676,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const pendingReuseRun = (postConnectionTasksRef.current.get(targetTabId) ?? []).find(
         (task) => task.reuseRun
       )?.reuseRun
-      const loginActionCount = buildConnectionLoginActions(resolvedConnection).length
+      const loginActionCount = buildConnectionLoginActions(loginConnection).length
       appendStatusToActiveRunOrLog(
         chatTabId,
         loginActionCount > 0
@@ -1678,6 +1692,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         host: resolvedConnection.host
       })
       try {
+        const hasLeadingAutoPassword = Boolean(
+          loginConnection.password || loginConnection.resolvedPassword
+        )
         const ok = includeSshCommand
           ? await runConnectionCommandSequence(
               commands,
@@ -1685,7 +1702,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               appendLog,
               (text, id) => appendSystemToRunOrLog(id, text),
               t,
-              chatTabId
+              chatTabId,
+              { hasLeadingAutoPassword }
             )
           : await runConnectionLoginActionSequence(
               commands,
@@ -1693,7 +1711,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               appendLog,
               (text, id) => appendSystemToRunOrLog(id, text),
               t,
-              chatTabId
+              chatTabId,
+              { hasLeadingAutoPassword }
             )
         if (!ok) {
           // Failed auth/host/login must not auto-retry the same SSH connection on exit.
@@ -1712,7 +1731,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // otherwise confirm-login anchors the wrong runtime environment.
         const finalTargetHost = resolveFinalSshTarget(commands, connection.host)
         const lastAction = commands.length > 1 ? commands[commands.length - 1] : undefined
-        const lastActionIsSsh = Boolean(lastAction && /^\s*ssh\b/i.test(lastAction))
+        const lastActionIsSsh = Boolean(lastAction && isSshCommandLine(lastAction))
         const preConfirm = await window.api.terminal.getContext(targetTabId)
         const previousHost =
           lastActionIsSsh && preConfirm.promptHost && preConfirm.promptHost !== 'local-shell'
@@ -1819,12 +1838,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       finalizeLoginRun(
         chatTabId,
         ok === true,
-        ok === false
-          ? t.terminal.connectionLoginTimeout.replace(
-              '{ms}',
-              String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
-            )
-          : undefined,
+        ok === undefined
+          ? timeoutMessage
+          : ok === false
+            ? t.terminal.postLoginTaskAborted
+            : undefined,
         { targetTabId, connection }
       )
       connTrace('automation-end', `tab=${targetTabId}`, `ok=${ok}`)
@@ -5874,7 +5892,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           runId,
           actions: [],
           steps: [matchStep],
-          startedAt
+          startedAt,
+          loginMeta: {
+            connectionName: matchedConnection.name,
+            host: matchedConnection.host,
+            port: matchedConnection.port,
+            user: matchedConnection.user,
+            actionCount: buildConnectionLoginActions(matchedConnection).length
+          }
         })
         updateAgentRun(chatTabId, (run) => run)
         void persistAgentRun({
@@ -5884,6 +5909,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           status: 'running',
           connectionId: matchedConnection.id
         })
+
+        if (isPasswordChangedReconnectRequest(intentSourceInput)) {
+          skipStoredPasswordTabsRef.current.add(matchedConnection.id)
+        }
 
         const targetTabId = await connectToConnection(
           matchedConnection,
@@ -5965,6 +5994,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         connectionId: matchedConnection.id
       })
 
+      if (isPasswordChangedReconnectRequest(intentSourceInput)) {
+        skipStoredPasswordTabsRef.current.add(matchedConnection.id)
+      }
+
       void connectToConnection(matchedConnection)
       updateTab(chatTabId, (current) => ({
         ...current,
@@ -6043,8 +6076,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (gate.kind !== 'ready') {
       clearThinking()
       if (gate.kind === 'clarify') {
+        const currentConnection =
+          connections.find((candidate) => candidate.id === readyTab?.connectionId) ??
+          connections.find((candidate) => candidate.id === executionTabAfterEnsure.connectionId)
         const clarifyOptions = buildTerminalNotReadyClarifyOptions({
-          connections: connections.map((c) => ({ id: c.id, label: c.name })),
+          connections: currentConnection
+            ? [{ id: currentConnection.id, label: currentConnection.name }]
+            : [],
+          currentConnectionId: currentConnection?.id,
+          retryCurrentLabel: currentConnection
+            ? t.terminal.clarifyRetryCurrent.replace('{label}', currentConnection.name)
+            : undefined,
           manualContinueLabel: t.terminal.clarifyManualContinue,
           openConnectionsLabel: t.terminal.clarifyOpenConnections
         })
@@ -6080,7 +6122,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             originalInput: displayInput,
             question,
             options: clarifyOptions,
-            defaultOptionId: CLARIFY_MANUAL_CONTINUE_ID
+            defaultOptionId: currentConnection?.id ?? CLARIFY_MANUAL_CONTINUE_ID
           }
         }))
         pendingAttentionNotifierRef.current.notifyIfUnfocused(
@@ -8215,7 +8257,8 @@ async function runConnectionCommandSequence(
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
   appendSystem: (text: string, tabId: string) => void,
   t: Dictionary,
-  logTabId = tabId
+  logTabId = tabId,
+  options?: { hasLeadingAutoPassword?: boolean }
 ): Promise<boolean> {
   const [sshCommand, ...loginActions] = commands
   if (!sshCommand) return true
@@ -8232,8 +8275,9 @@ async function runConnectionCommandSequence(
 
   if (loginActions.length === 0) return true
 
-  await typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId)
-  return true
+  return typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId, {
+    hasLeadingAutoPassword: Boolean(options?.hasLeadingAutoPassword)
+  })
 }
 
 async function runConnectionLoginActionSequence(
@@ -8242,11 +8286,14 @@ async function runConnectionLoginActionSequence(
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
   appendSystem: (text: string, tabId: string) => void,
   t: Dictionary,
-  logTabId = tabId
+  logTabId = tabId,
+  options?: { hasLeadingAutoPassword?: boolean }
 ): Promise<boolean> {
   if (loginActions.length === 0) return true
-  await typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId)
-  return true
+
+  return typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId, {
+    hasLeadingAutoPassword: Boolean(options?.hasLeadingAutoPassword)
+  })
 }
 
 function createLoginActionWaitDeps(tabId: string): LoginActionWaitDeps {
@@ -8269,21 +8316,37 @@ async function typeConnectionLoginActions(
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
   appendSystem: (text: string, tabId: string) => void,
   t: Dictionary,
-  logTabId: string
-): Promise<void> {
+  logTabId: string,
+  options?: { hasLeadingAutoPassword?: boolean }
+): Promise<boolean> {
   const deps = createLoginActionWaitDeps(tabId)
+  const hasLeadingAutoPassword = Boolean(options?.hasLeadingAutoPassword)
+  let previousWasCommand = false
+  let previousConsumedKind: Exclude<LoginStepConsumed['kind'], 'timeout'> | undefined
 
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
+    // The auto-prepended connection password is always a secret, even when its
+    // text happens to collide with a shell command word (e.g. `enable`).
+    const isAutoPassword = hasLeadingAutoPassword && index === 0
+    const isSecret = isAutoPassword || !looksLikeCommand(action)
+    const isLeadingAutoPassword = isAutoPassword
     const actionStart = Date.now()
+    // Secrets (except unused leading SSH password / NOPASSWD after a command)
+    // must wait for a password prompt — never type them into a bare host shell.
+    const allowHostReady =
+      isLeadingAutoPassword || (previousWasCommand && previousConsumedKind === 'host')
     let ready: LoginTypeReady = await waitForLoginTypeReady(deps, {
       tabId,
-      timeoutMs: LOGIN_TYPE_READY_TIMEOUT_MS
+      timeoutMs: LOGIN_TYPE_READY_TIMEOUT_MS,
+      requireWaiting: isSecret && !allowHostReady
     })
     if (ready.kind === 'timeout') {
       const context = await window.api.terminal.getContext(tabId)
       const recheck = resolveLoginTypeReady(context.output ?? '')
-      if (recheck) ready = recheck
+      if (recheck && !(isSecret && !allowHostReady && recheck.kind !== 'waiting')) {
+        ready = recheck
+      }
     }
     connTrace(
       'login-stage',
@@ -8301,11 +8364,22 @@ async function typeConnectionLoginActions(
         },
         logTabId
       )
-      break
+      return false
     }
 
-    if (ready.kind === 'host' && !looksLikeCommand(action)) {
+    if (
+      isSecret &&
+      shouldSkipSecretOnHost({
+        readyKind: ready.kind,
+        isLeadingAutoPassword,
+        previousWasCommand,
+        previousConsumedKind
+      })
+    ) {
       connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'skip-secret-already-host')
+      appendSystem(formatConnectionActionSkippedLog(index + 1, t), logTabId)
+      previousWasCommand = false
+      previousConsumedKind = ready.kind === 'host' ? 'host' : previousConsumedKind
       continue
     }
 
@@ -8313,7 +8387,10 @@ async function typeConnectionLoginActions(
     const outputAtType = contextAtType.output ?? ''
     const waitingLine = ready.kind === 'waiting' ? ready.line : undefined
     sendTerminalInput(action, tabId)
-    appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
+    appendSystem(
+      formatConnectionActionLog(action, index + 1, t, { forceMask: isAutoPassword }),
+      logTabId
+    )
 
     const consumed = await waitForLoginActionConsumed(deps, {
       tabId,
@@ -8329,7 +8406,18 @@ async function typeConnectionLoginActions(
       `consumed=${consumed.kind}`,
       `consumedAfterMs=${Date.now() - actionStart}`
     )
-    if (consumed.kind === 'timeout') {
+    let settled = consumed
+    if (settled.kind === 'timeout') {
+      const context = await window.api.terminal.getContext(tabId)
+      const recheck = resolveLoginActionConsumed(context.output ?? '', {
+        mode: ready.kind === 'waiting' ? 'waiting' : 'shell',
+        waitingLine,
+        outputAtType,
+        acceptQuietGrowth: true
+      })
+      if (recheck) settled = recheck
+    }
+    if (settled.kind === 'timeout') {
       appendLog(
         {
           kind: 'status',
@@ -8337,9 +8425,14 @@ async function typeConnectionLoginActions(
         },
         logTabId
       )
-      break
+      return false
     }
+
+    previousWasCommand = !isSecret
+    previousConsumedKind = settled.kind
   }
+
+  return true
 }
 
 async function waitForTerminalReadyForAgent(

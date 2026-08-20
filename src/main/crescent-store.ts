@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import { randomUUID } from 'crypto'
+import { safeStorage } from 'electron'
 
 import {
   appendOperationRecordToDb,
@@ -89,13 +90,101 @@ export const defaultMemoryFile: CrescentMemoryFile = {
   }
 }
 
+/**
+ * Secrets are encrypted at rest with Electron safeStorage (OS keychain / DPAPI)
+ * before hitting `config.json`. Legacy plaintext values are transparently read
+ * back and re-encrypted on the next write.
+ */
+const SECRET_ENCRYPTED_PREFIX = 'crescent-enc:v1:'
+
+function encryptSecret(value: string | undefined): string | undefined {
+  if (!value || value.startsWith(SECRET_ENCRYPTED_PREFIX)) return value
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return SECRET_ENCRYPTED_PREFIX + safeStorage.encryptString(value).toString('base64')
+    }
+  } catch {
+    // safeStorage not ready / unavailable: fall back to legacy plaintext so
+    // connections keep working in headless or keyring-less environments.
+  }
+  return value
+}
+
+function decryptSecret(value: string | undefined): string | undefined {
+  if (!value || !value.startsWith(SECRET_ENCRYPTED_PREFIX)) return value
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return undefined
+    return safeStorage.decryptString(
+      Buffer.from(value.slice(SECRET_ENCRYPTED_PREFIX.length), 'base64')
+    )
+  } catch {
+    console.warn('[crescent-store] failed to decrypt a stored secret; the value will be dropped.')
+    return undefined
+  }
+}
+
+function mapSecretRecord(
+  record: Record<string, string>,
+  transform: (value: string | undefined) => string | undefined
+): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(record)) {
+    next[key] = transform(value) ?? ''
+  }
+  return next
+}
+
+function encryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFile {
+  return {
+    ...config,
+    agent: {
+      ...config.agent,
+      providers: (config.agent.providers ?? []).map((provider) => ({
+        ...provider,
+        apiKey: encryptSecret(provider.apiKey) ?? ''
+      })),
+      mcpServers: (config.agent.mcpServers ?? []).map((server) => ({
+        ...server,
+        env: mapSecretRecord(server.env, encryptSecret),
+        ...(server.headers ? { headers: mapSecretRecord(server.headers, encryptSecret) } : {})
+      }))
+    },
+    connections: config.connections.map((connection) => ({
+      ...connection,
+      password: encryptSecret(connection.password)
+    }))
+  }
+}
+
+function decryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFile {
+  return {
+    ...config,
+    agent: {
+      ...config.agent,
+      providers: (config.agent.providers ?? []).map((provider) => ({
+        ...provider,
+        apiKey: decryptSecret(provider.apiKey) ?? ''
+      })),
+      mcpServers: (config.agent.mcpServers ?? []).map((server) => ({
+        ...server,
+        env: mapSecretRecord(server.env, decryptSecret),
+        ...(server.headers ? { headers: mapSecretRecord(server.headers, decryptSecret) } : {})
+      }))
+    },
+    connections: config.connections.map((connection) => ({
+      ...connection,
+      password: decryptSecret(connection.password)
+    }))
+  }
+}
+
 export function readCrescentConfig(): CrescentConfigFile {
-  return normalizeConfigFile(readJsonFile(getCrescentConfigPath(), {}))
+  return decryptConfigFileSecrets(normalizeConfigFile(readJsonFile(getCrescentConfigPath(), {})))
 }
 
 export function writeCrescentConfig(config: CrescentConfigFile): CrescentConfigFile {
   const normalized = normalizeConfigFile(config)
-  writeJsonFile(getCrescentConfigPath(), stripDbBackedConfig(normalized))
+  writeJsonFile(getCrescentConfigPath(), encryptConfigFileSecrets(stripDbBackedConfig(normalized)))
 
   return normalized
 }

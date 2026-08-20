@@ -1,7 +1,7 @@
 /**
  * Parse the destination host from an ssh argv line.
  *
- * `ssh -p 22 -l aide 192.0.2.10` must yield `192.0.2.10`, not `22`.
+ * `ssh -p 22 -l user 192.0.2.10` must yield `192.0.2.10`, not `22`.
  * A naive "first token after flags" regex treats the port as the host and
  * poisons EnvGuard (`expected 22, observed node-1`).
  */
@@ -31,7 +31,7 @@ const SSH_OPTIONS_WITH_VALUE = new Set([
   'w'
 ])
 
-/** Strip `user@` from an ssh destination (`aide@192.0.2.10` → `192.0.2.10`). */
+/** Strip `user@` from an ssh destination (`user@192.0.2.10` → `192.0.2.10`). */
 export function stripSshUser(value: string): string {
   const trimmed = value.trim()
   const at = trimmed.lastIndexOf('@')
@@ -46,17 +46,32 @@ export function isIpv4Literal(value: string): boolean {
 
 /**
  * True when a token can be a connection host. Rejects empty values, ssh flags,
- * and bare TCP ports (`22` from `-p 22`).
+ * bare TCP ports (`22` from `-p 22`), and shell aliases (`ssh-web-nginx1`).
  */
 export function isPlausibleSshHost(value: string | undefined): boolean {
   const host = stripSshUser(value ?? '').replace(/^\[+|\]+$/g, '')
   if (!host) return false
   if (host.startsWith('-')) return false
+  if (isSshAliasToken(host)) return false
   if (/^\d+$/.test(host)) {
     const port = Number(host)
     return Number.isInteger(port) && port > 65535
   }
   return true
+}
+
+/**
+ * Shell aliases such as `ssh-web-nginx1` / `ssh_web2`. `\b` after `ssh` is
+ * true before `-`, so these must not be parsed as `ssh` argv or EnvGuard hosts.
+ */
+export function isSshAliasToken(value: string | undefined): boolean {
+  const host = stripSshUser(value ?? '').trim()
+  return /^ssh[-_][A-Za-z0-9-]+$/i.test(host)
+}
+
+/** True for a real `ssh` command line (`ssh host`), not an alias token. */
+export function isSshCommandLine(command: string): boolean {
+  return /^\s*ssh(?:\s|$)/i.test(command)
 }
 
 function unquoteSshToken(token: string): string {
@@ -75,7 +90,7 @@ function unquoteSshToken(token: string): string {
  */
 export function extractSshDestinationHost(command: string): string | undefined {
   const trimmed = command.trim()
-  if (!/^ssh\b/i.test(trimmed)) return undefined
+  if (!isSshCommandLine(trimmed)) return undefined
 
   const body = trimmed.replace(/^ssh\s+/i, '')
   const tokens = body.split(/\s+/).filter(Boolean)
@@ -128,7 +143,7 @@ export function resolveFinalSshTarget(
   return isPlausibleSshHost(fallback) ? fallback : undefined
 }
 
-/** Drop port-like / flag-like values before writing them into EnvGuard state. */
+/** Drop port-like / flag-like / alias-like values before writing them into EnvGuard state. */
 export function sanitizeExpectedTargetHost(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   if (!trimmed) return undefined

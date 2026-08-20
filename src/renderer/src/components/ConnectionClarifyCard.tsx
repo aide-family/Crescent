@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
@@ -17,6 +17,7 @@ export function ConnectionClarifyCard({
   onDismiss: () => void
 }): React.JSX.Element | null {
   const options = useMemo(() => clarification.options ?? [], [clarification.options])
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const defaultIndex = useMemo(() => {
     if (options.length === 0) return 0
     const id = clarification.defaultOptionId
@@ -27,6 +28,12 @@ export function ConnectionClarifyCard({
 
   const [selectedIndex, setSelectedIndex] = useState(defaultIndex)
   const settled = clarification.settled
+
+  useEffect(() => {
+    if (options.length === 0 || settled) return
+    const selected = containerRef.current?.querySelector('[data-clarify-option="selected"]')
+    selected?.scrollIntoView({ block: 'nearest' })
+  }, [options.length, selectedIndex, settled])
 
   useEffect(() => {
     if (options.length === 0 || settled) return
@@ -97,14 +104,15 @@ export function ConnectionClarifyCard({
 
   return (
     <div
-      className="mx-3 mb-2 space-y-2 rounded-lg border border-border/50 bg-card/40 px-3 py-2"
+      ref={containerRef}
+      className="mx-3 mb-2 flex max-h-[min(42vh,22rem)] min-h-0 shrink-0 flex-col space-y-2 overflow-hidden rounded-lg border border-border/50 bg-card/40 px-3 py-2"
       role="listbox"
       aria-label={t.terminal.clarifySelectConnection}
     >
-      <div className="text-[11px] font-medium text-foreground/80">
+      <div className="shrink-0 text-[11px] font-medium text-foreground/80">
         {t.terminal.clarifySelectConnection}
       </div>
-      <ul className="space-y-1">
+      <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-0.5">
         {options.map((option, index) => {
           const selected = index === selectedIndex
           return (
@@ -113,7 +121,8 @@ export function ConnectionClarifyCard({
                 type="button"
                 role="option"
                 aria-selected={selected}
-                className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none transition-[background-color] focus-visible:ring-2 focus-visible:ring-ring/50 ${
+                data-clarify-option={selected ? 'selected' : undefined}
+                className={`flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none transition-[background-color] focus-visible:ring-2 focus-visible:ring-ring/50 ${
                   selected
                     ? 'bg-primary/12 text-foreground'
                     : 'text-muted-foreground hover:bg-muted/40'

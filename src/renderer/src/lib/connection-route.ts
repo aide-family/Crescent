@@ -4,6 +4,8 @@ import {
   getConnectionNameMentionTokens,
   isConnectionOnlyRequest,
   isExplicitConnectionRequest,
+  isExplicitReconnectRequest,
+  isPasswordChangedReconnectRequest,
   isSameConnectionTab,
   normalizeConnectionMentionText,
   connectionNameTokenAppearsInInput
@@ -93,6 +95,30 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     atMention?.kind === 'connection'
       ? atMention.connection
       : findDirectlyMentionedConnection(message, connections)
+
+  // Reconnect (retry / re-login / password changed). A uniquely named
+  // connection wins over the current tab's binding; otherwise reconnect the
+  // current tab's configured SSH. Do not dump every saved connection as a
+  // picker, and never retry a different host than the one the user named.
+  if (isExplicitReconnectRequest(message)) {
+    const connection =
+      (mentioned && connections.find((candidate) => candidate.id === mentioned.id)) ||
+      (activeTab?.connectionId &&
+        connections.find((candidate) => candidate.id === activeTab.connectionId))
+    if (connection) {
+      return {
+        targetTabId: activeTabId,
+        connectionId: connection.id,
+        connection,
+        action: 'connect',
+        label: connection.name || activeLabel,
+        reason: 'explicit-reconnect',
+        executeAfterLogin:
+          !isPasswordChangedReconnectRequest(message) &&
+          !isConnectionOnlyRequest(message, connection)
+      }
+    }
+  }
 
   if (mentioned) {
     return resolveNamedConnection({
@@ -500,8 +526,10 @@ export function looksLikeRemoteOpsIntent(message: string): boolean {
   return (
     /(?:kubectl|kubeadm|helm|k9s|\bk8s\b|kubernetes)/i.test(message) ||
     /(?:集群|命名空间|命名空間|pod|pods|节点|node|nodes|deployment|namespace)/i.test(message) ||
-    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到)/i.test(message) ||
-    /(?:巡检|健康检查|架构图|拓扑|网络架构)/i.test(message)
+    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到|重新连接|重连)/i.test(message) ||
+    /(?:巡检|健康检查|架构图|拓扑|网络架构)/i.test(message) ||
+    /(?:^|\n)\s*\[[^\n]*@[\w.-]+/.test(message) ||
+    /\b(?:scp|rsync)\b/i.test(message)
   )
 }
 

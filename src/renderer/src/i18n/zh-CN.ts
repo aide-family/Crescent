@@ -254,6 +254,8 @@ const zhCN = {
   },
   terminal: {
     connectionAction: '已键入登录动作',
+    connectionActionSkipped: '已跳过登录动作',
+    connectionActionSkippedReason: '当前已在主机提示符，无需再输入密钥。',
     connectionIntentResult: '已根据输入匹配连接并开始登录。',
     connectionIntentWithTaskResult:
       '已根据输入匹配连接并开始登录；登录完成后会继续执行原始任务，并加载匹配的 Skill。',
@@ -286,8 +288,9 @@ const zhCN = {
     connectionClarifyTitle: '需要确认连接目标',
     connectionClarifyReplyPrefix: '用户补充说明：',
     connectionNotReadyClarify:
-      '终端仍在连接或尚未就绪，暂时不能执行 Agent 命令。请确认连接目标、等待登录完成，或说明是否留在当前终端继续。',
+      '当前终端尚未登录成功，暂时不能执行 Agent 命令。请重试当前连接、确认已手动登录后继续，或打开连接设置。',
     clarifyManualContinue: '我已在终端手动登录，继续',
+    clarifyRetryCurrent: '重试当前连接：{label}',
     clarifyOpenConnections: '打开连接设置',
     clarifySelectConnection: '选择连接目标',
     clarifyConfirm: '确认',

@@ -1,4 +1,4 @@
-import { isPlausibleSshHost } from './ssh-destination'
+import { isIpv4Literal, isPlausibleSshHost, sanitizeExpectedTargetHost } from './ssh-destination'
 import {
   findNewestPromptSignal,
   isLocalShellPromptVisible,
@@ -31,20 +31,8 @@ export interface RecoveryBudget {
 
 export interface ConnectionState {
   mode: TerminalMode
-  /** Expected connection host (set on login start; cleared on local fallback). */
   expectedHost?: string
-  /**
-   * Runtime environment anchor: the prompt host actually reached after login
-   * (e.g. web1.zhangke after a multi-hop ssh). The injection guard compares the
-   * observed prompt against this anchor once a login succeeded, instead of the
-   * static configured host which only reflects the jump host.
-   */
   runtimeExpectedHost?: string
-  /**
-   * Hostname prompt observed on the jump box during login (often differs from
-   * the configured IP `expectedHost`). Returning here after a deeper runtime
-   * anchor is environment drift, not a peer hop.
-   */
   jumpPromptHost?: string
   /** Last observed prompt host (normalized). */
   promptHost?: string
@@ -170,6 +158,35 @@ export function isReturnToJumpHost(
   return false
 }
 
+/**
+ * Post-confirm EnvGuard write-back: keep the learned prompt host when the
+ * configured target is an IP (or an alias token), and never store the live
+ * target as jumpPromptHost.
+ */
+export function applyConfirmedLoginAnchor(
+  state: ConnectionState,
+  options: { expectedTargetHost?: string; jumpPromptHost?: string } = {}
+): ConnectionState {
+  const expectedTargetHost = sanitizeExpectedTargetHost(options.expectedTargetHost)
+  const jump = normalizeHostToken(options.jumpPromptHost ?? '')
+  const observed = normalizeHostToken(state.promptHost ?? state.runtimeExpectedHost ?? '')
+  const jumpIsTarget = Boolean(jump && observed && isPromptHostAligned(jump, observed))
+  const withJump = jump && !jumpIsTarget ? { ...state, jumpPromptHost: jump } : state
+
+  const learnedRuntime = runtimeAnchorHost(withJump)
+  const keepLearnedHostname =
+    Boolean(learnedRuntime) &&
+    !isIpv4Literal(learnedRuntime ?? '') &&
+    (!expectedTargetHost || isIpv4Literal(expectedTargetHost))
+  if (expectedTargetHost && !keepLearnedHostname) {
+    return {
+      ...withJump,
+      runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
+    }
+  }
+  return withJump
+}
+
 export interface InjectionGuardVerdict {
   /** Effective expected host used for comparison (runtime anchor first). */
   effectiveExpectedHost?: string
@@ -226,9 +243,6 @@ export function evaluateInjectionGuard(
     }
   }
 
-  // Multi-hop login: before a runtime anchor exists, a non-local, non-localhost
-  // prompt is the legitimate login destination (e.g. web1.zhangke after
-  // `ssh web1.zhangke`).
   if (
     !runtimeAnchorHost(state) &&
     observedHost !== 'local-shell' &&

@@ -93,7 +93,8 @@ export function AgentRunTimeline({
   thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
   const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
-  const runFinished = typeof document.elapsedMs === 'number'
+  const runFinished =
+    typeof document.elapsedMs === 'number' || Boolean(document.errorMarkdown?.trim())
   const hasApprovalStep = document.steps.some((step) => step.kind === 'approval')
   const visibleSteps = omitDuplicateTrailingMessage(
     sortTimelineBySeq(
@@ -131,7 +132,11 @@ export function AgentRunTimeline({
                   steps={item.steps}
                   t={t}
                   connectionName={document.loginMeta?.connectionName || item.connectionName}
-                  finished={loginFinished || hasConnectionFlowFinished(item.steps, t)}
+                  finished={
+                    Boolean(document.errorMarkdown) ||
+                    loginFinished ||
+                    hasConnectionFlowFinished(item.steps, t)
+                  }
                   failed={Boolean(document.errorMarkdown)}
                 />
               )
@@ -801,6 +806,25 @@ function hasConnectionFlowFinished(
   return steps.some((step) => (step.title ?? '').trim() === done)
 }
 
+function statusText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  return ''
+}
+
+function statusStepTitle(step: Extract<AgentRunStep, { kind: 'status' }>): string {
+  const title = statusText(step.title)
+  const firstLine = title.split('\n')[0]?.trim()
+  return firstLine || title
+}
+
+function statusStepDetail(step: Extract<AgentRunStep, { kind: 'status' }>): string {
+  const title = statusText(step.title)
+  const titleRest = title.includes('\n') ? title.split('\n').slice(1).join('\n').trim() : ''
+  const detail = statusText(step.detail)
+  return [titleRest, detail].filter(Boolean).join('\n')
+}
+
 export function groupTimelineSteps(steps: AgentRunStep[], t: Dictionary): TimelineItem[] {
   const items: TimelineItem[] = []
   // Collect every connection-flow status step in this run into ONE flow group,
@@ -866,7 +890,7 @@ function resolveConnectionFlowKey(
   }
   const matched = t.terminal.connectionMatched
   if (matched && title.startsWith(matched)) {
-    const firstLine = step.detail?.split('\n')[0]?.trim()
+    const firstLine = statusText(step.detail).split('\n')[0]?.trim()
     if (firstLine) return firstLine
   }
   return ''
@@ -991,13 +1015,15 @@ function ConnectionFlowGroup({
           {steps.map((step, stepIndex) => {
             const isLast = step.id === steps[steps.length - 1]?.id
             const createdAt = (step as { createdAt?: string }).createdAt
+            const titleText = statusStepTitle(step)
+            const detailText = statusStepDetail(step)
             return (
               <div key={step.id} className="flex items-start gap-2 text-[11px] leading-relaxed">
                 <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center">
-                  {!finished && isLast ? (
-                    <Loader2Icon className="size-3 animate-spin text-primary" aria-hidden="true" />
-                  ) : failed && isLast ? (
+                  {failed && isLast ? (
                     <TriangleAlertIcon className="size-3 text-destructive" aria-hidden="true" />
+                  ) : !finished && isLast ? (
+                    <Loader2Icon className="size-3 animate-spin text-primary" aria-hidden="true" />
                   ) : (
                     <span
                       className={`size-1 rounded-full ${
@@ -1012,16 +1038,16 @@ function ConnectionFlowGroup({
                     <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
                       {stepIndex + 1}
                     </span>
-                    <span className="min-w-0 break-words whitespace-pre-wrap">{step.title}</span>
+                    <span className="min-w-0 break-words whitespace-pre-wrap">{titleText}</span>
                   </div>
                   {createdAt ? (
                     <div className="mt-0.5 text-[10px] text-muted-foreground/50">
                       {formatLogTime(createdAt)}
                     </div>
                   ) : null}
-                  {step.detail ? (
+                  {detailText ? (
                     <div className="mt-0.5 break-words whitespace-pre-wrap text-muted-foreground/70">
-                      {step.detail}
+                      {detailText}
                     </div>
                   ) : null}
                 </div>
@@ -1045,14 +1071,17 @@ function LoginResultCard({
   const failed = Boolean(document.errorMarkdown?.trim())
   const elapsedMs = typeof document.elapsedMs === 'number' ? document.elapsedMs : undefined
   const address = [meta?.host ?? '', meta?.port ? `:${meta.port}` : ''].join('')
-  // Count the typed login-action steps actually rendered in the flow so the
-  // result card always agrees with the flow (single source: document.steps).
-  const actionPrefix = `${t.terminal.connectionAction} `
+  // Count typed + explicitly skipped login-action steps so the result card
+  // agrees with the flow (single source: document.steps).
+  const actionPrefixes = [
+    `${t.terminal.connectionAction} `,
+    `${t.terminal.connectionActionSkipped} `
+  ]
   const actionStepCount = document.steps.filter(
     (step) =>
       step.kind === 'status' &&
       typeof step.title === 'string' &&
-      step.title.trim().startsWith(actionPrefix)
+      actionPrefixes.some((prefix) => step.title.trim().startsWith(prefix))
   ).length
   const rowEntries: Array<[string, string]> = [
     [t.terminal.loginConnectionName, meta?.connectionName ?? ''],
@@ -1780,7 +1809,7 @@ function isNoiseStatusStep(step: AgentRunStep, t: Dictionary, hasApprovalStep = 
   if (hasApprovalStep && isClassifyingStatusMessage(title, t)) {
     return true
   }
-  if (hasApprovalStep && step.detail && isClassifyingStatusMessage(step.detail, t)) {
+  if (hasApprovalStep && step.detail && isClassifyingStatusMessage(statusText(step.detail), t)) {
     return true
   }
   if (title === t.commandReview.title || title.startsWith(`${t.commandReview.title}:`)) {
@@ -1793,8 +1822,8 @@ function isNoiseStatusStep(step: AgentRunStep, t: Dictionary, hasApprovalStep = 
   ) {
     return true
   }
-  if (step.detail) {
-    const detail = step.detail.trim()
+  const detail = statusText(step.detail)
+  if (detail) {
     if (
       detail === t.commandReview.readOnlyAllowed ||
       detail === t.commandReview.whitelisted ||

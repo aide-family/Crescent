@@ -1,5 +1,8 @@
 import { isPasswordPromptLine } from '../../../shared/terminal-password-prompt'
-import { findNewestPromptSignal, type PromptSignal } from '../../../shared/terminal-prompt-host'
+import {
+  extractRecentPromptHosts,
+  findNewestPromptSignal
+} from '../../../shared/terminal-prompt-host'
 
 export const LOGIN_TYPE_READY_TIMEOUT_MS = 60_000
 export const LOGIN_ACTION_CONSUMED_TIMEOUT_MS = 30_000
@@ -28,25 +31,126 @@ export type LoginStepConsumed =
 
 const HOST_KEY_PROMPT = /(?:yes\/no|continue connecting)\s*[:?]?\s*$/i
 
+function stripAnsi(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\u001b\][^\u0007]*\u0007/g, '')
+}
+
+function looksLikeHostPromptLine(line: string): boolean {
+  return (
+    /[@].*[:#$]/.test(line) || /\[[\w.-]+@[\w.-]+/.test(line) || /[\w.-]+@[\w.-]+\s*[#$]/.test(line)
+  )
+}
+
+/**
+ * Remote host prompt with no trailing command echo.
+ * `user@node-1:~$ ` is clean; `user@node-1:~$ sudo su - root` is not.
+ * ANSI color wraps around root prompts must be stripped first.
+ */
+export function isCleanHostPromptLine(line: string): boolean {
+  const trimmed = stripAnsi(line).trim()
+  // Allow `[K8S-RONLY | user@host:~# ]` — prompt char may sit before a closing bracket.
+  if (!/[$%#]\s*\]?\s*$/.test(trimmed)) return false
+  return looksLikeHostPromptLine(trimmed)
+}
+
+export type SkipSecretOnHostInput = {
+  readyKind: Exclude<LoginTypeReady['kind'], 'timeout'>
+  /** Auto-prepended connection password (key-auth may already be on a host). */
+  isLeadingAutoPassword: boolean
+  /** Previous typed action was a shell command (e.g. sudo). */
+  previousWasCommand: boolean
+  /** How the previous typed action settled. */
+  previousConsumedKind?: Exclude<LoginStepConsumed['kind'], 'timeout'>
+}
+
+/**
+ * Skip an unused secret when a clean host prompt is already visible.
+ *
+ * - Leading auto SSH password: key auth already landed.
+ * - After a command settled on host: NOPASSWD / no password prompt (e.g. sudo).
+ * Never skip solely because index > 0 and host is visible — that drops real
+ * follow-up commands misclassified as secrets, and silent-skips before confirm.
+ */
+export function shouldSkipSecretOnHost(input: SkipSecretOnHostInput): boolean {
+  if (input.readyKind !== 'host') return false
+  if (input.isLeadingAutoPassword) return true
+  return input.previousWasCommand && input.previousConsumedKind === 'host'
+}
+
 export function extractNewestWaitingLine(output: string): string | undefined {
   if (findNewestPromptSignal(output)?.kind !== 'waiting') return undefined
   const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const trimmed = lines[index]?.trim() ?? ''
+    const trimmed = stripAnsi(lines[index] ?? '').trim()
     if (!trimmed) continue
     if (isPasswordPromptLine(trimmed) || HOST_KEY_PROMPT.test(trimmed)) return trimmed
   }
   return undefined
 }
 
+/** Scan the whole suffix — OP-KUBE / `sw` banners exceed the default 40-line window. */
+const LOGIN_PROMPT_SCAN_LINES = 400
+
+/**
+ * Newest login-relevant signal, skipping dirty command echoes so a later
+ * MOTD/banner cannot hide a clean host prompt — and a huge banner cannot
+ * strand the waiter on `[root@jump]# sw xmhc`.
+ */
+export function resolveNewestLoginSignal(
+  output: string
+): Exclude<LoginStepConsumed, { kind: 'timeout' }> | undefined {
+  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const recent = lines.slice(-LOGIN_PROMPT_SCAN_LINES)
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const trimmed = stripAnsi(recent[index] ?? '').trim()
+    if (!trimmed) continue
+    if (isPasswordPromptLine(trimmed) || HOST_KEY_PROMPT.test(trimmed)) {
+      return { kind: 'waiting', line: trimmed }
+    }
+    if (isCleanHostPromptLine(trimmed)) {
+      const signal = findNewestPromptSignal(trimmed)
+      if (signal?.kind === 'host') return { kind: 'host', host: signal.host }
+    }
+    const signal = findNewestPromptSignal(trimmed)
+    if (signal?.kind === 'local') return { kind: 'local' }
+    if (signal?.kind === 'waiting') {
+      return { kind: 'waiting', line: extractNewestWaitingLine(trimmed) ?? trimmed }
+    }
+  }
+  return undefined
+}
+
+function lastExtractedHost(output: string): string | undefined {
+  const hosts = extractRecentPromptHosts(output, LOGIN_PROMPT_SCAN_LINES)
+  return hosts[hosts.length - 1]
+}
+
+/** `sw` / SSH landings that print a banner+MOTD and never a parseable PS1. */
+function isBannerSettledLanding(output: string): boolean {
+  if (findNewestPromptSignal(output, LOGIN_PROMPT_SCAN_LINES)?.kind === 'waiting') return false
+  return (
+    /✔\s*Switched to context/i.test(output) ||
+    />>> 切换到集群/.test(output) ||
+    /Authorized only\.\s*All activity will be monitored/i.test(output)
+  )
+}
+
+function settledHostFromBanner(output: string): { kind: 'host'; host: string } | undefined {
+  if (!isBannerSettledLanding(output)) return undefined
+  const host = lastExtractedHost(output)
+  if (!host) return undefined
+  return { kind: 'host', host }
+}
+
 export function resolveLoginTypeReady(
   output: string
 ): Exclude<LoginTypeReady, { kind: 'timeout' }> | undefined {
-  const signal = findNewestPromptSignal(output)
-  if (signal?.kind === 'waiting') {
-    return { kind: 'waiting', line: extractNewestWaitingLine(output) ?? '' }
+  const newest = resolveNewestLoginSignal(output)
+  if (newest?.kind === 'waiting') {
+    return { kind: 'waiting', line: newest.line }
   }
-  if (signal?.kind === 'host') return { kind: 'host', host: signal.host }
+  if (newest?.kind === 'host') return { kind: 'host', host: newest.host }
   return undefined
 }
 
@@ -56,42 +160,61 @@ export function resolveLoginActionConsumed(
     mode: 'waiting' | 'shell'
     waitingLine?: string
     outputAtType?: string
+    /** After the hard timeout: accept banner/MOTD landings that never printed PS1. */
+    acceptQuietGrowth?: boolean
   }
 ): Exclude<LoginStepConsumed, { kind: 'timeout' }> | undefined {
   if (options.mode === 'shell') {
     const snapshot = options.outputAtType ?? ''
     if (output.length <= snapshot.length) return undefined
     const suffix = output.slice(snapshot.length)
-    const signal = findNewestPromptSignal(suffix)
-    if (signal?.kind === 'waiting') {
-      return { kind: 'waiting', line: extractNewestWaitingLine(suffix) ?? '' }
+    const newest = resolveNewestLoginSignal(suffix)
+    if (newest?.kind === 'waiting') {
+      return { kind: 'waiting', line: newest.line }
     }
-    return signalToConsumed(signal)
+    if (newest) return newest
+    if (isBannerSettledLanding(suffix)) {
+      const host = lastExtractedHost(suffix) ?? lastExtractedHost(output)
+      if (host) return { kind: 'host', host }
+    }
+    if (options.acceptQuietGrowth) {
+      if (findNewestPromptSignal(suffix, LOGIN_PROMPT_SCAN_LINES)?.kind === 'waiting') {
+        return undefined
+      }
+      const host = lastExtractedHost(suffix) ?? lastExtractedHost(output)
+      if (host) return { kind: 'host', host }
+    }
+    return undefined
   }
 
-  const signal = findNewestPromptSignal(output)
-  if (signal?.kind === 'waiting') {
-    const line = extractNewestWaitingLine(output) ?? ''
+  const newest = resolveNewestLoginSignal(output)
+  if (newest?.kind === 'waiting') {
+    const line = newest.line
     if (options.waitingLine && line === options.waitingLine) return undefined
     if (!line) return undefined
     return { kind: 'waiting', line }
   }
-  return signalToConsumed(signal)
-}
-
-function signalToConsumed(
-  signal: PromptSignal | undefined
-): Exclude<LoginStepConsumed, { kind: 'timeout' }> | undefined {
-  if (signal?.kind === 'host') return { kind: 'host', host: signal.host }
-  if (signal?.kind === 'local') return { kind: 'local' }
-  return undefined
+  if (newest) return newest
+  return settledHostFromBanner(output)
 }
 
 export function waitForLoginTypeReady(
   deps: LoginActionWaitDeps,
-  options: { tabId: string; timeoutMs?: number; pollMs?: number; dataDebounceMs?: number }
+  options: {
+    tabId: string
+    timeoutMs?: number
+    pollMs?: number
+    dataDebounceMs?: number
+    /** Settle only on password / host-key prompts. */
+    requireWaiting?: boolean
+  }
 ): Promise<LoginTypeReady> {
-  return watchOutput(deps, options, resolveLoginTypeReady)
+  return watchOutput(deps, options, (output) => {
+    const ready = resolveLoginTypeReady(output)
+    if (!ready) return undefined
+    if (options.requireWaiting && ready.kind !== 'waiting') return undefined
+    return ready
+  })
 }
 
 export function waitForLoginActionConsumed(

@@ -23,24 +23,10 @@ export function waitForRemotePrompt(
     timeoutMs?: number
     pollMs?: number
     dataDebounceMs?: number
-    /**
-     * When set, a host prompt is only accepted once it aligns with this target
-     * (e.g. web1.zhangke after a multi-hop `ssh web1.zhangke`). This prevents
-     * confirm-login from running on an intermediate jump-host prompt.
-     */
     expectedHost?: string
     aliases?: string[]
     localHost?: string
-    /**
-     * First login to an IP (or any unverified target): accept a non-local
-     * hostname prompt so confirm-login can learn the alias instead of waiting
-     * out the timeout.
-     */
     acceptAnyRemoteHost?: boolean
-    /**
-     * When the last typed action was another `ssh`, ignore this already-visible
-     * jump-host prompt until a different remote host appears.
-     */
     previousHost?: string
   }
 ): Promise<PromptWaitSignal> {
@@ -116,7 +102,7 @@ export function waitForRemotePrompt(
   })
 }
 
-/** Strip `user@` from an ssh target (`aide@192.0.2.10` → `192.0.2.10`). */
+/** Strip `user@` from an ssh target (`user@192.0.2.10` → `192.0.2.10`). */
 export function stripSshTarget(value: string): string {
   const trimmed = value.trim()
   const at = trimmed.lastIndexOf('@')

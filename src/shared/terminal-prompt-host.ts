@@ -198,7 +198,9 @@ function matchPromptHostsInLine(line: string): string[] {
   if (!looksLikePrompt) return []
 
   const hosts: string[] = []
-  for (const match of line.matchAll(/(?:^|[[\s])([\w.-]+)@([\w.-]+)/g)) {
+  // Delimiter before user@host: start, [, whitespace, or ] (K8S-RONLY]root@host).
+  // Kept narrow so `x:user@host` inside a command echo is not picked up.
+  for (const match of line.matchAll(/(?:^|[[\s\]])([\w.-]+)@([\w.-]+)/g)) {
     if (match[2]) hosts.push(match[2])
   }
   return hosts

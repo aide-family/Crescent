@@ -11,6 +11,7 @@ import { normalizeHostToken, isPromptHostAligned } from '../../shared/terminal-p
 import {
   autoLearnUnverifiedLogin,
   classifyPipeCommand,
+  applyConfirmedLoginAnchor,
   confirmLoginState,
   createConnectionState,
   evaluateInjectionGuard,
@@ -23,7 +24,7 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
-import { isIpv4Literal, sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
+import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import { createPendingCommandController } from './pending-command'
 
@@ -848,24 +849,10 @@ export function registerTerminalIpc(): void {
           aliases: state.aliases
         }).promptHost
         const result = confirmLoginState(state, promptHost, { localHost })
-        const withJump = jumpPromptHost
-          ? {
-              ...result.state,
-              jumpPromptHost: normalizeHostToken(jumpPromptHost) || result.state.jumpPromptHost
-            }
-          : result.state
-        const learnedRuntime = runtimeAnchorHost(withJump)
-        const keepLearnedHostname =
-          Boolean(learnedRuntime) &&
-          !isIpv4Literal(learnedRuntime ?? '') &&
-          isIpv4Literal(expectedTargetHost ?? '')
-        const anchored =
-          expectedTargetHost && !keepLearnedHostname
-            ? {
-                ...withJump,
-                runtimeExpectedHost: normalizeHostToken(expectedTargetHost)
-              }
-            : withJump
+        const anchored = applyConfirmedLoginAnchor(result.state, {
+          expectedTargetHost,
+          jumpPromptHost
+        })
         connectionStates.set(targetKey, anchored)
         return result.ok ? anchored : undefined
       }

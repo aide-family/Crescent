@@ -191,6 +191,7 @@ export function isConnectionStatusText(text: string, t: Dictionary): boolean {
     t.terminal.switchedToConnection.split('{name}')[0],
     t.terminal.connectionStarting,
     t.terminal.connectionAction,
+    t.terminal.connectionActionSkipped,
     t.terminal.loginConfirming,
     t.terminal.postLoginTaskStarting,
     t.terminal.connectionNoActions,
@@ -231,6 +232,9 @@ export function summarizeBehaviorLog(
     if (firstLine.startsWith(`${t.terminal.commandExecuted}:`)) return t.terminal.commandExecuted
     if (firstLine.startsWith(`${t.terminal.connectionAction} `)) {
       return firstLine.split(':')[0] || t.terminal.connectionAction
+    }
+    if (firstLine.startsWith(`${t.terminal.connectionActionSkipped} `)) {
+      return firstLine.split(':')[0] || t.terminal.connectionActionSkipped
     }
     return firstLine
   }

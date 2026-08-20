@@ -22,8 +22,38 @@ export function isContinueIntent(value: string): boolean {
   return /^(continue|resume|keep going|go on|continue working|continue the task)$/.test(normalized)
 }
 
+export function isExplicitReconnectRequest(value: string): boolean {
+  return (
+    // 重连 / 重新连接 / 再连一次 / 重试连接 / 重试当前连接 / 重试 ssh 登录
+    /重连|重新连接|再连(?:一次|一下)?|重试\s*(?:ssh\s*)?(?:登录|连接)|重试当前\s*连接/.test(
+      value
+    ) ||
+    /reconnect|re-?connect|retry\s+(?:the\s+|current\s+)?(?:ssh\s+)?(?:login|connection)/i.test(
+      value
+    )
+  )
+}
+
+export function isPasswordChangedReconnectRequest(value: string): boolean {
+  if (!isExplicitReconnectRequest(value)) return false
+  return (
+    // 密码已修改 / 密码改了 / 密码变了 / 密码换了吗
+    /密码(?:已(?:经)?)?(?:修改|更改|更新|变更|改|换|变|重置)(?:了|过)?/.test(value) ||
+    // 已修改密码 / 刚换了密码
+    /(?:已|刚|刚刚)(?:经)?(?:修改|更改|更新|变更|改|换|变|重置)(?:了|过)?密码/.test(value) ||
+    // 改了密码 / 换了新密码
+    /(?:修改|更改|更新|变更|改|换|变|重置)(?:了|过)(?:新|个)?密码/.test(value) ||
+    // password changed / password has been reset / changed my password
+    /password\s+(?:has\s+been\s+)?(?:changed|updated|reset|modified|rotated|renewed)/i.test(
+      value
+    ) ||
+    /(?:changed|updated|reset|modified|rotated|renewed)\s+(?:my|the)\s+password/i.test(value)
+  )
+}
+
 export function isExplicitConnectionRequest(value: string): boolean {
   return (
+    isExplicitReconnectRequest(value) ||
     /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value) ||
     /(?:^|\s)(?:连接|登录|登陆|登入|进入|切换)(?:\s|到|至|$|[A-Za-z0-9\u4e00-\u9fff])/u.test(value)
   )
@@ -76,14 +106,17 @@ export function findDirectlyMentionedConnection(
 ): ConnectionConfig | undefined {
   if (hasExplicitLocalWorkIntent(input)) return undefined
 
+  const searchable = connectionMentionSearchText(input)
   const allowHostOrUserMatch = isExplicitConnectionRequest(input)
   const matches = connections.filter((connection) => {
     const nameTokens = getConnectionNameMentionTokens(connection)
-    if (nameTokens.some((token) => connectionNameTokenAppearsInInput(input, token))) return true
+    if (nameTokens.some((token) => connectionNameTokenAppearsInSearchText(searchable, token))) {
+      return true
+    }
     if (!allowHostOrUserMatch) return false
 
     return getConnectionHostUserMentionTokens(connection).some((token) =>
-      connectionNameTokenAppearsInInput(input, token)
+      connectionNameTokenAppearsInSearchText(searchable, token)
     )
   })
   return matches.length === 1 ? matches[0] : undefined
@@ -96,10 +129,23 @@ export function stripFilesystemPathSpans(input: string): string {
   return input.replace(FILESYSTEM_PATH_SPAN_RE, ' ')
 }
 
-/** True when a connection name token is a real mention, not a path fragment like aide-family. */
-export function connectionNameTokenAppearsInInput(input: string, token: string): boolean {
+/**
+ * Drop pasted PTY prompts (`root@web-nginx1`) and scp/rsync hop destinations
+ * (`nginx2:/path`) so they are not treated as named Crescent connections.
+ */
+export function stripPastedPromptAndRemoteCopySpans(input: string): string {
+  return input.replace(/\b[\w.-]+@[\w.-]+\b/g, ' ').replace(/\b[\w.-]+:\/[^\s]*/g, ' ')
+}
+
+/** Text used to match configured connection names. */
+export function connectionMentionSearchText(input: string): string {
+  const withoutPaths = stripFilesystemPathSpans(input)
+  if (isExplicitConnectionRequest(input)) return withoutPaths
+  return stripFilesystemPathSpans(stripPastedPromptAndRemoteCopySpans(input))
+}
+
+function connectionNameTokenAppearsInSearchText(searchable: string, token: string): boolean {
   if (!token) return false
-  const searchable = stripFilesystemPathSpans(input)
   if (/^\p{Script=Han}+$/u.test(token)) {
     return normalizeConnectionMentionText(searchable).includes(
       normalizeConnectionMentionText(token)
@@ -110,6 +156,11 @@ export function connectionNameTokenAppearsInInput(input: string, token: string):
     return new RegExp(`(^|[^A-Za-z0-9_-])${escaped}([^A-Za-z0-9_-]|$)`, 'i').test(searchable)
   }
   return normalizeConnectionMentionText(searchable).includes(normalizeConnectionMentionText(token))
+}
+
+/** True when a connection name token is a real mention, not a path fragment like aide-family. */
+export function connectionNameTokenAppearsInInput(input: string, token: string): boolean {
+  return connectionNameTokenAppearsInSearchText(connectionMentionSearchText(input), token)
 }
 
 export function isSameConnectionTab(
@@ -156,7 +207,7 @@ function buildConnectionMentionTokens(values: Array<string | undefined>): string
 
 /**
  * Split a value into CJK / non-CJK runs so mixed-script names like
- * "demo测试集群" also yield shorthand tokens ("zhangke", "测试集群").
+ * "demo测试集群" also yield shorthand tokens ("demo", "测试集群").
  * This lets requests such as "登录demo集群" match the configured name.
  */
 function splitMixedScriptSegments(value: string): string[] {
@@ -196,6 +247,8 @@ export function isConnectionOnlyRequest(input: string, connection: ConnectionCon
     'login',
     'ssh',
     'open',
+    'reconnect',
+    'retry',
     '连接',
     '登录',
     '登入',
@@ -205,7 +258,13 @@ export function isConnectionOnlyRequest(input: string, connection: ConnectionCon
     '集群',
     '环境',
     '到',
-    '至'
+    '至',
+    '重新连接',
+    '重连',
+    '重试当前连接',
+    '重试连接',
+    '重试',
+    '再连'
   ].sort((left, right) => right.length - left.length)
 
   for (const token of removableTokens) {
