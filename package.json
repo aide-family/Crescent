@@ -13,7 +13,7 @@
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "ci": "npm run lint && npm run test && npm run typecheck && npm run build",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

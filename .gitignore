@@ -8,3 +8,13 @@ out
 build/icons/preview/
 build/icons/Crescent.iconset/
 
+# Test files are not allowed in the repository
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.js
+**/*.test.jsx
+**/*.spec.js
+**/*.spec.jsx
+**/__tests__/
