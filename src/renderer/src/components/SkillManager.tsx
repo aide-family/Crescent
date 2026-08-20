@@ -40,10 +40,11 @@ import {
 } from '@renderer/components/ui/sheet'
 import type { Dictionary } from '@renderer/i18n'
 import {
+  catalogSkillPageUrl,
   formatInstallCount,
-  isSkillSearchResultInstalled,
-  catalogSkillPageUrl
+  isSkillSearchResultInstalled
 } from '@renderer/lib/skill-management'
+import { parseSkillMarkdown } from '@renderer/lib/skill-markdown'
 import type { AgentSkillOption, AgentSkillSearchResult } from '../../../shared/agent-types'
 
 type SkillManagerPane = 'installed' | 'discover'
@@ -64,6 +65,7 @@ export interface SkillManagerProps {
   onOpenChange: (open: boolean) => void
   t: Dictionary
   skillRoot: string
+  loadGlobalAgentSkills: boolean
   skills: AgentSkillOption[]
   filteredLocalSkills: AgentSkillOption[]
   localSkillSearchQuery: string
@@ -85,6 +87,7 @@ export interface SkillManagerProps {
   installedSkillNames: Set<string>
   onSkillRootChange: (value: string) => void
   onSaveSkillRoot: () => void
+  onLoadGlobalAgentSkillsChange: (value: boolean) => void
   onLocalSkillSearchQueryChange: (value: string) => void
   onSkillSearchQueryChange: (value: string) => void
   onRefreshSkills: () => void
@@ -106,6 +109,7 @@ export function SkillManager({
   onOpenChange,
   t,
   skillRoot,
+  loadGlobalAgentSkills,
   skills,
   filteredLocalSkills,
   localSkillSearchQuery,
@@ -127,6 +131,7 @@ export function SkillManager({
   installedSkillNames,
   onSkillRootChange,
   onSaveSkillRoot,
+  onLoadGlobalAgentSkillsChange,
   onLocalSkillSearchQueryChange,
   onSkillSearchQueryChange,
   onRefreshSkills,
@@ -169,6 +174,12 @@ export function SkillManager({
   const catalogPreviewLoading =
     Boolean(selectedSkillPreview?.catalogResultId) &&
     skillPreviewLoadingPath === selectedSkillPreview?.catalogResultId
+  const previewMarkdown = selectedSkillPreview
+    ? parseSkillMarkdown(selectedSkillPreview.content)
+    : null
+  const previewName = previewMarkdown?.name || selectedSkillPreview?.skill.name || ''
+  const previewDescription =
+    previewMarkdown?.description || selectedSkillPreview?.skill.description || ''
 
   function togglePreview(skill: AgentSkillOption): void {
     if (selectedSkillPreview?.skill.path === skill.path && !skillInstallLogResultId) {
@@ -301,11 +312,29 @@ export function SkillManager({
                     id="skill-root"
                     value={skillRoot}
                     onChange={(event) => onSkillRootChange(event.target.value)}
-                    placeholder="~/.agents/skills"
+                    placeholder="~/.crescent/skills"
                     spellCheck={false}
                     autoComplete="off"
                   />
                   <FieldDescription>{t.settings.skillDirectoryHint}</FieldDescription>
+                  <label
+                    htmlFor="load-global-agent-skills"
+                    className="flex items-start gap-2 pt-1 text-xs text-muted-foreground"
+                  >
+                    <Input
+                      id="load-global-agent-skills"
+                      type="checkbox"
+                      checked={loadGlobalAgentSkills}
+                      onChange={(event) => onLoadGlobalAgentSkillsChange(event.target.checked)}
+                      className="mt-0.5 size-3.5 shrink-0 accent-primary"
+                    />
+                    <span>
+                      <span className="block text-foreground">
+                        {t.settings.loadGlobalAgentSkills}
+                      </span>
+                      {t.settings.loadGlobalAgentSkillsHint}
+                    </span>
+                  </label>
                 </Field>
                 <Input
                   type="search"
@@ -685,18 +714,21 @@ export function SkillManager({
           ) : previewDetailOpen && selectedSkillPreview ? (
             <div className="app-sheet-detail flex w-[560px] shrink-0 flex-col overflow-hidden rounded-md border bg-background">
               <div className="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
-                <div className="min-w-0">
+                <div className="min-w-0 border-l-2 border-primary pl-2.5">
                   <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
                     <BookOpenIcon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 wrap-break-word">
-                      {selectedSkillPreview.skill.name}
-                    </span>
+                    <span className="min-w-0 wrap-break-word">{previewName}</span>
                     {selectedSkillPreview.skill.removable === false && (
                       <Badge variant="secondary" className="h-4 px-1.5 font-mono text-[10px]">
                         {t.settings.protectedSkill}
                       </Badge>
                     )}
                   </div>
+                  {previewDescription ? (
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      {previewDescription}
+                    </p>
+                  ) : null}
                   <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                     {catalogPreviewResult
                       ? catalogSkillPageUrl(catalogPreviewResult)
@@ -716,7 +748,7 @@ export function SkillManager({
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3 text-sm">
                 {selectedSkillPreview.content && !catalogPreviewLoading ? (
-                  <MarkdownContent value={selectedSkillPreview.content} t={t} />
+                  <MarkdownContent value={previewMarkdown?.body ?? ''} t={t} />
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                     <Loader2Icon className="mr-2 size-4 animate-spin" aria-hidden="true" />

@@ -50,7 +50,7 @@ import { SkillManager, type SkillPreviewState } from '@renderer/components/Skill
 import { ExtensionManager } from '@renderer/components/ExtensionManager'
 import { ExtensionUiDialog } from '@renderer/components/ExtensionUiDialog'
 import { WikiSheet } from '@renderer/components/WikiSheet'
-import { CaptureDraftSheet } from '@renderer/components/CaptureDraftSheet'
+import { CaptureDraftDialog } from '@renderer/components/CaptureDraftDialog'
 import { Button } from '@renderer/components/ui/button'
 import {
   dictionaries,
@@ -147,6 +147,7 @@ import {
 } from '@renderer/lib/agent-input'
 import { decodeUserMessageText, snapshotMessageReferences } from '@renderer/lib/agent-message-refs'
 import {
+  caretAfterProgrammaticValueChange,
   collectComposerRefIds,
   formatComposerRefToken,
   hasComposerRefTokens,
@@ -154,6 +155,21 @@ import {
   removeComposerRefToken,
   stripComposerRefTokens
 } from '@renderer/lib/composer-ref-tokens'
+import {
+  capturePinIsActionable,
+  captureReadyLogText,
+  captureReadyLogsForTab,
+  createCaptureDraftJob,
+  createCaptureGenerateQueue,
+  findCaptureJob,
+  hiddenCaptureReadyLogIds,
+  jobHasContent,
+  patchCaptureJob,
+  removeCaptureJob,
+  upsertCaptureJob,
+  visibleCaptureDraftPins,
+  type CaptureDraftJob
+} from '@renderer/lib/capture-draft-ui'
 import {
   buildCaptureSummary,
   hasCaptureableContent,
@@ -167,8 +183,22 @@ import {
   createCustomConnectionId,
   formatConnectionActionLog,
   isPasswordEnvVarMissing,
+  looksLikeCommand,
   mergeConnectionInput
 } from '@renderer/lib/connection-commands'
+import {
+  applyConnectionNameOverwrite,
+  findCustomConnectionNameConflict
+} from '@renderer/lib/connection-name-conflict'
+import {
+  LOGIN_ACTION_CONSUMED_TIMEOUT_MS,
+  LOGIN_TYPE_READY_TIMEOUT_MS,
+  resolveLoginTypeReady,
+  waitForLoginActionConsumed,
+  waitForLoginTypeReady,
+  type LoginActionWaitDeps,
+  type LoginTypeReady
+} from '@renderer/lib/login-action-wait'
 import {
   formatConnectionAutomationFailure,
   shouldDrainPostConnectionTasks
@@ -236,8 +266,6 @@ import {
 } from '@renderer/lib/skill-management'
 import {
   extractPasswordPromptLine,
-  hasInteractivePrompt,
-  hasOutputBeyondEcho,
   isTerminalCurrentlyAtPasswordPrompt,
   parseSubterminalTabId
 } from '@renderer/lib/terminal-text'
@@ -289,30 +317,31 @@ import {
   replaceSlashCommandInput,
   type SlashCommandOption
 } from '@renderer/lib/slash-commands'
-import type {
-  AgentConfig,
-  AgentMcpServerConfig,
-  AgentModelOption,
-  AgentOpenApiProfile,
-  AgentPathReference,
-  AgentProviderConfig,
-  AgentSkillInstallEvent,
-  AgentSkillSearchResult,
-  AgentValidationResult,
-  AgentSkillOption,
-  AgentExtensionOption,
-  AgentPiPackageSearchResult,
-  AgentWikiReference,
-  CaptureKind,
-  ExtensionUiRequest,
-  AgentConnectionIntentResult,
-  ConnectionConfig,
-  ConnectionInput,
-  LocalInstructionDocument,
-  StoredAgentRun,
-  StoredSessionHistoryItem,
-  WikiDocument,
-  WikiDocumentSummary
+import {
+  CAPTURE_BACKGROUND_TIMEOUT_MS,
+  type AgentConfig,
+  type AgentMcpServerConfig,
+  type AgentModelOption,
+  type AgentOpenApiProfile,
+  type AgentPathReference,
+  type AgentProviderConfig,
+  type AgentSkillInstallEvent,
+  type AgentSkillSearchResult,
+  type AgentValidationResult,
+  type AgentSkillOption,
+  type AgentExtensionOption,
+  type AgentPiPackageSearchResult,
+  type AgentWikiReference,
+  type CaptureKind,
+  type ExtensionUiRequest,
+  type AgentConnectionIntentResult,
+  type ConnectionConfig,
+  type ConnectionInput,
+  type LocalInstructionDocument,
+  type StoredAgentRun,
+  type StoredSessionHistoryItem,
+  type WikiDocument,
+  type WikiDocumentSummary
 } from '../../shared/agent-types'
 import { addSessionTokenUsage, EMPTY_SESSION_TOKEN_USAGE } from '../../shared/session-token-usage'
 import {
@@ -353,7 +382,8 @@ const emptyConfig: AgentConfig = {
   openApiTimeoutMs: 30_000,
   openApiMaxRetries: 2,
   openApiRetryBackoffMs: 300,
-  skillRoot: '~/.agents/skills',
+  skillRoot: '~/.crescent/skills',
+  loadGlobalAgentSkills: false,
   disabledExtensions: [],
   mcpServers: []
 }
@@ -521,6 +551,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
   const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
+  const passwordFocusTabIdRef = useRef<string | null>(null)
   const runAgentConversationRef = useRef<
     | ((
         input: string,
@@ -635,35 +666,21 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
   const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
   const [savingHistorySkillTabId, setSavingHistorySkillTabId] = useState<string | null>(null)
-  const [captureDraft, setCaptureDraft] = useState<{
-    open: boolean
-    kind: CaptureKind
-    title: string
-    content: string
-    skillName: string
-    notes: string
-    overwrite: boolean
-    generating: boolean
-    refining: boolean
-    committing: boolean
-    error: string | null
-    conflict: boolean
-    summary: string
-  }>({
-    open: false,
-    kind: 'sop',
-    title: '',
-    content: '',
-    skillName: '',
-    notes: '',
-    overwrite: false,
-    generating: false,
-    refining: false,
-    committing: false,
-    error: null,
-    conflict: false,
-    summary: ''
-  })
+  const [captureJobs, setCaptureJobs] = useState<CaptureDraftJob[]>([])
+  const [captureDialogKind, setCaptureDialogKind] = useState<CaptureKind | null>(null)
+  const captureJobsRef = useRef<CaptureDraftJob[]>([])
+  const captureJobIdRef = useRef(0)
+  const captureGenerateQueueRef = useRef(createCaptureGenerateQueue())
+
+  function setCaptureJobsSync(
+    updater: CaptureDraftJob[] | ((current: CaptureDraftJob[]) => CaptureDraftJob[])
+  ): void {
+    setCaptureJobs((current) => {
+      const next = typeof updater === 'function' ? updater(current) : updater
+      captureJobsRef.current = next
+      return next
+    })
+  }
   const [sessionUsageBaselineByTabId, setSessionUsageBaselineByTabId] = useState<
     Record<string, { input: number; output: number }>
   >({})
@@ -713,6 +730,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [connectionSaveMessage, setConnectionSaveMessage] = useState<SkillManageMessage | null>(
     null
   )
+  const [connectionNameConflict, setConnectionNameConflict] = useState<{
+    existingId: string
+    name: string
+    connectAfterSave: boolean
+  } | null>(null)
   const [connectionActionBusy, setConnectionActionBusy] = useState(false)
   const connectionActionBusyRef = useRef(false)
   const [terminalPanePercent, setTerminalPanePercent] = useState(65)
@@ -781,6 +803,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     sessionUsageBaselineByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE,
     liveSessionUsageByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE
   )
+  const captureDialogJob =
+    captureDialogKind == null
+      ? undefined
+      : findCaptureJob(captureJobs, {
+          kind: captureDialogKind,
+          tabId: sessionChatTab.id
+        })
+  const capturePins = visibleCaptureDraftPins({
+    jobs: captureJobs,
+    activeTabId: sessionChatTab.id,
+    agentBusy: sessionChatTab.agentBusy
+  })
+  const captureReadyLogs = captureReadyLogsForTab(captureJobs, sessionChatTab.id)
+  const hiddenReadyLogIds = hiddenCaptureReadyLogIds({
+    jobs: captureJobs,
+    activeTabId: sessionChatTab.id,
+    agentBusy: sessionChatTab.agentBusy
+  })
 
   useEffect(() => {
     const connectionId = resolveOpsConnectionId(
@@ -1936,10 +1976,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }, [appendSystemToRunOrLog, t, updateConnectionAttempt])
 
   useEffect(() => {
-    if (!passwordPromptRequest) return
+    if (!passwordPromptRequest) {
+      passwordFocusTabIdRef.current = null
+      return
+    }
 
     passwordPromptRequestRef.current = passwordPromptRequest
-    window.requestAnimationFrame(() => passwordPromptInputRef.current?.focus())
+    if (passwordFocusTabIdRef.current === passwordPromptRequest.tabId) return
+    passwordFocusTabIdRef.current = passwordPromptRequest.tabId
+    agentInputRef.current?.blur()
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && focused.closest('.app-composer-body')) {
+      focused.blur()
+    }
+    window.requestAnimationFrame(() => {
+      const input = passwordPromptInputRef.current
+      if (!input || document.activeElement === input) return
+      input.focus()
+    })
   }, [passwordPromptRequest])
 
   useEffect(() => {
@@ -2750,7 +2804,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     try {
       const nextConfig = await saveAgentConfig({
         ...config,
-        skillRoot: config.skillRoot.trim() || '~/.agents/skills',
+        skillRoot: config.skillRoot.trim() || '~/.crescent/skills',
         commandWhitelist: parseCommandWhitelist(commandWhitelistText)
       })
       setSkillManageMessage({ type: 'success', text: t.settings.skillDirectorySaved })
@@ -3394,47 +3448,90 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     notes?: string
     refining?: boolean
   }): Promise<void> {
-    setCaptureDraft((current) => ({
-      ...current,
-      open: true,
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const refining = Boolean(input.refining)
+    const existing = findCaptureJob(captureJobsRef.current, {
       kind: input.kind,
-      generating: !input.refining,
-      refining: Boolean(input.refining),
-      error: null,
-      conflict: false,
-      summary: input.summary
-    }))
-    try {
-      const generated = await window.api.agent.generateCaptureDraft({
-        kind: input.kind,
-        summary: input.summary,
-        locale,
-        draft: input.draft,
-        notes: input.notes
-      })
-      if (!generated.ok || !generated.content?.trim()) {
-        throw new Error(generated.error || t.capture.failed)
-      }
-      setCaptureDraft((current) => ({
-        ...current,
-        title: generated.title ?? current.title,
-        content: generated.content ?? '',
-        skillName: generated.skillName ?? current.skillName,
-        generating: false,
-        refining: false,
-        error: null
-      }))
-      toast.success(t.capture.generated)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setCaptureDraft((current) => ({
-        ...current,
-        generating: false,
-        refining: false,
-        error: `${t.capture.failed}: ${message}`
-      }))
-      toast.error(`${t.capture.failed}: ${message}`, { duration: TOAST_INTERVENTION_DURATION_MS })
+      tabId: chatTabId
+    })
+    if (refining) {
+      if (!existing || !existing.content.trim()) return
     }
+
+    const jobId = refining && existing ? existing.jobId : String(++captureJobIdRef.current)
+    if (refining) {
+      setCaptureJobsSync((current) =>
+        patchCaptureJob(current, jobId, {
+          generating: false,
+          refining: true,
+          error: null,
+          conflict: false,
+          summary: input.summary
+        })
+      )
+    } else {
+      setCaptureJobsSync((current) =>
+        upsertCaptureJob(
+          current,
+          createCaptureDraftJob({
+            jobId,
+            kind: input.kind,
+            tabId: chatTabId,
+            summary: input.summary
+          })
+        )
+      )
+    }
+
+    await captureGenerateQueueRef.current.enqueue(async () => {
+      if (!findCaptureJob(captureJobsRef.current, { jobId })) return
+      try {
+        const generated = await window.api.agent.generateCaptureDraft({
+          kind: input.kind,
+          summary: input.summary,
+          locale,
+          draft: input.draft,
+          notes: input.notes,
+          timeoutMs: CAPTURE_BACKGROUND_TIMEOUT_MS
+        })
+        if (!findCaptureJob(captureJobsRef.current, { jobId })) return
+        if (!generated.ok || !generated.content?.trim()) {
+          throw new Error(generated.error || t.capture.failed)
+        }
+        const readyLogId = refining
+          ? (existing?.readyLogId ?? null)
+          : appendLog({ kind: 'status', text: captureReadyLogText(input.kind, t) }, chatTabId)
+        setCaptureJobsSync((current) => {
+          const live = findCaptureJob(current, { jobId })
+          return patchCaptureJob(current, jobId, {
+            title: generated.title ?? live?.title ?? '',
+            content: generated.content ?? '',
+            skillName: generated.skillName ?? live?.skillName ?? '',
+            generating: false,
+            refining: false,
+            phase: 'ready',
+            readyLogId,
+            error: null
+          })
+        })
+        if (!refining) toast.success(t.capture.generated)
+      } catch (error) {
+        if (!findCaptureJob(captureJobsRef.current, { jobId })) return
+        const message = error instanceof Error ? error.message : String(error)
+        setCaptureJobsSync((current) => {
+          const live = findCaptureJob(current, { jobId })
+          if (!live) return current
+          const keepContent = jobHasContent(live)
+          return patchCaptureJob(current, jobId, {
+            generating: false,
+            refining: false,
+            phase: keepContent ? 'ready' : 'error',
+            error: `${t.capture.failed}: ${message}`
+          })
+        })
+        toast.error(`${t.capture.failed}: ${message}`, { duration: TOAST_INTERVENTION_DURATION_MS })
+      }
+    })
   }
 
   function startCaptureFromCurrentSession(
@@ -3477,7 +3574,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         scope: 'turn',
         t
       })
-      await generateCaptureDraftFromSummary({ kind: 'sop', summary })
+      void generateCaptureDraftFromSummary({ kind: 'sop', summary })
     } finally {
       setSavingSopLogId(null)
     }
@@ -3503,7 +3600,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         seedText: detail.title,
         t
       })
-      await generateCaptureDraftFromSummary({ kind, summary })
+      void generateCaptureDraftFromSummary({ kind, summary })
     } catch (error) {
       toast.error(
         `${t.capture.failed}: ${error instanceof Error ? error.message : String(error)}`,
@@ -3523,35 +3620,55 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     await saveHistorySessionToCapture(item, 'skill')
   }
 
+  function dialogCaptureJob(): CaptureDraftJob | undefined {
+    if (captureDialogKind == null) return undefined
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    return findCaptureJob(captureJobsRef.current, {
+      kind: captureDialogKind,
+      tabId: chatTabId
+    })
+  }
+
+  function patchDialogCaptureJob(patch: Partial<CaptureDraftJob>): void {
+    const job = dialogCaptureJob()
+    if (!job) return
+    setCaptureJobsSync((current) => patchCaptureJob(current, job.jobId, patch))
+  }
+
   async function refineCaptureDraft(): Promise<void> {
-    if (!captureDraft.summary.trim() || !captureDraft.content.trim()) return
+    const job = dialogCaptureJob()
+    if (!job || !job.summary.trim() || !job.content.trim()) return
     await generateCaptureDraftFromSummary({
-      kind: captureDraft.kind,
-      summary: captureDraft.summary,
-      draft: captureDraft.content,
-      notes: captureDraft.notes,
+      kind: job.kind,
+      summary: job.summary,
+      draft: job.content,
+      notes: job.notes,
       refining: true
     })
   }
 
   async function commitCaptureDraft(): Promise<void> {
-    if (!captureDraft.content.trim() || captureDraft.committing) return
-    setCaptureDraft((current) => ({ ...current, committing: true, error: null }))
+    const job = dialogCaptureJob()
+    if (!job || !job.content.trim() || job.committing) return
+    setCaptureJobsSync((current) =>
+      patchCaptureJob(current, job.jobId, { committing: true, error: null })
+    )
     try {
       const result = await window.api.agent.commitCaptureDraft({
-        kind: captureDraft.kind,
-        title: captureDraft.title,
-        content: captureDraft.content,
-        skillName: captureDraft.skillName,
-        overwrite: captureDraft.overwrite
+        kind: job.kind,
+        title: job.title,
+        content: job.content,
+        skillName: job.skillName,
+        overwrite: job.overwrite
       })
       if (result.conflict) {
-        setCaptureDraft((current) => ({
-          ...current,
-          committing: false,
-          conflict: true,
-          error: t.capture.conflict
-        }))
+        setCaptureJobsSync((current) =>
+          patchCaptureJob(current, job.jobId, {
+            committing: false,
+            conflict: true,
+            error: t.capture.conflict
+          })
+        )
         return
       }
       if (!result.ok) {
@@ -3574,14 +3691,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         }))
         toast.success(`${t.capture.savedSkill}: ${result.skill.name}`)
       }
-      setCaptureDraft((current) => ({ ...current, open: false, committing: false }))
+      setCaptureJobsSync((current) => removeCaptureJob(current, job.jobId))
+      setCaptureDialogKind(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      setCaptureDraft((current) => ({
-        ...current,
-        committing: false,
-        error: message
-      }))
+      setCaptureJobsSync((current) =>
+        patchCaptureJob(current, job.jobId, { committing: false, error: message })
+      )
       toast.error(message, { duration: TOAST_INTERVENTION_DURATION_MS })
     }
   }
@@ -5015,7 +5131,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionModalOpen(true)
   }
 
-  async function saveConnection(connectAfterSave = false): Promise<void> {
+  async function saveConnection(
+    connectAfterSave = false,
+    options?: { overwriteExistingId?: string }
+  ): Promise<void> {
     if (connectionActionBusyRef.current) return
     const normalizedInput = normalizeConnectionInputForSave(
       connectionForm,
@@ -5028,20 +5147,43 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       ? normalizedInput
       : { ...normalizedInput, id: createCustomConnectionId() }
 
+    const conflict = findCustomConnectionNameConflict(connections, input)
+    if (conflict && options?.overwriteExistingId !== conflict.id) {
+      setConnectionNameConflict({
+        existingId: conflict.id,
+        name: conflict.name.trim(),
+        connectAfterSave
+      })
+      setConnectionEditing(true)
+      setConnectionSaveMessage({
+        type: 'error',
+        text: t.connections.nameConflict.replace('{name}', conflict.name.trim())
+      })
+      return
+    }
+
+    const overwrite = conflict
+      ? applyConnectionNameOverwrite(input, conflict.id)
+      : { input, deleteId: undefined }
+
     connectionActionBusyRef.current = true
     setConnectionActionBusy(true)
     setConnectionSaveMessage(null)
 
     try {
-      const nextConnections = await window.api.connections.save(input)
+      let nextConnections = await window.api.connections.save(overwrite.input)
+      if (overwrite.deleteId) {
+        nextConnections = await window.api.connections.delete(overwrite.deleteId)
+      }
       setConnections(nextConnections)
+      setConnectionNameConflict(null)
       const fallbackConnection: ConnectionConfig = {
-        ...input,
-        id: input.id ?? '',
+        ...overwrite.input,
+        id: overwrite.input.id ?? '',
         source: 'custom'
       }
       const savedConnection = mergeConnectionInput(
-        nextConnections.find((connection) => connection.id === input.id),
+        nextConnections.find((connection) => connection.id === overwrite.input.id),
         fallbackConnection
       )
 
@@ -6343,6 +6485,32 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       activeWikiIds: (merged.activeWikiIds ?? []).filter((id) => ids.wiki.has(id))
     }
   }
+  function applyComposerSlashReplacement(
+    tab: AgentTerminalTab,
+    replacement: string,
+    extras: Partial<AgentTerminalTab> = {}
+  ): AgentTerminalTab {
+    const next = replaceSlashCommandInput(
+      tab.agentInput,
+      replacement,
+      slashReplacementCursor(tab.agentInput)
+    )
+    setComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, next))
+    return applyComposerInput(tab, next, extras)
+  }
+
+  function openCaptureDraft(kind: CaptureKind): void {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const job = findCaptureJob(captureJobsRef.current, { kind, tabId: chatTabId })
+    if (!job || !capturePinIsActionable(job.phase, jobHasContent(job))) return
+    agentInputRef.current?.blur()
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && focused.closest('.app-composer-body')) {
+      focused.blur()
+    }
+    setCaptureDialogKind(kind)
+  }
+
   function handleAgentInputKeyDown(event: KeyboardEvent<HTMLElement>): void {
     if (event.key === 'Enter' && isComposingInput(event)) return
 
@@ -6429,12 +6597,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
 
     if (command.id === 'create-skill' || command.id === 'sop') {
-      updateTab(sessionChatTab.id, (tab) =>
-        applyComposerInput(
-          tab,
-          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
-        )
-      )
+      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       startCaptureFromCurrentSession(command.id === 'create-skill' ? 'skill' : 'sop', 'turn')
@@ -6451,15 +6614,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (command.toolRef) {
       const toolRef = command.toolRef as AgentToolReference
       updateTab(sessionChatTab.id, (tab) =>
-        applyComposerInput(
-          tab,
-          replaceSlashCommandInput(
-            tab.agentInput,
-            formatComposerRefToken('tool', toolRef.id),
-            slashReplacementCursor(tab.agentInput)
-          ),
-          { toolRefs: addUniqueToolRef(tab.toolRefs, toolRef) }
-        )
+        applyComposerSlashReplacement(tab, formatComposerRefToken('tool', toolRef.id), {
+          toolRefs: addUniqueToolRef(tab.toolRefs, toolRef)
+        })
       )
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
@@ -6477,23 +6634,15 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const wikiRef = command.wikiRef as AgentWikiReference
       updateTab(sessionChatTab.id, (tab) => {
         const ids = tab.activeWikiIds ?? []
-        return applyComposerInput(
-          tab,
-          replaceSlashCommandInput(
-            tab.agentInput,
-            formatComposerRefToken('wiki', wikiRef.id),
-            slashReplacementCursor(tab.agentInput)
-          ),
-          {
-            activeWikiIds: ids.includes(wikiRef.id) ? ids : [...ids, wikiRef.id],
-            wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
-              id: wikiRef.id,
-              title: wikiRef.title,
-              path: wikiRef.path,
-              content: ''
-            })
-          }
-        )
+        return applyComposerSlashReplacement(tab, formatComposerRefToken('wiki', wikiRef.id), {
+          activeWikiIds: ids.includes(wikiRef.id) ? ids : [...ids, wikiRef.id],
+          wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+            id: wikiRef.id,
+            title: wikiRef.title,
+            path: wikiRef.path,
+            content: ''
+          })
+        })
       })
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
@@ -6502,24 +6651,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     if (command.agentStyle) {
       applyConversationStyle(command.agentStyle)
-      updateTab(sessionChatTab.id, (tab) =>
-        applyComposerInput(
-          tab,
-          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
-        )
-      )
+      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       return
     }
 
     if (command.connection) {
-      updateTab(sessionChatTab.id, (tab) =>
-        applyComposerInput(
-          tab,
-          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
-        )
-      )
+      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       void connectToConnection(command.connection)
@@ -6528,12 +6667,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     if (command.extensionCommand) {
       const extensionCommand = command.extensionCommand
-      updateTab(sessionChatTab.id, (tab) =>
-        applyComposerInput(
-          tab,
-          replaceSlashCommandInput(tab.agentInput, '', slashReplacementCursor(tab.agentInput))
-        )
-      )
+      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
       void window.api.agent
@@ -6560,13 +6694,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const replacement = command.skill
         ? formatComposerRefToken('skill', command.skill.id)
         : (command.templateInput ?? command.value)
-      return applyComposerInput(
+      return applyComposerSlashReplacement(
         tab,
-        replaceSlashCommandInput(
-          tab.agentInput,
-          replacement,
-          slashReplacementCursor(tab.agentInput)
-        ),
+        replacement,
         command.skill ? { skillRefs: addUniqueSkillRef(tab.skillRefs, command.skill) } : {}
       )
     })
@@ -6603,23 +6733,15 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   async function addWikiReference(document: WikiDocumentSummary): Promise<void> {
     updateTab(sessionChatTab.id, (tab) => {
       const ids = tab.activeWikiIds ?? []
-      return applyComposerInput(
-        tab,
-        replaceSlashCommandInput(
-          tab.agentInput,
-          formatComposerRefToken('wiki', document.id),
-          slashReplacementCursor(tab.agentInput)
-        ),
-        {
-          activeWikiIds: ids.includes(document.id) ? ids : [...ids, document.id],
-          wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
-            id: document.id,
-            title: document.title,
-            path: document.path,
-            content: ''
-          })
-        }
-      )
+      return applyComposerSlashReplacement(tab, formatComposerRefToken('wiki', document.id), {
+        activeWikiIds: ids.includes(document.id) ? ids : [...ids, document.id],
+        wikiRefs: addUniqueWikiRef(tab.wikiRefs, {
+          id: document.id,
+          title: document.title,
+          path: document.path,
+          content: ''
+        })
+      })
     })
   }
 
@@ -6637,6 +6759,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
               cursor
             )
           : insertComposerRefTokenAt(tab.agentInput, cursor, 'path', reference.id)
+      setComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, nextInput))
       return applyComposerInput(tab, nextInput, {
         pathRefs: addUniquePathRef(tab.pathRefs, reference)
       })
@@ -6799,6 +6922,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     key: K,
     value: ConnectionInput[K]
   ): void {
+    if (key === 'name') setConnectionNameConflict(null)
     setConnectionForm((current) => ({ ...current, [key]: value }))
   }
 
@@ -6808,6 +6932,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionActionsText('')
     setConnectionImportText('')
     setConnectionSaveMessage(null)
+    setConnectionNameConflict(null)
     setSelectedConnectionId('')
     setConnectionEditing(true)
   }
@@ -6818,6 +6943,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
     setSelectedConnectionId(connection.id)
     setConnectionEditing(editing)
+    setConnectionNameConflict(null)
   }
 
   function selectConnection(connection: ConnectionConfig): void {
@@ -7214,6 +7340,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       onOpenChange={setSkillOpen}
       t={t}
       skillRoot={config.skillRoot}
+      loadGlobalAgentSkills={config.loadGlobalAgentSkills}
       skills={skills}
       filteredLocalSkills={filteredLocalSkills}
       localSkillSearchQuery={localSkillSearchQuery}
@@ -7235,6 +7362,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       installedSkillNames={installedSkillNames}
       onSkillRootChange={(value) => updateConfig('skillRoot', value)}
       onSaveSkillRoot={() => void saveSkillRoot()}
+      onLoadGlobalAgentSkillsChange={(checked) => {
+        void persistAgentConfigPatch({ loadGlobalAgentSkills: checked }).then(async () => {
+          setSkills(await window.api.agent.listSkills())
+        })
+      }}
       onLocalSkillSearchQueryChange={setLocalSkillSearchQuery}
       onSkillSearchQueryChange={setSkillSearchQuery}
       onRefreshSkills={() => void refreshSkills()}
@@ -7550,26 +7682,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       {mcpSheet}
       {historySheet}
       {wikiSheet}
-      <CaptureDraftSheet
-        open={captureDraft.open}
-        kind={captureDraft.kind}
+      <CaptureDraftDialog
+        open={Boolean(captureDialogJob)}
+        kind={captureDialogJob?.kind ?? captureDialogKind ?? 'sop'}
         t={t}
-        title={captureDraft.title}
-        content={captureDraft.content}
-        skillName={captureDraft.skillName}
-        notes={captureDraft.notes}
-        overwrite={captureDraft.overwrite}
-        generating={captureDraft.generating}
-        refining={captureDraft.refining}
-        committing={captureDraft.committing}
-        error={captureDraft.error}
-        conflict={captureDraft.conflict}
-        onOpenChange={(open) => setCaptureDraft((current) => ({ ...current, open }))}
-        onTitleChange={(title) => setCaptureDraft((current) => ({ ...current, title }))}
-        onContentChange={(content) => setCaptureDraft((current) => ({ ...current, content }))}
-        onSkillNameChange={(skillName) => setCaptureDraft((current) => ({ ...current, skillName }))}
-        onNotesChange={(notes) => setCaptureDraft((current) => ({ ...current, notes }))}
-        onOverwriteChange={(overwrite) => setCaptureDraft((current) => ({ ...current, overwrite }))}
+        title={captureDialogJob?.title ?? ''}
+        content={captureDialogJob?.content ?? ''}
+        skillName={captureDialogJob?.skillName ?? ''}
+        notes={captureDialogJob?.notes ?? ''}
+        overwrite={captureDialogJob?.overwrite ?? false}
+        generating={captureDialogJob?.generating ?? false}
+        refining={captureDialogJob?.refining ?? false}
+        committing={captureDialogJob?.committing ?? false}
+        error={captureDialogJob?.error ?? null}
+        conflict={captureDialogJob?.conflict ?? false}
+        onOpenChange={(open) => {
+          if (!open) setCaptureDialogKind(null)
+        }}
+        onTitleChange={(title) => patchDialogCaptureJob({ title })}
+        onContentChange={(content) => patchDialogCaptureJob({ content })}
+        onSkillNameChange={(skillName) => patchDialogCaptureJob({ skillName })}
+        onNotesChange={(notes) => patchDialogCaptureJob({ notes })}
+        onOverwriteChange={(overwrite) => patchDialogCaptureJob({ overwrite })}
         onRefine={() => void refineCaptureDraft()}
         onCommit={() => void commitCaptureDraft()}
       />
@@ -7708,6 +7842,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onSaveAsSop={(entry) => {
               void saveAgentTurnAsWikiSop(entry)
             }}
+            captureReadyLogs={captureReadyLogs}
+            hiddenCaptureReadyLogIds={hiddenReadyLogIds}
+            captureDraftPins={capturePins}
+            onOpenCaptureDraft={openCaptureDraft}
             hasEarlierLogs={hasEarlierLogs}
             loadingEarlier={loadingEarlierLogs}
             onLoadEarlier={() => void loadEarlierAgentLogs()}
@@ -7883,6 +8021,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         connectionCommandPreview={connectionCommandPreview}
         connectionFormReady={connectionFormReady}
         connectionSaveMessage={connectionSaveMessage}
+        connectionNameConflict={connectionNameConflict}
         connectionActionBusy={connectionActionBusy}
         t={t}
         formatConnectionTarget={formatConnectionTarget}
@@ -7910,6 +8049,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         onResetForm={resetConnectionForm}
         onStartEditing={() => setConnectionEditing(true)}
         onSave={(connectAfterSave) => void saveConnection(connectAfterSave)}
+        onRenameNameConflict={() => {
+          setConnectionNameConflict(null)
+          setConnectionSaveMessage(null)
+          setConnectionEditing(true)
+          requestAnimationFrame(() => {
+            const field = document.getElementById('connection-name')
+            if (field instanceof HTMLInputElement) {
+              field.focus()
+              field.select()
+            }
+          })
+        }}
+        onOverwriteNameConflict={() => {
+          if (!connectionNameConflict) return
+          void saveConnection(connectionNameConflict.connectAfterSave, {
+            overwriteExistingId: connectionNameConflict.existingId
+          })
+        }}
       />
       <CloseTabsConfirmModal
         request={closeTabsConfirmRequest}
@@ -7959,7 +8116,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       <AppFooter
         version={appVersion}
         updateStatus={appUpdateStatus}
-        agentStyle={sessionAgentStyle}
         t={t}
         onDownloadUpdate={() => {
           if (appUpdateStatus.state === 'downloading') return
@@ -8072,55 +8228,11 @@ async function runConnectionCommandSequence(
   const shellInteractive = await waitForShellInteractive(tabId)
   connTrace('login-stage', `tab=${tabId}`, `shellInteractive=${shellInteractive}`)
 
-  const firstActionReady = loginActions.length ? waitForTerminalActionPrompt(tabId) : undefined
   window.api.terminal.pasteCommand(sshCommand, true, tabId)
 
   if (loginActions.length === 0) return true
 
-  for (let index = 0; index < loginActions.length; index += 1) {
-    const action = loginActions[index]
-    const actionStart = Date.now()
-    const ready =
-      index === 0
-        ? await firstActionReady
-        : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
-    connTrace(
-      'login-stage',
-      `tab=${tabId}`,
-      `action=${index + 1}`,
-      `ready=${ready}`,
-      `readyAfterMs=${Date.now() - actionStart}`
-    )
-    if (!ready) {
-      // The interactive-prompt event can be missed by the renderer data
-      // subscription (coalescing/backpressure). Re-check the live context; if
-      // the terminal is actually at a password prompt now, send the action
-      // anyway instead of aborting the whole login.
-      const context = await window.api.terminal.getContext(tabId)
-      if (hasInteractivePrompt(context.output)) {
-        connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
-        sendTerminalInput(action, tabId)
-        appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-        continue
-      }
-      // Still not ready: the login may have completed without an interactive
-      // prompt (key-based auth) or the terminal may be waiting on the user.
-      // Do NOT abort here — waitForPromptHostOrTimeout is the authoritative
-      // completion check and runs right after this sequence.
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
-        },
-        logTabId
-      )
-      break
-    }
-
-    sendTerminalInput(action, tabId)
-    appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-  }
-
+  await typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId)
   return true
 }
 
@@ -8133,30 +8245,55 @@ async function runConnectionLoginActionSequence(
   logTabId = tabId
 ): Promise<boolean> {
   if (loginActions.length === 0) return true
+  await typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId)
+  return true
+}
 
-  const firstActionReady = waitForTerminalActionPrompt(tabId)
+function createLoginActionWaitDeps(tabId: string): LoginActionWaitDeps {
+  return {
+    getContext: async () => {
+      const context = await window.api.terminal.getContext(tabId)
+      return { output: context.output, promptHost: context.promptHost }
+    },
+    onData: (handler) => window.api.terminal.onData(handler),
+    setInterval: (fn, ms) => window.setInterval(fn, ms),
+    clearInterval: (id) => window.clearInterval(id),
+    setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimeout: (id) => window.clearTimeout(id)
+  }
+}
+
+async function typeConnectionLoginActions(
+  loginActions: string[],
+  tabId: string,
+  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
+  appendSystem: (text: string, tabId: string) => void,
+  t: Dictionary,
+  logTabId: string
+): Promise<void> {
+  const deps = createLoginActionWaitDeps(tabId)
+
   for (let index = 0; index < loginActions.length; index += 1) {
     const action = loginActions[index]
     const actionStart = Date.now()
-    const ready =
-      index === 0
-        ? await firstActionReady
-        : await waitForTerminalIdle(tabId, { ignoredEcho: loginActions[index - 1] })
+    let ready: LoginTypeReady = await waitForLoginTypeReady(deps, {
+      tabId,
+      timeoutMs: LOGIN_TYPE_READY_TIMEOUT_MS
+    })
+    if (ready.kind === 'timeout') {
+      const context = await window.api.terminal.getContext(tabId)
+      const recheck = resolveLoginTypeReady(context.output ?? '')
+      if (recheck) ready = recheck
+    }
     connTrace(
       'login-stage',
       `tab=${tabId}`,
       `action=${index + 1}`,
-      `ready=${ready}`,
+      `ready=${ready.kind}`,
       `readyAfterMs=${Date.now() - actionStart}`
     )
-    if (!ready) {
-      const context = await window.api.terminal.getContext(tabId)
-      if (hasInteractivePrompt(context.output)) {
-        connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'prompt-recheck=hit')
-        sendTerminalInput(action, tabId)
-        appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-        continue
-      }
+
+    if (ready.kind === 'timeout') {
       appendLog(
         {
           kind: 'status',
@@ -8167,49 +8304,42 @@ async function runConnectionLoginActionSequence(
       break
     }
 
+    if (ready.kind === 'host' && !looksLikeCommand(action)) {
+      connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'skip-secret-already-host')
+      continue
+    }
+
+    const contextAtType = await window.api.terminal.getContext(tabId)
+    const outputAtType = contextAtType.output ?? ''
+    const waitingLine = ready.kind === 'waiting' ? ready.line : undefined
     sendTerminalInput(action, tabId)
     appendSystem(formatConnectionActionLog(action, index + 1, t), logTabId)
-  }
 
-  return true
-}
-
-function waitForTerminalIdle(
-  tabId: string,
-  options: { ignoredEcho?: string; idleMs?: number; timeoutMs?: number } = {}
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const idleMs = options.idleMs ?? 1200
-    const timeoutMs = options.timeoutMs ?? 30_000
-    let receivedData = false
-    let settled = false
-    let idleTimer: number | undefined
-    let observedOutput = ''
-    const timeout = window.setTimeout(() => settle(false), timeoutMs)
-
-    const unsubscribe = window.api.terminal.onData((event) => {
-      if (event.tabId !== tabId) return
-
-      observedOutput = `${observedOutput}${event.data}`.slice(-8000)
-      if (options.ignoredEcho && !hasOutputBeyondEcho(observedOutput, options.ignoredEcho)) {
-        return
-      }
-
-      receivedData = true
-      if (idleTimer) window.clearTimeout(idleTimer)
-      idleTimer = window.setTimeout(() => settle(true), idleMs)
+    const consumed = await waitForLoginActionConsumed(deps, {
+      tabId,
+      mode: ready.kind === 'waiting' ? 'waiting' : 'shell',
+      waitingLine,
+      outputAtType,
+      timeoutMs: LOGIN_ACTION_CONSUMED_TIMEOUT_MS
     })
-
-    function settle(value: boolean): void {
-      if (settled) return
-
-      settled = true
-      window.clearTimeout(timeout)
-      if (idleTimer) window.clearTimeout(idleTimer)
-      unsubscribe()
-      resolve(value && receivedData)
+    connTrace(
+      'login-stage',
+      `tab=${tabId}`,
+      `action=${index + 1}`,
+      `consumed=${consumed.kind}`,
+      `consumedAfterMs=${Date.now() - actionStart}`
+    )
+    if (consumed.kind === 'timeout') {
+      appendLog(
+        {
+          kind: 'status',
+          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
+        },
+        logTabId
+      )
+      break
     }
-  })
+  }
 }
 
 async function waitForTerminalReadyForAgent(
@@ -8256,33 +8386,6 @@ async function settleAgentCancel(runId: string): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-function waitForTerminalActionPrompt(tabId: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timeoutMs = 60_000
-    let settled = false
-    let observedOutput = ''
-    const timeout = window.setTimeout(() => settle(false), timeoutMs)
-
-    const unsubscribe = window.api.terminal.onData((event) => {
-      if (event.tabId !== tabId) return
-
-      observedOutput = `${observedOutput}${event.data}`.slice(-8000)
-      if (!hasInteractivePrompt(observedOutput)) return
-
-      settle(true)
-    })
-
-    function settle(value: boolean): void {
-      if (settled) return
-
-      settled = true
-      window.clearTimeout(timeout)
-      unsubscribe()
-      resolve(value)
-    }
-  })
 }
 
 /**

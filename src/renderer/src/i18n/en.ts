@@ -239,6 +239,10 @@ const en = {
     saveAndConnectSucceeded: 'Connection saved. Connecting now.',
     saveFailed: 'Failed to save connection',
     saveSucceeded: 'Connection saved.',
+    nameConflict:
+      'Another custom connection already uses “{name}”. Rename this copy or overwrite the existing one.',
+    renameName: 'Rename',
+    overwriteExisting: 'Overwrite existing',
     searchPlaceholder: 'Search by name, host, user, or description…',
     storedIn: 'Custom connections are stored in ~/.crescent/config.json.',
     sshConnections: 'SSH connections',
@@ -738,6 +742,13 @@ const en = {
     edit: 'Edit',
     empty: 'Nothing to convert. Finish a run first, or paste a procedure in the input.',
     generated: 'Draft ready. It will be saved only after you confirm.',
+    backgroundGeneratingSop: 'Generating SOP draft in the background…',
+    backgroundGeneratingSkill: 'Generating skill draft in the background…',
+    readySop: 'SOP draft ready · Click to open',
+    readySkill: 'Skill draft ready · Click to open',
+    pinReadySop: 'SOP draft ready',
+    pinReadySkill: 'Skill draft ready',
+    pinOpen: 'Open',
     savedSop: 'SOP saved to the knowledge base',
     savedSkill: 'Skill saved to the local skill directory',
     conflict: 'A skill with this name already exists. Rename it or overwrite.',
@@ -921,8 +932,11 @@ const en = {
     saveSkillDirectory: 'Save directory',
     skillDirectory: 'Skill load directory',
     skillDirectoryHint:
-      'Only skills under this directory are loaded. The default is ~/.agents/skills.',
+      'Generated and installed skills are saved here. Default is ~/.crescent/skills.',
     skillDirectorySaved: 'Skill load directory saved',
+    loadGlobalAgentSkills: 'Also load global ~/.agents/skills',
+    loadGlobalAgentSkillsHint:
+      'When checked, skills in ~/.agents/skills are loaded read-only. New skills still save to the directory above.',
     skillDeleted: 'Skill deleted',
     skillDeleting: 'Deleting skill',
     skillFallbackInstalledAll:

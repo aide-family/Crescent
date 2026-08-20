@@ -19,6 +19,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/compo
 import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
+import { cn } from '@renderer/lib/utils'
 import type { ConnectionConfig, ConnectionInput } from '../../../shared/agent-types'
 
 type ConnectionFormChange = <K extends keyof ConnectionInput>(
@@ -40,6 +41,7 @@ export function ConnectionManagerModal({
   connectionCommandPreview,
   connectionFormReady,
   connectionSaveMessage,
+  connectionNameConflict,
   connectionActionBusy = false,
   t,
   formatConnectionTarget,
@@ -60,7 +62,9 @@ export function ConnectionManagerModal({
   onActionsTextChange,
   onResetForm,
   onStartEditing,
-  onSave
+  onSave,
+  onRenameNameConflict,
+  onOverwriteNameConflict
 }: {
   open: boolean
   connections: ConnectionConfig[]
@@ -75,6 +79,7 @@ export function ConnectionManagerModal({
   connectionCommandPreview: string
   connectionFormReady: boolean
   connectionSaveMessage: SkillManageMessage | null
+  connectionNameConflict: { name: string } | null
   connectionActionBusy?: boolean
   t: Dictionary
   formatConnectionTarget: (connection: ConnectionConfig) => string
@@ -96,6 +101,8 @@ export function ConnectionManagerModal({
   onResetForm: () => void
   onStartEditing: () => void
   onSave: (connectAfterSave: boolean) => void
+  onRenameNameConflict: () => void
+  onOverwriteNameConflict: () => void
 }): React.JSX.Element | null {
   useEffect(() => {
     if (!open) return
@@ -115,6 +122,7 @@ export function ConnectionManagerModal({
   const canSaveConnection =
     connectionEditing && connectionFormReady && canEditConnection && !connectionActionBusy
   const connectDisabled = connectionActionBusy
+  const viewableClass = !connectionEditing ? 'cursor-text select-text' : undefined
 
   return (
     <div
@@ -308,11 +316,11 @@ export function ConnectionManagerModal({
                 <Input
                   id="connection-name"
                   name="connection-name"
-                  className="h-8"
+                  className={cn('h-8', viewableClass)}
                   value={connectionForm.name}
                   onChange={(event) => onFormChange('name', event.target.value)}
                   placeholder={t.connections.namePlaceholder}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -323,11 +331,11 @@ export function ConnectionManagerModal({
                   <Input
                     id="connection-host"
                     name="host"
-                    className="h-8 font-mono"
+                    className={cn('h-8 font-mono', viewableClass)}
                     value={connectionForm.host}
                     onChange={(event) => onFormChange('host', event.target.value)}
                     placeholder="10.0.0.8…"
-                    disabled={!connectionEditing}
+                    readOnly={!connectionEditing}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -339,11 +347,11 @@ export function ConnectionManagerModal({
                     name="port"
                     type="number"
                     inputMode="numeric"
-                    className="h-8 font-mono tabular-nums"
+                    className={cn('h-8 font-mono tabular-nums', viewableClass)}
                     value={connectionForm.port ?? 22}
                     onChange={(event) => onFormChange('port', Number(event.target.value))}
                     placeholder="22"
-                    disabled={!connectionEditing}
+                    readOnly={!connectionEditing}
                     autoComplete="off"
                   />
                 </Field>
@@ -353,11 +361,11 @@ export function ConnectionManagerModal({
                 <Input
                   id="connection-user"
                   name="username"
-                  className="h-8 font-mono"
+                  className={cn('h-8 font-mono', viewableClass)}
                   value={connectionForm.user ?? ''}
                   onChange={(event) => onFormChange('user', event.target.value)}
                   placeholder="root…"
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -372,7 +380,7 @@ export function ConnectionManagerModal({
                   value={connectionForm.password ?? ''}
                   onChange={(event) => onFormChange('password', event.target.value)}
                   placeholder={t.connections.passwordPlaceholder}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -384,11 +392,11 @@ export function ConnectionManagerModal({
                 <Input
                   id="connection-password-env"
                   name="connection-password-env"
-                  className="h-8 font-mono"
+                  className={cn('h-8 font-mono', viewableClass)}
                   value={connectionForm.passwordEnvVar ?? ''}
                   onChange={(event) => onFormChange('passwordEnvVar', event.target.value)}
                   placeholder={t.connections.passwordEnvVarPlaceholder}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -399,11 +407,11 @@ export function ConnectionManagerModal({
                 <Input
                   id="connection-identity"
                   name="identity-file"
-                  className="h-8 font-mono"
+                  className={cn('h-8 font-mono', viewableClass)}
                   value={connectionForm.identityFile ?? ''}
                   onChange={(event) => onFormChange('identityFile', event.target.value)}
                   placeholder="~/.ssh/id_rsa…"
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -413,10 +421,10 @@ export function ConnectionManagerModal({
                 <Textarea
                   id="connection-ssh-options"
                   name="ssh-options"
-                  className="min-h-28 resize-y font-mono text-xs"
+                  className={cn('min-h-28 resize-y font-mono text-xs', viewableClass)}
                   value={connectionSshOptionsText}
                   onChange={(event) => onSshOptionsTextChange(event.target.value)}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                   placeholder={
@@ -435,10 +443,10 @@ export function ConnectionManagerModal({
                 <Textarea
                   id="connection-actions"
                   name="login-actions"
-                  className="min-h-32 resize-y font-mono text-xs"
+                  className={cn('min-h-32 resize-y font-mono text-xs', viewableClass)}
                   value={connectionActionsText}
                   onChange={(event) => onActionsTextChange(event.target.value)}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                   spellCheck={false}
                   placeholder={'your_password\ncd /srv/app\nkubectl get pods'}
@@ -452,11 +460,11 @@ export function ConnectionManagerModal({
                 <Input
                   id="connection-description"
                   name="connection-description"
-                  className="h-8"
+                  className={cn('h-8', viewableClass)}
                   value={connectionForm.description ?? ''}
                   onChange={(event) => onFormChange('description', event.target.value)}
                   placeholder={t.connections.descriptionPlaceholder}
-                  disabled={!connectionEditing}
+                  readOnly={!connectionEditing}
                   autoComplete="off"
                 />
                 <FieldDescription>
@@ -475,6 +483,16 @@ export function ConnectionManagerModal({
         </div>
         <div className="shrink-0 border-t px-4 py-2">
           <SkillManageStatus message={connectionSaveMessage} />
+          {connectionNameConflict ? (
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <Button type="button" variant="outline" size="xs" onClick={onRenameNameConflict}>
+                {t.connections.renameName}
+              </Button>
+              <Button type="button" size="xs" onClick={onOverwriteNameConflict}>
+                {t.connections.overwriteExisting}
+              </Button>
+            </div>
+          ) : null}
           <div className="mt-2 flex items-center justify-between gap-3">
             <Button type="button" variant="outline" onClick={onResetForm}>
               {t.common.new}

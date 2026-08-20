@@ -115,16 +115,17 @@ export function WikiSheet({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon-sm"
             onClick={onRefresh}
             disabled={wikiLoading}
+            aria-label={t.wiki.refresh}
+            title={t.wiki.refresh}
           >
             {wikiLoading ? (
-              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+              <Loader2Icon className="animate-spin" aria-hidden="true" />
             ) : (
-              <RefreshCwIcon data-icon="inline-start" />
+              <RefreshCwIcon aria-hidden="true" />
             )}
-            {t.wiki.refresh}
           </Button>
         </SheetHeader>
 

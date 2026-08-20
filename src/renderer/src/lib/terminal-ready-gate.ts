@@ -1,3 +1,4 @@
+import { findNewestPromptSignal } from '../../../shared/terminal-prompt-host'
 import { isExecutionTerminalReadyForAgent } from './connection-route'
 import { hasInteractivePrompt } from './terminal-text'
 import type { AgentTerminalTab } from './terminal-tabs'
@@ -59,7 +60,12 @@ export function isTerminalSnapshotReadyForAgent(input: {
   if (!isExecutionTerminalReadyForAgent({ tab: input.tab, terminalMode: input.terminalMode })) {
     return false
   }
-  if (input.output != null && hasInteractivePrompt(input.output)) return false
+  if (input.output == null) return true
+
+  const signal = findNewestPromptSignal(input.output)
+  if (signal?.kind === 'waiting') return false
+  if (isRemoteExecutionTab(input.tab) && signal?.kind === 'host') return true
+  if (hasInteractivePrompt(input.output)) return false
   return true
 }
 

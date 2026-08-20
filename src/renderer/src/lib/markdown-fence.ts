@@ -13,12 +13,12 @@ export interface MarkdownFenceScanResult {
  * Does not treat EOF as a closed fence — callers should show a placeholder while streaming.
  */
 export function scanMarkdownFence(lines: string[], start: number): MarkdownFenceScanResult | null {
-  const open = lines[start]?.match(/^(```|~~~)([\w-]*)?\s*$/)
+  const open = lines[start]?.match(/^\s*(```|~~~)([\w-]*)?\s*$/)
   if (!open) return null
 
   const fenceMarker = open[1]
   const language = (open[2] ?? '').trim()
-  const closeRe = new RegExp(`^${escapeRegExp(fenceMarker)}\\s*$`)
+  const closeRe = new RegExp(`^\\s*${escapeRegExp(fenceMarker)}\\s*$`)
   const codeLines: string[] = []
   let index = start + 1
 

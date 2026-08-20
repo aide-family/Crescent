@@ -28,13 +28,23 @@ const SOP_PHRASES: RegExp[] = [
 
 const SKILL_PHRASES: RegExp[] = [
   /\/create-skill\b/i,
+  /把.{0,24}(?:会话|对话|流程).{0,16}(?:转|存|写|生成|创建).{0,8}skill/i,
   /把.{0,16}流程.{0,12}skill/i,
+  /存为\s*skill/i,
+  /存成\s*skill/i,
+  /保存为\s*skill/i,
+  /保存成\s*skill/i,
   /转成\s*skill/i,
   /写成\s*skill/i,
   /转为\s*skill/i,
   /转换成\s*skill/i,
+  /转换为\s*skill/i,
+  /转换成为?\s*skill/i,
   /生成\s*skill/i,
   /创建\s*skill/i,
+  /存为\s*技能/i,
+  /转成\s*技能/i,
+  /save\s+as\s+(?:a\s+)?skill/i,
   /(?:convert|save)\s+(?:this\s+)?(?:session\s+)?(?:to\s+)?(?:a\s+)?skill/i,
   /create\s+(?:a\s+)?skill\s+from/i
 ]

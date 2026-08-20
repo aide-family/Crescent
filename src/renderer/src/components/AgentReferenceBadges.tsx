@@ -21,7 +21,7 @@ import { cn } from '@renderer/lib/utils'
 
 const TAG_CLASS = {
   skill: 'border-teal-500/30 bg-teal-500/12 text-teal-700 dark:text-teal-200',
-  wiki: 'border-amber-500/30 bg-amber-500/12 text-amber-800 dark:text-amber-200',
+  wiki: 'border-border/70 bg-muted/30 text-foreground/80',
   mcp: 'border-violet-500/30 bg-violet-500/12 text-violet-800 dark:text-violet-200',
   tool: 'border-violet-500/30 bg-violet-500/12 text-violet-800 dark:text-violet-200',
   path: 'border-slate-400/35 bg-slate-500/10 text-slate-700 dark:text-slate-200'

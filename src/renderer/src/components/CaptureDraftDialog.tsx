@@ -1,23 +1,24 @@
+import { useRef, type JSX } from 'react'
 import { Loader2Icon, SparklesIcon } from 'lucide-react'
 
+import { ImeSafeInput, ImeSafeTextarea } from '@renderer/components/ImeSafeFields'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { SkillMarkdownPreview } from '@renderer/components/SkillMarkdownPreview'
 import { SkillManageStatus } from '@renderer/components/StatusIndicators'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import { Input } from '@renderer/components/ui/input'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle
-} from '@renderer/components/ui/sheet'
-import { Textarea } from '@renderer/components/ui/textarea'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@renderer/components/ui/dialog'
 import type { Dictionary } from '@renderer/i18n'
 import type { CaptureKind } from '../../../shared/agent-types'
 
-export interface CaptureDraftSheetProps {
+export interface CaptureDraftDialogProps {
   open: boolean
   kind: CaptureKind
   t: Dictionary
@@ -41,7 +42,7 @@ export interface CaptureDraftSheetProps {
   onCommit: () => void
 }
 
-export function CaptureDraftSheet({
+export function CaptureDraftDialog({
   open,
   kind,
   t,
@@ -63,40 +64,52 @@ export function CaptureDraftSheet({
   onOverwriteChange,
   onRefine,
   onCommit
-}: CaptureDraftSheetProps): React.JSX.Element {
+}: CaptureDraftDialogProps): JSX.Element {
   const busy = generating || refining || committing
   const canCommit = Boolean(content.trim()) && !busy
+  const titleInputRef = useRef<HTMLInputElement>(null)
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="w-[720px] sm:max-w-[min(720px,calc(100vw-3rem))]">
-        <SheetHeader className="pr-12">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="h-[min(85vh,900px)] w-[80vw] max-w-[80vw] gap-0 p-0"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          titleInputRef.current?.focus()
+        }}
+      >
+        <DialogHeader>
           <div className="flex items-center gap-2">
-            <SheetTitle>{kind === 'skill' ? t.capture.titleSkill : t.capture.titleSop}</SheetTitle>
+            <DialogTitle>
+              {kind === 'skill' ? t.capture.titleSkill : t.capture.titleSop}
+            </DialogTitle>
             <Badge variant="outline">{kind === 'skill' ? t.input.tagSkill : t.input.tagSop}</Badge>
           </div>
-          <SheetDescription>{t.capture.description}</SheetDescription>
-        </SheetHeader>
+          <DialogDescription>{t.capture.description}</DialogDescription>
+        </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 pb-2">
-          <label className="grid gap-1 text-xs text-muted-foreground">
-            {t.capture.titleLabel}
-            <Input
-              value={title}
-              onChange={(event) => onTitleChange(event.target.value)}
-              disabled={generating}
-            />
-          </label>
-          {kind === 'skill' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-2">
+          <div className="grid shrink-0 gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-xs text-muted-foreground">
-              {t.capture.skillNameLabel}
-              <Input
-                value={skillName}
-                onChange={(event) => onSkillNameChange(event.target.value)}
+              {t.capture.titleLabel}
+              <ImeSafeInput
+                ref={titleInputRef}
+                value={title}
+                onValueChange={onTitleChange}
                 disabled={generating}
               />
             </label>
-          )}
+            {kind === 'skill' ? (
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                {t.capture.skillNameLabel}
+                <ImeSafeInput
+                  value={skillName}
+                  onValueChange={onSkillNameChange}
+                  disabled={generating}
+                />
+              </label>
+            ) : null}
+          </div>
 
           {generating && !content ? (
             <div className="app-empty-state flex items-center gap-2">
@@ -104,36 +117,45 @@ export function CaptureDraftSheet({
               {t.capture.generating}
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-2">
-              <label className="grid min-h-0 gap-1 text-xs text-muted-foreground">
+            <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
+              <label className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-xs text-muted-foreground">
                 {t.capture.edit}
-                <Textarea
-                  className="min-h-[320px] resize-y font-mono text-xs"
+                <ImeSafeTextarea
+                  className="h-full min-h-0 resize-none font-mono text-xs [field-sizing:fixed]"
                   value={content}
-                  onChange={(event) => onContentChange(event.target.value)}
+                  onValueChange={onContentChange}
                   disabled={generating}
                 />
               </label>
-              <div className="grid min-h-0 gap-1 text-xs text-muted-foreground">
+              <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-xs text-muted-foreground">
                 {t.capture.preview}
-                <div className="min-h-[320px] overflow-auto rounded-md border border-border/70 bg-background/40 p-3">
-                  <MarkdownContent value={content} t={t} headingIdPrefix="capture-draft" />
+                <div className="min-h-0 overflow-auto border-l-2 border-primary pl-3">
+                  {kind === 'skill' ? (
+                    <SkillMarkdownPreview
+                      content={content}
+                      t={t}
+                      headingIdPrefix="capture-draft"
+                      fallbackName={skillName}
+                    />
+                  ) : (
+                    <MarkdownContent value={content} t={t} headingIdPrefix="capture-draft" />
+                  )}
                 </div>
               </div>
             </div>
           )}
 
-          <label className="grid gap-1 text-xs text-muted-foreground">
+          <label className="grid shrink-0 gap-1 text-xs text-muted-foreground">
             {t.capture.refine}
-            <Input
+            <ImeSafeInput
               value={notes}
-              onChange={(event) => onNotesChange(event.target.value)}
+              onValueChange={onNotesChange}
               placeholder={t.capture.notesPlaceholder}
               disabled={busy}
             />
           </label>
 
-          {conflict && (
+          {conflict ? (
             <label className="flex items-center gap-2 text-xs text-amber-500">
               <input
                 type="checkbox"
@@ -142,12 +164,12 @@ export function CaptureDraftSheet({
               />
               {t.capture.overwrite}
             </label>
-          )}
+          ) : null}
 
           <SkillManageStatus message={error ? { type: 'error', text: error } : null} />
         </div>
 
-        <SheetFooter className="gap-2 sm:justify-end">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"
@@ -177,8 +199,8 @@ export function CaptureDraftSheet({
             {committing && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
             {committing ? t.capture.committing : t.capture.commit}
           </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

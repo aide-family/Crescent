@@ -10,6 +10,14 @@ import { generateSkillFromSummary } from './generate-skill'
 import { createAgentSkill } from './skills'
 import { saveWikiDocument } from './wiki'
 
+const CAPTURE_TIMEOUT_MIN_MS = 1_000
+const CAPTURE_TIMEOUT_MAX_MS = 10 * 60_000
+
+export function normalizeCaptureTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.min(Math.max(Math.floor(value), CAPTURE_TIMEOUT_MIN_MS), CAPTURE_TIMEOUT_MAX_MS)
+}
+
 export async function generateCaptureDraft(
   input: AgentGenerateCaptureDraftInput,
   options?: {
@@ -24,6 +32,9 @@ export async function generateCaptureDraft(
     return { ok: false, kind, error: 'Summary is empty.' }
   }
 
+  const timeoutMs = options?.timeoutMs ?? normalizeCaptureTimeoutMs(input.timeoutMs)
+  const generateOptions = timeoutMs == null ? options : { ...options, timeoutMs }
+
   if (kind === 'skill') {
     const generated = await generateSkillFromSummary(
       {
@@ -32,7 +43,7 @@ export async function generateCaptureDraft(
         draft: input.draft,
         notes: input.notes
       },
-      options
+      generateOptions
     )
     return {
       ok: generated.ok,
@@ -53,7 +64,7 @@ export async function generateCaptureDraft(
       draft: input.draft,
       notes: input.notes
     },
-    options
+    generateOptions
   )
   return {
     ok: generated.ok,

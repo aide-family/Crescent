@@ -2,7 +2,7 @@ import { AgentBrain } from './brain'
 import type { AgentConfig } from './types'
 import { stripToolsFromChatParams, type SopChatFn } from './generate-sop'
 
-export const SKILL_GENERATE_TIMEOUT_MS = 30_000
+export const SKILL_GENERATE_TIMEOUT_MS = 180_000
 
 export interface GenerateSkillInput {
   summary: string

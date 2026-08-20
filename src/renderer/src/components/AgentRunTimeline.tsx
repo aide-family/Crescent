@@ -1387,7 +1387,7 @@ function ApprovalStepCard({
     <div
       className={
         pending
-          ? 'min-w-0 rounded-xl border border-amber-500/35 bg-amber-500/5'
+          ? 'min-w-0 rounded-xl border border-border/70 border-l-2 border-l-primary bg-card'
           : 'min-w-0 rounded-xl border border-border/60'
       }
     >

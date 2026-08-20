@@ -413,13 +413,6 @@
   background: color-mix(in oklch, var(--primary) 20%, transparent);
 }
 
-.app-footer-mode {
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: color-mix(in oklch, var(--muted-foreground) 88%, transparent);
-}
-
 /*
   Nested sticky pinning (top offset only — no z-index):
   - .app-sticky-scope sets the offset for nested bars under a section title

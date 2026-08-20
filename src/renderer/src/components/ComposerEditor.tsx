@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { ComposerRefChip } from '@renderer/components/AgentReferenceBadges'
 import type { Dictionary } from '@renderer/i18n'
 import {
-  caretAfterInsertedRef,
+  caretAfterProgrammaticValueChange,
   flattenComposerSegmentsForInline,
   removeComposerRefToken
 } from '@renderer/lib/composer-ref-tokens'
@@ -31,6 +31,7 @@ import type {
 
 export interface ComposerInputHandle {
   focus: () => void
+  blur: () => void
   readonly value: string
   setSelectionRange: (start: number, end?: number) => void
 }
@@ -82,6 +83,7 @@ export function ComposerEditor({
       else {
         agentInputRef.current = {
           focus: () => surface.focus(),
+          blur: () => surface.blur(),
           get value() {
             return serializeComposerDom(surface)
           },
@@ -103,9 +105,9 @@ export function ComposerEditor({
       return
     }
 
-    const insertedCaret = caretAfterInsertedRef(previousValueRef.current, value)
+    const insertedCaret = caretAfterProgrammaticValueChange(previousValueRef.current, value)
     previousValueRef.current = value
-    if (insertedCaret != null) pendingCaretRef.current = insertedCaret
+    pendingCaretRef.current = insertedCaret
 
     for (const root of chipRootsRef.current) root.unmount()
     chipRootsRef.current = []

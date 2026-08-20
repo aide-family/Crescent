@@ -1,6 +1,7 @@
-import type { FormEvent, Ref } from 'react'
+import type { FormEvent, KeyboardEvent, Ref } from 'react'
 import { TriangleAlertIcon } from 'lucide-react'
 
+import { ImeSafeInput } from '@renderer/components/ImeSafeFields'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
@@ -141,10 +142,18 @@ export function PasswordPromptInlineCard({
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }): React.JSX.Element {
+  function handleKeyDown(event: KeyboardEvent<HTMLFormElement>): void {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    onCancel()
+  }
+
   return (
     <form
       onSubmit={onSubmit}
-      className="min-w-0 rounded-xl border border-amber-500/35 bg-amber-500/5"
+      onKeyDown={handleKeyDown}
+      className="min-w-0 rounded-md border border-border/70 border-l-2 border-l-primary bg-card"
     >
       <div className="flex items-start justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
@@ -165,12 +174,12 @@ export function PasswordPromptInlineCard({
           <FieldLabel htmlFor="terminal-password-inline-input">
             {t.terminal.passwordPromptLabel}
           </FieldLabel>
-          <Input
+          <ImeSafeInput
             id="terminal-password-inline-input"
             ref={inputRef}
             type="password"
             value={value}
-            onChange={(event) => onChange(event.target.value)}
+            onValueChange={onChange}
             autoComplete="current-password"
             className="h-9"
           />

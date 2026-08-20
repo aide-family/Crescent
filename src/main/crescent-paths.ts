@@ -22,6 +22,17 @@ export function getCrescentWikiDir(): string {
   return join(getCrescentDir(), 'wiki')
 }
 
+export const CRESCENT_USER_SKILLS_TILDE = '~/.crescent/skills'
+export const GLOBAL_AGENT_SKILLS_TILDE = '~/.agents/skills'
+
+export function getCrescentUserSkillsDir(): string {
+  return join(getCrescentDir(), 'skills')
+}
+
+export function getGlobalAgentSkillsDir(): string {
+  return join(homedir(), '.agents', 'skills')
+}
+
 export function getCrescentSystemSkillsDir(): string {
   const override = process.env.CRESCENT_SYSTEM_SKILL_ROOT?.trim()
   if (override) return resolve(override)

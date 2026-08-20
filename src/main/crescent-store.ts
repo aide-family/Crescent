@@ -11,7 +11,12 @@ import {
   writeCrescentDbFlag,
   writeCrescentMemoryToDb
 } from './crescent-sqlite'
-import { getCrescentConfigPath, getCrescentMemoryPath } from './crescent-paths'
+import {
+  CRESCENT_USER_SKILLS_TILDE,
+  GLOBAL_AGENT_SKILLS_TILDE,
+  getCrescentConfigPath,
+  getCrescentMemoryPath
+} from './crescent-paths'
 import {
   normalizeOpenApiProfiles,
   projectOpenApiProfileFields,
@@ -69,7 +74,8 @@ export const defaultAgentConfig: AgentConfig = {
   openApiTimeoutMs: 30_000,
   openApiMaxRetries: 2,
   openApiRetryBackoffMs: 300,
-  skillRoot: '~/.agents/skills',
+  skillRoot: CRESCENT_USER_SKILLS_TILDE,
+  loadGlobalAgentSkills: false,
   disabledExtensions: [],
   mcpServers: []
 }
@@ -247,6 +253,7 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     openApiProfileId: openApi.openApiProfileId,
     ...openApiFields,
     skillRoot: normalizeSkillRoot(config.skillRoot),
+    loadGlobalAgentSkills: normalizeLoadGlobalAgentSkills(config),
     disabledExtensions: normalizeDisabledExtensionIds(config.disabledExtensions),
     mcpServers: normalizeMcpServers(config.mcpServers)
   }
@@ -254,8 +261,15 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
 
 function normalizeSkillRoot(value: unknown): string {
   const skillRoot = String(value ?? '').trim()
+  if (!skillRoot || skillRoot === GLOBAL_AGENT_SKILLS_TILDE) {
+    return CRESCENT_USER_SKILLS_TILDE
+  }
+  return skillRoot
+}
 
-  return skillRoot || defaultAgentConfig.skillRoot
+function normalizeLoadGlobalAgentSkills(config: Partial<AgentConfig>): boolean {
+  if (typeof config.loadGlobalAgentSkills === 'boolean') return config.loadGlobalAgentSkills
+  return String(config.skillRoot ?? '').trim() === GLOBAL_AGENT_SKILLS_TILDE
 }
 
 function normalizeDisabledExtensionIds(value: unknown): string[] {

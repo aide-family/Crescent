@@ -18,7 +18,7 @@ import type {
   AgentSkillOption,
   AgentSkillSearchResult
 } from './types'
-import { getCrescentSystemSkillsDir } from '../crescent-paths'
+import { getCrescentSystemSkillsDir, GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 
 const MAX_MATCHED_SKILLS = 3
 const MAX_SKILL_CONTENT_CHARS = 16_000
@@ -26,7 +26,7 @@ const MAX_SKILL_DESCRIPTION_CHARS = 800
 const MIN_SKILL_MATCH_SCORE = 40
 const MIN_RELATIVE_SKILL_MATCH_SCORE = 0.65
 const MIN_MATCHED_SKILL_TOKENS = 2
-const DEFAULT_SKILL_ROOT = '~/.agents/skills'
+const DEFAULT_SKILL_ROOT = '~/.crescent/skills'
 const ESCAPE_CHAR = String.fromCharCode(27)
 const BELL_CHAR = String.fromCharCode(7)
 const ANSI_CSI_PATTERN = new RegExp(`${ESCAPE_CHAR}\\[[0-?]*[ -/]*[@-~]`, 'g')
@@ -51,16 +51,31 @@ export interface AgentSkillInstallSession {
   cancel: () => void
 }
 
-export function listAgentSkills(skillRoot?: string): AgentSkillOption[] {
+export type ListAgentSkillsOptions = {
+  loadGlobalAgentSkills?: boolean
+  globalSkillRoot?: string
+}
+
+export function listAgentSkills(
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillOption[] {
   const seen = new Set<string>()
   const skills: AgentSkillOption[] = []
   const systemRoot = ensureBuiltInOperationSkills()
   const root = resolveSkillRoot(skillRoot)
-
-  for (const { root: currentRoot, removable } of [
+  const roots: Array<{ root: string; removable: boolean }> = [
     { root: systemRoot, removable: false },
     { root, removable: true }
-  ]) {
+  ]
+  if (options?.loadGlobalAgentSkills) {
+    const globalRoot = resolveSkillRoot(options.globalSkillRoot || GLOBAL_AGENT_SKILLS_TILDE)
+    if (globalRoot !== root) {
+      roots.push({ root: globalRoot, removable: true })
+    }
+  }
+
+  for (const { root: currentRoot, removable } of roots) {
     for (const path of findSkillFiles(currentRoot)) {
       const resolvedPath = resolve(path)
       if (seen.has(resolvedPath)) continue
@@ -680,21 +695,29 @@ export function sanitizeSkillDirName(name: string): string {
   return safe || 'skill'
 }
 
-export function deleteAgentSkill(path: string, skillRoot?: string): AgentSkillOption[] {
+export function deleteAgentSkill(
+  path: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillOption[] {
   const skillPath = resolve(path)
-  const skill = listAgentSkills(skillRoot).find(
+  const skill = listAgentSkills(skillRoot, options).find(
     (candidate) => resolve(candidate.path) === skillPath
   )
   if (!skill) throw new Error('Skill not found.')
   if (!skill.removable) throw new Error('This skill is protected and cannot be deleted.')
 
   rmSync(dirname(skillPath), { recursive: true, force: false })
-  return listAgentSkills(skillRoot)
+  return listAgentSkills(skillRoot, options)
 }
 
-export function readAgentSkillContent(path: string, skillRoot?: string): string {
+export function readAgentSkillContent(
+  path: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): string {
   const skillPath = resolve(path)
-  const skill = listAgentSkills(skillRoot).find(
+  const skill = listAgentSkills(skillRoot, options).find(
     (candidate) => resolve(candidate.path) === skillPath
   )
   if (!skill) throw new Error('Skill not found.')

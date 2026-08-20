@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 
 import { ActionLogRow, AgentLogContent } from '@renderer/components/AgentLogContent'
+import { CaptureDraftReadyRow } from '@renderer/components/CaptureDraftPin'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import {
@@ -22,6 +23,7 @@ import {
   logRoleLabel
 } from '@renderer/lib/agent-log'
 import type { AgentLogEntry, AgentRunViewState } from '@renderer/lib/terminal-tabs'
+import type { CaptureKind } from '../../../shared/agent-types'
 
 export function AgentLogList({
   logRef,
@@ -51,6 +53,9 @@ export function AgentLogList({
   onInjectSuggestions,
   onOpenModelSettings,
   onSaveAsSop,
+  captureReadyLogs = [],
+  hiddenCaptureReadyLogIds = [],
+  onOpenCaptureDraft,
   hasEarlierLogs,
   loadingEarlier,
   onLoadEarlier
@@ -82,6 +87,9 @@ export function AgentLogList({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: (entry: AgentLogEntry) => void
+  captureReadyLogs?: Array<{ logId: number; kind: CaptureKind }>
+  hiddenCaptureReadyLogIds?: number[]
+  onOpenCaptureDraft?: (kind: CaptureKind) => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
   savingSopLogId?: number | null
@@ -124,6 +132,14 @@ export function AgentLogList({
     }
     return ids
   }, [absorbedByAssistantId])
+  const hiddenReadyIds = useMemo(
+    () => new Set(hiddenCaptureReadyLogIds),
+    [hiddenCaptureReadyLogIds]
+  )
+  const readyLogById = useMemo(
+    () => new Map(captureReadyLogs.map((item) => [item.logId, item.kind])),
+    [captureReadyLogs]
+  )
 
   return (
     <div
@@ -158,10 +174,12 @@ export function AgentLogList({
       {entries
         .filter((entry) => entry.kind !== 'user-supplement')
         .filter((entry) => !(entry.kind === 'status' && absorbedIds.has(entry.id)))
+        .filter((entry) => !hiddenReadyIds.has(entry.id))
         .map((entry, entryIndex, visibleEntries) => {
           const previousKind = entryIndex > 0 ? visibleEntries[entryIndex - 1]?.kind : undefined
           const conversation = isConversationLog(entry.kind)
           const spacing = logListItemSpacingClass(entry.kind, previousKind, entryIndex === 0)
+          const readyKind = readyLogById.get(entry.id)
 
           return (
             <div
@@ -230,6 +248,13 @@ export function AgentLogList({
                     onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
                   />
                 </>
+              ) : readyKind && onOpenCaptureDraft ? (
+                <CaptureDraftReadyRow
+                  text={entry.text}
+                  createdAt={entry.createdAt}
+                  t={t}
+                  onOpen={() => onOpenCaptureDraft(readyKind)}
+                />
               ) : (
                 <ActionLogRow entry={entry} t={t} />
               )}

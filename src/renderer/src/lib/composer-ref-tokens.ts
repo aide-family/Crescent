@@ -155,6 +155,11 @@ export function caretAfterInsertedRef(previous: string, next: string): number | 
   return caret
 }
 
+/** Caret after a parent-driven composer update (slash prefix or chip). */
+export function caretAfterProgrammaticValueChange(previous: string, next: string): number {
+  return caretAfterInsertedRef(previous, next) ?? next.length
+}
+
 /** Map a serialized caret onto a text field, snapping chip interiors to the following field. */
 export function resolveComposerTextCaret(
   value: string,

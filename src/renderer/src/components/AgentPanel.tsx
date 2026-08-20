@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 
 import { AgentLogList } from '@renderer/components/AgentLogList'
+import { CaptureDraftPin } from '@renderer/components/CaptureDraftPin'
 import { ComposerEditor, type ComposerInputHandle } from '@renderer/components/ComposerEditor'
 import { ConnectionClarifyCard } from '@renderer/components/ConnectionClarifyCard'
 import { SessionUsageBar } from '@renderer/components/SessionUsageBar'
@@ -49,6 +50,7 @@ import {
 } from '@renderer/components/ui/tooltip'
 import type { Dictionary } from '@renderer/i18n'
 import type { SlashCommandOption } from '@renderer/lib/slash-commands'
+import type { CaptureDraftPinView } from '@renderer/lib/capture-draft-ui'
 import {
   getSessionDisplayTitle,
   getSessionGroupId,
@@ -64,7 +66,11 @@ import {
   agentStyleTitle
 } from '@renderer/lib/agent-style-ui'
 import { normalizeAgentStyle, type AgentStyle } from '../../../shared/agent-style'
-import type { AgentModelOption, AgentPinnedWorkflow } from '../../../shared/agent-types'
+import type {
+  AgentModelOption,
+  AgentPinnedWorkflow,
+  CaptureKind
+} from '../../../shared/agent-types'
 
 export function AgentPanel({
   sessionChatTab,
@@ -137,6 +143,10 @@ export function AgentPanel({
   onPasswordPromptCancel,
   onPasswordPromptSubmit,
   onSaveAsSop,
+  captureReadyLogs = [],
+  hiddenCaptureReadyLogIds = [],
+  captureDraftPins = [],
+  onOpenCaptureDraft,
   hasEarlierLogs,
   loadingEarlier,
   onLoadEarlier,
@@ -223,6 +233,10 @@ export function AgentPanel({
   onPasswordPromptCancel?: () => void
   onPasswordPromptSubmit?: (event: FormEvent<HTMLFormElement>) => void
   onSaveAsSop?: (entry: AgentLogEntry) => void
+  captureReadyLogs?: Array<{ logId: number; kind: CaptureKind }>
+  hiddenCaptureReadyLogIds?: number[]
+  captureDraftPins?: CaptureDraftPinView[]
+  onOpenCaptureDraft?: (kind: CaptureKind) => void
   hasEarlierLogs?: boolean
   loadingEarlier?: boolean
   onLoadEarlier?: () => void | Promise<void>
@@ -294,6 +308,9 @@ export function AgentPanel({
         onOpenConnections={onOpenConnections}
         onOpenModelSettings={onOpenModelSettings}
         onSaveAsSop={onSaveAsSop}
+        captureReadyLogs={captureReadyLogs}
+        hiddenCaptureReadyLogIds={hiddenCaptureReadyLogIds}
+        onOpenCaptureDraft={onOpenCaptureDraft}
         hasEarlierLogs={hasEarlierLogs}
         loadingEarlier={loadingEarlier}
         onLoadEarlier={onLoadEarlier}
@@ -328,6 +345,20 @@ export function AgentPanel({
         </div>
       ) : null}
       <div className="app-input-dock space-y-1.5 p-2.5">
+        {captureDraftPins.length > 0 && onOpenCaptureDraft ? (
+          <div className="flex flex-col gap-1">
+            {captureDraftPins.map((pin) => (
+              <CaptureDraftPin
+                key={pin.kind}
+                kind={pin.kind}
+                phase={pin.phase}
+                hasContent={pin.hasContent}
+                t={t}
+                onOpen={() => onOpenCaptureDraft(pin.kind)}
+              />
+            ))}
+          </div>
+        ) : null}
         <SessionUsageBar
           inputTokens={sessionInputTokens}
           outputTokens={sessionOutputTokens}

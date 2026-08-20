@@ -128,7 +128,7 @@ export function ExtensionManager({
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <p className="mb-2 shrink-0 rounded-md border border-amber-500/25 bg-amber-500/6 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mb-2 shrink-0 rounded-md border border-border/70 border-l-2 border-l-primary bg-muted/20 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">
               {t.settings.extensionsSecurityWarning}
             </p>
             <div className="flex shrink-0 items-center justify-between gap-2 pb-2">

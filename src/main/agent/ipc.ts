@@ -46,7 +46,11 @@ import {
   searchPiPackageCatalog
 } from './pi-packages'
 import { generateAndSaveSop } from './generate-sop'
-import { commitCaptureDraft, generateCaptureDraft } from './generate-capture'
+import {
+  commitCaptureDraft,
+  generateCaptureDraft,
+  normalizeCaptureTimeoutMs
+} from './generate-capture'
 import {
   cancelPiAgentRun,
   listHostedExtensionCommands,
@@ -116,7 +120,10 @@ export function registerAgentIpc(): void {
   })
 
   ipcMain.handle('agent:list-skills', () => {
-    return listAgentSkills(readAgentConfig().skillRoot)
+    const config = readAgentConfig()
+    return listAgentSkills(config.skillRoot, {
+      loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+    })
   })
 
   ipcMain.handle('agent:search-skills', (_, query: string) => {
@@ -189,11 +196,17 @@ export function registerAgentIpc(): void {
   })
 
   ipcMain.handle('agent:delete-skill', (_, path: string) => {
-    return deleteAgentSkill(path ?? '', readAgentConfig().skillRoot)
+    const config = readAgentConfig()
+    return deleteAgentSkill(path ?? '', config.skillRoot, {
+      loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+    })
   })
 
   ipcMain.handle('agent:get-skill-content', (_, path: string) => {
-    return readAgentSkillContent(path ?? '', readAgentConfig().skillRoot)
+    const config = readAgentConfig()
+    return readAgentSkillContent(path ?? '', config.skillRoot, {
+      loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+    })
   })
 
   ipcMain.handle(
@@ -324,9 +337,13 @@ export function registerAgentIpc(): void {
           summary: typeof payload?.summary === 'string' ? payload.summary : '',
           locale: typeof payload?.locale === 'string' ? payload.locale : undefined,
           draft: typeof payload?.draft === 'string' ? payload.draft : undefined,
-          notes: typeof payload?.notes === 'string' ? payload.notes : undefined
+          notes: typeof payload?.notes === 'string' ? payload.notes : undefined,
+          timeoutMs: payload?.timeoutMs
         },
-        { config: readAgentConfig() }
+        {
+          config: readAgentConfig(),
+          timeoutMs: normalizeCaptureTimeoutMs(payload?.timeoutMs)
+        }
       )
     }
   )
@@ -625,13 +642,16 @@ export function registerAgentIpc(): void {
       .map((doc) => ({ title: doc.title, content: doc.content }))
 
     const skillRoot = agentConfig.skillRoot
+    const skillListOptions = {
+      loadGlobalAgentSkills: Boolean(agentConfig.loadGlobalAgentSkills)
+    }
     const skillPaths = [
       ...new Set((payload?.activeSkillPaths ?? []).map((path) => path.trim()).filter(Boolean))
     ]
-    const skillCatalog = skillPaths.length ? listAgentSkills(skillRoot) : []
+    const skillCatalog = skillPaths.length ? listAgentSkills(skillRoot, skillListOptions) : []
     const activeSkillDocs = skillPaths.flatMap((skillPath) => {
       try {
-        const content = readAgentSkillContent(skillPath, skillRoot)
+        const content = readAgentSkillContent(skillPath, skillRoot, skillListOptions)
         const resolved = resolve(skillPath)
         const matched = skillCatalog.find((skill) => resolve(skill.path) === resolved)
         return [

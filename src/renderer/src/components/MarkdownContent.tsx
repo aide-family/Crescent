@@ -1011,7 +1011,7 @@ function clampMermaidZoom(value: number): number {
 
 function isMarkdownBlockStart(line: string): boolean {
   return (
-    /^```/.test(line) ||
+    /^\s*(```|~~~)/.test(line) ||
     /^\s*---+\s*$/.test(line) ||
     isMarkdownTableLine(line) ||
     /^<details(?:\s+open)?>$/.test(line.trim()) ||

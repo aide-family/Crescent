@@ -34,6 +34,8 @@ export interface AgentConfig {
   openApiMaxRetries: number
   openApiRetryBackoffMs: number
   skillRoot: string
+  /** When true, also load skills from ~/.agents/skills. Writes still go to skillRoot. */
+  loadGlobalAgentSkills: boolean
   /** Extension ids (file/dir basename) that should not be loaded. */
   disabledExtensions: string[]
   mcpServers: AgentMcpServerConfig[]
@@ -278,12 +280,16 @@ export interface AgentReloadRuntimeResult {
   error?: string
 }
 
+/** Background SOP/skill draft generation. Isolated from the agent-run abort. */
+export const CAPTURE_BACKGROUND_TIMEOUT_MS = 180_000
+
 export interface AgentGenerateCaptureDraftInput {
   kind: CaptureKind
   summary: string
   locale?: string
   draft?: string
   notes?: string
+  timeoutMs?: number
 }
 
 export interface AgentGenerateCaptureDraftResult {

@@ -2,7 +2,7 @@ import { AgentBrain } from './brain'
 import type { AgentConfig, WikiDocument } from './types'
 import { saveWikiDocument } from './wiki'
 
-export const SOP_GENERATE_TIMEOUT_MS = 30_000
+export const SOP_GENERATE_TIMEOUT_MS = 180_000
 
 export interface GenerateSopInput {
   summary: string
@@ -100,7 +100,9 @@ export function buildGenerateSopSystemPrompt(locale?: string): string {
     'Never use deprecated flags such as `kubectl version --short` (use `kubectl version` or omit version checks).',
     'For deep-dive steps: each abnormal object gets its own section, but commands for multiple objects may run in the same bash invocation concurrently (`;` / `&` within one call as appropriate for readonly inspection).',
     'Respond with:',
-    '1) First line exactly: TITLE: <short title without SOP： prefix>',
+    '1) First line exactly: TITLE: <one-line outcome summary without SOP： prefix>',
+    'TITLE must name what was inspected or performed and the distinctive result (e.g. 集群巡检与 Kibana 初始化异常).',
+    'Do not use generic labels such as 健康摘要, 巡检结果, 检查报告, Health summary, or a host/connection name.',
     '2) Then a markdown body with these sections:',
     '- 适用范围 / Scope',
     '- 前置条件 / Prerequisites',

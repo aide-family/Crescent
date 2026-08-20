@@ -1,7 +1,11 @@
-import { isPromptHostAligned, normalizeHostToken } from '../../../shared/terminal-prompt-host'
+import {
+  findNewestPromptSignal,
+  isPromptHostAligned,
+  normalizeHostToken
+} from '../../../shared/terminal-prompt-host'
 
 export interface PromptWaitDeps {
-  getContext: () => Promise<{ promptHost?: string }>
+  getContext: () => Promise<{ promptHost?: string; output?: string }>
   onData: (handler: (event: { tabId: string }) => void) => () => void
   setInterval: (fn: () => void, ms: number) => number
   clearInterval: (id: number) => void
@@ -66,7 +70,15 @@ export function waitForRemotePrompt(
     const check = (): void => {
       void deps.getContext().then((context) => {
         if (settled) return
-        const promptHost = context.promptHost
+        const signal = context.output != null ? findNewestPromptSignal(context.output) : undefined
+        const promptHost =
+          signal?.kind === 'host'
+            ? signal.host
+            : signal?.kind === 'local'
+              ? 'local-shell'
+              : signal?.kind === 'waiting'
+                ? undefined
+                : context.promptHost
         if (promptHost && promptHost !== 'local-shell') {
           if (
             isLoginPromptReady(promptHost, {

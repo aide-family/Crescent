@@ -27,7 +27,7 @@ export function QuotaErrorCard({
   return (
     <div
       data-testid="model-quota-error-card"
-      className="min-w-0 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-sm"
+      className="min-w-0 rounded-xl border border-border/70 border-l-2 border-l-primary bg-card px-3 py-2.5 text-sm"
     >
       <div className="flex items-start gap-2">
         <TriangleAlertIcon

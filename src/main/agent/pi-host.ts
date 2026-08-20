@@ -7,6 +7,7 @@ import { buildLocalInstructionContext } from './instruction-files'
 import { extractAssistantTextFromMessages, mapPiSessionEventToAgentEvents } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { getCrescentPiExtensionsDir, getCrescentPiSkillsDir } from './pi-paths'
+import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 import {
   resolvePiModel,
   resolveThinkingLevelForModel,
@@ -545,7 +546,7 @@ async function ensureHostedSession(
   const model = await resolvePiModel(config, modelRuntime)
 
   const instructionContext = buildLocalInstructionContext()
-  const additionalSkillPaths = collectSkillRoots(config.skillRoot)
+  const additionalSkillPaths = collectSkillRoots(config)
   const additionalExtensionPaths = [
     ...listEnabledExtensionPaths({
       disabledExtensions: config.disabledExtensions
@@ -673,11 +674,14 @@ function getHostedExtensionRunner(session: AgentSession): HostedExtensionRunner 
   return runner
 }
 
-function collectSkillRoots(skillRoot: string): string[] {
+function collectSkillRoots(config: AgentConfig): string[] {
   const roots = [getCrescentPiSkillsDir()]
-  const configured = skillRoot?.trim()
+  const configured = config.skillRoot?.trim()
   if (configured) {
     roots.push(resolve(configured.replace(/^~(?=$|[/\\])/, homedir())))
+  }
+  if (config.loadGlobalAgentSkills) {
+    roots.push(resolve(GLOBAL_AGENT_SKILLS_TILDE.replace(/^~(?=$|[/\\])/, homedir())))
   }
   return [...new Set(roots)]
 }
