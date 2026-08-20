@@ -9,9 +9,11 @@ import {
   registerRendererRecoveryIpc
 } from './renderer-recovery'
 import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
+import { initSystemLogging } from './logging'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
+initSystemLogging()
 installWarningFilter()
 installNativeLogFilter()
 configureGpuPolicy()

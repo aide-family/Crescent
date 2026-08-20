@@ -10,6 +10,7 @@ export default defineConfig({
     }
   },
   test: {
-    environment: 'node'
+    environment: 'node',
+    exclude: ['e2e/**', 'node_modules/**', 'dist/**', 'out/**']
   }
 })
