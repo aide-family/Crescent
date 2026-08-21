@@ -31,6 +31,7 @@ import {
   readCatalogSkillContent
 } from './skills'
 import {
+  createAgentExtension,
   deleteAgentExtension,
   importAgentExtension,
   listAgentExtensions,
@@ -258,6 +259,15 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:import-extension', (event) => {
     return importAgentExtensionFromDialog(event.sender)
+  })
+
+  ipcMain.handle('agent:create-extension', (_, payload?: { name?: string }) => {
+    const result = createAgentExtension({
+      name: typeof payload?.name === 'string' ? payload.name : '',
+      disabledExtensions: readAgentConfig().disabledExtensions
+    })
+    if (!result.ok) return result
+    return { ok: true as const, extension: result.extension, extensions: listAllAgentExtensions() }
   })
 
   ipcMain.handle('agent:delete-extension', async (_, path: string) => {

@@ -579,6 +579,8 @@ const zhCN = {
     slashConnectionDescription: '选择已保存的 SSH 连接并登录',
     slashCreateSkill: '创建 Skill',
     slashCreateSkillDescription: '把当前会话处置流程转成 Skill 草稿，确认后写入',
+    slashCreateExtension: '创建扩展',
+    slashCreateExtensionDescription: '在扩展目录新建自定义插件模板，可随时启用或停用',
     slashSop: '创建 SOP',
     slashSopDescription: '把当前会话处置流程转成 SOP 草稿，确认后写入知识库',
     createSkillPrompt:
@@ -923,8 +925,13 @@ const zhCN = {
     extensionsSecurityWarning: '扩展以本机权限执行任意代码。只安装你信任的来源。',
     extensionsSearchPlaceholder: '按名称、工具或命令搜索扩展…',
     addExtension: '添加',
+    createExtension: '创建',
+    createExtensionHint:
+      '写入 ~/.crescent/pi-agent/extensions 的 TypeScript 模板，默认启用，可随时停用。输入名称后点击「创建」确认。',
+    createExtensionPlaceholder: '扩展名称，例如 my-plugin',
+    extensionCreated: '扩展已创建',
     refreshExtensions: '刷新',
-    noExtensions: '还没有扩展。添加 .ts 文件，或包含 index.ts 的目录。',
+    noExtensions: '还没有扩展。创建模板，或添加 .ts 文件 / 包含 index.ts 的目录。',
     noMatchedExtensions: '没有匹配的扩展。',
     extensionEnabled: '启用',
     extensionDisabled: '停用',

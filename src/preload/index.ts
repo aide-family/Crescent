@@ -312,6 +312,14 @@ const api = {
       error?: string
       extensions?: AgentExtensionOption[]
     }> => ipcRenderer.invoke('agent:import-extension'),
+    createExtension: (
+      name: string
+    ): Promise<{
+      ok: boolean
+      error?: string
+      extension?: AgentExtensionOption
+      extensions?: AgentExtensionOption[]
+    }> => ipcRenderer.invoke('agent:create-extension', { name }),
     deleteExtension: (path: string): Promise<AgentExtensionOption[]> =>
       ipcRenderer.invoke('agent:delete-extension', path),
     setExtensionEnabled: (input: {

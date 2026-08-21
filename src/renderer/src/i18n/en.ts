@@ -625,6 +625,9 @@ const en = {
     slashCreateSkill: 'Create skill',
     slashCreateSkillDescription:
       'Turn this session’s workflow into a skill draft, then confirm to save',
+    slashCreateExtension: 'Create extension',
+    slashCreateExtensionDescription:
+      'Create a custom plugin template in the extensions directory; enable or disable anytime',
     slashSop: 'Create SOP',
     slashSopDescription: 'Turn this session’s workflow into an SOP draft, then confirm to save',
     createSkillPrompt:
@@ -992,8 +995,14 @@ const en = {
       'Extensions run with full local permissions and can execute arbitrary code. Only install files you trust.',
     extensionsSearchPlaceholder: 'Search extensions by name, tools, or commands…',
     addExtension: 'Add',
+    createExtension: 'Create',
+    createExtensionHint:
+      'Writes a TypeScript template under ~/.crescent/pi-agent/extensions. Enabled by default; toggle anytime. Click Create to confirm.',
+    createExtensionPlaceholder: 'Extension name, e.g. my-plugin',
+    extensionCreated: 'Extension created',
     refreshExtensions: 'Refresh',
-    noExtensions: 'No extensions installed. Add a .ts file or a directory with index.ts.',
+    noExtensions:
+      'No extensions installed. Create a template, or add a .ts file / directory with index.ts.',
     noMatchedExtensions: 'No matching extensions.',
     extensionEnabled: 'On',
     extensionDisabled: 'Off',

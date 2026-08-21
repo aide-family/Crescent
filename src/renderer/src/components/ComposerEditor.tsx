@@ -23,6 +23,11 @@ import {
   serializeComposerDom,
   setComposerDomCaret
 } from '@renderer/lib/composer-surface'
+import {
+  isImeKeyEvent,
+  markImeCompositionEnded,
+  shouldIgnoreEnterAfterImeConfirm
+} from '@renderer/lib/ime-safe-value'
 import type { AgentToolReference } from '@renderer/lib/terminal-tabs'
 import type {
   AgentPathReference,
@@ -72,6 +77,7 @@ export function ComposerEditor({
   const previousValueRef = useRef(value)
   const pendingCaretRef = useRef<number | null>(null)
   const composingRef = useRef(false)
+  const compositionEndedAtRef = useRef(0)
   const mountedRef = useRef(false)
   const lookupsRef = useRef({ skillRefs, wikiRefs, toolRefs, pathRefs, t, onChange, value })
 
@@ -225,9 +231,11 @@ export function ComposerEditor({
       }}
       onCompositionStart={() => {
         composingRef.current = true
+        compositionEndedAtRef.current = 0
       }}
       onCompositionEnd={() => {
         composingRef.current = false
+        compositionEndedAtRef.current = markImeCompositionEnded()
         emitFromDom()
       }}
       onSelect={() => {
@@ -245,7 +253,20 @@ export function ComposerEditor({
         emitFromDom()
       }}
       onKeyDown={(event) => {
-        if (event.nativeEvent.isComposing || event.keyCode === 229) {
+        const imeActive = isImeKeyEvent(event) || composingRef.current
+        const enterConfirmsIme =
+          event.key === 'Enter' &&
+          !event.shiftKey &&
+          shouldIgnoreEnterAfterImeConfirm(compositionEndedAtRef.current)
+
+        if (enterConfirmsIme) {
+          // Confirming an IME candidate must not submit the composer.
+          event.preventDefault()
+          compositionEndedAtRef.current = 0
+          return
+        }
+
+        if (imeActive) {
           onKeyDown(event)
           return
         }

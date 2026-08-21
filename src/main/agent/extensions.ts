@@ -216,14 +216,67 @@ export function readAgentExtensionContent(
   return readFileSync(extension.path, 'utf8').slice(0, MAX_EXTENSION_PREVIEW_CHARS)
 }
 
+export type CreateAgentExtensionResult =
+  | { ok: true; extension: AgentExtensionOption; extensions: AgentExtensionOption[] }
+  | { ok: false; error: string }
+
+/**
+ * Create a starter Pi extension under the Crescent extensions directory.
+ * New extensions are enabled by default (absent from disabledExtensions).
+ */
+export function createAgentExtension(input: {
+  name: string
+  extensionsDir?: string
+  disabledExtensions?: string[]
+}): CreateAgentExtensionResult {
+  const id = sanitizeExtensionId(input.name)
+  if (!id) {
+    return {
+      ok: false,
+      error: 'Extension name must use letters, numbers, hyphens, or underscores (e.g. my-plugin).'
+    }
+  }
+
+  const root = ensureExtensionsDir(input.extensionsDir ?? getCrescentPiExtensionsDir())
+  const dest = join(root, `${id}${EXTENSION_FILE_SUFFIX}`)
+  if (!isPathInsideExtensionsDir(dest, root)) {
+    return { ok: false, error: 'Extension path is outside the extensions directory.' }
+  }
+  if (existsSync(dest) || existsSync(join(root, id))) {
+    return { ok: false, error: `Extension already exists: ${id}` }
+  }
+
+  writeFileSync(dest, buildStarterExtensionSource(id), 'utf8')
+  const extensions = listAgentExtensions({
+    extensionsDir: root,
+    disabledExtensions: input.disabledExtensions
+  })
+  const extension = extensions.find((entry) => entry.id === id)
+  if (!extension) {
+    return { ok: false, error: 'Extension was written but could not be listed.' }
+  }
+  return { ok: true, extension, extensions }
+}
+
 export function writeStarterExtension(
   extensionsDir = getCrescentPiExtensionsDir()
 ): AgentExtensionOption[] {
-  const root = ensureExtensionsDir(extensionsDir)
-  const dest = join(root, 'hello.ts')
-  if (existsSync(dest)) return listAgentExtensions({ extensionsDir: root })
-  writeFileSync(dest, STARTER_EXTENSION_SOURCE, 'utf8')
-  return listAgentExtensions({ extensionsDir: root })
+  const result = createAgentExtension({ name: 'hello', extensionsDir })
+  if (result.ok) return result.extensions
+  return listAgentExtensions({ extensionsDir })
+}
+
+export function sanitizeExtensionId(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+  if (!/^[a-z][a-z0-9-]*$/.test(cleaned)) return ''
+  return cleaned
 }
 
 export function isPathInsideExtensionsDir(path: string, extensionsDir: string): boolean {
@@ -316,14 +369,17 @@ function extensionIdFromFileName(name: string): string {
   return name.endsWith(EXTENSION_FILE_SUFFIX) ? name.slice(0, -EXTENSION_FILE_SUFFIX.length) : name
 }
 
-const STARTER_EXTENSION_SOURCE = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+function buildStarterExtensionSource(id: string): string {
+  const toolName = `${id.replace(/-/g, '_')}_greet`
+  const commandName = id
+  return `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "greet",
+    name: "${toolName}",
     label: "Greet",
-    description: "Greet someone by name",
+    description: "Greet someone by name (${id})",
     parameters: Type.Object({
       name: Type.String({ description: "Name to greet" }),
     }),
@@ -335,11 +391,12 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("hello", {
-    description: "Say hello from a Crescent extension",
+  pi.registerCommand("${commandName}", {
+    description: "Say hello from the ${id} Crescent extension",
     handler: async (args, ctx) => {
       ctx.ui.notify(\`Hello \${args || "world"}!\`, "info");
     },
   });
 }
 `
+}

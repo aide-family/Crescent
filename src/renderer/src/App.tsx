@@ -329,6 +329,7 @@ import {
   replaceSlashCommandInput,
   type SlashCommandOption
 } from '@renderer/lib/slash-commands'
+import { isImeKeyEvent } from '@renderer/lib/ime-safe-value'
 import {
   CAPTURE_BACKGROUND_TIMEOUT_MS,
   type AgentConfig,
@@ -619,6 +620,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     null
   )
   const [extensionDeletingPath, setExtensionDeletingPath] = useState<string | null>(null)
+  const [extensionCreating, setExtensionCreating] = useState(false)
+  const [extensionCreateOpen, setExtensionCreateOpen] = useState(false)
   const [selectedExtensionPreview, setSelectedExtensionPreview] = useState<{
     extension: AgentExtensionOption
     content: string
@@ -3023,6 +3026,37 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         type: 'error',
         text: error instanceof Error ? error.message : String(error)
       })
+    }
+  }
+
+  async function createExtension(name: string): Promise<boolean> {
+    setExtensionCreating(true)
+    try {
+      const result = await window.api.agent.createExtension(name)
+      if (!result.ok) {
+        setExtensionManageMessage({
+          type: 'error',
+          text: result.error || t.settings.extensionCommandFailed
+        })
+        return false
+      }
+      setExtensions(result.extensions ?? (await window.api.agent.listExtensions()))
+      setExtensionManageMessage({
+        type: 'success',
+        text: `${t.settings.extensionCreated}: ${result.extension?.name ?? name}`
+      })
+      if (result.extension) {
+        void previewExtension(result.extension)
+      }
+      return true
+    } catch (error) {
+      setExtensionManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+      return false
+    } finally {
+      setExtensionCreating(false)
     }
   }
 
@@ -6814,6 +6848,15 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
+    if (command.id === 'create-extension') {
+      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
+      setSlashCommandIndex(0)
+      setSlashCommandOpen(false)
+      setExtensionCreateOpen(true)
+      setExtensionOpen(true)
+      return
+    }
+
     if (command.pathReferenceKind) {
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
@@ -7620,7 +7663,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const extensionSheet = (
     <ExtensionManager
       open={extensionOpen}
-      onOpenChange={setExtensionOpen}
+      onOpenChange={(next) => {
+        setExtensionOpen(next)
+        if (!next) setExtensionCreateOpen(false)
+      }}
       t={t}
       extensions={extensions}
       searchQuery={extensionSearchQuery}
@@ -7630,12 +7676,16 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       installingSource={extensionInstallingSource}
       manageMessage={extensionManageMessage}
       deletingPath={extensionDeletingPath}
+      creating={extensionCreating}
+      createOpen={extensionCreateOpen}
+      onCreateOpenChange={setExtensionCreateOpen}
       preview={selectedExtensionPreview}
       previewLoadingPath={extensionPreviewLoadingPath}
       onSearchQueryChange={setExtensionSearchQuery}
       onCatalogQueryChange={setExtensionCatalogQuery}
       onRefresh={() => void refreshExtensions()}
       onImport={() => void importExtension()}
+      onCreate={(name) => createExtension(name)}
       onSearchCatalog={() => void searchExtensionCatalog()}
       onInstallPackage={(result) => void installExtensionPackage(result)}
       onDelete={(extension) => void deleteExtension(extension)}
@@ -8397,13 +8447,7 @@ function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string
 }
 
 function isComposingInput(event: KeyboardEvent<HTMLElement>): boolean {
-  const reactEvent = event as KeyboardEvent<HTMLElement> & { isComposing?: boolean }
-  const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & {
-    isComposing?: boolean
-    keyCode?: number
-  }
-
-  return Boolean(reactEvent.isComposing || nativeEvent.isComposing || nativeEvent.keyCode === 229)
+  return isImeKeyEvent(event)
 }
 
 async function resolvePastedFileReference(file: File): Promise<AgentPathReference | undefined> {

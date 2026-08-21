@@ -278,6 +278,21 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['create-skill', 'skill', 'skills', 'custom', '转成skill']
     },
     {
+      id: 'create-extension',
+      title: t.input.slashCreateExtension,
+      description: t.input.slashCreateExtensionDescription,
+      value: '/create-extension',
+      keywords: [
+        'create-extension',
+        'create-plugin',
+        'extension',
+        'extensions',
+        'plugin',
+        '自定义扩展',
+        '创建插件'
+      ]
+    },
+    {
       id: 'create-sop',
       title: t.input.slashSop,
       description: t.input.slashSopDescription,

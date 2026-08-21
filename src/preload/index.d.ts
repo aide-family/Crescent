@@ -212,6 +212,12 @@ interface TerminalAgentApi {
       error?: string
       extensions?: AgentExtensionOption[]
     }>
+    createExtension: (name: string) => Promise<{
+      ok: boolean
+      error?: string
+      extension?: AgentExtensionOption
+      extensions?: AgentExtensionOption[]
+    }>
     deleteExtension: (path: string) => Promise<AgentExtensionOption[]>
     setExtensionEnabled: (input: {
       id: string

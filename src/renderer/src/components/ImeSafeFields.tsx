@@ -11,17 +11,30 @@ import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { applyExternalImeValue, shouldCommitImeChange } from '@renderer/lib/ime-safe-value'
 
+type ImeCompositionHandler = () => void
+
 function useImeSafeValue(
   external: string,
-  onCommit: (value: string) => void
+  onCommit: (value: string) => void,
+  options?: {
+    onCompositionStart?: ImeCompositionHandler
+    onCompositionEnd?: ImeCompositionHandler
+  }
 ): {
   value: string
   onChange: (value: string) => void
-  onCompositionStart: () => void
+  onCompositionStart: (event: CompositionEvent<HTMLInputElement | HTMLTextAreaElement>) => void
   onCompositionEnd: (event: CompositionEvent<HTMLInputElement | HTMLTextAreaElement>) => void
 } {
   const composingRef = useRef(false)
   const [local, setLocal] = useState(external)
+  const onCompositionStartRef = useRef(options?.onCompositionStart)
+  const onCompositionEndRef = useRef(options?.onCompositionEnd)
+
+  useEffect(() => {
+    onCompositionStartRef.current = options?.onCompositionStart
+    onCompositionEndRef.current = options?.onCompositionEnd
+  }, [options?.onCompositionStart, options?.onCompositionEnd])
 
   useEffect(() => {
     setLocal((current) =>
@@ -41,12 +54,14 @@ function useImeSafeValue(
     },
     onCompositionStart() {
       composingRef.current = true
+      onCompositionStartRef.current?.()
     },
     onCompositionEnd(event) {
       composingRef.current = false
       const next = event.currentTarget.value
       setLocal(next)
       onCommit(next)
+      onCompositionEndRef.current?.()
     }
   }
 }
@@ -54,12 +69,19 @@ function useImeSafeValue(
 export function ImeSafeInput({
   value,
   onValueChange,
+  onCompositionStart,
+  onCompositionEnd,
   ...props
-}: Omit<ComponentProps<typeof Input>, 'onChange' | 'value'> & {
+}: Omit<
+  ComponentProps<typeof Input>,
+  'onChange' | 'value' | 'onCompositionStart' | 'onCompositionEnd'
+> & {
   value: string
   onValueChange: (value: string) => void
+  onCompositionStart?: ImeCompositionHandler
+  onCompositionEnd?: ImeCompositionHandler
 }): JSX.Element {
-  const ime = useImeSafeValue(value, onValueChange)
+  const ime = useImeSafeValue(value, onValueChange, { onCompositionStart, onCompositionEnd })
   return (
     <Input
       {...props}
@@ -74,12 +96,19 @@ export function ImeSafeInput({
 export function ImeSafeTextarea({
   value,
   onValueChange,
+  onCompositionStart,
+  onCompositionEnd,
   ...props
-}: Omit<ComponentProps<typeof Textarea>, 'onChange' | 'value'> & {
+}: Omit<
+  ComponentProps<typeof Textarea>,
+  'onChange' | 'value' | 'onCompositionStart' | 'onCompositionEnd'
+> & {
   value: string
   onValueChange: (value: string) => void
+  onCompositionStart?: ImeCompositionHandler
+  onCompositionEnd?: ImeCompositionHandler
 }): JSX.Element {
-  const ime = useImeSafeValue(value, onValueChange)
+  const ime = useImeSafeValue(value, onValueChange, { onCompositionStart, onCompositionEnd })
   return (
     <Textarea
       {...props}

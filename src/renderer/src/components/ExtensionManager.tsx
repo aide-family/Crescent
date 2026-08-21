@@ -1,8 +1,9 @@
-import { type KeyboardEvent, useState } from 'react'
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import {
   DownloadIcon,
   FilePlusIcon,
   Loader2Icon,
+  PlusIcon,
   PuzzleIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
+import { ImeSafeInput } from '@renderer/components/ImeSafeFields'
 import {
   SkillManageStatus,
   StatusDot,
@@ -31,6 +33,11 @@ import {
   filterLocalExtensions,
   isPiPackageSearchResultInstalled
 } from '@renderer/lib/extension-management'
+import {
+  isImeKeyEvent,
+  markImeCompositionEnded,
+  shouldIgnoreEnterAfterImeConfirm
+} from '@renderer/lib/ime-safe-value'
 import { formatInstallCount } from '@renderer/lib/skill-management'
 import type { AgentExtensionOption, AgentPiPackageSearchResult } from '../../../shared/agent-types'
 
@@ -50,12 +57,16 @@ export interface ExtensionManagerProps {
   installingSource: string | null
   manageMessage: SkillManageMessage | null
   deletingPath: string | null
+  creating: boolean
+  createOpen: boolean
+  onCreateOpenChange: (open: boolean) => void
   preview: { extension: AgentExtensionOption; content: string } | null
   previewLoadingPath: string | null
   onSearchQueryChange: (value: string) => void
   onCatalogQueryChange: (value: string) => void
   onRefresh: () => void
   onImport: () => void
+  onCreate: (name: string) => Promise<boolean>
   onSearchCatalog: () => void
   onInstallPackage: (result: AgentPiPackageSearchResult) => void
   onDelete: (extension: AgentExtensionOption) => void
@@ -76,12 +87,16 @@ export function ExtensionManager({
   installingSource,
   manageMessage,
   deletingPath,
+  creating,
+  createOpen,
+  onCreateOpenChange,
   preview,
   previewLoadingPath,
   onSearchQueryChange,
   onCatalogQueryChange,
   onRefresh,
   onImport,
+  onCreate,
   onSearchCatalog,
   onInstallPackage,
   onDelete,
@@ -93,8 +108,35 @@ export function ExtensionManager({
   const previewOpen = Boolean(preview)
   const [pane, setPane] = useState<ExtensionManagerPane>('installed')
   const [confirmDelete, setConfirmDelete] = useState<AgentExtensionOption | null>(null)
+  const [createName, setCreateName] = useState('')
+  const [createOpenSeen, setCreateOpenSeen] = useState(createOpen)
+  const createCompositionEndedAtRef = useRef(0)
+
+  if (createOpen !== createOpenSeen) {
+    setCreateOpenSeen(createOpen)
+    if (createOpen) {
+      setPane('installed')
+      setCreateName('')
+    }
+  }
+
+  useEffect(() => {
+    if (!createOpen) return
+    createCompositionEndedAtRef.current = 0
+  }, [createOpen])
+
+  function beginCreate(): void {
+    setPane('installed')
+    setCreateName('')
+    onCreateOpenChange(true)
+  }
 
   function handleSheetKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === 'Escape' && createOpen) {
+      event.stopPropagation()
+      onCreateOpenChange(false)
+      return
+    }
     if (event.key === 'Escape' && preview) {
       event.stopPropagation()
       onPreviewChange(null)
@@ -111,6 +153,30 @@ export function ExtensionManager({
   function selectDiscover(): void {
     setPane('discover')
     if (catalogResults.length === 0 && !catalogLoading) onSearchCatalog()
+  }
+
+  async function submitCreate(): Promise<void> {
+    const name = createName.trim()
+    if (!name || creating) return
+    const ok = await onCreate(name)
+    if (!ok) return
+    onCreateOpenChange(false)
+    setCreateName('')
+    createCompositionEndedAtRef.current = 0
+  }
+
+  function handleCreateNameKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    // Enter confirms IME candidates on macOS; never treat it as "Create".
+    if (event.key !== 'Enter') return
+    if (
+      isImeKeyEvent(event) ||
+      shouldIgnoreEnterAfterImeConfirm(createCompositionEndedAtRef.current)
+    ) {
+      event.preventDefault()
+      createCompositionEndedAtRef.current = 0
+      return
+    }
+    event.preventDefault()
   }
 
   const previewFence = preview?.extension.kind === 'package' ? 'json' : 'ts'
@@ -152,16 +218,28 @@ export function ExtensionManager({
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {pane === 'installed' ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={onImport}
-                    aria-label={t.settings.addExtension}
-                  >
-                    <FilePlusIcon data-icon="inline-start" />
-                    {t.settings.addExtension}
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={beginCreate}
+                      aria-label={t.settings.createExtension}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      {t.settings.createExtension}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={onImport}
+                      aria-label={t.settings.addExtension}
+                    >
+                      <FilePlusIcon data-icon="inline-start" />
+                      {t.settings.addExtension}
+                    </Button>
+                  </>
                 ) : null}
                 <Button
                   type="button"
@@ -439,6 +517,63 @@ export function ExtensionManager({
             </aside>
           ) : null}
         </div>
+        {createOpen ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/45 p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-extension-title"
+              className="w-full max-w-sm rounded-lg border bg-background p-3"
+            >
+              <p id="create-extension-title" className="text-sm font-medium">
+                {t.settings.createExtension}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{t.settings.createExtensionHint}</p>
+              <ImeSafeInput
+                className="mt-3"
+                value={createName}
+                onValueChange={setCreateName}
+                onCompositionStart={() => {
+                  createCompositionEndedAtRef.current = 0
+                }}
+                onCompositionEnd={() => {
+                  createCompositionEndedAtRef.current = markImeCompositionEnded()
+                }}
+                onKeyDown={handleCreateNameKeyDown}
+                placeholder={t.settings.createExtensionPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                autoFocus
+                aria-label={t.settings.createExtensionPlaceholder}
+                disabled={creating}
+              />
+              <div className="mt-3 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  disabled={creating}
+                  onClick={() => onCreateOpenChange(false)}
+                >
+                  {t.common.cancel}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={creating || !createName.trim()}
+                  onClick={() => void submitCreate()}
+                >
+                  {creating ? (
+                    <Loader2Icon className="animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <PlusIcon data-icon="inline-start" />
+                  )}
+                  {t.settings.createExtension}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {confirmDelete ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/45 p-4">
             <div
