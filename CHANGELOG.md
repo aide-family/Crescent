@@ -1,20 +1,34 @@
 # Changelog
 
-## Unreleased
+## v1.0.9 (2026-08-22)
 
-### Skills
+### Extensions
 
-- Removed bundled `system-skills`. Agent skills come from the configured skill directory and optional `~/.agents/skills`.
+- Create starter agent extensions from Extension Manager; host IPC (`createAgentExtension`) scaffolds under the Crescent extensions directory.
+
+### Security
+
+- Encrypt stored secrets at rest with Electron `safeStorage`: connection passwords, model provider API keys, and MCP env/header values in `~/.crescent/config.json`. Legacy plaintext values still load and re-encrypt on the next write.
+- Leading auto passwords are always treated as secrets and force-masked in logs even when the text collides with a shell command word.
+- Harden reconnect intent matching (clarify-card copy, named connections vs current tab, password-change wording).
+
+### Settings / Runtime
+
+- Configurable system log level in Settings (persisted with agent config).
+- Skip GitHub update checks when running unpackaged so local dev does not hit the network and time out.
+- Reuse already-logged-in terminals more reliably when prompt-host signals are missing or a remote root `#` looks local.
+
+### Desktop / Performance
+
+- Mermaid loads on demand via a dedicated runtime module; renderer build enforces asset size limits and manual chunks for large dependencies.
 - Skill manager can import a local `SKILL.md` file or skill directory into the configured skill root.
-
-### Terminal / SSH
-
-- Connection manager keeps the editor collapsed until a card is selected; clicking the same card hides it again.
-- Connection card actions sit in the footer; delete stays at the top-right corner.
-
-### Desktop
-
+- Removed bundled `system-skills`. Agent skills come from the configured skill directory and optional `~/.agents/skills`.
+- Connection manager keeps the editor collapsed until a card is selected; card actions sit in the footer; delete stays at the top-right.
 - Sheets other than Settings open from the left.
+
+### Chores
+
+- Repository no longer ships Playwright E2E or other forbidden test artifacts; CI stays aligned with that policy.
 
 ## v1.0.8 (2026-08-20)
 
