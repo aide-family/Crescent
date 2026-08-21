@@ -1,12 +1,14 @@
 import type { Dictionary } from '@renderer/i18n'
 import { decodeUserMessageText } from './agent-message-refs'
 import { parseAgentRunDocument } from './agent-run-document'
+import { buildTraceFromAgentRunView } from './agent-run-trace-export'
 import { stripComposerRefTokens } from './composer-ref-tokens'
 import type { AgentLogEntry, AgentRunStep, AgentRunViewState } from './terminal-tabs'
-import type { CaptureScope } from '../../../shared/agent-types'
-import type { StoredAgentLogEntry } from '../../../shared/agent-types'
+import type { AgentRunTrace, CaptureScope, StoredAgentLogEntry } from '../../../shared/agent-types'
+import { formatCaptureTranscript } from '../../../shared/capture-transcript'
 
-const SUMMARY_MAX_CHARS = 12_000
+const SUMMARY_MAX_CHARS = 80_000
+const COMMAND_RESULT_MAX_CHARS = 2_000
 
 export interface CaptureLogEntry {
   id: number
@@ -21,12 +23,12 @@ function summarizeToolSteps(steps: AgentRunStep[]): string[] {
     const command = (step.command || step.argsText || '').trim()
     const result = (step.resultText || '').trim()
     if (!command && !result) continue
-    const resultPreview = result ? result.slice(0, 400) : ''
+    const resultPreview = result ? result.slice(0, COMMAND_RESULT_MAX_CHARS) : ''
     lines.push(
       [
-        command ? `Command: ${command.slice(0, 300)}` : '',
+        command ? `Command: ${command}` : '',
         resultPreview
-          ? `Result: ${resultPreview}${result.length > 400 ? '…' : ''}${step.isError ? ' (error)' : ''}`
+          ? `Result: ${resultPreview}${result.length > COMMAND_RESULT_MAX_CHARS ? '…' : ''}${step.isError ? ' (error)' : ''}`
           : ''
       ]
         .filter(Boolean)
@@ -62,7 +64,62 @@ function collectUserGoals(
   return selected.map((index) => normalizeLogText('user', log[index]!.text))
 }
 
-/** Build a compact turn or session summary for SOP/skill generation. */
+/** Prefer the session-trace transcript; fall back to the in-memory log summary. */
+export function buildSessionCaptureSummary(input: {
+  traces: AgentRunTrace[]
+  log: CaptureLogEntry[]
+  entry?: CaptureLogEntry
+  liveRun?: AgentRunViewState
+  scope?: CaptureScope
+  seedText?: string
+  t: Dictionary
+}): string {
+  const transcript = formatCaptureTranscript({
+    traces: input.traces,
+    seedText: input.seedText,
+    scope: input.scope ?? 'session'
+  })
+  const hasTraceBody = input.traces.some(
+    (trace) => trace.input.trim() || trace.steps.length > 0 || Boolean(trace.resultSummary?.trim())
+  )
+  if (transcript.trim() && hasTraceBody) return transcript
+  return buildCaptureSummary(input)
+}
+
+export function collectLiveCaptureTraces(input: {
+  log: CaptureLogEntry[]
+  tabId: string
+  liveRunByLogId: Record<number, AgentRunViewState>
+}): AgentRunTrace[] {
+  const traces: AgentRunTrace[] = []
+  for (let index = 0; index < input.log.length; index++) {
+    const entry = input.log[index]
+    if (entry?.kind !== 'assistant') continue
+    const live = input.liveRunByLogId[entry.id]
+    if (!live) continue
+    let userText = ''
+    for (let previous = index - 1; previous >= 0; previous--) {
+      const candidate = input.log[previous]
+      if (candidate?.kind === 'user') {
+        userText = normalizeLogText('user', candidate.text)
+        break
+      }
+    }
+    traces.push(
+      buildTraceFromAgentRunView({
+        runId: live.runId ?? `live-${input.tabId}-${entry.id}`,
+        tabId: input.tabId,
+        displayInput: userText,
+        status: live.error ? 'error' : 'success',
+        run: live,
+        output: live.result,
+        error: live.error
+      })
+    )
+  }
+  return traces
+}
+
 export function buildCaptureSummary(input: {
   log: CaptureLogEntry[]
   entry?: CaptureLogEntry

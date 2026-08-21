@@ -17,6 +17,7 @@ interface ConnectionListProps {
   formatConnectionTarget: (connection: ConnectionConfig) => string
   onQueryChange: (query: string) => void
   onSelectConnection?: (connection: ConnectionConfig) => void
+  renderConnectionCorner?: (connection: ConnectionConfig) => ReactNode
   renderConnectionActions: (connection: ConnectionConfig) => ReactNode
 }
 
@@ -72,6 +73,7 @@ export function ConnectionList({
   formatConnectionTarget,
   onQueryChange,
   onSelectConnection,
+  renderConnectionCorner,
   renderConnectionActions
 }: ConnectionListProps): React.JSX.Element {
   function moveSelection(currentId: string, direction: 1 | -1): void {
@@ -131,18 +133,27 @@ export function ConnectionList({
         ) : filteredConnections.length === 0 ? (
           <p className="app-empty-state">{t.connections.noSearchResults}</p>
         ) : (
-          filteredConnections.map((connection) => (
-            <div
-              key={connection.id}
-              data-selected={selectedConnectionId === connection.id ? 'true' : undefined}
-              className="app-list-row text-xs"
-            >
-              <div className="flex items-start justify-between gap-2">
+          filteredConnections.map((connection) => {
+            const corner = renderConnectionCorner?.(connection)
+            return (
+              <div
+                key={connection.id}
+                data-selected={selectedConnectionId === connection.id ? 'true' : undefined}
+                className="app-list-row relative flex flex-col text-xs"
+              >
+                {corner ? (
+                  <div
+                    className="absolute top-1.5 right-1.5 z-10"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {corner}
+                  </div>
+                ) : null}
                 {onSelectConnection ? (
                   <button
                     type="button"
                     data-connection-id={connection.id}
-                    className="min-w-0 flex-1 space-y-0.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    className={`min-w-0 space-y-0.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${corner ? 'pr-8' : ''}`}
                     onClick={() => onSelectConnection(connection)}
                     onKeyDown={(event) => handleIdentityKeyDown(event, connection)}
                   >
@@ -154,7 +165,7 @@ export function ConnectionList({
                     />
                   </button>
                 ) : (
-                  <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className={`min-w-0 space-y-0.5 ${corner ? 'pr-8' : ''}`}>
                     <ConnectionIdentity
                       connection={connection}
                       formatConnectionTarget={formatConnectionTarget}
@@ -163,15 +174,12 @@ export function ConnectionList({
                     />
                   </div>
                 )}
-                <div
-                  className="flex shrink-0 items-start gap-1"
-                  onClick={(event) => event.stopPropagation()}
-                >
+                <div className="mt-2 flex justify-end" onClick={(event) => event.stopPropagation()}>
                   {renderConnectionActions(connection)}
                 </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </div>

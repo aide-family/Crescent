@@ -41,7 +41,6 @@ export {
   getCrescentDir,
   getCrescentConfigPath,
   getCrescentMemoryPath,
-  getCrescentSystemSkillsDir,
   getCrescentWikiDir
 } from './crescent-paths'
 

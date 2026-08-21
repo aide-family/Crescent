@@ -213,7 +213,6 @@ export function McpServersSheet({
       }}
     >
       <SheetContent
-        side="right"
         className={`w-full ${detailVisible ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
         onKeyDown={handleSheetKeyDown}
       >
@@ -221,7 +220,7 @@ export function McpServersSheet({
           <SheetTitle>{t.settings.mcpServers}</SheetTitle>
           <SheetDescription>{t.settings.mcpServersHint}</SheetDescription>
         </SheetHeader>
-        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+        <div className="app-sheet-split flex min-h-0 flex-1 flex-row gap-3 overflow-hidden px-4">
           <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium text-muted-foreground">

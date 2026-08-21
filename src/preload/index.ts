@@ -15,6 +15,7 @@ import type {
   AgentGenerateCaptureDraftResult,
   AgentCommitCaptureDraftInput,
   AgentCommitCaptureDraftResult,
+  AgentCaptureRequestedPayload,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -277,6 +278,19 @@ const api = {
       ipcRenderer.invoke('agent:start-skill-install', input),
     cancelSkillInstall: (installId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:cancel-skill-install', installId),
+    importSkill: (input?: {
+      sourcePath?: string
+      overwrite?: boolean
+    }): Promise<{
+      ok: boolean
+      canceled?: boolean
+      conflict?: boolean
+      existingNames?: string[]
+      sourcePath?: string
+      error?: string
+      skills?: AgentSkillOption[]
+      imported?: string[]
+    }> => ipcRenderer.invoke('agent:import-skill', input),
     deleteSkill: (path: string): Promise<AgentSkillOption[]> =>
       ipcRenderer.invoke('agent:delete-skill', path),
     getSkillContent: (path: string): Promise<string> =>
@@ -472,6 +486,17 @@ const api = {
 
       ipcRenderer.on('agent:subterminal-opened', listener)
       return () => ipcRenderer.removeListener('agent:subterminal-opened', listener)
+    },
+    onCaptureRequested: (
+      callback: (payload: AgentCaptureRequestedPayload) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        payload: AgentCaptureRequestedPayload
+      ): void => callback(payload)
+
+      ipcRenderer.on('agent:capture-requested', listener)
+      return () => ipcRenderer.removeListener('agent:capture-requested', listener)
     },
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AgentSkillInstallEvent): void =>

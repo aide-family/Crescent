@@ -271,6 +271,13 @@ export interface AgentGenerateSopResult {
 export type CaptureKind = 'sop' | 'skill'
 export type CaptureScope = 'turn' | 'session'
 
+export interface AgentCaptureRequestedPayload {
+  kind: CaptureKind
+  scope: CaptureScope
+  seedText?: string
+  chatTabId?: string
+}
+
 export interface AgentReloadRuntimeInput {
   sessionKey?: string
 }

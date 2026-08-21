@@ -95,7 +95,9 @@ export function buildGenerateSkillSystemPrompt(locale?: string): string {
     'You turn a Crescent ops session summary into a reusable Agent Skill (SKILL.md).',
     'This is a single text completion: do not call tools, do not browse disk, do not write files.',
     'Do not invent filesystem paths, hosts, or secret credentials.',
-    'Use only commands and outcomes present in the summary. Drop failed or speculative steps.',
+    'Use only the session transcript. Do not invent hosts, paths, or credentials.',
+    'Honor the operator seed text for the skill name and title when present.',
+    'Keep the successful workflow. Mention failed attempts only as cautions (do not retry X).',
     localeHint,
     'Respond with a SKILL.md document:',
     '1) YAML frontmatter with name (kebab-case ascii when possible), description, and optional aliases.',
@@ -105,7 +107,7 @@ export function buildGenerateSkillSystemPrompt(locale?: string): string {
 }
 
 export function buildGenerateSkillUserMessage(input: GenerateSkillInput): string {
-  const parts = ['# Session summary', input.summary.trim()]
+  const parts = ['# Session transcript', input.summary.trim()]
   const draft = input.draft?.trim()
   if (draft) {
     parts.push('', '# Current draft', draft)

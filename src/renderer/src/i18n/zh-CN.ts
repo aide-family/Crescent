@@ -579,7 +579,7 @@ const zhCN = {
     slashConnectionDescription: '选择已保存的 SSH 连接并登录',
     slashCreateSkill: '创建 Skill',
     slashCreateSkillDescription: '把当前会话处置流程转成 Skill 草稿，确认后写入',
-    slashSop: '生成 SOP',
+    slashSop: '创建 SOP',
     slashSopDescription: '把当前会话处置流程转成 SOP 草稿，确认后写入知识库',
     createSkillPrompt:
       '我想创建一个自定义 Skill。请引导我明确名称、适用场景、触发条件、执行步骤、输入输出、风险与验证方式，然后生成 SKILL.md 草稿。',
@@ -905,7 +905,12 @@ const zhCN = {
     updateSkill: '更新',
     skillsManagement: 'Skills 管理',
     skillsManagementHint:
-      '管理本机可用的 Agent Skills。系统内置 Skill 受保护不可删除，安装来源使用 skills.sh 搜索结果。',
+      '管理本机可用的 Agent Skills。可以从 skills.sh 搜索安装，也可以把本机 SKILL.md 文件或 Skill 目录导入到配置的 Skills 目录。',
+    importSkill: '导入',
+    skillImported: 'Skill 已导入',
+    skillImportFailed: 'Skill 导入失败',
+    skillImportOverwriteConfirm:
+      '以下 Skill 已存在：\n\n{names}\n\n要覆盖写入配置的 Skills 目录吗？',
     skillsNoResults: '未找到匹配的 Skills。',
     skillsRefreshed: 'Skills 已刷新',
     skillsSearchComplete: 'Skills 搜索完成',

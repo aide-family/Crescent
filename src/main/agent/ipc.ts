@@ -22,6 +22,7 @@ import {
 } from './connection-intent'
 import {
   deleteAgentSkill,
+  importAgentSkillsFromPath,
   installAgentSkill,
   listAgentSkills,
   readAgentSkillContent,
@@ -195,6 +196,13 @@ export function registerAgentIpc(): void {
     session.cancel()
     return { ok: true }
   })
+
+  ipcMain.handle(
+    'agent:import-skill',
+    (event, payload?: { sourcePath?: string; overwrite?: boolean }) => {
+      return importAgentSkillsFromDialog(event.sender, payload)
+    }
+  )
 
   ipcMain.handle('agent:delete-skill', (_, path: string) => {
     const config = readAgentConfig()
@@ -732,6 +740,42 @@ function listAllAgentExtensions(): ReturnType<typeof listAgentExtensions> {
     ...listAgentExtensions({ disabledExtensions }),
     ...listPiPackageExtensions({ disabledExtensions })
   ]
+}
+
+async function importAgentSkillsFromDialog(
+  webContents: WebContents,
+  payload?: { sourcePath?: string; overwrite?: boolean }
+): Promise<ReturnType<typeof importAgentSkillsFromPath> | { ok: false; canceled: true }> {
+  let sourcePath = typeof payload?.sourcePath === 'string' ? payload.sourcePath.trim() : ''
+  if (!sourcePath) {
+    const options: OpenDialogOptions = {
+      title: 'Import skill',
+      properties: process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openDirectory'],
+      filters: [
+        { name: 'Skill markdown', extensions: ['md'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    }
+    const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
+    const selection = browserWindow
+      ? await dialog.showOpenDialog(browserWindow, options)
+      : await dialog.showOpenDialog(options)
+
+    if (selection.canceled || !selection.filePaths[0]) {
+      return { ok: false, canceled: true }
+    }
+    sourcePath = resolve(selection.filePaths[0])
+  }
+
+  try {
+    return importAgentSkillsFromPath({
+      sourcePath,
+      skillRoot: readAgentConfig().skillRoot,
+      overwrite: Boolean(payload?.overwrite)
+    })
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 async function importAgentExtensionFromDialog(webContents: WebContents): Promise<{

@@ -625,7 +625,7 @@ const en = {
     slashCreateSkill: 'Create skill',
     slashCreateSkillDescription:
       'Turn this session’s workflow into a skill draft, then confirm to save',
-    slashSop: 'Generate SOP',
+    slashSop: 'Create SOP',
     slashSopDescription: 'Turn this session’s workflow into an SOP draft, then confirm to save',
     createSkillPrompt:
       'I want to create a custom Skill. Guide me through the name, use cases, triggers, workflow steps, inputs and outputs, risks, and validation approach, then generate a SKILL.md draft.',
@@ -973,7 +973,12 @@ const en = {
     updateSkill: 'Update',
     skillsManagement: 'Skills management',
     skillsManagementHint:
-      'Manage Agent Skills available on this machine. Built-in system skills are protected; installs use skills.sh search results.',
+      'Manage Agent Skills on this machine. Install from skills.sh, or import a local SKILL.md file or skill directory into the configured skill folder.',
+    importSkill: 'Import',
+    skillImported: 'Skill imported',
+    skillImportFailed: 'Skill import failed',
+    skillImportOverwriteConfirm:
+      'These skills already exist:\n\n{names}\n\nOverwrite them in the configured skill directory?',
     skillsNoResults: 'No matching skills found.',
     skillsRefreshed: 'Skills refreshed',
     skillsSearchComplete: 'Skills search complete',

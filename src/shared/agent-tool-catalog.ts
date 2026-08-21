@@ -56,5 +56,29 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     requiresApproval: false,
     external: false,
     stateChanging: true
+  },
+  {
+    name: 'create-skill',
+    method: 'post',
+    path: 'pi://crescent/create-skill',
+    description:
+      'Capture this session as a Skill draft. The operator confirms before SKILL.md is written.',
+    source: 'built-in',
+    risk: 'medium',
+    requiresApproval: false,
+    external: false,
+    stateChanging: true
+  },
+  {
+    name: 'create-sop',
+    method: 'post',
+    path: 'pi://crescent/create-sop',
+    description:
+      'Capture this session as a wiki SOP draft. The operator confirms before the wiki is written.',
+    source: 'built-in',
+    risk: 'medium',
+    requiresApproval: false,
+    external: false,
+    stateChanging: true
   }
 ]

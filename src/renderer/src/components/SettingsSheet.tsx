@@ -209,7 +209,10 @@ export function SettingsSheet({
           <SettingsIcon aria-hidden="true" />
         </Button>
       </SheetTrigger>
-      <SheetContent className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}>
+      <SheetContent
+        side="right"
+        className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
+      >
         <SheetHeader>
           <SheetTitle>{t.settings.title}</SheetTitle>
           <SheetDescription>

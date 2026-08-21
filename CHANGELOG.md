@@ -1,10 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Skills
+
+- Removed bundled `system-skills`. Agent skills come from the configured skill directory and optional `~/.agents/skills`.
+- Skill manager can import a local `SKILL.md` file or skill directory into the configured skill root.
+
+### Terminal / SSH
+
+- Connection manager keeps the editor collapsed until a card is selected; clicking the same card hides it again.
+- Connection card actions sit in the footer; delete stays at the top-right corner.
+
+### Desktop
+
+- Sheets other than Settings open from the left.
+
 ## v1.0.8 (2026-08-20)
 
 ### Capture / Knowledge
 
-- Capture a turn or session as an SOP or Skill draft (`/sop`, `/create-skill`, or phrases like 存成 SOP / 转成 skill). The host intercepts the request, generates in the background, and writes only after confirm.
+- Capture a turn or session as an SOP or Skill draft (`/create-sop`, `/create-skill`, or phrases like 存成 SOP / 转成 skill). The host intercepts the request, generates in the background, and writes only after confirm. `/sop` still matches the create-sop command.
 - Open a ready draft from the chat row or a pin while the agent is busy; edit the markdown, add notes for AI refine, and overwrite a same-named skill if needed.
 - History can turn a stored session into a Skill draft as well as a wiki SOP.
 - SOP generation waits up to 180s, revises from operator notes, and requires a specific title. Failed generation no longer saves raw seed text into the wiki.
@@ -12,7 +28,7 @@
 ### Skills
 
 - Default skill root is `~/.crescent/skills`. Configurations still pointing at `~/.agents/skills` migrate automatically; optionally load that global directory read-only.
-- New skills from capture save into the configured skill root; built-in skills cannot be overwritten.
+- New skills from capture save into the configured skill root.
 - Skill manager preview strips YAML frontmatter and renders the SKILL.md body.
 
 ### Slash / Runtime

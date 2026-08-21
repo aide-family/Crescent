@@ -18,7 +18,7 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Capture SOP/Skill from a session as a confirm-before-write draft (`/sop`, `/create-skill`, or natural language). Edit, refine with notes, then save.
+- Capture SOP/Skill from a session as a confirm-before-write draft (`/create-sop`, `/create-skill`, or natural language). Edit, refine with notes, then save.
 - `/reload` rebuilds idle agent runtimes so skills, wiki, MCP, and extensions pick up without restarting. Busy sessions stay as-is.
 - User skills default to `~/.crescent/skills` (old `~/.agents/skills` migrates); optional read-only load of global `~/.agents/skills`. SSH login actions wait for password/host-key prompts; custom connection names can be renamed or overwritten on conflict.
 

@@ -18,12 +18,3 @@ build/icons/Crescent.iconset/
 **/*.spec.js
 **/*.spec.jsx
 **/__tests__/
-
-# E2E tests are the only allowed test artifact; they live under e2e/.
-!e2e/**/*.spec.ts
-!e2e/**/*.spec.tsx
-
-# Playwright output
-test-results/
-playwright-report/
-blob-report/

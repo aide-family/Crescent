@@ -1,4 +1,4 @@
-import { useRef, type JSX } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react'
 import { Loader2Icon, SparklesIcon } from 'lucide-react'
 
 import { ImeSafeInput, ImeSafeTextarea } from '@renderer/components/ImeSafeFields'
@@ -16,6 +16,10 @@ import {
   DialogTitle
 } from '@renderer/components/ui/dialog'
 import type { Dictionary } from '@renderer/i18n'
+import {
+  resolveCaptureDraftParentSync,
+  type CaptureDraftFields
+} from '@renderer/lib/capture-draft-ui'
 import type { CaptureKind } from '../../../shared/agent-types'
 
 export interface CaptureDraftDialogProps {
@@ -33,13 +37,10 @@ export interface CaptureDraftDialogProps {
   error: string | null
   conflict: boolean
   onOpenChange: (open: boolean) => void
-  onTitleChange: (value: string) => void
-  onContentChange: (value: string) => void
-  onSkillNameChange: (value: string) => void
-  onNotesChange: (value: string) => void
+  onFlush: (fields: CaptureDraftFields) => void
   onOverwriteChange: (value: boolean) => void
-  onRefine: () => void
-  onCommit: () => void
+  onRefine: (fields: CaptureDraftFields) => void
+  onCommit: (fields: CaptureDraftFields) => void
 }
 
 export function CaptureDraftDialog({
@@ -57,20 +58,73 @@ export function CaptureDraftDialog({
   error,
   conflict,
   onOpenChange,
-  onTitleChange,
-  onContentChange,
-  onSkillNameChange,
-  onNotesChange,
+  onFlush,
   onOverwriteChange,
   onRefine,
   onCommit
 }: CaptureDraftDialogProps): JSX.Element {
   const busy = generating || refining || committing
-  const canCommit = Boolean(content.trim()) && !busy
+  const [localTitle, setLocalTitle] = useState(title)
+  const [localContent, setLocalContent] = useState(content)
+  const [localSkillName, setLocalSkillName] = useState(skillName)
+  const [localNotes, setLocalNotes] = useState(notes)
+  const fieldsRef = useRef<CaptureDraftFields>({ title, content, skillName, notes })
+  const wasOpenRef = useRef(false)
+  const wasBusyRef = useRef(false)
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const canCommit = Boolean(localContent.trim()) && !busy
+
+  function writeFields(next: CaptureDraftFields): void {
+    fieldsRef.current = next
+    setLocalTitle(next.title)
+    setLocalContent(next.content)
+    setLocalSkillName(next.skillName)
+    setLocalNotes(next.notes)
+  }
+
+  function patchFields(patch: Partial<CaptureDraftFields>): void {
+    const next = { ...fieldsRef.current, ...patch }
+    fieldsRef.current = next
+    if (patch.title != null) setLocalTitle(patch.title)
+    if (patch.content != null) setLocalContent(patch.content)
+    if (patch.skillName != null) setLocalSkillName(patch.skillName)
+    if (patch.notes != null) setLocalNotes(patch.notes)
+  }
+
+  useEffect(() => {
+    const generatingBusy = generating || refining
+    const mode = resolveCaptureDraftParentSync({
+      open,
+      wasOpen: wasOpenRef.current,
+      busy: generatingBusy,
+      wasBusy: wasBusyRef.current
+    })
+    wasOpenRef.current = open
+    wasBusyRef.current = generatingBusy
+    if (mode === 'full') {
+      writeFields({ title, content, skillName, notes })
+    } else if (mode === 'generated') {
+      writeFields({
+        title,
+        content,
+        skillName,
+        notes: fieldsRef.current.notes
+      })
+    }
+  }, [open, generating, refining, title, content, skillName, notes])
+
+  function currentFields(): CaptureDraftFields {
+    return fieldsRef.current
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onFlush(currentFields())
+        onOpenChange(next)
+      }}
+    >
       <DialogContent
         className="h-[min(85vh,900px)] w-[80vw] max-w-[80vw] gap-0 p-0"
         onOpenAutoFocus={(event) => {
@@ -94,8 +148,9 @@ export function CaptureDraftDialog({
               {t.capture.titleLabel}
               <ImeSafeInput
                 ref={titleInputRef}
-                value={title}
-                onValueChange={onTitleChange}
+                value={localTitle}
+                onValueChange={(value) => patchFields({ title: value })}
+                onBlur={() => onFlush(currentFields())}
                 disabled={generating}
               />
             </label>
@@ -103,15 +158,16 @@ export function CaptureDraftDialog({
               <label className="grid gap-1 text-xs text-muted-foreground">
                 {t.capture.skillNameLabel}
                 <ImeSafeInput
-                  value={skillName}
-                  onValueChange={onSkillNameChange}
+                  value={localSkillName}
+                  onValueChange={(value) => patchFields({ skillName: value })}
+                  onBlur={() => onFlush(currentFields())}
                   disabled={generating}
                 />
               </label>
             ) : null}
           </div>
 
-          {generating && !content ? (
+          {generating && !localContent ? (
             <div className="app-empty-state flex items-center gap-2">
               <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
               {t.capture.generating}
@@ -122,8 +178,9 @@ export function CaptureDraftDialog({
                 {t.capture.edit}
                 <ImeSafeTextarea
                   className="h-full min-h-0 resize-none font-mono text-xs [field-sizing:fixed]"
-                  value={content}
-                  onValueChange={onContentChange}
+                  value={localContent}
+                  onValueChange={(value) => patchFields({ content: value })}
+                  onBlur={() => onFlush(currentFields())}
                   disabled={generating}
                 />
               </label>
@@ -132,13 +189,13 @@ export function CaptureDraftDialog({
                 <div className="min-h-0 overflow-auto border-l-2 border-primary pl-3">
                   {kind === 'skill' ? (
                     <SkillMarkdownPreview
-                      content={content}
+                      content={localContent}
                       t={t}
                       headingIdPrefix="capture-draft"
-                      fallbackName={skillName}
+                      fallbackName={localSkillName}
                     />
                   ) : (
-                    <MarkdownContent value={content} t={t} headingIdPrefix="capture-draft" />
+                    <MarkdownContent value={localContent} t={t} headingIdPrefix="capture-draft" />
                   )}
                 </div>
               </div>
@@ -148,8 +205,9 @@ export function CaptureDraftDialog({
           <label className="grid shrink-0 gap-1 text-xs text-muted-foreground">
             {t.capture.refine}
             <ImeSafeInput
-              value={notes}
-              onValueChange={onNotesChange}
+              value={localNotes}
+              onValueChange={(value) => patchFields({ notes: value })}
+              onBlur={() => onFlush(currentFields())}
               placeholder={t.capture.notesPlaceholder}
               disabled={busy}
             />
@@ -173,7 +231,10 @@ export function CaptureDraftDialog({
           <Button
             type="button"
             variant="outline"
-            onClick={() => onOpenChange(false)}
+            onClick={() => {
+              onFlush(currentFields())
+              onOpenChange(false)
+            }}
             disabled={committing}
           >
             {t.common.cancel}
@@ -181,8 +242,8 @@ export function CaptureDraftDialog({
           <Button
             type="button"
             variant="outline"
-            onClick={onRefine}
-            disabled={!content.trim() || busy}
+            onClick={() => onRefine(currentFields())}
+            disabled={!localContent.trim() || busy}
           >
             {refining ? (
               <Loader2Icon className="animate-spin" data-icon="inline-start" />
@@ -193,7 +254,7 @@ export function CaptureDraftDialog({
           </Button>
           <Button
             type="button"
-            onClick={onCommit}
+            onClick={() => onCommit(currentFields())}
             disabled={!canCommit || (conflict && !overwrite)}
           >
             {committing && <Loader2Icon className="animate-spin" data-icon="inline-start" />}

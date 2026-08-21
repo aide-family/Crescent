@@ -94,7 +94,9 @@ export function buildGenerateSopSystemPrompt(locale?: string): string {
     'You turn a Crescent ops session summary into a reusable SOP markdown document.',
     'This is a single text completion: do not call tools, do not browse disk, do not write files.',
     'Do not invent filesystem paths or secret credentials.',
-    'Use only the summary provided by the user message.',
+    'Use only the session transcript provided by the user message.',
+    'Honor the operator seed text for the SOP title when present.',
+    'Keep the successful workflow. Mention failed attempts only as cautions (do not retry X).',
     localeHint,
     'Command examples in the SOP must be currently valid CLI usage.',
     'Never use deprecated flags such as `kubectl version --short` (use `kubectl version` or omit version checks).',
@@ -183,7 +185,7 @@ export async function generateSopFromSummary(
 }
 
 export function buildGenerateSopUserMessage(input: GenerateSopInput): string {
-  const parts = ['# Session summary', input.summary.trim()]
+  const parts = ['# Session transcript', input.summary.trim()]
   const draft = input.draft?.trim()
   if (draft) {
     parts.push('', '# Current draft', draft)

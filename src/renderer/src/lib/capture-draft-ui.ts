@@ -28,6 +28,26 @@ export type CaptureDraftPinView = {
   hasContent: boolean
 }
 
+export type CaptureDraftFields = {
+  title: string
+  content: string
+  skillName: string
+  notes: string
+}
+
+export type CaptureDraftParentSync = 'full' | 'generated' | 'none'
+
+export function resolveCaptureDraftParentSync(input: {
+  open: boolean
+  wasOpen: boolean
+  busy: boolean
+  wasBusy: boolean
+}): CaptureDraftParentSync {
+  if (input.open && !input.wasOpen) return 'full'
+  if (input.open && input.wasBusy && !input.busy) return 'generated'
+  return 'none'
+}
+
 const KIND_ORDER: CaptureKind[] = ['sop', 'skill']
 
 export function captureReadyLogText(kind: CaptureKind, t: Dictionary): string {

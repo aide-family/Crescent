@@ -26,6 +26,7 @@ import {
   createOpenSubterminalToolDefinition,
   OPEN_SUBTERMINAL_DISCIPLINE
 } from './pi-open-subterminal'
+import { CREATE_CAPTURE_DISCIPLINE, createCaptureToolDefinitions } from './pi-create-capture'
 import {
   hostedSessionToolProfile,
   needsModelChange,
@@ -569,12 +570,14 @@ async function ensureHostedSession(
       buildInvariantAgentPrompt({
         base: base ?? '',
         instructionContext,
-        openSubterminalDiscipline: OPEN_SUBTERMINAL_DISCIPLINE
+        openSubterminalDiscipline: OPEN_SUBTERMINAL_DISCIPLINE,
+        createCaptureDiscipline: CREATE_CAPTURE_DISCIPLINE
       })
   })
   await resourceLoader.reload()
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
+  const captureTools = await createCaptureToolDefinitions(pi, sessionKey)
   const mcp = await loadMcpPiTools(pi, config.mcpServers)
 
   const { session, extensionsResult } = await pi.createAgentSession({
@@ -584,7 +587,12 @@ async function ensureHostedSession(
     thinkingLevel: resolveThinkingLevelForModel(model ?? undefined),
     modelRuntime,
     resourceLoader,
-    customTools: [ptyBashTool as never, openSubterminalTool as never, ...(mcp.tools as never[])],
+    customTools: [
+      ptyBashTool as never,
+      openSubterminalTool as never,
+      ...(captureTools as never[]),
+      ...(mcp.tools as never[])
+    ],
     sessionManager: pi.SessionManager.inMemory(cwd),
     settingsManager
   })

@@ -24,11 +24,11 @@ export function isContinueIntent(value: string): boolean {
 
 export function isExplicitReconnectRequest(value: string): boolean {
   return (
-    // 重连 / 重新连接 / 再连一次 / 重试连接 / 重试当前连接 / 重试 ssh 登录
-    /重连|重新连接|再连(?:一次|一下)?|重试\s*(?:ssh\s*)?(?:登录|连接)|重试当前\s*连接/.test(
+    // 重连 / 重新连接 / 恢复连接 / 再连一次 / 重试连接 / 重试当前连接 / 重试 ssh 登录
+    /重连|重新连接|恢复连接|恢复\s*(?:ssh\s*)?(?:登录|连接)|再连(?:一次|一下)?|重试\s*(?:ssh\s*)?(?:登录|连接)|重试当前\s*连接/.test(
       value
     ) ||
-    /reconnect|re-?connect|retry\s+(?:the\s+|current\s+)?(?:ssh\s+)?(?:login|connection)/i.test(
+    /reconnect|re-?connect|restore\s+(?:the\s+)?(?:ssh\s+)?(?:login|connection)|retry\s+(?:the\s+|current\s+)?(?:ssh\s+)?(?:login|connection)/i.test(
       value
     )
   )
@@ -249,6 +249,7 @@ export function isConnectionOnlyRequest(input: string, connection: ConnectionCon
     'open',
     'reconnect',
     'retry',
+    'restore',
     '连接',
     '登录',
     '登入',
@@ -260,6 +261,8 @@ export function isConnectionOnlyRequest(input: string, connection: ConnectionCon
     '到',
     '至',
     '重新连接',
+    '恢复连接',
+    '恢复',
     '重连',
     '重试当前连接',
     '重试连接',

@@ -56,16 +56,9 @@ You can switch between local terminals, production hosts, test environments, and
 
 ### 4. Skills and Knowledge Base
 
-Crescent includes built-in Skills for common operational tasks, including:
+Crescent loads Agent Skills from the configured skill directory (default `~/.crescent/skills`). You can search and install from skills.sh, import a local `SKILL.md` file or skill directory, and optionally load `~/.agents/skills` read-only.
 
-- Linux host inspection.
-- Docker environment inspection.
-- Kubernetes cluster inspection.
-- Kubernetes architecture diagram generation.
-- Application service troubleshooting.
-- Network connectivity checks.
-
-It also supports local Skill management and a local knowledge base. You can turn troubleshooting records into reusable SOPs and let future Agent runs retrieve that operational knowledge.
+It also supports a local knowledge base. You can turn troubleshooting records into reusable SOPs and let future Agent runs retrieve that operational knowledge.
 
 This makes Crescent more than a chat interface. It is a workbench for gradually accumulating team knowledge.
 

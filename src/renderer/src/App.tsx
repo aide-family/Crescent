@@ -144,6 +144,7 @@ import {
   isContinueIntent,
   isExplicitConnectionRequest,
   isExplicitNonTerminalAgentRequest,
+  isExplicitReconnectRequest,
   isPasswordChangedReconnectRequest
 } from '@renderer/lib/agent-input'
 import { decodeUserMessageText, snapshotMessageReferences } from '@renderer/lib/agent-message-refs'
@@ -169,12 +170,16 @@ import {
   removeCaptureJob,
   upsertCaptureJob,
   visibleCaptureDraftPins,
+  type CaptureDraftFields,
   type CaptureDraftJob
 } from '@renderer/lib/capture-draft-ui'
 import {
   buildCaptureSummary,
+  buildSessionCaptureSummary,
+  collectLiveCaptureTraces,
   hasCaptureableContent,
-  historyLogsToCaptureEntries
+  historyLogsToCaptureEntries,
+  type CaptureLogEntry
 } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
 import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
@@ -187,6 +192,7 @@ import {
   isPasswordEnvVarMissing,
   looksLikeCommand,
   mergeConnectionInput,
+  resolveRemainingConnectionCommands,
   stripStoredPassword
 } from '@renderer/lib/connection-commands'
 import {
@@ -371,6 +377,7 @@ import {
   shouldShowOnboarding
 } from '@renderer/lib/onboarding'
 import { parseCaptureIntent } from '../../shared/capture-intent'
+import { mergeCaptureTraces } from '../../shared/capture-transcript'
 import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
@@ -678,6 +685,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const captureJobsRef = useRef<CaptureDraftJob[]>([])
   const captureJobIdRef = useRef(0)
   const captureGenerateQueueRef = useRef(createCaptureGenerateQueue())
+  const startCaptureFromCurrentSessionRef = useRef<
+    (
+      kind: CaptureKind,
+      scope: 'turn' | 'session',
+      seedText?: string,
+      tabId?: string
+    ) => Promise<void>
+  >(async () => undefined)
 
   function setCaptureJobsSync(
     updater: CaptureDraftJob[] | ((current: CaptureDraftJob[]) => CaptureDraftJob[])
@@ -729,7 +744,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
-  const [connectionEditing, setConnectionEditing] = useState(true)
+  const [connectionEditing, setConnectionEditing] = useState(false)
+  const [connectionFormOpen, setConnectionFormOpen] = useState(false)
   const [connectionForm, setConnectionForm] = useState<ConnectionInput>(createEmptyConnectionForm)
   const [connectionSshOptionsText, setConnectionSshOptionsText] = useState('')
   const [connectionActionsText, setConnectionActionsText] = useState('')
@@ -1635,9 +1651,23 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         ? stripStoredPassword(resolvedConnection)
         : resolvedConnection
 
-      const commands = includeSshCommand
-        ? buildConnectionCommands(loginConnection)
-        : buildConnectionLoginActions(loginConnection)
+      const liveContext = await window.api.terminal.getContext(targetTabId)
+      const remaining = resolveRemainingConnectionCommands(loginConnection, {
+        promptHost: liveContext.promptHost,
+        alignment: liveContext.alignment ?? liveContext.sessionAligned,
+        output: liveContext.output,
+        preferSshCommand: includeSshCommand
+      })
+      const commands = remaining.commands
+      const includeSshNow = remaining.includeSshCommand
+      connTrace(
+        'login-remaining',
+        `tab=${targetTabId}`,
+        `includeSsh=${includeSshNow}`,
+        `actions=${commands.length}`,
+        `promptHost=${liveContext.promptHost ?? '-'}`,
+        `aligned=${liveContext.alignment ?? liveContext.sessionAligned ?? '-'}`
+      )
 
       if (!skipStoredPassword && isPasswordEnvVarMissing(resolvedConnection)) {
         const message = `${t.connections.passwordEnvVarMissing}: ${resolvedConnection.passwordEnvVar}`
@@ -1646,14 +1676,25 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         return false
       }
 
-      if (commands.length === 0) return true
+      if (commands.length === 0) {
+        if (liveContext.promptHost && liveContext.promptHost !== 'local-shell') {
+          await window.api.terminal.confirmLogin({
+            tabId: targetTabId,
+            expectedTargetHost: resolveFinalSshTarget(
+              buildConnectionCommands(loginConnection),
+              resolvedConnection.host
+            )
+          })
+        }
+        return true
+      }
 
       const targetTab = tabsRef.current.find((tab) => tab.id === targetTabId)
       const subterminal = targetTab
         ? undefined
         : resolveSubterminalTabState(tabsRef.current, targetTabId)
       const terminalMode = targetTab?.terminalMode ?? subterminal?.terminalMode
-      const [sshCommand] = includeSshCommand ? commands : []
+      const [sshCommand] = includeSshNow ? commands : []
       if (
         terminalMode === 'pipe' &&
         sshCommand &&
@@ -1676,7 +1717,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const pendingReuseRun = (postConnectionTasksRef.current.get(targetTabId) ?? []).find(
         (task) => task.reuseRun
       )?.reuseRun
-      const loginActionCount = buildConnectionLoginActions(loginConnection).length
+      const loginActionCount = includeSshNow ? Math.max(0, commands.length - 1) : commands.length
       appendStatusToActiveRunOrLog(
         chatTabId,
         loginActionCount > 0
@@ -1692,10 +1733,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         host: resolvedConnection.host
       })
       try {
-        const hasLeadingAutoPassword = Boolean(
-          loginConnection.password || loginConnection.resolvedPassword
-        )
-        const ok = includeSshCommand
+        const storedPassword = loginConnection.password || loginConnection.resolvedPassword
+        const firstSecret = includeSshNow ? commands[1] : commands[0]
+        const hasLeadingAutoPassword = Boolean(storedPassword && firstSecret === storedPassword)
+        const ok = includeSshNow
           ? await runConnectionCommandSequence(
               commands,
               targetTabId,
@@ -1729,8 +1770,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         // Multi-hop login: the final `ssh <host>` action is the true target.
         // Wait for that host's prompt (not the jump box's) before confirming,
         // otherwise confirm-login anchors the wrong runtime environment.
-        const finalTargetHost = resolveFinalSshTarget(commands, connection.host)
-        const lastAction = commands.length > 1 ? commands[commands.length - 1] : undefined
+        const fullCommands = buildConnectionCommands(loginConnection)
+        const finalTargetHost = resolveFinalSshTarget(fullCommands, connection.host)
+        const lastAction = commands.length > 0 ? commands[commands.length - 1] : undefined
         const lastActionIsSsh = Boolean(lastAction && isSshCommandLine(lastAction))
         const preConfirm = await window.api.terminal.getContext(targetTabId)
         const previousHost =
@@ -1749,14 +1791,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           `promptSignal=${loginSignal}`,
           `promptAfterMs=${Date.now() - promptStart}`
         )
-        const verified = sshCommand
-          ? await window.api.terminal.confirmLogin({
-              tabId: subterminal ? subterminal.parentTabId : targetTabId,
-              sourceTabId: subterminal ? targetTabId : undefined,
-              expectedTargetHost: finalTargetHost,
-              jumpPromptHost: previousHost
-            })
-          : undefined
+        const verified = await window.api.terminal.confirmLogin({
+          tabId: subterminal ? subterminal.parentTabId : targetTabId,
+          sourceTabId: subterminal ? targetTabId : undefined,
+          expectedTargetHost: finalTargetHost,
+          jumpPromptHost: previousHost
+        })
         if (verified && !verified.ok && loginSignal === 'local') {
           skipConnectionReconnectRef.current.add(targetTabId)
           abortPostConnectionTasks(
@@ -2059,7 +2099,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         toast.success(t.app.updateSaved)
       }
     })
-    void window.api.update.check()
+    if (!import.meta.env.DEV) {
+      void window.api.update.check()
+    }
     return () => {
       cancelled = true
       unsubscribe()
@@ -2573,6 +2615,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       handleSkillInstallEvent(event)
     })
   })
+
+  useEffect(() => {
+    return window.api.agent.onCaptureRequested((payload) => {
+      void startCaptureFromCurrentSessionRef.current(
+        payload.kind === 'skill' ? 'skill' : 'sop',
+        payload.scope === 'turn' ? 'turn' : 'session',
+        payload.seedText ?? '',
+        payload.chatTabId
+      )
+    })
+  }, [])
 
   useEffect(() => {
     return window.api.storage.onSessionSummaryUpdated((event) => {
@@ -3275,6 +3328,46 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }, 1400)
   }
 
+  async function importSkillFromDisk(options?: {
+    sourcePath?: string
+    overwrite?: boolean
+  }): Promise<void> {
+    try {
+      const result = await window.api.agent.importSkill(options)
+      if (result.canceled) return
+      if (result.conflict && result.sourcePath) {
+        const names = (result.existingNames ?? []).join('\n')
+        if (
+          !window.confirm(
+            t.settings.skillImportOverwriteConfirm.replace('{names}', names || result.sourcePath)
+          )
+        ) {
+          return
+        }
+        await importSkillFromDisk({ sourcePath: result.sourcePath, overwrite: true })
+        return
+      }
+      if (!result.ok) {
+        setSkillManageMessage({
+          type: 'error',
+          text: result.error || t.settings.skillImportFailed
+        })
+        return
+      }
+      setSkills(result.skills ?? (await window.api.agent.listSkills()))
+      const imported = result.imported?.filter(Boolean).join(', ')
+      setSkillManageMessage({
+        type: 'success',
+        text: imported ? `${t.settings.skillImported}: ${imported}` : t.settings.skillImported
+      })
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   async function deleteSkill(skill: AgentSkillOption): Promise<void> {
     if (!skill.removable) return
     if (!window.confirm(`${t.confirm.deleteSkill}\n\n${skill.name}`)) return
@@ -3552,19 +3645,50 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     })
   }
 
-  function startCaptureFromCurrentSession(
+  async function startCaptureFromCurrentSession(
     kind: CaptureKind,
     scope: 'turn' | 'session',
-    seedText = ''
-  ): void {
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
-    if (!hasCaptureableContent({ log, seedText })) {
-      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
-      return
+    seedText = '',
+    tabId?: string
+  ): Promise<void> {
+    const chatTabId =
+      tabId?.trim() || resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const memoryLog = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
+    let log: CaptureLogEntry[] = memoryLog.map((entry) => ({
+      id: entry.id,
+      kind: entry.kind,
+      text: entry.text
+    }))
+    let runs: StoredAgentRun[] = []
+    try {
+      const [history, storedRuns] = await Promise.all([
+        window.api.storage.getSessionHistory(chatTabId),
+        window.api.storage.listAllAgentRuns(chatTabId)
+      ])
+      runs = storedRuns
+      if ((history?.logs.length ?? 0) > memoryLog.length) {
+        log = historyLogsToCaptureEntries(history!.logs)
+      }
+    } catch {
+      // Use the in-memory log when SQLite is unavailable.
     }
+
+    const liveTraces = collectLiveCaptureTraces({
+      log,
+      tabId: chatTabId,
+      liveRunByLogId
+    })
+    const traces = mergeCaptureTraces(
+      buildAgentSessionTrace({
+        tabId: chatTabId,
+        title: getSessionDisplayTitle(sessionChatTab, tabsRef.current, activeTabIdRef.current),
+        runs
+      }).runs,
+      liveTraces
+    )
     const entry = [...log].reverse().find((item) => item.kind === 'assistant')
-    const summary = buildCaptureSummary({
+    const summary = buildSessionCaptureSummary({
+      traces,
       log,
       entry,
       liveRun: entry ? liveRunByLogId[entry.id] : undefined,
@@ -3572,8 +3696,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       seedText,
       t
     })
+    if (!hasCaptureableContent({ log, seedText }) && !summary.trim()) {
+      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
+      return
+    }
     void generateCaptureDraftFromSummary({ kind, summary })
   }
+  startCaptureFromCurrentSessionRef.current = startCaptureFromCurrentSession
 
   async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
     if (savingSopLogId === entry.id) return
@@ -3605,19 +3734,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (kind === 'skill') setSavingHistorySkillTabId(item.tabId)
     else setSavingHistoryWikiTabId(item.tabId)
     try {
-      const detail = await window.api.storage.getSessionHistory(item.tabId)
+      const [detail, runs] = await Promise.all([
+        window.api.storage.getSessionHistory(item.tabId),
+        window.api.storage.listAllAgentRuns(item.tabId)
+      ])
       if (!detail) return
       const log = historyLogsToCaptureEntries(detail.logs)
-      if (!hasCaptureableContent({ log, seedText: detail.title })) {
-        toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
-        return
-      }
-      const summary = buildCaptureSummary({
+      const traces = buildAgentSessionTrace({
+        tabId: item.tabId,
+        title: detail.title,
+        runs
+      }).runs
+      const summary = buildSessionCaptureSummary({
+        traces,
         log,
         scope: 'session',
         seedText: detail.title,
         t
       })
+      if (!hasCaptureableContent({ log, seedText: detail.title }) && !summary.trim()) {
+        toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
+        return
+      }
       void generateCaptureDraftFromSummary({ kind, summary })
     } catch (error) {
       toast.error(
@@ -3653,30 +3791,32 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setCaptureJobsSync((current) => patchCaptureJob(current, job.jobId, patch))
   }
 
-  async function refineCaptureDraft(): Promise<void> {
+  async function refineCaptureDraft(fields: CaptureDraftFields): Promise<void> {
     const job = dialogCaptureJob()
-    if (!job || !job.summary.trim() || !job.content.trim()) return
+    if (!job || !job.summary.trim() || !fields.content.trim()) return
+    patchDialogCaptureJob(fields)
     await generateCaptureDraftFromSummary({
       kind: job.kind,
       summary: job.summary,
-      draft: job.content,
-      notes: job.notes,
+      draft: fields.content,
+      notes: fields.notes,
       refining: true
     })
   }
 
-  async function commitCaptureDraft(): Promise<void> {
+  async function commitCaptureDraft(fields: CaptureDraftFields): Promise<void> {
     const job = dialogCaptureJob()
-    if (!job || !job.content.trim() || job.committing) return
+    if (!job || !fields.content.trim() || job.committing) return
+    patchDialogCaptureJob(fields)
     setCaptureJobsSync((current) =>
       patchCaptureJob(current, job.jobId, { committing: true, error: null })
     )
     try {
       const result = await window.api.agent.commitCaptureDraft({
         kind: job.kind,
-        title: job.title,
-        content: job.content,
-        skillName: job.skillName,
+        title: fields.title,
+        content: fields.content,
+        skillName: fields.skillName,
         overwrite: job.overwrite
       })
       if (result.conflict) {
@@ -4593,22 +4733,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       // Recovery brake #2: never reinit + re-knock ssh on an already connected
       // terminal. Read the SSOT first; aligned means reuse as-is.
       const context = await window.api.terminal.getContext(targetTabId)
-      // A session that is already sitting on a REMOTE prompt host is usable
-      // even when the SSOT alignment says "drifted" (e.g. the configured host
-      // is an IP while the remote prompt shows a hostname). Re-learn the
-      // observed host as an alias instead of killing a working login.
+      // Only skip re-login when EnvGuard says the PTY is on the operation
+      // target. A jump-box fall-back is remote AND drifted — continue with
+      // remaining login actions from the connection (next ssh + password),
+      // instead of treating any remote prompt as "already connected".
+      const waitingForSecret = findNewestPromptSignal(context.output)?.kind === 'waiting'
       const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
-      if (context.alignment === 'aligned' || onRemoteHost) {
+      if (context.alignment === 'aligned' && !waitingForSecret) {
         connTrace('connect-reuse-aligned', `tab=${targetTabId}`, 'skipping re-login')
-        if (onRemoteHost && context.alignment !== 'aligned') {
-          const verified = await window.api.terminal.confirmLogin({ tabId: targetTabId })
-          connTrace('reuse-reconfirm', `tab=${targetTabId}`, `ok=${verified?.ok}`)
-        }
         markChatTabReady(chatTabId)
         finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
         if (postConnectionTasksRef.current.get(targetTabId)?.length) {
           drainPostConnectionTasks(targetTabId)
         }
+      } else if (onRemoteHost || waitingForSecret) {
+        connTrace(
+          'reuse-remaining-login',
+          `tab=${targetTabId}`,
+          `connection=${connection.id}`,
+          `promptHost=${context.promptHost ?? '-'}`,
+          `waiting=${waitingForSecret}`
+        )
+        await executeConnectionCommands(connection, targetTabId)
       } else {
         connTrace('reuse-login', `tab=${targetTabId}`, `connection=${connection.id}`)
         // Same SSH tab re-login: stop the old PTY, spawn a fresh one inline and
@@ -4851,6 +4997,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function showConnectionList(): void {
+    setSelectedConnectionId('')
+    setConnectionFormOpen(false)
+    setConnectionEditing(false)
     setConnectionModalOpen(true)
     void window.api.connections
       .list()
@@ -5241,7 +5390,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     const nextConnections = await window.api.connections.delete(id)
     setConnections(nextConnections)
-    if (connectionForm.id === id) resetConnectionForm()
+    if (connectionForm.id === id) closeConnectionForm()
   }
 
   async function resolveConnectionIntentForInput(
@@ -5328,7 +5477,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     const captureIntent = parseCaptureIntent(displayInput)
     if (captureIntent) {
       updateTab(chatTabId, (current) => applyComposerInput(current, ''))
-      startCaptureFromCurrentSession(
+      void startCaptureFromCurrentSession(
         captureIntent.kind,
         captureIntent.scope,
         captureIntent.seedText
@@ -5509,7 +5658,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           message: intentSourceInput,
           activeTabId: terminalTabId,
           activeTab: terminalTab,
-          sessionTabs
+          sessionTabs,
+          sessionAligned: terminalContext.sessionAligned,
+          promptHost: terminalContext.promptHost
         })
       }
     }
@@ -5529,7 +5680,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
     let executionTerminalId = terminalTabId
-    const activeLoggedIn = isActiveLoggedInTerminal(terminalTab)
+    const activeLoggedIn = isActiveLoggedInTerminal(terminalTab, {
+      sessionAligned: terminalContext.sessionAligned,
+      promptHost: terminalContext.promptHost
+    })
     try {
       if (route.action === 'llm-fallback' && activeLoggedIn) {
         // Never let LLM / lastUsed steal an already logged-in active terminal.
@@ -5797,6 +5951,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       route.action !== 'switch'
     ) {
       // LLM / lastUsed must not steal a logged-in active terminal; explicit route actions may.
+      connectionIntent = undefined
+    }
+
+    if (
+      activeLoggedIn &&
+      connectionIntent?.analysis?.shouldConnect &&
+      connectionIntent.connection?.id === terminalTab?.connectionId &&
+      !isExplicitReconnectRequest(intentSourceInput)
+    ) {
+      // Already on this connection: run the inspect/task in the live PTY.
+      // Do not open a second login card or re-type ssh / login actions.
       connectionIntent = undefined
     }
 
@@ -6638,11 +6803,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return
     }
 
-    if (command.id === 'create-skill' || command.id === 'sop') {
+    if (command.id === 'create-skill' || command.id === 'create-sop') {
       updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
       setSlashCommandIndex(0)
       setSlashCommandOpen(false)
-      startCaptureFromCurrentSession(command.id === 'create-skill' ? 'skill' : 'sop', 'turn')
+      void startCaptureFromCurrentSession(
+        command.id === 'create-skill' ? 'skill' : 'sop',
+        'session'
+      )
       return
     }
 
@@ -6977,6 +7145,19 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionNameConflict(null)
     setSelectedConnectionId('')
     setConnectionEditing(true)
+    setConnectionFormOpen(true)
+  }
+
+  function closeConnectionForm(): void {
+    setConnectionForm(createEmptyConnectionForm())
+    setConnectionSshOptionsText('')
+    setConnectionActionsText('')
+    setConnectionImportText('')
+    setConnectionSaveMessage(null)
+    setConnectionNameConflict(null)
+    setSelectedConnectionId('')
+    setConnectionEditing(false)
+    setConnectionFormOpen(false)
   }
 
   function loadConnectionIntoForm(connection: ConnectionConfig, editing: boolean): void {
@@ -6985,10 +7166,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
     setSelectedConnectionId(connection.id)
     setConnectionEditing(editing)
+    setConnectionFormOpen(true)
     setConnectionNameConflict(null)
   }
 
   function selectConnection(connection: ConnectionConfig): void {
+    if (selectedConnectionId === connection.id && connectionFormOpen) {
+      setSelectedConnectionId('')
+      setConnectionFormOpen(false)
+      setConnectionEditing(false)
+      return
+    }
     loadConnectionIntoForm(connection, false)
   }
 
@@ -7007,6 +7195,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setConnectionActionsText(connection.actions?.join('\n') ?? '')
     setSelectedConnectionId('')
     setConnectionEditing(true)
+    setConnectionFormOpen(true)
   }
 
   async function copyConnection(connection: ConnectionConfig): Promise<void> {
@@ -7046,6 +7235,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       setConnectionImportText('')
       setSelectedConnectionId('')
       setConnectionEditing(true)
+      setConnectionFormOpen(true)
     } catch {
       setConnectionImportText((current) => current)
     }
@@ -7412,6 +7602,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       onLocalSkillSearchQueryChange={setLocalSkillSearchQuery}
       onSkillSearchQueryChange={setSkillSearchQuery}
       onRefreshSkills={() => void refreshSkills()}
+      onImportSkills={() => void importSkillFromDisk()}
       onSearchSkills={() => void searchSkills()}
       onInstallSkill={(result) => void installSkill(result)}
       onCancelSkillInstall={(resultId) => void cancelSkillInstall(resultId)}
@@ -7742,13 +7933,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         onOpenChange={(open) => {
           if (!open) setCaptureDialogKind(null)
         }}
-        onTitleChange={(title) => patchDialogCaptureJob({ title })}
-        onContentChange={(content) => patchDialogCaptureJob({ content })}
-        onSkillNameChange={(skillName) => patchDialogCaptureJob({ skillName })}
-        onNotesChange={(notes) => patchDialogCaptureJob({ notes })}
+        onFlush={(fields) => patchDialogCaptureJob(fields)}
         onOverwriteChange={(overwrite) => patchDialogCaptureJob({ overwrite })}
-        onRefine={() => void refineCaptureDraft()}
-        onCommit={() => void commitCaptureDraft()}
+        onRefine={(fields) => void refineCaptureDraft(fields)}
+        onCommit={(fields) => void commitCaptureDraft(fields)}
       />
       <section
         className={`app-frame relative flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
@@ -8058,6 +8246,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         selectedConnectionId={selectedConnectionId}
         connectionForm={connectionForm}
         connectionEditing={connectionEditing}
+        connectionFormOpen={connectionFormOpen}
         connectionImportText={connectionImportText}
         connectionSshOptionsText={connectionSshOptionsText}
         connectionActionsText={connectionActionsText}

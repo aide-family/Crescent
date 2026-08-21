@@ -56,16 +56,9 @@ Crescent 可以读取 `~/.ssh/config`，也支持自定义 SSH 连接、登录�
 
 ### 4. Skills + 知识库，把经验沉淀成可复用工作流
 
-项目内置了系统 Skill，例如：
+Crescent 从配置的 Skill 目录加载 Agent Skills（默认 `~/.crescent/skills`）。可以从 skills.sh 搜索安装，也可以从本机 `SKILL.md` 文件或 Skill 目录导入，并可选只读加载 `~/.agents/skills`。
 
-- Linux 基础环境巡检。
-- Docker 环境检查。
-- Kubernetes 集群巡检。
-- Kubernetes 架构图生成。
-- 应用服务排查。
-- 网络连通性检查。
-
-Crescent 还支持本地 Skill 管理和知识库沉淀。你可以把一次排障记录整理成 SOP，保存到本地知识库，后续 Agent 可以检索并参考这些经验。
+还支持本地知识库沉淀。你可以把一次排障记录整理成 SOP，保存到本地知识库，后续 Agent 可以检索并参考这些经验。
 
 这让 Crescent 不只是会话工具，而更像一个面向团队经验复用的运维工作台。
 

@@ -14,6 +14,7 @@ import type {
   AgentGenerateCaptureDraftResult,
   AgentCommitCaptureDraftInput,
   AgentCommitCaptureDraftResult,
+  AgentCaptureRequestedPayload,
   AgentModelOption,
   AgentPathReference,
   PastedAttachmentInput,
@@ -184,6 +185,16 @@ interface TerminalAgentApi {
       installSkill?: string
     }) => Promise<{ ok: boolean; installId: string }>
     cancelSkillInstall: (installId: string) => Promise<{ ok: boolean }>
+    importSkill: (input?: { sourcePath?: string; overwrite?: boolean }) => Promise<{
+      ok: boolean
+      canceled?: boolean
+      conflict?: boolean
+      existingNames?: string[]
+      sourcePath?: string
+      error?: string
+      skills?: AgentSkillOption[]
+      imported?: string[]
+    }>
     deleteSkill: (path: string) => Promise<AgentSkillOption[]>
     getSkillContent: (path: string) => Promise<string>
     getCatalogSkillContent: (input: {
@@ -294,6 +305,7 @@ interface TerminalAgentApi {
         chatTabId?: string
       }) => void
     ) => () => void
+    onCaptureRequested: (callback: (payload: AgentCaptureRequestedPayload) => void) => () => void
     onSkillInstallEvent: (callback: (event: AgentSkillInstallEvent) => void) => () => void
     onExtensionUiRequest: (callback: (request: ExtensionUiRequest) => void) => () => void
     onExtensionUiDismiss: (callback: (payload: ExtensionUiDismiss) => void) => () => void

@@ -4,6 +4,7 @@ export interface InvariantAgentPromptInput {
   base: string
   instructionContext?: string
   openSubterminalDiscipline?: string
+  createCaptureDiscipline?: string
 }
 
 /**
@@ -35,8 +36,8 @@ export function buildInvariantAgentPrompt(input: InvariantAgentPromptInput): str
     '- 知识库/SOP 存库一律经 wiki 机制写入 ~/.crescent/wiki；Skill 写入配置的 skillRoot；禁止存到 workspace 或远程主机；',
     '  禁止用 bash 写文件（mkdir / cat > / heredoc）或用 write/edit 工具落 SOP / SKILL.md。',
     '- 把本轮或整段会话存成 SOP / Skill 由系统在提交前拦截并在后台生成草稿；你通常收不到「存为skill / 转换为skill / 存成 SOP」这类原话。',
-    '  若请求仍到达你：不要声称草稿已打开或已写入，不要询问保存位置，不要用 bash/write 落盘；',
-    '  不要让用户改用 /create-skill 或 /sop。用一两句说明系统会后台生成草稿，操作者稍后可在对话里打开确认。',
+    '  若请求仍到达你：调用 create-skill 或 create-sop（默认 scope=session）；不要声称草稿已打开或已写入，不要询问保存位置，不要用 bash/write 落盘；',
+    '  不要让用户改用斜杠命令。工具只触发后台草稿，操作者稍后可在对话里打开确认。',
     '',
     '# 引用材料纪律',
     '- 用户引用的 Skill / SOP 仅作参考材料；简单任务不要强行套完整手册流程，按目标最小必要执行。',
@@ -78,7 +79,8 @@ export function buildInvariantAgentPrompt(input: InvariantAgentPromptInput): str
     '  直接在该终端执行排查命令；不得主动询问或要求用户选择连接目标。',
     '- 目标环境未就绪时等待工具结果，不要改口问用户怎么连；直接执行任务。',
     '',
-    input.openSubterminalDiscipline?.trim() ?? ''
+    input.openSubterminalDiscipline?.trim() ?? '',
+    input.createCaptureDiscipline?.trim() ?? ''
   ]
     .filter(Boolean)
     .join('\n')

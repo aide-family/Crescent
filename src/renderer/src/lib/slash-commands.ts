@@ -278,11 +278,11 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       keywords: ['create-skill', 'skill', 'skills', 'custom', '转成skill']
     },
     {
-      id: 'sop',
+      id: 'create-sop',
       title: t.input.slashSop,
       description: t.input.slashSopDescription,
-      value: '/sop',
-      keywords: ['sop', 'wiki', 'knowledge', '知识库']
+      value: '/create-sop',
+      keywords: ['create-sop', 'sop', 'wiki', 'knowledge', '知识库']
     }
   ]
 }

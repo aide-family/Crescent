@@ -15,6 +15,7 @@ import {
   flattenComposerSegmentsForInline,
   removeComposerRefToken
 } from '@renderer/lib/composer-ref-tokens'
+import { shouldSkipComposerDomRebuild } from '@renderer/lib/composer-rebuild-policy'
 import {
   createComposerPadBr,
   getComposerDomCaret,
@@ -93,13 +94,18 @@ export function ComposerEditor({
         }
       }
     }
-    if (!surface || composingRef.current) return
+    if (!surface) return
 
     const isEcho = mountedRef.current && value === lastEmittedRef.current
     mountedRef.current = true
-    // When empty, always rebuild so a leftover browser <br> cannot hide the
-    // CSS placeholder (echo skip would leave non-pad BR in the DOM).
-    if (isEcho && value.length > 0) {
+    if (
+      shouldSkipComposerDomRebuild({
+        composing: composingRef.current,
+        isEcho,
+        valueLength: value.length,
+        composerFocused: document.activeElement === surface
+      })
+    ) {
       previousValueRef.current = value
       pendingCaretRef.current = null
       return

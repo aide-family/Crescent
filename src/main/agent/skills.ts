@@ -6,11 +6,12 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'fs'
 import { spawn } from 'child_process'
 import { homedir, tmpdir } from 'os'
-import { basename, dirname, join, resolve } from 'path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 
 import type {
   AgentSkillContext,
@@ -18,7 +19,7 @@ import type {
   AgentSkillOption,
   AgentSkillSearchResult
 } from './types'
-import { getCrescentSystemSkillsDir, GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
+import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 
 const MAX_MATCHED_SKILLS = 3
 const MAX_SKILL_CONTENT_CHARS = 16_000
@@ -62,12 +63,8 @@ export function listAgentSkills(
 ): AgentSkillOption[] {
   const seen = new Set<string>()
   const skills: AgentSkillOption[] = []
-  const systemRoot = ensureBuiltInOperationSkills()
   const root = resolveSkillRoot(skillRoot)
-  const roots: Array<{ root: string; removable: boolean }> = [
-    { root: systemRoot, removable: false },
-    { root, removable: true }
-  ]
+  const roots: Array<{ root: string; removable: boolean }> = [{ root, removable: true }]
   if (options?.loadGlobalAgentSkills) {
     const globalRoot = resolveSkillRoot(options.globalSkillRoot || GLOBAL_AGENT_SKILLS_TILDE)
     if (globalRoot !== root) {
@@ -648,17 +645,13 @@ export function createAgentSkill(input: CreateAgentSkillInput): CreateAgentSkill
   if (!content) return { ok: false, error: 'Skill content is empty.' }
 
   const root = resolveSkillRoot(input.skillRoot)
-  const systemRoot = resolve(ensureBuiltInOperationSkills())
   const extractedName = extractSkillName(content) || input.name?.trim() || ''
   const dirName = sanitizeSkillDirName(extractedName)
   const skillDir = resolve(join(root, dirName))
   const skillPath = join(skillDir, 'SKILL.md')
 
-  if (!skillDir.startsWith(root)) {
+  if (!isPathInside(root, skillDir) && skillDir !== root) {
     return { ok: false, error: 'Skill path is outside the configured skill root.' }
-  }
-  if (skillDir === systemRoot || skillDir.startsWith(`${systemRoot}/`)) {
-    return { ok: false, error: 'Built-in skills cannot be overwritten.' }
   }
 
   if (existsSync(skillPath) && !input.overwrite) {
@@ -673,6 +666,91 @@ export function createAgentSkill(input: CreateAgentSkillInput): CreateAgentSkill
   mkdirSync(skillDir, { recursive: true })
   writeFileSync(skillPath, content.endsWith('\n') ? content : `${content}\n`, 'utf8')
   return { ok: true, skill: readSkill(skillPath, root, true) }
+}
+
+export type ImportAgentSkillsResult =
+  | { ok: true; skills: AgentSkillOption[]; imported: string[] }
+  | { ok: false; canceled: true }
+  | {
+      ok: false
+      conflict: true
+      existingNames: string[]
+      sourcePath: string
+    }
+  | { ok: false; error: string }
+
+export function importAgentSkillsFromPath(input: {
+  sourcePath: string
+  skillRoot?: string
+  overwrite?: boolean
+}): ImportAgentSkillsResult {
+  const sourcePath = resolve(input.sourcePath.trim())
+  if (!existsSync(sourcePath)) {
+    return { ok: false, error: 'Skill source does not exist.' }
+  }
+
+  const root = resolveSkillRoot(input.skillRoot)
+  mkdirSync(root, { recursive: true })
+
+  const sourceDirectories = resolveImportSkillDirectories(sourcePath)
+  if (sourceDirectories.length === 0) {
+    return { ok: false, error: 'No SKILL.md files found in the selected path.' }
+  }
+
+  for (const directory of sourceDirectories) {
+    if (isPathInside(root, directory) || resolve(directory) === root) {
+      return {
+        ok: false,
+        error: 'Cannot import a skill that is already inside the skill directory.'
+      }
+    }
+  }
+
+  const planned: Array<{ source: string; dest: string; name: string }> = []
+  for (const directory of sourceDirectories) {
+    const content = readFileSync(join(directory, 'SKILL.md'), 'utf8')
+    const skillName = extractSkillName(content) || basename(directory)
+    const dest = resolve(join(root, sanitizeSkillDirectoryName(skillName)))
+    if (!isPathInside(root, dest)) {
+      return { ok: false, error: 'Skill path is outside the configured skill root.' }
+    }
+    planned.push({ source: directory, dest, name: skillName })
+  }
+
+  const existingNames = [
+    ...new Set(planned.filter((item) => existsSync(item.dest)).map((item) => item.name))
+  ]
+  if (existingNames.length > 0 && !input.overwrite) {
+    return {
+      ok: false,
+      conflict: true,
+      existingNames,
+      sourcePath
+    }
+  }
+
+  const imported: string[] = []
+  for (const item of planned) {
+    rmSync(item.dest, { recursive: true, force: true })
+    cpSync(item.source, item.dest, { recursive: true })
+    imported.push(item.name)
+  }
+
+  return {
+    ok: true,
+    imported,
+    skills: listAgentSkills(input.skillRoot)
+  }
+}
+
+function resolveImportSkillDirectories(sourcePath: string): string[] {
+  const stats = statSync(sourcePath)
+  if (stats.isFile()) {
+    if (basename(sourcePath) !== 'SKILL.md') return []
+    return [dirname(sourcePath)]
+  }
+  if (!stats.isDirectory()) return []
+  return findSkillDirectories(sourcePath)
 }
 
 export function sanitizeSkillDirName(name: string): string {
@@ -794,8 +872,11 @@ function resolveSkillRoot(value: string | undefined): string {
   return resolve(trimmed)
 }
 
-function ensureBuiltInOperationSkills(): string {
-  return getCrescentSystemSkillsDir()
+function isPathInside(parent: string, child: string): boolean {
+  const resolvedChild = resolve(child)
+  const resolvedParent = resolve(parent)
+  const rel = relative(resolvedParent, resolvedChild)
+  return Boolean(rel) && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel)
 }
 
 function normalizeSkillSearchResults(payload: unknown): AgentSkillSearchResult[] {

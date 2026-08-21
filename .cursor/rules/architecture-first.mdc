@@ -1,0 +1,28 @@
+---
+description: Architecture-first constraints for Pi host tools and Electron process boundaries
+alwaysApply: true
+---
+
+# Architecture first
+
+Do not patch a single UI or prompt symptom in isolation. Decisions must fit Crescent’s host architecture: Electron process boundaries plus Pi as the guest runtime.
+
+## Host vs Pi
+
+- Crescent owns SSH, MCP, subterminals, command review, secrets, wiki, and skill persistence. Pi is the guest agent runtime.
+- Do not enable `pi-mcp-adapter` or `pi-subagents` as the product plane. Do not load project `.pi/extensions`.
+- Host features that the model should invoke (subterminals, capture, similar) follow `open_subterminal`: `defineTool` in main, catalog entry, preload-whitelisted IPC, renderer-owned UI. Not a project extension, not bash/`write` to disk.
+- Before changing `src/main/agent/`, read installed `@earendil-works/pi-*` types. Import Pi only through `src/main/agent/pi-sdk.ts` (`import()`).
+- `createAgentSession` `tools` is an allowlist that **replaces** the default set. Custom tools must also be listed if an allowlist is passed.
+
+## Electron boundaries
+
+- Renderer: no Node, no filesystem. Main owns OS/DB/secrets. Preload is the only bridge.
+- Keep `contextIsolation: true`, `nodeIntegration: false`. Whitelist IPC in preload; validate arguments in main.
+- Renderer never writes `~/.crescent/wiki` or skill files. Persist SOP/Skill only through main (`generate-capture`, `wiki`, `skills`) after operator confirm.
+
+## Capture identity
+
+- Slash, natural-language intercept, and agent tools share one command identity: `create-skill` and `create-sop`.
+- All three entry points call the same `startCaptureFromCurrentSession` path (session trace → background draft → confirm-before-write).
+- Do not tell the model to ask the user to type a slash command; the model calls the host tools.

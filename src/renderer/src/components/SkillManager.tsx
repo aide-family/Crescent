@@ -4,6 +4,7 @@ import {
   CheckIcon,
   CopyIcon,
   DownloadIcon,
+  FilePlusIcon,
   FileTextIcon,
   Loader2Icon,
   RefreshCwIcon,
@@ -91,6 +92,7 @@ export interface SkillManagerProps {
   onLocalSkillSearchQueryChange: (value: string) => void
   onSkillSearchQueryChange: (value: string) => void
   onRefreshSkills: () => void
+  onImportSkills: () => void
   onSearchSkills: () => void
   onInstallSkill: (result: AgentSkillSearchResult) => void
   onCancelSkillInstall: (resultId: string) => void
@@ -135,6 +137,7 @@ export function SkillManager({
   onLocalSkillSearchQueryChange,
   onSkillSearchQueryChange,
   onRefreshSkills,
+  onImportSkills,
   onSearchSkills,
   onInstallSkill,
   onCancelSkillInstall,
@@ -232,7 +235,6 @@ export function SkillManager({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="right"
         className={`w-full overflow-hidden ${sidePanelOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
         onKeyDown={handleSheetKeyDown}
       >
@@ -240,7 +242,7 @@ export function SkillManager({
           <SheetTitle>{t.settings.skillsManagement}</SheetTitle>
           <SheetDescription>{t.settings.skillsManagementHint}</SheetDescription>
         </SheetHeader>
-        <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
+        <div className="app-sheet-split flex min-h-0 flex-1 flex-row gap-3 overflow-hidden px-4">
           <div className="app-sheet-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <div className="flex shrink-0 items-center justify-between gap-2 pb-2">
               <div
@@ -263,6 +265,18 @@ export function SkillManager({
                 />
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {pane === 'installed' ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={onImportSkills}
+                    aria-label={t.settings.importSkill}
+                  >
+                    <FilePlusIcon data-icon="inline-start" />
+                    {t.settings.importSkill}
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="ghost"

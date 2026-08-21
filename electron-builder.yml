@@ -24,9 +24,6 @@ asarUnpack:
   - '**/@modelcontextprotocol/**'
   # Pi optional image tooling (WASM) must be readable outside asar.
   - '**/@silvia-odwyer/photon-node/**'
-extraResources:
-  - from: system-skills
-    to: system-skills
 win:
   executableName: crescent
   icon: build/icon.ico
