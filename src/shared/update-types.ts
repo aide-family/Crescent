@@ -8,6 +8,7 @@ export type AppUpdateState =
   | 'error'
 
 export type AppUpdateStatusEvent =
+  | { state: 'idle' }
   | { state: 'checking' }
   | {
       state: 'available'
@@ -34,4 +35,5 @@ export interface AppUpdateActionResult {
   ok: boolean
   error?: string
   path?: string
+  skipped?: boolean
 }

@@ -77,18 +77,20 @@ export function findNewestPromptSignal(
 }
 
 function isLocalPromptLine(line: string): boolean {
-  // oh-my-zsh / powerlevel10k arrows, bare `$`/`%`/`#` and `~ $` style prompts.
+  // oh-my-zsh / powerlevel10k arrows, bare `$`/`%` and `~ $` style prompts.
   // The arrow must be the WHOLE line: `➜  ~ ssh …` is a pasted command echo,
   // not a local prompt signal, and treating it as one would poison the
   // alignment/guard logic while the ssh login is still in progress.
+  // A lone `#` is not local — remote root shells commonly use that PS1.
   if (/^➜\s+\S+\s*$/.test(line)) return true
   if (/^❯\s+\S+\s*$/.test(line)) return true
   if (/^[➜❯]\s*$/.test(line)) return true
-  if (/^[%$#]\s*$/.test(line)) return true
-  if (/^~\s+[%$#]\s*$/.test(line)) return true
+  if (/^[%$]\s*$/.test(line)) return true
+  if (/^~\s+[%$]\s*$/.test(line)) return true
   // Stock bash/zsh: `bash-5.2$`, `zsh%`, short path without user@host.
+  // Do not treat a bare `#` as local — remote root shells use that PS1.
   if (/^(?:bash|zsh|sh)[-/\d.]*\s*[%$#]\s*$/i.test(line)) return true
-  if (/^[^@\n]{1,40}\s[%$#]\s*$/.test(line) && !/\bssh\b/i.test(line)) return true
+  if (/^[^@\n]{1,40}\s[%$]\s*$/.test(line) && !/\bssh\b/i.test(line)) return true
   return false
 }
 

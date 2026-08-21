@@ -1,10 +1,15 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
-import { is } from '@electron-toolkit/utils'
 import { getMenuLabels, type MenuLocale } from '../../shared/menu-labels'
 import { safeWebContentsSend } from '../safe-ipc-send'
-import type { AppUpdateStatusEvent } from '../../shared/update-types'
+import type { AppUpdateActionResult, AppUpdateStatusEvent } from '../../shared/update-types'
 import { downloadUpdateInstaller } from './download-installer'
+import {
+  isAppUpdateCheckEnabled,
+  isExpectedUpdateNetworkError,
+  shouldForceDevUpdateConfig,
+  summarizeUpdateNetworkError
+} from './update-policy'
 
 let configured = false
 let menuUpdateRequested = false
@@ -104,15 +109,38 @@ export function setMenuUpdateLocale(locale: MenuLocale): void {
   menuLocale = locale
 }
 
+function isUpdateCheckEnabled(): boolean {
+  return isAppUpdateCheckEnabled({
+    isPackaged: app.isPackaged,
+    forceDevUpdates: shouldForceDevUpdateConfig()
+  })
+}
+
 export function configureAutoUpdater(): void {
   if (configured) return
   configured = true
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = {
+    info() {
+      // Quiet by default: "Checking for update" is expected product noise.
+    },
+    warn(message?: unknown) {
+      console.warn(String(message ?? ''))
+    },
+    error(message?: unknown) {
+      const text = String(message ?? '')
+      if (isExpectedUpdateNetworkError(text)) {
+        console.warn(`Update check failed (${summarizeUpdateNetworkError(text)})`)
+        return
+      }
+      console.error(text)
+    }
+  }
 
-  // In development, electron-updater reads dev-app-update.yml next to the project.
-  autoUpdater.forceDevUpdateConfig = is.dev
+  // Unpackaged `npm run dev` must not hit GitHub. Opt in with CRESCENT_DEV_UPDATES=1.
+  autoUpdater.forceDevUpdateConfig = shouldForceDevUpdateConfig()
 
   autoUpdater.on('checking-for-update', () => {
     broadcast({ state: 'checking' })
@@ -174,6 +202,10 @@ export function configureAutoUpdater(): void {
 
   autoUpdater.on('error', (error) => {
     const message = error?.message || String(error)
+    if (isExpectedUpdateNetworkError(message) && !isMenuUpdateFlowActive()) {
+      broadcast({ state: 'idle' })
+      return
+    }
     broadcast({
       state: 'error',
       message
@@ -188,13 +220,19 @@ export function getAppVersion(): string {
   return app.getVersion()
 }
 
-export async function checkForAppUpdates(): Promise<{ ok: boolean; error?: string }> {
+export async function checkForAppUpdates(): Promise<AppUpdateActionResult> {
   configureAutoUpdater()
+  if (!isUpdateCheckEnabled()) {
+    return { ok: true, skipped: true }
+  }
   try {
     await autoUpdater.checkForUpdates()
     return { ok: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (isExpectedUpdateNetworkError(message) && !isMenuUpdateFlowActive()) {
+      return { ok: true, skipped: true }
+    }
     broadcast({ state: 'error', message })
     return { ok: false, error: message }
   }
@@ -265,9 +303,16 @@ export async function downloadInstallerToDownloads(): Promise<{
 export async function checkThenDownloadFromMenu(): Promise<void> {
   if (isMenuUpdateFlowActive() || menuDialogPending) return
   configureAutoUpdater()
+  if (!isUpdateCheckEnabled()) {
+    return
+  }
   menuUpdateRequested = true
   setMenuBusy(true)
   const result = await checkForAppUpdates()
+  if (result.skipped) {
+    clearMenuUpdateFlow()
+    return
+  }
   if (!result.ok) {
     await presentMenuUpdateError(result.error || getMenuLabels(menuLocale).updateErrorTitle)
   }

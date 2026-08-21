@@ -157,6 +157,7 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   // Active remote session has left the operation target (exit-to-local or
   // fall-back to the jump box). Reconnect through configured login actions so
   // the agent re-executes on the restored target — not the wrong host.
+  // Missing promptHost is not local-shell; only EnvGuard `drifted` reconnects.
   if (ctx.sessionAligned === 'drifted' && activeTab?.connectionId) {
     const connection = connections.find((c) => c.id === activeTab.connectionId)
     if (connection) {
@@ -261,8 +262,9 @@ export function isActiveLoggedInTerminal(
   if (tab.terminalStartError?.trim()) return false
   if (!tab.terminalReady) return false
   if (!(tab.connectionId || tab.isSsh)) return false
-  // Any EnvGuard drift (exit-to-local OR fall-back to jump) means the PTY is
-  // not on the operation target — do not treat as a ready logged-in session.
+  // EnvGuard drift (exit-to-local or jump-box fall-back) is the only signal
+  // that the PTY left the operation target. A missing promptHost or a bare
+  // `#` misread as local-shell must not force a second login on a ready tab.
   if (options?.sessionAligned === 'drifted') {
     return false
   }
@@ -296,8 +298,9 @@ export function shouldPreferActiveLoggedIn(input: {
   return true
 }
 
-function isLocalShellPromptHost(promptHost: string | undefined): boolean {
-  return !promptHost || promptHost === 'local-shell'
+/** True only for a parsed local-shell prompt — undefined is "unknown", not local. */
+export function isLocalShellPromptHost(promptHost: string | undefined): boolean {
+  return promptHost === 'local-shell'
 }
 
 /** Put the active connection first and optionally mark it as current. */
@@ -361,13 +364,12 @@ function resolveNamedConnection(input: {
     sessionTabs,
     activeLabel,
     soft,
-    sessionAligned,
-    promptHost
+    sessionAligned
   } = input
   const prefix = soft ? 'soft' : 'mention'
 
   if (isSameConnectionTab(activeTab, mentioned)) {
-    if (sessionAligned === 'drifted' && isLocalShellPromptHost(promptHost)) {
+    if (isExplicitReconnectRequest(message) || sessionAligned === 'drifted') {
       return {
         targetTabId: activeTabId,
         connectionId: mentioned.id,
@@ -526,7 +528,9 @@ export function looksLikeRemoteOpsIntent(message: string): boolean {
   return (
     /(?:kubectl|kubeadm|helm|k9s|\bk8s\b|kubernetes)/i.test(message) ||
     /(?:集群|命名空间|命名空間|pod|pods|节点|node|nodes|deployment|namespace)/i.test(message) ||
-    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到|重新连接|重连)/i.test(message) ||
+    /(?:^|[\s，,])(?:ssh|login|connect|连接|登录|登陆|切换到|重新连接|恢复连接|重连)/i.test(
+      message
+    ) ||
     /(?:巡检|健康检查|架构图|拓扑|网络架构)/i.test(message) ||
     /(?:^|\n)\s*\[[^\n]*@[\w.-]+/.test(message) ||
     /\b(?:scp|rsync)\b/i.test(message)
@@ -691,6 +695,8 @@ export function routeForcedConnection(input: {
   activeTabId: string
   activeTab?: AgentTerminalTab
   sessionTabs: AgentTerminalTab[]
+  sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
 }): ConnectionRouteResult {
   return resolveNamedConnection({
     mentioned: input.connection,
@@ -699,6 +705,8 @@ export function routeForcedConnection(input: {
     activeTab: input.activeTab,
     sessionTabs: input.sessionTabs,
     connections: [input.connection],
-    activeLabel: formatTabLabel(input.activeTab)
+    activeLabel: formatTabLabel(input.activeTab),
+    sessionAligned: input.sessionAligned,
+    promptHost: input.promptHost
   })
 }

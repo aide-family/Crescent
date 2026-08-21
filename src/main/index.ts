@@ -11,6 +11,7 @@ import {
 import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
 import { initSystemLogging, setSystemLogLevel } from './logging'
 import { readAgentConfig } from './crescent-store'
+import { isKnownNativeLogNoise } from './native-log-filter'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -64,21 +65,7 @@ function installNativeLogFilter(): void {
   const originalWrite = process.stderr.write.bind(process.stderr)
   process.stderr.write = ((chunk: unknown, ...args: unknown[]) => {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk)
-    const isKnownMacInputMethodNoise =
-      text.includes('TSM AdjustCapsLockLEDForKeyTransitionHandling') ||
-      text.includes('error messaging the mach port for IMKCFRunLoopWakeUpReliable')
-    const isKnownChromiumTileMemoryNoise = text.includes('tile memory limits exceeded')
-    const isDisposedRenderFrameNoise =
-      text.includes('Error sending from webFrameMain') ||
-      text.includes('Render frame was disposed before WebFrameMain could be accessed')
-
-    if (
-      isKnownMacInputMethodNoise ||
-      isKnownChromiumTileMemoryNoise ||
-      isDisposedRenderFrameNoise
-    ) {
-      return true
-    }
+    if (isKnownNativeLogNoise(text)) return true
     return (originalWrite as (...parameters: unknown[]) => boolean)(chunk, ...args)
   }) as typeof process.stderr.write
 }

@@ -8,12 +8,20 @@ import {
   onMenuUpdateBusyChange,
   setMenuUpdateLocale
 } from './update/updater'
+import { isAppUpdateCheckEnabled, shouldForceDevUpdateConfig } from './update/update-policy'
 
 const CHECK_FOR_UPDATES_MENU_ID = 'check-for-updates'
 
 let currentLocale: MenuLocale = 'en'
 let checkForUpdatesEnabled = true
 let installed = false
+
+function canCheckForUpdates(): boolean {
+  return isAppUpdateCheckEnabled({
+    isPackaged: app.isPackaged,
+    forceDevUpdates: shouldForceDevUpdateConfig()
+  })
+}
 
 function applyApplicationMenu(): void {
   const labels = getMenuLabels(currentLocale)
@@ -26,7 +34,7 @@ function setCheckForUpdatesMenuEnabled(enabled: boolean): void {
   checkForUpdatesEnabled = enabled
   const item = Menu.getApplicationMenu()?.getMenuItemById(CHECK_FOR_UPDATES_MENU_ID)
   if (item) {
-    item.enabled = enabled
+    item.enabled = enabled && canCheckForUpdates()
     return
   }
   applyApplicationMenu()
@@ -94,7 +102,7 @@ export function buildApplicationMenuTemplate(
       {
         id: CHECK_FOR_UPDATES_MENU_ID,
         label: labels.checkForUpdates,
-        enabled: checkForUpdatesEnabled,
+        enabled: checkForUpdatesEnabled && canCheckForUpdates(),
         click: (): void => {
           void checkThenDownloadFromMenu()
         }
