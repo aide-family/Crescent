@@ -7,7 +7,6 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react'
 import { createPortal } from 'react-dom'
-import mermaid from 'mermaid'
 import {
   CheckIcon,
   CopyIcon,
@@ -34,6 +33,7 @@ import { appMermaidThemeVariables } from '@renderer/lib/design-system'
 import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
 import { resolveMermaidBlockUiState, scanMarkdownFence } from '@renderer/lib/markdown-fence'
 import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
+import { loadMermaid } from '@renderer/lib/mermaid-runtime'
 import {
   buildMarkdownPreview,
   LruMap,
@@ -52,18 +52,6 @@ const MERMAID_MAX_ZOOM = 10
 const MERMAID_ZOOM_STEP = 0.15
 const MERMAID_ZOOM_EPSILON = 0.001
 const MERMAID_RENDER_DEBOUNCE_MS = 100
-
-const MERMAID_RENDER_CONFIG = {
-  startOnLoad: false,
-  securityLevel: 'strict',
-  htmlLabels: false,
-  flowchart: {
-    htmlLabels: false
-  },
-  theme: 'base',
-  themeVariables: appMermaidThemeVariables,
-  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
-} as const
 
 const mermaidSvgCache = new LruMap<string, string>(32)
 
@@ -592,8 +580,8 @@ function MermaidBlock({
     let disposed = false
     const timer = window.setTimeout(() => {
       void (async () => {
-        mermaid.initialize(MERMAID_RENDER_CONFIG)
         try {
+          const mermaid = await loadMermaid()
           const result = await mermaid.render(diagramIdRef.current, code)
           if (disposed) return
           mermaidSvgCache.set(code, result.svg)
@@ -776,7 +764,7 @@ function MermaidBlock({
   }
 
   async function renderExportSvg(): Promise<string> {
-    mermaid.initialize(MERMAID_RENDER_CONFIG)
+    const mermaid = await loadMermaid()
     const result = await mermaid.render(`mermaid-export-${crypto.randomUUID()}`, code)
     return result.svg
   }
