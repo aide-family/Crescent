@@ -69,6 +69,8 @@ export type SkipSecretOnHostInput = {
  *
  * - Leading auto SSH password: key auth already landed.
  * - After a command settled on host: NOPASSWD / no password prompt (e.g. sudo).
+ * - After a prior unused-secret skip on host: keep skipping consecutive secrets
+ *   (callers must leave `previousWasCommand` true / `previousConsumedKind` host).
  * Never skip solely because index > 0 and host is visible — that drops real
  * follow-up commands misclassified as secrets, and silent-skips before confirm.
  */

@@ -234,6 +234,10 @@ const en = {
       'Could not read the password environment variable. Packaged apps do not inherit terminal exports — on macOS/Linux define it in ~/.zprofile or ~/.zshrc; on Windows set a User environment variable, then relaunch Crescent',
     passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD…',
     passwordPlaceholder: 'Optional; leave empty to skip automatic password input…',
+    rootPassword: 'Root password',
+    rootPasswordDescription:
+      'Automatically typed for sudo and other privilege password prompts. If empty, Crescent asks you instead.',
+    rootPasswordPlaceholder: 'Optional; leave empty to type sudo passwords manually…',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
     saveAndConnectSucceeded: 'Connection saved. Connecting now.',

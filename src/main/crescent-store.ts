@@ -152,7 +152,8 @@ function encryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFil
     },
     connections: config.connections.map((connection) => ({
       ...connection,
-      password: encryptSecret(connection.password)
+      password: encryptSecret(connection.password),
+      rootPassword: encryptSecret(connection.rootPassword)
     }))
   }
 }
@@ -174,7 +175,8 @@ function decryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFil
     },
     connections: config.connections.map((connection) => ({
       ...connection,
-      password: decryptSecret(connection.password)
+      password: decryptSecret(connection.password),
+      rootPassword: decryptSecret(connection.rootPassword)
     }))
   }
 }
@@ -532,6 +534,7 @@ function normalizeConnection(value: unknown): ConnectionConfig {
     user: record.user ? String(record.user) : undefined,
     password: record.password ? String(record.password) : undefined,
     passwordEnvVar: record.passwordEnvVar ? String(record.passwordEnvVar).trim() : undefined,
+    rootPassword: record.rootPassword ? String(record.rootPassword) : undefined,
     port: Number.isFinite(port) && port > 0 ? Math.round(port) : undefined,
     identityFile: record.identityFile ? String(record.identityFile) : undefined,
     sshOptions: Array.isArray(record.sshOptions)

@@ -24,6 +24,7 @@ import {
   setComposerDomCaret
 } from '@renderer/lib/composer-surface'
 import {
+  clearImeEnterConfirmGuardUnlessEnter,
   isImeKeyEvent,
   markImeCompositionEnded,
   shouldIgnoreEnterAfterImeConfirm
@@ -253,6 +254,11 @@ export function ComposerEditor({
         emitFromDom()
       }}
       onKeyDown={(event) => {
+        compositionEndedAtRef.current = clearImeEnterConfirmGuardUnlessEnter(
+          compositionEndedAtRef.current,
+          event.key
+        )
+
         const imeActive = isImeKeyEvent(event) || composingRef.current
         const enterConfirmsIme =
           event.key === 'Enter' &&

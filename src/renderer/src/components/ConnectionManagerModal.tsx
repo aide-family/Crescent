@@ -404,6 +404,24 @@ export function ConnectionManagerModal({
                   />
                 </Field>
                 <Field>
+                  <FieldLabel htmlFor="connection-root-password">
+                    {t.connections.rootPassword}
+                  </FieldLabel>
+                  <Input
+                    id="connection-root-password"
+                    name="connection-root-password"
+                    type="password"
+                    className="h-8"
+                    value={connectionForm.rootPassword ?? ''}
+                    onChange={(event) => onFormChange('rootPassword', event.target.value)}
+                    placeholder={t.connections.rootPasswordPlaceholder}
+                    readOnly={!connectionEditing}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <FieldDescription>{t.connections.rootPasswordDescription}</FieldDescription>
+                </Field>
+                <Field>
                   <FieldLabel htmlFor="connection-password-env">
                     {t.connections.passwordEnvVar}
                   </FieldLabel>

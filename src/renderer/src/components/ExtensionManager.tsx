@@ -34,6 +34,7 @@ import {
   isPiPackageSearchResultInstalled
 } from '@renderer/lib/extension-management'
 import {
+  clearImeEnterConfirmGuardUnlessEnter,
   isImeKeyEvent,
   markImeCompositionEnded,
   shouldIgnoreEnterAfterImeConfirm
@@ -166,6 +167,10 @@ export function ExtensionManager({
   }
 
   function handleCreateNameKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    createCompositionEndedAtRef.current = clearImeEnterConfirmGuardUnlessEnter(
+      createCompositionEndedAtRef.current,
+      event.key
+    )
     // Enter confirms IME candidates on macOS; never treat it as "Create".
     if (event.key !== 'Enter') return
     if (

@@ -281,6 +281,7 @@ import {
   isTerminalCurrentlyAtPasswordPrompt,
   parseSubterminalTabId
 } from '@renderer/lib/terminal-text'
+import { decideRootPasswordAutofill } from '@renderer/lib/root-password-autofill'
 import {
   createTerminalTab,
   getNextTerminalTitle,
@@ -565,6 +566,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   >(null)
   const passwordPromptBuffersRef = useRef(new Map<string, string>())
   const passwordPromptOpenTabsRef = useRef(new Set<string>())
+  const rootPasswordAutoSubmittedTabsRef = useRef(new Set<string>())
   const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
   const passwordFocusTabIdRef = useRef<string | null>(null)
   const runAgentConversationRef = useRef<
@@ -2188,7 +2190,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       passwordPromptBuffersRef.current.set(tabId, nextBuffer)
 
       const promptLine = extractPasswordPromptLine(nextBuffer)
-      if (!promptLine) return
+      if (!promptLine) {
+        rootPasswordAutoSubmittedTabsRef.current.delete(tabId)
+        return
+      }
       if (automatedLoginTabsRef.current.has(tabId)) {
         passwordPromptBuffersRef.current.set(tabId, '')
         return
@@ -2202,6 +2207,21 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
       const tab = tabsRef.current.find((current) => current.id === tabId)
       if (!tab) return
+
+      const connection = tab.connectionId
+        ? connectionsRef.current.find((item) => item.id === tab.connectionId)
+        : undefined
+      const autofill = decideRootPasswordAutofill({
+        rootPassword: connection?.rootPassword,
+        alreadyAttempted: rootPasswordAutoSubmittedTabsRef.current.has(tabId),
+        isAutomatedLogin: false
+      })
+      if (autofill.action === 'auto-submit') {
+        rootPasswordAutoSubmittedTabsRef.current.add(tabId)
+        passwordPromptBuffersRef.current.set(tabId, '')
+        sendTerminalInput(autofill.password, tabId)
+        return
+      }
 
       passwordPromptOpenTabsRef.current.add(tabId)
       const request = {
@@ -4415,6 +4435,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
     passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
     passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
+    rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
     pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
     setPasswordAttentionTabIds((current) =>
       current.filter((id) => id !== passwordPromptRequest.tabId)
@@ -4429,6 +4450,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
       passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
       passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
+      rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
       pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
       setPasswordAttentionTabIds((current) =>
         current.filter((id) => id !== passwordPromptRequest.tabId)
@@ -7248,6 +7270,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       user: connection.user,
       password: connection.password,
       passwordEnvVar: connection.passwordEnvVar,
+      rootPassword: connection.rootPassword,
       port: connection.port,
       identityFile: connection.identityFile,
       sshOptions: connection.sshOptions,
@@ -7267,6 +7290,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         user: parsed.user,
         password: parsed.password,
         passwordEnvVar: parsed.passwordEnvVar,
+        rootPassword: parsed.rootPassword,
         port: parsed.port ?? 22,
         identityFile: parsed.identityFile,
         sshOptions: parsed.sshOptions,
@@ -8580,6 +8604,20 @@ async function typeConnectionLoginActions(
       const recheck = resolveLoginTypeReady(context.output ?? '')
       if (recheck && !(isSecret && !allowHostReady && recheck.kind !== 'waiting')) {
         ready = recheck
+      } else if (isSecret && recheck?.kind === 'host') {
+        // Trailing unused secret (e.g. extra sudo password after hostname) while
+        // already on a clean host — skip instead of marking the whole login failed.
+        connTrace(
+          'login-stage',
+          `tab=${tabId}`,
+          `action=${index + 1}`,
+          'skip-secret-timeout-on-host'
+        )
+        appendSystem(formatConnectionActionSkippedLog(index + 1, t), logTabId)
+        // Keep the host skip-chain alive for any further unused secrets.
+        previousWasCommand = true
+        previousConsumedKind = 'host'
+        continue
       }
     }
     connTrace(
@@ -8612,8 +8650,10 @@ async function typeConnectionLoginActions(
     ) {
       connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'skip-secret-already-host')
       appendSystem(formatConnectionActionSkippedLog(index + 1, t), logTabId)
-      previousWasCommand = false
-      previousConsumedKind = ready.kind === 'host' ? 'host' : previousConsumedKind
+      // Do not clear previousWasCommand — consecutive unused secrets (password,
+      // enable, …) must keep skipping while the shell stays on a clean host.
+      previousWasCommand = true
+      previousConsumedKind = 'host'
       continue
     }
 

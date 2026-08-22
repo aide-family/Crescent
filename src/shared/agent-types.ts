@@ -112,6 +112,8 @@ export interface ConnectionConfig {
   password?: string
   passwordEnvVar?: string
   resolvedPassword?: string
+  /** Root/sudo password for interactive privilege prompts after login. */
+  rootPassword?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]
@@ -126,6 +128,7 @@ export interface ConnectionInput {
   user?: string
   password?: string
   passwordEnvVar?: string
+  rootPassword?: string
   port?: number
   identityFile?: string
   sshOptions?: string[]
