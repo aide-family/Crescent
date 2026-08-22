@@ -14,7 +14,7 @@ import {
   syncCrescentProvidersToModelRuntime
 } from './pi-model-runtime'
 import { loadMcpPiTools } from './pi-mcp-tools'
-import { loadPiCodingAgent, type PiCodingAgentModule } from './pi-sdk'
+import { loadPiSdk, type PiSdkFacade } from './pi-sdk'
 import {
   clearPtyBashExecContext,
   createPtyBashToolDefinition,
@@ -63,9 +63,9 @@ import { diffSessionTokenUsage, snapshotSessionTokenUsage } from '../../shared/s
 import type { AgentConfig, AgentEvent } from './types'
 import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-prompt'
 
-type AgentSession = Awaited<ReturnType<PiCodingAgentModule['createAgentSession']>>['session']
+type AgentSession = Awaited<ReturnType<PiSdkFacade['createAgentSession']>>['session']
 type LoadExtensionsResult = Awaited<
-  ReturnType<PiCodingAgentModule['createAgentSession']>
+  ReturnType<PiSdkFacade['createAgentSession']>
 >['extensionsResult']
 
 interface HostedExtensionCommand {
@@ -541,7 +541,7 @@ async function ensureHostedSession(
     hostedSessions.delete(sessionKey)
   }
 
-  const pi = await loadPiCodingAgent()
+  const pi = await loadPiSdk()
   const { settingsManager, agentDir } = await createCrescentSettingsManager(cwd)
   const modelRuntime = await syncCrescentProvidersToModelRuntime(config)
   const model = await resolvePiModel(config, modelRuntime)

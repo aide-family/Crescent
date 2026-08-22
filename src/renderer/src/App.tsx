@@ -23,6 +23,7 @@ import {
   ServerIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
+import { deferAfterFirstPaint } from '@renderer/lib/defer-after-paint'
 import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 
 import { AgentPanel } from '@renderer/components/AgentPanel'
@@ -2379,9 +2380,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   useEffect(() => {
     document.documentElement.classList.add('dark')
 
+    let cancelled = false
+
     window.api.agent
       .getConfig()
       .then((nextConfig) => {
+        if (cancelled) return
         setConfig(nextConfig)
         setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
         setModels(flattenProviderModels(nextConfig.providers))
@@ -2393,58 +2397,80 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         if (!hasConfiguredModelSelection(nextConfig)) {
           setValidation(undefined)
           setValidating(false)
-          return
         }
 
-        const requestId = validationRequestRef.current + 1
-        validationRequestRef.current = requestId
-        setValidating(true)
-        setValidation(undefined)
-        void window.api.agent
-          .validateConfig(nextConfig)
-          .then((result) => {
-            if (validationRequestRef.current === requestId) setValidation(result)
-          })
-          .finally(() => {
-            if (validationRequestRef.current === requestId) setValidating(false)
-          })
+        deferAfterFirstPaint(() => {
+          if (cancelled) return
+
+          window.api.agent
+            .getModels()
+            .then((models) => {
+              if (cancelled) return
+              setModels(models)
+
+              if (!hasConfiguredModelSelection(nextConfig)) {
+                setValidation(undefined)
+                setValidating(false)
+                return
+              }
+
+              const requestId = validationRequestRef.current + 1
+              validationRequestRef.current = requestId
+              setValidating(true)
+              setValidation(undefined)
+              void window.api.agent
+                .validateConfig(nextConfig)
+                .then((result) => {
+                  if (validationRequestRef.current === requestId) setValidation(result)
+                })
+                .finally(() => {
+                  if (validationRequestRef.current === requestId) setValidating(false)
+                })
+            })
+            .catch((error) => {
+              writeLine(`\x1b[31m${failedToLoadModelsText}: ${String(error)}\x1b[0m`)
+            })
+
+          void window.api.agent
+            .listSkills()
+            .then(setSkills)
+            .catch(() => setSkills([]))
+          void window.api.agent
+            .listExtensions()
+            .then(setExtensions)
+            .catch(() => setExtensions([]))
+          void window.api.agent
+            .listExtensionCommands()
+            .then(setExtensionCommands)
+            .catch(() => setExtensionCommands([]))
+          void window.api.agent
+            .listInstructionFiles()
+            .then((files) => {
+              setInstructionFiles(files)
+              setInstructionContent(
+                files.find((file) => file.name === 'IDENTITY.md')?.content ?? ''
+              )
+            })
+            .catch(() => setInstructionFiles([]))
+        })
       })
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
       })
-    window.api.agent
-      .getModels()
-      .then(setModels)
-      .catch((error) => {
-        writeLine(`\x1b[31m${failedToLoadModelsText}: ${String(error)}\x1b[0m`)
-      })
-    window.api.agent
-      .listSkills()
-      .then(setSkills)
-      .catch(() => setSkills([]))
-    window.api.agent
-      .listExtensions()
-      .then(setExtensions)
-      .catch(() => setExtensions([]))
-    window.api.agent
-      .listExtensionCommands()
-      .then(setExtensionCommands)
-      .catch(() => setExtensionCommands([]))
-    window.api.agent
-      .listInstructionFiles()
-      .then((files) => {
-        setInstructionFiles(files)
-        setInstructionContent(files.find((file) => file.name === 'IDENTITY.md')?.content ?? '')
-      })
-      .catch(() => setInstructionFiles([]))
+
     window.api.connections
       .list()
       .then((items) => {
+        if (cancelled) return
         setConnections(items)
       })
       .catch((error) => {
         writeLine(`\x1b[31m${failedToLoadConnectionsText}: ${String(error)}\x1b[0m`)
       })
+
+    return () => {
+      cancelled = true
+    }
   }, [failedToLoadConfigText, failedToLoadConnectionsText, failedToLoadModelsText, writeLine])
 
   useEffect(() => {

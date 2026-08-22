@@ -4,7 +4,7 @@ import type { TSchema } from 'typebox'
 import { applyToolNamePolicy } from '../../shared/tool-policy'
 import { isMcpServerComplete, redactMcpUrl } from '../../shared/mcp-servers'
 import type { AgentMcpServerConfig, ToolCatalogEntry } from '../../shared/agent-types'
-import type { PiCodingAgentModule } from './pi-sdk'
+import type { PiSdkFacade } from './pi-sdk'
 import { loadMcpSdk } from './mcp-sdk'
 
 export const MCP_TOOL_RESULT_MAX_CHARS = 50 * 1024
@@ -29,7 +29,7 @@ export interface McpRuntimeClient {
 export type McpServerConnector = (server: AgentMcpServerConfig) => Promise<McpRuntimeClient>
 
 export interface McpLoadedTools {
-  tools: ReturnType<PiCodingAgentModule['defineTool']>[]
+  tools: ReturnType<PiSdkFacade['defineTool']>[]
   toolNames: string[]
   catalog: ToolCatalogEntry[]
   errors: Record<string, string>
@@ -131,11 +131,11 @@ export async function listMcpToolCatalog(
 }
 
 export async function loadMcpPiTools(
-  pi: PiCodingAgentModule,
+  pi: PiSdkFacade,
   servers: AgentMcpServerConfig[],
   connect: McpServerConnector = connectMcpServer
 ): Promise<McpLoadedTools> {
-  const tools: ReturnType<PiCodingAgentModule['defineTool']>[] = []
+  const tools: ReturnType<PiSdkFacade['defineTool']>[] = []
   const toolNames: string[] = []
   const catalog: ToolCatalogEntry[] = []
   const errors: Record<string, string> = {}
@@ -175,11 +175,11 @@ export async function loadMcpPiTools(
 }
 
 export function createMcpPiToolDefinition(
-  pi: PiCodingAgentModule,
+  pi: PiSdkFacade,
   server: AgentMcpServerConfig,
   tool: { name: string; description?: string; inputSchema?: unknown },
   client: McpRuntimeClient
-): ReturnType<PiCodingAgentModule['defineTool']> {
+): ReturnType<PiSdkFacade['defineTool']> {
   const name = mcpPiToolName(server.id, tool.name)
   return pi.defineTool({
     name,

@@ -10,11 +10,11 @@ import {
 } from './deepseek-compat'
 import { getAgentProviders } from './model-provider-config'
 import { getCrescentPiAuthPath, getCrescentPiModelsPath } from './pi-paths'
-import { loadPiCodingAgent } from './pi-sdk'
+import { loadPiModelRuntime } from './pi-sdk'
 import type { AgentConfig, AgentProviderConfig } from './types'
 
 type ModelRuntime = Awaited<
-  ReturnType<Awaited<ReturnType<typeof loadPiCodingAgent>>['ModelRuntime']['create']>
+  ReturnType<Awaited<ReturnType<typeof loadPiModelRuntime>>['ModelRuntime']['create']>
 >
 type ProviderConfigInput = Parameters<ModelRuntime['registerProvider']>[1]
 
@@ -23,7 +23,7 @@ let runtimePromise: Promise<ModelRuntime> | undefined
 export async function getCrescentModelRuntime(): Promise<ModelRuntime> {
   if (!runtimePromise) {
     runtimePromise = (async () => {
-      const { ModelRuntime } = await loadPiCodingAgent()
+      const { ModelRuntime } = await loadPiModelRuntime()
       return ModelRuntime.create({
         authPath: getCrescentPiAuthPath(),
         modelsPath: getCrescentPiModelsPath(),

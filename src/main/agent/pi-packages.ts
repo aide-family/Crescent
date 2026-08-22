@@ -3,7 +3,7 @@ import { join } from 'path'
 
 import type { AgentExtensionOption, AgentPiPackageSearchResult } from './types'
 import { getCrescentPiAgentDir } from './pi-paths'
-import { loadPiCodingAgent } from './pi-sdk'
+import { loadPiSdk } from './pi-sdk'
 import { normalizeDisabledExtensions } from './extensions'
 
 const NPM_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search'
@@ -206,7 +206,7 @@ export async function createCrescentSettingsManager(cwd: string): Promise<{
   >
   agentDir: string
 }> {
-  const pi = await loadPiCodingAgent()
+  const pi = await loadPiSdk()
   const agentDir = getCrescentPiAgentDir()
   const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: false })
   settingsManager.setProjectTrusted(false)
@@ -222,7 +222,7 @@ async function createCrescentPackageManager(cwd: string): Promise<{
     (typeof import('@earendil-works/pi-coding-agent'))['DefaultPackageManager']
   >
 }> {
-  const pi = await loadPiCodingAgent()
+  const pi = await loadPiSdk()
   const { settingsManager, agentDir } = await createCrescentSettingsManager(cwd)
   return {
     packageManager: new pi.DefaultPackageManager({

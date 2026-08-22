@@ -7,7 +7,7 @@ import type {
   CaptureKind,
   CaptureScope
 } from '../../shared/agent-types'
-import { loadPiAi, type PiCodingAgentModule } from './pi-sdk'
+import { loadPiAi, type PiSdkFacade } from './pi-sdk'
 import { getPtyBashExecContext } from './pi-terminal-bash'
 
 export const CREATE_CAPTURE_DISCIPLINE = [
@@ -71,9 +71,9 @@ function requestCaptureDraft(input: {
 }
 
 export async function createCaptureToolDefinitions(
-  pi: PiCodingAgentModule,
+  pi: PiSdkFacade,
   sessionKey: string
-): Promise<Array<ReturnType<PiCodingAgentModule['defineTool']>>> {
+): Promise<Array<ReturnType<PiSdkFacade['defineTool']>>> {
   const { StringEnum } = await loadPiAi()
   const parameters = Type.Object({
     scope: Type.Optional(StringEnum(['session', 'turn'] as const)),

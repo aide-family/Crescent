@@ -10,7 +10,7 @@ import {
 } from '../terminal/ipc'
 import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
-import type { PiCodingAgentModule } from './pi-sdk'
+import type { PiSdkFacade } from './pi-sdk'
 import type { AgentConfig, AgentEvent } from './types'
 
 export interface PtyBashExecContext {
@@ -116,10 +116,10 @@ export async function settlePtyInterruptsBeforeSessionAbort(input: {
 }
 
 export function createPtyBashToolDefinition(
-  pi: PiCodingAgentModule,
+  pi: PiSdkFacade,
   cwd: string,
   sessionKey: string
-): ReturnType<PiCodingAgentModule['createBashToolDefinition']> {
+): ReturnType<PiSdkFacade['createBashToolDefinition']> {
   return pi.createBashToolDefinition(cwd, {
     operations: {
       async exec(command, _cwd, options) {

@@ -93,6 +93,7 @@ import {
 import { loadSshConfigConnections } from '../connections/ssh-config'
 import { getCrescentAttachmentsDir } from '../crescent-paths'
 import { setSystemLogLevel } from '../logging'
+import { traceStartup } from '../startup-trace'
 import type {
   AgentConfig,
   AgentConnectionIntentInput,
@@ -115,11 +116,17 @@ const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 
 export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-config', () => {
-    return readAgentConfig()
+    const start = traceStartup('ipc:agent:get-config')
+    const config = readAgentConfig()
+    traceStartup('ipc:agent:get-config:done', start)
+    return config
   })
 
   ipcMain.handle('agent:get-models', async () => {
-    return listPiAvailableModels(readAgentConfig())
+    const start = traceStartup('ipc:agent:get-models')
+    const models = await listPiAvailableModels(readAgentConfig())
+    traceStartup('ipc:agent:get-models:done', start)
+    return models
   })
 
   ipcMain.handle('agent:list-skills', () => {
@@ -502,6 +509,7 @@ export function registerAgentIpc(): void {
   })
 
   ipcMain.handle('agent:validate-config', async (_, config: Partial<AgentConfig>) => {
+    const start = traceStartup('ipc:agent:validate-config')
     const nextConfig = normalizeAgentConfig({
       ...readAgentConfig(),
       ...config
@@ -520,6 +528,7 @@ export function registerAgentIpc(): void {
           : tool
       )
       const tools = [...builtInTools, ...mcpCatalog.tools]
+      traceStartup('ipc:agent:validate-config:done', start)
       return {
         ok: true,
         modelOk: true,
@@ -528,6 +537,7 @@ export function registerAgentIpc(): void {
         ...(Object.keys(mcpCatalog.errors).length ? { mcpErrors: mcpCatalog.errors } : {})
       }
     } catch (error) {
+      traceStartup('ipc:agent:validate-config:failed', start)
       return {
         ok: false,
         modelOk: false,

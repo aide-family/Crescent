@@ -4,7 +4,7 @@ import type { WebContents } from 'electron'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import { openTemporarySubterminal, resolveParentTerminalTabId } from '../terminal/ipc'
 import { listConnections } from '../connections/ipc'
-import { loadPiAi, type PiCodingAgentModule } from './pi-sdk'
+import { loadPiAi, type PiSdkFacade } from './pi-sdk'
 import { getPtyBashExecContext, updatePtyBashExecutionTabId } from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
@@ -192,9 +192,9 @@ export async function openAgentSubterminal(input: {
 }
 
 export async function createOpenSubterminalToolDefinition(
-  pi: PiCodingAgentModule,
+  pi: PiSdkFacade,
   sessionKey: string
-): Promise<ReturnType<PiCodingAgentModule['defineTool']>> {
+): Promise<ReturnType<PiSdkFacade['defineTool']>> {
   const { StringEnum } = await loadPiAi()
   const parameters = Type.Object({
     // StringEnum (pi-ai) instead of Type.Union/Type.Literal: Google's API and
