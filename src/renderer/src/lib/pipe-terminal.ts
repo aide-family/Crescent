@@ -162,7 +162,8 @@ export function handlePipeTerminalInput(
 export function observeTerminalHostResize(
   host: HTMLElement,
   fitAddon: FitAddon,
-  tabId: string
+  tabId: string,
+  onAfterFit?: () => void
 ): ResizeObserver {
   const resizeObserver = new ResizeObserver(() => {
     fitAddon.fit()
@@ -170,6 +171,7 @@ export function observeTerminalHostResize(
     if (dimensions) {
       window.api.terminal.resize({ cols: dimensions.cols, rows: dimensions.rows, tabId })
     }
+    onAfterFit?.()
   })
   resizeObserver.observe(host)
   return resizeObserver

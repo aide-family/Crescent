@@ -10,7 +10,7 @@ const KUBECTL_BEFORE_VERB = String.raw`\bkubectl(?:\s+[^\s]+)*?\s+`
 export const HIGH = new RegExp(
   String.raw`\b(rm|mv|dd|kill|reboot)\b|systemctl\s+(restart|stop|start|enable|disable)|` +
     KUBECTL_BEFORE_VERB +
-    String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace|exec)|` +
+    String.raw`(delete|apply|patch|edit|rollout|scale|drain|cordon|create|replace)|` +
     String.raw`docker\s+(rm|rmi|restart|stop|run)|\b(chmod|chown|tee)\b`
 )
 
@@ -158,7 +158,6 @@ const KUBECTL_WRITE = new Set([
   'cordon',
   'create',
   'replace',
-  'exec',
   'port-forward'
 ])
 const KUBECTL_READ = new Set([
@@ -240,6 +239,36 @@ const SIMPLE_READ = new Set([
 ])
 const DURATION = /^(?:\d+(?:\.\d+)?)[smhd]?$/
 
+const KUBECTL_EXEC_FLAGS_WITH_VALUE = new Set([
+  '-c',
+  '--container',
+  '-n',
+  '--namespace',
+  '--kubeconfig',
+  '--context'
+])
+const DOCKER_EXEC_FLAGS_WITH_VALUE = new Set(['-e', '--env', '-u', '--user', '-w', '--workdir'])
+const SSH_FLAGS_WITH_VALUE = new Set([
+  '-p',
+  '-i',
+  '-J',
+  '-l',
+  '-o',
+  '-F',
+  '-E',
+  '-L',
+  '-R',
+  '-D',
+  '-W',
+  '-w',
+  '-b',
+  '-c',
+  '-I',
+  '-S',
+  '-s'
+])
+const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
+
 interface SimpleCommandRisk {
   level: StaticCommandLevel
   verb: string
@@ -269,7 +298,7 @@ export function hasHighWriteVerb(cmd: string): boolean {
 
 /**
  * Extract a human-readable verb for approval copy.
- * Prefers write verbs (`kubectl exec`); falls back to readonly verbs (`kubectl get`)
+ * Prefers write verbs from inner commands; falls back to readonly verbs (`kubectl get`)
  * instead of the opaque label `change`.
  */
 export function extractRiskVerb(cmd: string): string {
@@ -309,9 +338,20 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
 
   if (argv0 === 'kubectl') {
     const verb = firstKnownVerb(argv, KUBECTL_WRITE, KUBECTL_READ)
+    if (verb === 'exec' || findVerbIndex(argv, 'exec') >= 0) {
+      const inner = extractKubectlExecInner(argv)
+      if (!inner) return { level: 'gray', verb: 'kubectl exec' }
+      return classifyPeeledInner(inner)
+    }
     if (verb && KUBECTL_WRITE.has(verb)) return { level: 'high', verb: `kubectl ${verb}` }
     if (verb && KUBECTL_READ.has(verb)) return { level: 'low', verb: `kubectl ${verb}` }
     return { level: 'gray', verb: 'kubectl' }
+  }
+
+  if (argv0 === 'ssh') {
+    const remote = extractSshRemoteCommand(argv)
+    if (!remote) return { level: 'gray', verb: 'ssh' }
+    return classifyPeeledInner(remote)
   }
 
   if (argv0 === 'docker') {
@@ -321,6 +361,11 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
         return { level: 'low', verb: `docker compose ${parsed.verb}` }
       }
       return { level: 'gray', verb: 'docker compose' }
+    }
+    if (parsed.verb === 'exec') {
+      const inner = extractDockerExecInner(argv)
+      if (!inner) return { level: 'gray', verb: 'docker exec' }
+      return classifyPeeledInner(inner)
     }
     if (DOCKER_WRITE.has(parsed.verb)) return { level: 'high', verb: `docker ${parsed.verb}` }
     if (DOCKER_READ.has(parsed.verb)) return { level: 'low', verb: `docker ${parsed.verb}` }
@@ -415,6 +460,184 @@ function skipTimeout(argv: string[]): string[] {
 function commandBasename(token: string): string {
   const parts = token.replace(/\\/g, '/').split('/')
   return (parts[parts.length - 1] ?? token).toLowerCase()
+}
+
+/**
+ * Classify the inner/remote command after peeling kubectl exec, ssh, or docker exec.
+ * Also unwraps `sh -c 'script'` before classification.
+ */
+function classifyPeeledInner(innerArgv: string[]): SimpleCommandRisk {
+  const unwrapped = unwrapShellScript(innerArgv)
+  const innerStr = unwrapped ?? innerArgv.join(' ')
+  if (!innerStr.trim()) return { level: 'gray', verb: 'change' }
+
+  const commands = collectSimpleCommands(innerStr)
+  if (!commands || commands.length === 0) return { level: 'gray', verb: 'change' }
+
+  let sawGray = false
+  let firstVerb: string | undefined
+  for (const cmd of commands) {
+    const risk = classifySimpleCommand(cmd)
+    if (risk.level === 'high') return risk
+    if (risk.level === 'gray') sawGray = true
+    firstVerb ??= risk.verb
+  }
+  if (sawGray) return { level: 'gray', verb: firstVerb ?? 'change' }
+  return { level: 'low', verb: firstVerb ?? 'change' }
+}
+
+function unwrapShellScript(argv: string[]): string | null {
+  if (argv.length < 2) return null
+  const shell = commandBasename(argv[0] ?? '')
+  if (!SHELL_NAMES.has(shell)) return null
+
+  for (let i = 1; i < argv.length; i++) {
+    const token = argv[i] ?? ''
+    if (token === '-c' || token === '--command') {
+      return argv[i + 1] ?? null
+    }
+    if (token.startsWith('-c') && token.length > 2) {
+      return token.slice(2)
+    }
+  }
+  return null
+}
+
+function findVerbIndex(argv: string[], verb: string): number {
+  for (let i = 1; i < argv.length; i++) {
+    const token = argv[i] ?? ''
+    if (token === '--') break
+    if (token.startsWith('-')) continue
+    if (token.toLowerCase() === verb) return i
+  }
+  return -1
+}
+
+function skipKubectlExecFlags(argv: string[], start: number): number {
+  let i = start
+  while (i < argv.length) {
+    const token = argv[i] ?? ''
+    if (token === '--') return i
+    if (!token.startsWith('-')) return i
+
+    const eq = token.indexOf('=')
+    if (eq > 0) {
+      i += 1
+      continue
+    }
+    const lower = token.toLowerCase()
+    if (KUBECTL_EXEC_FLAGS_WITH_VALUE.has(lower)) {
+      i += 2
+      continue
+    }
+    if (lower === '-i' || lower === '-t' || lower === '-it') {
+      i += 1
+      continue
+    }
+    i += 1
+  }
+  return i
+}
+
+function extractKubectlExecInner(argv: string[]): string[] | null {
+  const execIdx = findVerbIndex(argv, 'exec')
+  if (execIdx < 0) return null
+
+  let i = skipKubectlExecFlags(argv, execIdx + 1)
+  if (i >= argv.length) return null
+
+  if (argv[i] === '--') {
+    const rest = argv.slice(i + 1)
+    return rest.length > 0 ? rest : null
+  }
+
+  i += 1
+  if (i >= argv.length) return null
+
+  if (argv[i] === '--') {
+    const rest = argv.slice(i + 1)
+    return rest.length > 0 ? rest : null
+  }
+
+  const rest = argv.slice(i)
+  return rest.length > 0 ? rest : null
+}
+
+function skipDockerExecFlags(argv: string[], start: number): number {
+  let i = start
+  while (i < argv.length) {
+    const token = argv[i] ?? ''
+    if (token === '--') return i
+    if (!token.startsWith('-')) return i
+
+    const eq = token.indexOf('=')
+    if (eq > 0) {
+      i += 1
+      continue
+    }
+    const lower = token.toLowerCase()
+    if (DOCKER_EXEC_FLAGS_WITH_VALUE.has(lower)) {
+      i += 2
+      continue
+    }
+    if (lower === '-i' || lower === '-t' || lower === '-it') {
+      i += 1
+      continue
+    }
+    i += 1
+  }
+  return i
+}
+
+function extractDockerExecInner(argv: string[]): string[] | null {
+  const execIdx = findVerbIndex(argv, 'exec')
+  if (execIdx < 0) return null
+
+  let i = skipDockerExecFlags(argv, execIdx + 1)
+  if (i >= argv.length) return null
+
+  if (argv[i] === '--') {
+    const rest = argv.slice(i + 1)
+    return rest.length > 0 ? rest : null
+  }
+
+  i += 1
+  if (i >= argv.length) return null
+
+  if (argv[i] === '--') {
+    const rest = argv.slice(i + 1)
+    return rest.length > 0 ? rest : null
+  }
+
+  const rest = argv.slice(i)
+  return rest.length > 0 ? rest : null
+}
+
+function extractSshRemoteCommand(argv: string[]): string[] | null {
+  let i = 1
+  while (i < argv.length) {
+    const token = argv[i] ?? ''
+    if (!token.startsWith('-')) break
+
+    const eq = token.indexOf('=')
+    if (eq > 0) {
+      i += 1
+      continue
+    }
+    const lower = token.toLowerCase()
+    if (SSH_FLAGS_WITH_VALUE.has(lower)) {
+      i += 2
+      continue
+    }
+    i += 1
+  }
+
+  if (i >= argv.length) return null
+
+  i += 1
+  if (i >= argv.length) return null
+
+  return argv.slice(i)
 }
 
 function firstKnownVerb(argv: string[], write: Set<string>, read: Set<string>): string | undefined {

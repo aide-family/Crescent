@@ -16,6 +16,7 @@ import {
   appendTerminalOutputRing,
   readTerminalOutputRing
 } from '@renderer/lib/terminal-output-ring'
+import { attachXtermScrollFollow, writeXtermAndFollow } from '@renderer/lib/xterm-scroll-follow'
 import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
 
 export interface SubterminalResizeState {
@@ -62,15 +63,25 @@ function SubterminalXtermPane({
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
 
+    const scrollFollow = attachXtermScrollFollow(terminal)
+
     if (subterminal.rawOutput) {
-      terminal.write(filterCrescentBootstrapOutput(subterminal.rawOutput))
+      writeXtermAndFollow(
+        terminal,
+        filterCrescentBootstrapOutput(subterminal.rawOutput),
+        scrollFollow
+      )
     } else {
       const ring = readTerminalOutputRing(subterminal.id)
-      if (ring) terminal.write(filterCrescentBootstrapOutput(ring))
+      if (ring) {
+        writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(ring), scrollFollow)
+      }
     }
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const inputDisposable = terminal.onData((data) => {
+      scrollFollow.resetFollow()
+      terminal.scrollToBottom()
       window.api.terminal.write(data, subterminal.id)
     })
 
@@ -79,13 +90,17 @@ function SubterminalXtermPane({
       const filtered = bootstrapFilter.push(event.data)
       if (filtered) {
         appendTerminalOutputRing(subterminal.id, filtered)
-        terminal.write(filtered)
+        writeXtermAndFollow(terminal, filtered, scrollFollow)
       }
     })
 
     const stopExit = window.api.terminal.onExit((event) => {
       if (event.tabId !== subterminal.id) return
-      terminal.writeln(`\r\n\x1b[31m${shellExitedText} ${event.exitCode}.\x1b[0m`)
+      writeXtermAndFollow(
+        terminal,
+        `\r\n\x1b[31m${shellExitedText} ${event.exitCode}.\x1b[0m`,
+        scrollFollow
+      )
     })
 
     const resizeObserver = new ResizeObserver(() => {
@@ -100,6 +115,7 @@ function SubterminalXtermPane({
         rows: dimensions.rows,
         tabId: subterminal.id
       })
+      scrollFollow.followIfEnabled()
     })
     resizeObserver.observe(host)
 
@@ -107,6 +123,7 @@ function SubterminalXtermPane({
       inputDisposable.dispose()
       stopData()
       stopExit()
+      scrollFollow.dispose()
       resizeObserver.disconnect()
       terminal.dispose()
       terminalRef.current = null

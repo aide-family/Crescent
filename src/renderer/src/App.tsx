@@ -61,6 +61,7 @@ import {
   type Locale
 } from '@renderer/i18n'
 import { useAgentRuns } from '@renderer/hooks/useAgentRuns'
+import { useScrollFollow } from '@renderer/hooks/useScrollFollow'
 import {
   connectionToForm,
   createEmptyConnectionForm,
@@ -2706,58 +2707,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     })
   }, [liveRunByLogId, passwordAttentionTabIds, tabs])
 
-  const userScrollingRef = useRef(false)
-  const userScrollIdleTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    const el = agentLogRef.current
-    if (!el) return
-
-    const followLatest = (force: boolean): void => {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-      // New user input always returns to the latest; otherwise follow unless
-      // the user is actively scrolling (idle timeout below resumes tracking).
-      if (force || nearBottom || !userScrollingRef.current) {
-        el.scrollTo({ top: el.scrollHeight })
-      }
-    }
-
-    const handleScroll = (): void => {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-      if (nearBottom) {
-        userScrollingRef.current = false
-        if (userScrollIdleTimerRef.current != null) {
-          window.clearTimeout(userScrollIdleTimerRef.current)
-          userScrollIdleTimerRef.current = null
-        }
-        return
-      }
-      userScrollingRef.current = true
-      if (userScrollIdleTimerRef.current != null) {
-        window.clearTimeout(userScrollIdleTimerRef.current)
-      }
-      userScrollIdleTimerRef.current = window.setTimeout(() => {
-        // User stopped scrolling: resume tracking so the next update follows.
-        userScrollingRef.current = false
-        userScrollIdleTimerRef.current = null
-      }, 1500)
-    }
-
+  const newUserInputForScroll = useMemo(() => {
     const entries = activeTab?.agentLog ?? []
     const lastEntry = entries[entries.length - 1]
-    const newUserInput = Boolean(
-      lastEntry && (lastEntry.kind === 'user' || lastEntry.kind === 'user-supplement')
-    )
-    followLatest(newUserInput)
+    return Boolean(lastEntry && (lastEntry.kind === 'user' || lastEntry.kind === 'user-supplement'))
+  }, [activeTab?.agentLog])
 
-    el.addEventListener('scroll', handleScroll, { passive: true })
-    const observer = new ResizeObserver(() => followLatest(false))
-    observer.observe(el)
-    return () => {
-      el.removeEventListener('scroll', handleScroll)
-      observer.disconnect()
-    }
-  }, [activeTab?.agentLog, activeTab?.agentThinking, activeTab?.thinkingMessage, activeLiveRun])
+  const { followNow: followAgentLog } = useScrollFollow(
+    agentLogRef,
+    [activeTab?.agentLog, activeTab?.agentThinking, activeTab?.thinkingMessage, activeLiveRun],
+    { forceFollow: newUserInputForScroll }
+  )
 
   const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
 
@@ -5049,7 +5009,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function viewConnectionRecovery(): void {
-    agentLogRef.current?.scrollTo({ top: agentLogRef.current.scrollHeight })
+    followAgentLog(true)
   }
 
   function showConnectionList(): void {

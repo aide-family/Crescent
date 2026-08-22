@@ -16,6 +16,7 @@ import {
   parseSubterminalTabId
 } from '../lib/terminal-text'
 import { appendTerminalOutputRing, readTerminalOutputRing } from '../lib/terminal-output-ring'
+import { attachXtermScrollFollow, writeXtermAndFollow } from '../lib/xterm-scroll-follow'
 import {
   resolveSessionChatTabId,
   type AgentLogEntryInput,
@@ -146,15 +147,21 @@ export function useXtermLifecycle({
     terminal.open(host)
     fitAddon.fit()
 
+    const scrollFollow = attachXtermScrollFollow(terminal)
+
     if (tab.terminalOutput) {
-      terminal.write(filterCrescentBootstrapOutput(tab.terminalOutput))
+      writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(tab.terminalOutput), scrollFollow)
     } else {
       const ring = readTerminalOutputRing(tab.id)
-      if (ring) terminal.write(filterCrescentBootstrapOutput(ring))
+      if (ring) {
+        writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(ring), scrollFollow)
+      }
     }
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
+      scrollFollow.resetFollow()
+      terminal.scrollToBottom()
       if (terminalModeRef.current === 'pipe') {
         handlePipeTerminalInput(terminal, data)
         return
@@ -174,7 +181,9 @@ export function useXtermLifecycle({
       if (!filtered) return
 
       appendTerminalOutputRing(event.tabId, filtered)
-      if (event.tabId === activeTabIdRef.current) terminal.write(filtered)
+      if (event.tabId === activeTabIdRef.current) {
+        writeXtermAndFollow(terminal, filtered, scrollFollow)
+      }
     })
     const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
       const subterminal = parseSubterminalTabId(tabId)
@@ -187,7 +196,7 @@ export function useXtermLifecycle({
       if (tabId === activeTabIdRef.current) {
         terminalCwdRef.current = cwd
         pipePromptRef.current = prompt || formatPipePrompt(cwd)
-        terminal.write(`\r\n${pipePromptRef.current}`)
+        writeXtermAndFollow(terminal, `\r\n${pipePromptRef.current}`, scrollFollow)
       }
     })
     const stopTerminalExit = window.api.terminal.onExit((event) => {
@@ -312,13 +321,16 @@ export function useXtermLifecycle({
       }))
     })
 
-    const resizeObserver = observeTerminalHostResize(host, fitAddon, tab.id)
+    const resizeObserver = observeTerminalHostResize(host, fitAddon, tab.id, () =>
+      scrollFollow.followIfEnabled()
+    )
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
 
     return () => {
       resizeObserver.disconnect()
+      scrollFollow.dispose()
       terminalDataDisposable.dispose()
       stopTerminalData()
       stopTerminalPrompt()
