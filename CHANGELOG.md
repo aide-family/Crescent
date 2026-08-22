@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.10 (2026-08-22)
+
+### Terminal / SSH
+
+- Saved connections can store an optional root password, encrypted at rest with the same `safeStorage` path as login passwords.
+- Autofill root password when privilege prompts appear, based on connection context and prompt signals.
+
+### Desktop
+
+- Scroll-follow for agent logs and terminal output: new lines stay in view while you are at the bottom; scrolling up pauses follow until you return to the bottom.
+
 ## v1.0.9 (2026-08-22)
 
 ### Extensions

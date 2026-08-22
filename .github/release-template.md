@@ -18,9 +18,8 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Create starter agent extensions from Extension Manager (host IPC scaffolds under the Crescent extensions directory).
-- Encrypt connection passwords, provider API keys, and MCP env/headers at rest with Electron `safeStorage`; harden reconnect intent and password masking in logs.
-- Configurable system log level in Settings; skip GitHub update checks when unpackaged; reuse already-logged-in terminals more reliably. Mermaid loads on demand for a smaller renderer bundle.
+- Optional root password on saved connections, encrypted at rest and autofilled when privilege prompts appear.
+- Scroll-follow for agent logs and terminal output: views stay pinned to the bottom while you read, and resume following when you scroll back down.
 
 ## Install Notes
 
