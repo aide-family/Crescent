@@ -196,6 +196,7 @@ import {
   looksLikeCommand,
   mergeConnectionInput,
   resolveRemainingConnectionCommands,
+  shouldSkipReuseRelogin,
   stripStoredPassword
 } from '@renderer/lib/connection-commands'
 import {
@@ -1664,7 +1665,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         promptHost: liveContext.promptHost,
         alignment: liveContext.alignment ?? liveContext.sessionAligned,
         output: liveContext.output,
-        preferSshCommand: includeSshCommand
+        preferSshCommand: includeSshCommand,
+        ready: liveContext.ready,
+        aliases: liveContext.aliases,
+        returnToJumpHost: liveContext.returnToJumpHost
       })
       const commands = remaining.commands
       const includeSshNow = remaining.includeSshCommand
@@ -2560,6 +2564,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   useEffect(() => {
     return window.api.agent.onSubterminalOpened((payload) => {
       void (async () => {
+        const chatTabId =
+          payload.chatTabId?.trim() || resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
+        if (chatTabId && activeRunCanceledRef.current.has(chatTabId)) {
+          void window.api.agent.ackSubterminalOpened({
+            tabId: payload.tabId,
+            ok: false,
+            error: 'Agent run was canceled.'
+          })
+          return
+        }
+
         ensureSubterminal(payload.parentTabId, {
           id: payload.tabId,
           name: payload.name,
@@ -2583,6 +2598,14 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         }
 
         try {
+          if (chatTabId && activeRunCanceledRef.current.has(chatTabId)) {
+            void window.api.agent.ackSubterminalOpened({
+              tabId: payload.tabId,
+              ok: false,
+              error: 'Agent run was canceled.'
+            })
+            return
+          }
           const refreshed = await window.api.connections.resolve(payload.connectionId)
           const fallback = connectionsRef.current.find((item) => item.id === payload.connectionId)
           const connection = refreshed
@@ -2615,9 +2638,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             // Subterminal SSH success writes back to the parent tab SSOT
             // (confirm-login promotion inside executeConnectionAutomation):
             // clear the recovery card and mark the chat ready.
-            const chatTabId = resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
-            markChatTabReady(chatTabId)
-            recoveryBudgetByTabRef.current.delete(chatTabId)
+            const readyChatTabId = resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
+            markChatTabReady(readyChatTabId)
+            recoveryBudgetByTabRef.current.delete(readyChatTabId)
             skipConnectionReconnectRef.current.delete(payload.parentTabId)
           }
           void window.api.agent.ackSubterminalOpened({
@@ -4776,16 +4799,28 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
     if (resolution.kind === 'reuse') {
       // Recovery brake #2: never reinit + re-knock ssh on an already connected
-      // terminal. Read the SSOT first; aligned means reuse as-is.
+      // terminal. Read the SSOT first; skip re-login when remaining commands
+      // are empty (aligned / regex / ready remote / on-target aliases).
       const context = await window.api.terminal.getContext(targetTabId)
-      // Only skip re-login when EnvGuard says the PTY is on the operation
-      // target. A jump-box fall-back is remote AND drifted — continue with
-      // remaining login actions from the connection (next ssh + password),
-      // instead of treating any remote prompt as "already connected".
       const waitingForSecret = findNewestPromptSignal(context.output)?.kind === 'waiting'
       const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
-      if (context.alignment === 'aligned' && !waitingForSecret) {
-        connTrace('connect-reuse-aligned', `tab=${targetTabId}`, 'skipping re-login')
+      const loginEnv = {
+        promptHost: context.promptHost,
+        alignment: context.alignment ?? context.sessionAligned,
+        output: context.output,
+        ready: context.ready,
+        aliases: context.aliases,
+        returnToJumpHost: context.returnToJumpHost,
+        preferSshCommand: false as const
+      }
+      if (!waitingForSecret && shouldSkipReuseRelogin(connection, loginEnv)) {
+        connTrace(
+          'connect-reuse-skip-relogin',
+          `tab=${targetTabId}`,
+          `promptHost=${context.promptHost ?? '-'}`,
+          `aligned=${context.alignment ?? context.sessionAligned ?? '-'}`,
+          `ready=${context.ready ? 'yes' : 'no'}`
+        )
         markChatTabReady(chatTabId)
         finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
         if (postConnectionTasksRef.current.get(targetTabId)?.length) {
@@ -5404,6 +5439,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         text: connectAfterSave ? t.connections.saveAndConnectSucceeded : t.connections.saveSucceeded
       })
 
+      if (savedConnection?.id) {
+        await syncClusterHostRegexToLiveTabs(savedConnection.id, savedConnection.clusterHostRegex)
+      }
+
       if (connectAfterSave && savedConnection) {
         // Busy flag already held; open terminal without re-entering the guard.
         if (isLocalConnection(savedConnection)) {
@@ -5430,12 +5469,62 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  async function syncClusterHostRegexToLiveTabs(
+    connectionId: string,
+    clusterHostRegex: string | undefined
+  ): Promise<void> {
+    const tabIds = new Set<string>()
+    for (const tab of tabsRef.current) {
+      if (tab.connectionId === connectionId) tabIds.add(tab.id)
+      for (const sub of tab.subTerminals) {
+        if (sub.connectionId === connectionId) tabIds.add(sub.id)
+      }
+    }
+    await Promise.all(
+      [...tabIds].map((tabId) =>
+        window.api.terminal
+          .patchClusterHostRegex({
+            tabId,
+            clusterHostRegex: clusterHostRegex ?? null
+          })
+          .catch(() => undefined)
+      )
+    )
+  }
+
   async function deleteConnection(id: string): Promise<void> {
     if (!window.confirm(t.confirm.deleteConnection)) return
 
     const nextConnections = await window.api.connections.delete(id)
     setConnections(nextConnections)
     if (connectionForm.id === id) closeConnectionForm()
+  }
+
+  async function toggleConnectionFavorite(id: string): Promise<void> {
+    try {
+      const nextConnections = await window.api.connections.toggleFavorite(id)
+      setConnections(nextConnections)
+    } catch (error) {
+      setConnectionSaveMessage({
+        type: 'error',
+        text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
+    }
+  }
+
+  async function reorderConnectionList(
+    id: string,
+    action: 'up' | 'down' | 'top' | 'bottom'
+  ): Promise<void> {
+    try {
+      const nextConnections = await window.api.connections.reorder({ id, action })
+      setConnections(nextConnections)
+    } catch (error) {
+      setConnectionSaveMessage({
+        type: 'error',
+        text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+      })
+    }
   }
 
   async function resolveConnectionIntentForInput(
@@ -5640,14 +5729,18 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       `tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
     )
     if (terminalContext.sessionAligned === 'drifted') {
-      // Dead or off-target session: local-shell OR jump-box fall-back. Mark the
-      // tab not ready so routing/recovery reconnect to the operation target
-      // instead of injecting on the wrong host.
-      const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
-      updateConnectionAttempt(driftedChatTabId, (state) =>
-        markConnectionFailed(state, { reason: t.terminal.connectionDriftedReconnecting })
-      )
-      updateTab(terminalTabId, (tab) => ({ ...tab, terminalReady: false }))
+      // Only clear readiness on real leave-target drift (local shell or jump
+      // fall-back). Hostname≠IP false positives must keep terminalReady so
+      // inspection reuses the live PTY instead of re-typing login actions.
+      const leftTarget =
+        terminalContext.promptHost === 'local-shell' || Boolean(terminalContext.returnToJumpHost)
+      if (leftTarget) {
+        const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
+        updateConnectionAttempt(driftedChatTabId, (state) =>
+          markConnectionFailed(state, { reason: t.terminal.connectionDriftedReconnecting })
+        )
+        updateTab(terminalTabId, (tab) => ({ ...tab, terminalReady: false }))
+      }
     }
     const pendingClarification = tab?.pendingClarification
     const activePending =
@@ -5682,7 +5775,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       explicitNonTerminal: explicitNonTerminalRequest,
       explicitLocalFile: explicitLocalFileRequest,
       sessionAligned: terminalContext.sessionAligned,
-      promptHost: terminalContext.promptHost
+      promptHost: terminalContext.promptHost,
+      aliases: terminalContext.aliases,
+      expectedHost: terminalContext.expectedHost,
+      returnToJumpHost: terminalContext.returnToJumpHost
     })
     connTrace(
       'route',
@@ -5727,7 +5823,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     let executionTerminalId = terminalTabId
     const activeLoggedIn = isActiveLoggedInTerminal(terminalTab, {
       sessionAligned: terminalContext.sessionAligned,
-      promptHost: terminalContext.promptHost
+      promptHost: terminalContext.promptHost,
+      returnToJumpHost: terminalContext.returnToJumpHost
     })
     try {
       if (route.action === 'llm-fallback' && activeLoggedIn) {
@@ -8364,6 +8461,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         onDuplicateConnection={duplicateConnection}
         onEditConnection={editConnection}
         onDeleteConnection={(id) => void deleteConnection(id)}
+        onToggleFavorite={(id) => void toggleConnectionFavorite(id)}
+        onReorderConnection={(id, action) => void reorderConnectionList(id, action)}
         onImportTextChange={setConnectionImportText}
         onImportConnection={importConnectionFromText}
         onFormChange={updateConnectionForm}

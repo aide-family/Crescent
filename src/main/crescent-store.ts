@@ -36,6 +36,13 @@ import type {
   ConnectionInput,
   OperationRecord
 } from './agent/types'
+import {
+  normalizeConnectionListMeta,
+  reorderInMeta,
+  toggleFavoriteInMeta,
+  type ConnectionListMeta,
+  type ConnectionReorderAction
+} from '../shared/connection-list'
 
 export {
   getCrescentDir,
@@ -49,6 +56,8 @@ export interface CrescentConfigFile {
   connections: ConnectionConfig[]
   /** Soft default for connection routing after a successful SSH login. */
   lastUsedConnectionId?: string
+  /** Favorite + manual order for custom and ssh-config hosts (ids only). */
+  connectionList?: ConnectionListMeta
 }
 
 export interface CrescentMemoryFile {
@@ -236,19 +245,78 @@ export function upsertCustomConnection(input: ConnectionInput): ConnectionConfig
     ...current.connections.filter((candidate) => candidate.id !== id),
     connection
   ].sort((left, right) => left.name.localeCompare(right.name))
+  const meta = current.connectionList ?? { favoriteIds: [], orderIds: [] }
+  const alreadyPlaced = meta.favoriteIds.includes(id) || meta.orderIds.includes(id)
+  const connectionList = alreadyPlaced
+    ? meta
+    : {
+        favoriteIds: meta.favoriteIds,
+        orderIds: [...meta.orderIds.filter((entry) => entry !== id), id]
+      }
 
-  writeCrescentConfig({ ...current, connections })
+  writeCrescentConfig({ ...current, connections, connectionList })
   return connection
 }
 
 export function deleteCustomConnection(id: string): void {
   const current = readCrescentConfig()
+  const meta = current.connectionList ?? { favoriteIds: [], orderIds: [] }
   writeCrescentConfig({
     ...current,
     connections: current.connections.filter((connection) => connection.id !== id),
     lastUsedConnectionId:
-      current.lastUsedConnectionId === id ? undefined : current.lastUsedConnectionId
+      current.lastUsedConnectionId === id ? undefined : current.lastUsedConnectionId,
+    connectionList: {
+      favoriteIds: meta.favoriteIds.filter((entry) => entry !== id),
+      orderIds: meta.orderIds.filter((entry) => entry !== id)
+    }
   })
+}
+
+export function readConnectionListMeta(): ConnectionListMeta {
+  return normalizeConnectionListMeta(readCrescentConfig().connectionList)
+}
+
+export function writeConnectionListMeta(meta: ConnectionListMeta): ConnectionListMeta {
+  const current = readCrescentConfig()
+  const next = normalizeConnectionListMeta(meta)
+  writeCrescentConfig({
+    ...current,
+    connectionList: next
+  })
+  return next
+}
+
+/** Toggle favorite for a connection id; returns updated meta. */
+export function toggleConnectionFavorite(
+  connectionId: string,
+  knownIds: Iterable<string>
+): ConnectionListMeta {
+  const current = readCrescentConfig()
+  const next = toggleFavoriteInMeta(
+    current.connectionList ?? { favoriteIds: [], orderIds: [] },
+    connectionId,
+    knownIds
+  )
+  writeCrescentConfig({ ...current, connectionList: next })
+  return next
+}
+
+/** Reorder within favorites or non-favorites; returns updated meta. */
+export function reorderConnection(
+  connectionId: string,
+  action: ConnectionReorderAction,
+  knownIds: Iterable<string>
+): ConnectionListMeta {
+  const current = readCrescentConfig()
+  const next = reorderInMeta(
+    current.connectionList ?? { favoriteIds: [], orderIds: [] },
+    connectionId,
+    action,
+    knownIds
+  )
+  writeCrescentConfig({ ...current, connectionList: next })
+  return next
 }
 
 export function readLastUsedConnectionId(): string | undefined {
@@ -455,7 +523,8 @@ function normalizeConfigFile(value: unknown): CrescentConfigFile {
     connections: Array.isArray(record.connections)
       ? record.connections.map(normalizeConnection).filter((connection) => connection.host)
       : [],
-    lastUsedConnectionId: normalizeLastUsedConnectionId(record.lastUsedConnectionId)
+    lastUsedConnectionId: normalizeLastUsedConnectionId(record.lastUsedConnectionId),
+    connectionList: normalizeConnectionListMeta(record.connectionList)
   }
 }
 

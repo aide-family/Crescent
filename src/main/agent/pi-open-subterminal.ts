@@ -12,7 +12,8 @@ export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
   '- 需要登录另一台主机 / 新 SSH，而当前终端无法到达或不该离开：优先 open_subterminal(mode=ssh, connectionId=...)，再在该子终端执行；不要只做分析。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
-  '- workspace 的 write/edit 不能代替本机 /etc/hosts。'
+  '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
+  '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。'
 ].join('\n')
 
 export type OpenSubterminalMode = 'local' | 'ssh'
@@ -36,6 +37,8 @@ export interface AgentSubterminalOpenedPayload {
 interface SubterminalReadyWaiter {
   resolve: (result: { ok: boolean; error?: string }) => void
   timeout: NodeJS.Timeout
+  abortHandler?: () => void
+  signal?: AbortSignal
 }
 
 const readyWaiters = new Map<string, SubterminalReadyWaiter>()
@@ -50,30 +53,86 @@ export function resolveAgentSubterminalReady(payload: {
   const waiter = readyWaiters.get(tabId)
   if (!waiter) return { ok: false }
   clearTimeout(waiter.timeout)
+  if (waiter.signal && waiter.abortHandler) {
+    waiter.signal.removeEventListener('abort', waiter.abortHandler)
+  }
   readyWaiters.delete(tabId)
   waiter.resolve({ ok: Boolean(payload.ok), error: payload.error })
   return { ok: true }
 }
 
-function waitForRendererReady(
+/** Reject every in-flight open_subterminal ready waiter (e.g. on Stop). */
+export function rejectAllSubterminalReadyWaiters(reason: string): number {
+  let count = 0
+  for (const [tabId, waiter] of readyWaiters.entries()) {
+    clearTimeout(waiter.timeout)
+    if (waiter.signal && waiter.abortHandler) {
+      waiter.signal.removeEventListener('abort', waiter.abortHandler)
+    }
+    readyWaiters.delete(tabId)
+    waiter.resolve({ ok: false, error: reason })
+    count += 1
+  }
+  return count
+}
+
+export function waitForRendererReady(
   tabId: string,
+  signal?: AbortSignal,
   timeoutMs = 20_000
 ): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ ok: false, error: 'Agent run was canceled.' })
+      return
+    }
+
     const existing = readyWaiters.get(tabId)
     if (existing) {
       clearTimeout(existing.timeout)
+      if (existing.signal && existing.abortHandler) {
+        existing.signal.removeEventListener('abort', existing.abortHandler)
+      }
       readyWaiters.delete(tabId)
       existing.resolve({ ok: false, error: 'Superseded by a newer open_subterminal call.' })
     }
+
+    let settled = false
+    const finish = (result: { ok: boolean; error?: string }): void => {
+      if (settled) return
+      settled = true
+      const current = readyWaiters.get(tabId)
+      if (current) {
+        clearTimeout(current.timeout)
+        if (current.signal && current.abortHandler) {
+          current.signal.removeEventListener('abort', current.abortHandler)
+        }
+        readyWaiters.delete(tabId)
+      }
+      resolve(result)
+    }
+
     const timeout = setTimeout(() => {
-      readyWaiters.delete(tabId)
-      resolve({
+      finish({
         ok: true,
         error: 'Timed out waiting for UI ack; bash will still target this subterminal.'
       })
     }, timeoutMs)
-    readyWaiters.set(tabId, { resolve, timeout })
+
+    const abortHandler = (): void => {
+      finish({ ok: false, error: 'Agent run was canceled.' })
+    }
+
+    if (signal) {
+      signal.addEventListener('abort', abortHandler, { once: true })
+    }
+
+    readyWaiters.set(tabId, {
+      resolve: finish,
+      timeout,
+      abortHandler: signal ? abortHandler : undefined,
+      signal
+    })
   })
 }
 
@@ -100,6 +159,7 @@ export async function openAgentSubterminal(input: {
   sessionKey: string
   params: OpenSubterminalParams
   webContents?: WebContents
+  signal?: AbortSignal
 }): Promise<{
   ok: boolean
   tabId?: string
@@ -109,6 +169,10 @@ export async function openAgentSubterminal(input: {
   hint?: string
   error?: string
 }> {
+  if (input.signal?.aborted) {
+    return { ok: false, error: 'Agent run was canceled.' }
+  }
+
   const context = getPtyBashExecContext(input.sessionKey)
   const webContents = input.webContents ?? context?.webContents
   if (!context || !webContents || webContents.isDestroyed()) {
@@ -146,6 +210,10 @@ export async function openAgentSubterminal(input: {
     }
   }
 
+  if (input.signal?.aborted) {
+    return { ok: false, error: 'Agent run was canceled.' }
+  }
+
   const parentTabId = resolveOpenSubterminalParentTabId(context.executionTabId)
   const name =
     input.params.name?.trim() ||
@@ -156,6 +224,17 @@ export async function openAgentSubterminal(input: {
     return {
       ok: false,
       error: opened.error || 'Failed to open subterminal.'
+    }
+  }
+
+  if (input.signal?.aborted) {
+    return {
+      ok: false,
+      tabId: opened.tabId,
+      name: opened.name || name,
+      mode,
+      parentTabId,
+      error: 'Agent run was canceled.'
     }
   }
 
@@ -172,7 +251,18 @@ export async function openAgentSubterminal(input: {
   }
   safeWebContentsSend(webContents, 'agent:subterminal-opened', payload)
 
-  const ready = await waitForRendererReady(opened.tabId)
+  const ready = await waitForRendererReady(opened.tabId, input.signal)
+  if (!ready.ok) {
+    return {
+      ok: false,
+      tabId: opened.tabId,
+      name: payload.name,
+      mode,
+      parentTabId,
+      error: ready.error || 'Agent run was canceled.'
+    }
+  }
+
   const hintParts = [
     `Subsequent bash commands now run in subterminal "${payload.name}" (${opened.tabId}).`,
     mode === 'local'
@@ -210,19 +300,22 @@ export async function createOpenSubterminalToolDefinition(
       'Open a docked subterminal and route subsequent bash there.',
       'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
       'Use mode=ssh with connectionId to open a new SSH session in a subterminal.',
+      'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
       'Do not only analyze — call this tool then execute.'
     ].join(' '),
     promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
-      'For a new SSH target the current pane cannot reach, call open_subterminal(mode=ssh, connectionId=...).'
+      'For a new SSH target the current pane cannot reach, call open_subterminal(mode=ssh, connectionId=...).',
+      'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
     parameters,
     executionMode: 'sequential',
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal) {
       const result = await openAgentSubterminal({
         sessionKey,
-        params: params as OpenSubterminalParams
+        params: params as OpenSubterminalParams,
+        signal
       })
       const text = JSON.stringify(result, null, 2)
       return {

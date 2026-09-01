@@ -214,6 +214,12 @@ const en = {
     descriptionPlaceholder: 'Optional note…',
     duplicateAsNew: 'Duplicate as new',
     existing: 'Existing',
+    favorite: 'Favorite',
+    unfavorite: 'Remove favorite',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
+    moveToTop: 'Move to top',
+    moveToBottom: 'Move to bottom',
     host: 'Host',
     clusterHostRegex: 'Cluster host regex',
     clusterHostRegexDescription:

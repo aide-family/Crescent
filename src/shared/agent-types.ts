@@ -121,6 +121,11 @@ export interface ConnectionConfig {
   actions?: string[]
   /** When set, a matching terminal hostname counts as already logged in. */
   clusterHostRegex?: string
+  /**
+   * Runtime-only: derived from `connectionList.favoriteIds` when listing.
+   * Not persisted on the connection row (ssh-config hosts stay read-only).
+   */
+  favorite?: boolean
 }
 
 export interface ConnectionInput {

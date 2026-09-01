@@ -120,7 +120,7 @@ export function createPtyBashToolDefinition(
   cwd: string,
   sessionKey: string
 ): ReturnType<PiSdkFacade['createBashToolDefinition']> {
-  return pi.createBashToolDefinition(cwd, {
+  const tool = pi.createBashToolDefinition(cwd, {
     operations: {
       async exec(command, _cwd, options) {
         const context = execContextBySessionKey.get(sessionKey)
@@ -155,6 +155,9 @@ export function createPtyBashToolDefinition(
       }
     }
   })
+  // Prefer sequential bash tool calls; exclusive per-tab lock in
+  // executeCommandInTerminal remains the hard gate against same-pane conflicts.
+  return { ...tool, executionMode: 'sequential' }
 }
 
 async function executeReviewedPtyCommand(input: {

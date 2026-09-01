@@ -139,6 +139,9 @@ const api = {
       promptHost?: string
       aliases?: string[]
       ready?: boolean
+      jumpPromptHost?: string
+      runtimeExpectedHost?: string
+      returnToJumpHost?: boolean
     }> => ipcRenderer.invoke('terminal:get-context', { tabId }),
     resize: (dimensions: { cols: number; rows: number; tabId?: string }): void => {
       ipcRenderer.send('terminal:resize', dimensions)
@@ -155,6 +158,11 @@ const api = {
       clusterHostRegex?: string | null
     }): Promise<{ ok: boolean; host?: string; error?: string }> =>
       ipcRenderer.invoke('terminal:set-expected-host', options),
+    patchClusterHostRegex: (options: {
+      tabId: string
+      clusterHostRegex?: string | null
+    }): Promise<{ ok: boolean; clusterHostRegex?: string; error?: string }> =>
+      ipcRenderer.invoke('terminal:patch-cluster-host-regex', options),
     confirmLogin: (options: {
       tabId: string
       sourceTabId?: string
@@ -539,7 +547,13 @@ const api = {
       ipcRenderer.invoke('connections:delete', id),
     getLastUsed: (): Promise<string | null> => ipcRenderer.invoke('connections:get-last-used'),
     setLastUsed: (id: string): Promise<string | null> =>
-      ipcRenderer.invoke('connections:set-last-used', id)
+      ipcRenderer.invoke('connections:set-last-used', id),
+    toggleFavorite: (id: string): Promise<ConnectionConfig[]> =>
+      ipcRenderer.invoke('connections:toggle-favorite', id),
+    reorder: (input: {
+      id: string
+      action: 'up' | 'down' | 'top' | 'bottom'
+    }): Promise<ConnectionConfig[]> => ipcRenderer.invoke('connections:reorder', input)
   },
   storage: {
     saveTabs: (tabs: StoredSessionTab[]): Promise<{ ok: boolean }> =>

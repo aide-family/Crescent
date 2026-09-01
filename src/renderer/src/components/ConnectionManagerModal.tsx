@@ -1,5 +1,9 @@
 import { useEffect } from 'react'
 import {
+  ArrowDownIcon,
+  ArrowDownToLineIcon,
+  ArrowUpIcon,
+  ArrowUpToLineIcon,
   CopyIcon,
   CopyPlusIcon,
   InfoIcon,
@@ -8,6 +12,7 @@ import {
   PanelBottomIcon,
   PencilIcon,
   ServerIcon,
+  StarIcon,
   Trash2Icon,
   XIcon
 } from 'lucide-react'
@@ -27,6 +32,8 @@ type ConnectionFormChange = <K extends keyof ConnectionInput>(
   key: K,
   value: ConnectionInput[K]
 ) => void
+
+type ConnectionReorderAction = 'up' | 'down' | 'top' | 'bottom'
 
 export function ConnectionManagerModal({
   open,
@@ -57,6 +64,8 @@ export function ConnectionManagerModal({
   onDuplicateConnection,
   onEditConnection,
   onDeleteConnection,
+  onToggleFavorite,
+  onReorderConnection,
   onImportTextChange,
   onImportConnection,
   onFormChange,
@@ -96,6 +105,8 @@ export function ConnectionManagerModal({
   onDuplicateConnection: (connection: ConnectionConfig) => void
   onEditConnection: (connection: ConnectionConfig) => void
   onDeleteConnection: (id: string) => void
+  onToggleFavorite: (id: string) => void
+  onReorderConnection: (id: string, action: ConnectionReorderAction) => void
   onImportTextChange: (value: string) => void
   onImportConnection: () => void
   onFormChange: ConnectionFormChange
@@ -186,24 +197,102 @@ export function ConnectionManagerModal({
               </Button>
             }
             renderConnectionCorner={(connection) =>
-              connection.source === 'custom' ? (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="icon-xs"
-                  aria-label={t.common.delete}
-                  title={t.common.delete}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onDeleteConnection(connection.id)
-                  }}
-                >
-                  <Trash2Icon aria-hidden="true" />
-                </Button>
-              ) : null
+              connection.source === 'local' ? null : (
+                <div className="flex items-center gap-0.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={
+                      connection.favorite ? t.connections.unfavorite : t.connections.favorite
+                    }
+                    title={connection.favorite ? t.connections.unfavorite : t.connections.favorite}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onToggleFavorite(connection.id)
+                    }}
+                  >
+                    <StarIcon
+                      aria-hidden="true"
+                      className={connection.favorite ? 'fill-current text-primary' : undefined}
+                    />
+                  </Button>
+                  {connection.source === 'custom' ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon-xs"
+                      aria-label={t.common.delete}
+                      title={t.common.delete}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDeleteConnection(connection.id)
+                      }}
+                    >
+                      <Trash2Icon aria-hidden="true" />
+                    </Button>
+                  ) : null}
+                </div>
+              )
             }
             renderConnectionActions={(connection) => (
               <div className="flex flex-wrap items-center justify-end gap-1">
+                {connection.source !== 'local' ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.moveToTop}
+                      title={t.connections.moveToTop}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onReorderConnection(connection.id, 'top')
+                      }}
+                    >
+                      <ArrowUpToLineIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.moveUp}
+                      title={t.connections.moveUp}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onReorderConnection(connection.id, 'up')
+                      }}
+                    >
+                      <ArrowUpIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.moveDown}
+                      title={t.connections.moveDown}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onReorderConnection(connection.id, 'down')
+                      }}
+                    >
+                      <ArrowDownIcon aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t.connections.moveToBottom}
+                      title={t.connections.moveToBottom}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onReorderConnection(connection.id, 'bottom')
+                      }}
+                    >
+                      <ArrowDownToLineIcon aria-hidden="true" />
+                    </Button>
+                  </>
+                ) : null}
                 {connection.source === 'custom' ? (
                   <>
                     <Button

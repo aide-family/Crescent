@@ -17,6 +17,7 @@ import {
   evaluateInjectionGuard,
   isReturnToJumpHost,
   learnHostAlias,
+  patchConnectionClusterHostRegex,
   promoteSubterminalLogin,
   resolveGateAlignment,
   resolveSessionAlignment,
@@ -27,6 +28,7 @@ import {
 import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import { createPendingCommandController } from './pending-command'
+import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
 
 interface TerminalSession {
   id: number
@@ -241,6 +243,10 @@ export function executeCommandInTerminal(
       output: '',
       error: 'Command is empty.'
     })
+  }
+
+  if (pendingCommandPromises.has(key)) {
+    return Promise.resolve(buildTerminalExclusiveBusyResult(normalizedCommand, session))
   }
 
   const drift = detectEnvironmentDriftForSession(key, normalizedTabId, normalizedCommand, session)
@@ -809,6 +815,22 @@ export function registerTerminalIpc(): void {
     }
   )
 
+  ipcMain.handle(
+    'terminal:patch-cluster-host-regex',
+    (event, payload?: { tabId?: string; clusterHostRegex?: string | null }) => {
+      const tabId = normalizeTabId(payload?.tabId)
+      if (!tabId || !isUsableTerminalTabId(tabId)) {
+        return { ok: false as const, error: 'Missing or reserved terminal tab id.' }
+      }
+      const key = getSessionKey(event.sender.id, tabId)
+      sessionWebContents.set(key, event.sender)
+      const state = getConnectionState(key)
+      const next = patchConnectionClusterHostRegex(state, payload?.clusterHostRegex)
+      connectionStates.set(key, next)
+      return { ok: true as const, clusterHostRegex: next.clusterHostRegex }
+    }
+  )
+
   /**
    * Verified-login write-back (SSOT write source). Called after a login
    * automation sequence or a successful subterminal ssh. Learns the observed
@@ -1169,8 +1191,12 @@ export function registerTerminalIpc(): void {
       ? resolveGateAlignment(state, output)
       : (resolved?.alignment ?? 'unknown')
     const alignment = gateAlignment
-    const sessionAligned = expectedHost ? alignment : 'unknown'
-    const ready = Boolean(state?.ready) && alignment !== 'drifted'
+    const hasSsotTarget = Boolean(expectedHost || state?.clusterHostRegex)
+    const sessionAligned = hasSsotTarget ? alignment : 'unknown'
+    // SSOT ready stays independent of transient gate drift so the renderer can
+    // skip re-login when the PTY is still on a remote verified session.
+    const ready = Boolean(state?.ready)
+    const returnToJumpHost = Boolean(state && promptHost && isReturnToJumpHost(state, promptHost))
     connTrace(
       'getContext',
       `tab=${tabId}`,
@@ -1179,6 +1205,7 @@ export function registerTerminalIpc(): void {
       `runtime=${state?.runtimeExpectedHost || '-'}`,
       `aliases=${state?.aliases.join(',') || '-'}`,
       `ready=${ready ? 'yes' : 'no'}`,
+      `returnJump=${returnToJumpHost ? 'yes' : 'no'}`,
       `tail=${output.slice(-120).replace(/\n/g, '\\n')}`
     )
 
@@ -1197,7 +1224,10 @@ export function registerTerminalIpc(): void {
         alignment,
         promptHost,
         aliases: state?.aliases ?? [],
-        ready
+        ready,
+        jumpPromptHost: state?.jumpPromptHost,
+        runtimeExpectedHost: state?.runtimeExpectedHost,
+        returnToJumpHost
       }
     }
 
@@ -1212,7 +1242,10 @@ export function registerTerminalIpc(): void {
       alignment,
       promptHost,
       aliases: state?.aliases ?? [],
-      ready
+      ready,
+      jumpPromptHost: state?.jumpPromptHost,
+      runtimeExpectedHost: state?.runtimeExpectedHost,
+      returnToJumpHost
     }
   })
 

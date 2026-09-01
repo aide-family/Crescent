@@ -109,6 +109,9 @@ interface TerminalAgentApi {
       promptHost?: string
       aliases?: string[]
       ready?: boolean
+      jumpPromptHost?: string
+      runtimeExpectedHost?: string
+      returnToJumpHost?: boolean
     }>
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
@@ -118,6 +121,10 @@ interface TerminalAgentApi {
       host?: string | null
       clusterHostRegex?: string | null
     }) => Promise<{ ok: boolean; host?: string; error?: string }>
+    patchClusterHostRegex: (options: {
+      tabId: string
+      clusterHostRegex?: string | null
+    }) => Promise<{ ok: boolean; clusterHostRegex?: string; error?: string }>
     confirmLogin: (options: {
       tabId: string
       sourceTabId?: string
@@ -324,6 +331,11 @@ interface TerminalAgentApi {
     delete: (id: string) => Promise<ConnectionConfig[]>
     getLastUsed: () => Promise<string | null>
     setLastUsed: (id: string) => Promise<string | null>
+    toggleFavorite: (id: string) => Promise<ConnectionConfig[]>
+    reorder: (input: {
+      id: string
+      action: 'up' | 'down' | 'top' | 'bottom'
+    }) => Promise<ConnectionConfig[]>
   }
   storage: {
     saveTabs: (tabs: StoredSessionTab[]) => Promise<{ ok: boolean }>

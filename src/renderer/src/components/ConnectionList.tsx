@@ -1,5 +1,5 @@
 import type { KeyboardEvent, ReactNode } from 'react'
-import { SearchIcon } from 'lucide-react'
+import { SearchIcon, StarIcon } from 'lucide-react'
 
 import { Input } from '@renderer/components/ui/input'
 import type { Dictionary } from '@renderer/i18n'
@@ -40,7 +40,12 @@ function ConnectionIdentity({
 }): React.JSX.Element {
   return (
     <>
-      <p className="truncate text-[13px] font-medium leading-snug">{connection.name}</p>
+      <p className="flex min-w-0 items-center gap-1 truncate text-[13px] font-medium leading-snug">
+        {connection.favorite ? (
+          <StarIcon aria-hidden="true" className="size-3.5 shrink-0 fill-current text-primary" />
+        ) : null}
+        <span className="truncate">{connection.name}</span>
+      </p>
       <p className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
         {formatConnectionTarget(connection)}
       </p>
@@ -154,7 +159,7 @@ export function ConnectionList({
                   <button
                     type="button"
                     data-connection-id={connection.id}
-                    className={`min-w-0 space-y-0.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${corner ? 'pr-8' : ''}`}
+                    className={`min-w-0 space-y-0.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${corner ? 'pr-14' : ''}`}
                     onClick={() => onSelectConnection(connection)}
                     onKeyDown={(event) => handleIdentityKeyDown(event, connection)}
                   >
@@ -166,7 +171,7 @@ export function ConnectionList({
                     />
                   </button>
                 ) : (
-                  <div className={`min-w-0 space-y-0.5 ${corner ? 'pr-8' : ''}`}>
+                  <div className={`min-w-0 space-y-0.5 ${corner ? 'pr-14' : ''}`}>
                     <ConnectionIdentity
                       connection={connection}
                       formatConnectionTarget={formatConnectionTarget}

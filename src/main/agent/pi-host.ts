@@ -24,7 +24,8 @@ import {
 } from './pi-terminal-bash'
 import {
   createOpenSubterminalToolDefinition,
-  OPEN_SUBTERMINAL_DISCIPLINE
+  OPEN_SUBTERMINAL_DISCIPLINE,
+  rejectAllSubterminalReadyWaiters
 } from './pi-open-subterminal'
 import { CREATE_CAPTURE_DISCIPLINE, createCaptureToolDefinitions } from './pi-create-capture'
 import {
@@ -394,6 +395,7 @@ export async function cancelPiAgentRun(runId: string): Promise<boolean> {
   active.abortController.abort()
   rejectPendingApprovalsForRun(runId, 'Agent run was canceled.')
   rejectPendingExtensionUiForRun(runId, 'Agent run was canceled.')
+  rejectAllSubterminalReadyWaiters('Agent run was canceled.')
   const hosted = hostedSessions.get(active.sessionKey)
   try {
     await settlePtyInterruptsBeforeSessionAbort({

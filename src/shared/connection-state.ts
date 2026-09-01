@@ -105,6 +105,17 @@ export function setConnectionExpectedHost(
   }
 }
 
+/** Patch clusterHostRegex on live SSOT without clearing ready/runtime anchors. */
+export function patchConnectionClusterHostRegex(
+  state: ConnectionState,
+  clusterHostRegex: string | null | undefined
+): ConnectionState {
+  return {
+    ...state,
+    clusterHostRegex: normalizeClusterHostRegex(clusterHostRegex)
+  }
+}
+
 /** True when observed host matches a configured cluster hostname regex. */
 export function matchesClusterHostRegex(
   observedHost: string | undefined,

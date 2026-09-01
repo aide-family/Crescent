@@ -96,6 +96,7 @@ export function insertComposerNewline(root: HTMLElement): void {
   after.collapse(true)
   selection.removeAllRanges()
   selection.addRange(after)
+  scrollComposerCaretIntoView(root)
 }
 
 export function setComposerDomCaret(root: HTMLElement, offset: number): void {
@@ -184,6 +185,53 @@ export function setComposerDomCaret(root: HTMLElement, offset: number): void {
     }
   }
   root.focus()
+  scrollComposerCaretIntoView(root)
+}
+
+/**
+ * Keep the caret visible inside the composer scrollport (max-height + overflow-y).
+ * Adjusts root.scrollTop only — does not call element.scrollIntoView (avoids page jump).
+ */
+export function scrollComposerCaretIntoView(root: HTMLElement): void {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) && range.startContainer !== root) return
+
+  const rootRect = root.getBoundingClientRect()
+  let caretTop = rootRect.top
+  let caretBottom = rootRect.top
+  const rects = range.getClientRects()
+  if (rects.length > 0) {
+    const first = rects[0]
+    const last = rects[rects.length - 1]
+    if (first && last) {
+      caretTop = first.top
+      caretBottom = last.bottom
+    }
+  } else {
+    // Collapsed caret often has empty client rects; use a temporary marker.
+    const marker = document.createElement('span')
+    marker.textContent = '\u200b'
+    marker.style.cssText = 'display:inline-block;width:0;height:1em;overflow:hidden'
+    const probe = range.cloneRange()
+    probe.collapse(true)
+    probe.insertNode(marker)
+    const markerRect = marker.getBoundingClientRect()
+    caretTop = markerRect.top
+    caretBottom = markerRect.bottom
+    marker.parentNode?.removeChild(marker)
+    // Restore selection after marker removal.
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  const padding = 4
+  if (caretBottom > rootRect.bottom - padding) {
+    root.scrollTop += caretBottom - (rootRect.bottom - padding)
+  } else if (caretTop < rootRect.top + padding) {
+    root.scrollTop -= rootRect.top + padding - caretTop
+  }
 }
 
 function rangeAfterComposerRef(range: Range, root: HTMLElement): Range {

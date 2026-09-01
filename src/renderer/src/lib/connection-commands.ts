@@ -1,6 +1,6 @@
 import type { Dictionary } from '@renderer/i18n'
 import type { ConnectionConfig } from '../../../shared/agent-types'
-import { matchesClusterHostRegex } from '../../../shared/connection-state'
+import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
 import { extractSshDestinationHost, isSshCommandLine } from '../../../shared/ssh-destination'
 import { findNewestPromptSignal, isPromptHostAligned } from '../../../shared/terminal-prompt-host'
 
@@ -52,6 +52,12 @@ export type ConnectionLoginEnvironment = {
   promptHost?: string
   alignment?: 'aligned' | 'drifted' | 'unknown'
   output?: string
+  /** SSOT login-verified flag from get-context (independent of transient drift). */
+  ready?: boolean
+  /** Learned prompt-host aliases from get-context. */
+  aliases?: string[]
+  /** True when live prompt is a fall-back to the jump box after a deeper target. */
+  returnToJumpHost?: boolean
   /**
    * Caller intends to paste the initial `ssh` (fresh local PTY). Live
    * environment always wins: a remote hop or password prompt never re-types
@@ -144,7 +150,7 @@ function remainingWithoutLeadingSsh(commands: string[]): RemainingConnectionComm
  *   already landed, keep later `ssh` / password actions.
  * - Password/host-key prompt: never paste another `ssh`; type the secret for
  *   the hop that is waiting, then the rest.
- * - Aligned on the operation target: nothing to type.
+ * - Aligned / ready / on-target: nothing to type.
  */
 export function resolveRemainingConnectionCommands(
   connection: ConnectionConfig,
@@ -166,6 +172,31 @@ export function resolveRemainingConnectionCommands(
     env.promptHost &&
     env.promptHost !== 'local-shell' &&
     matchesClusterHostRegex(env.promptHost, connection.clusterHostRegex)
+  ) {
+    return { includeSshCommand: false, commands: [] }
+  }
+
+  // Login already verified and the PTY still shows a remote prompt — do not
+  // re-type password/actions for hostname≠IP false-positive drift. Jump-box
+  // fall-back still needs remaining hops.
+  if (
+    !waiting &&
+    env.ready === true &&
+    !env.returnToJumpHost &&
+    env.promptHost &&
+    env.promptHost !== 'local-shell'
+  ) {
+    return { includeSshCommand: false, commands: [] }
+  }
+
+  // Live prompt matches learned aliases or cluster regex — on the operation
+  // target. Do NOT treat connection.host alone as on-target: for jump-box
+  // connections that host is the first hop, and remaining actions must run.
+  if (
+    !waiting &&
+    !env.returnToJumpHost &&
+    env.promptHost &&
+    isHostOnTarget(env.promptHost, env.aliases ?? [], undefined, connection.clusterHostRegex)
   ) {
     return { includeSshCommand: false, commands: [] }
   }
@@ -196,6 +227,14 @@ export function resolveRemainingConnectionCommands(
   }
 
   return remainingWithoutLeadingSsh(full)
+}
+
+/** True when connect-reuse should mark ready and skip typing login actions. */
+export function shouldSkipReuseRelogin(
+  connection: ConnectionConfig,
+  env: ConnectionLoginEnvironment
+): boolean {
+  return resolveRemainingConnectionCommands(connection, env).commands.length === 0
 }
 
 export function stripStoredPassword(connection: ConnectionConfig): ConnectionConfig {

@@ -20,6 +20,7 @@ import {
   createComposerPadBr,
   getComposerDomCaret,
   insertComposerNewline,
+  scrollComposerCaretIntoView,
   serializeComposerDom,
   setComposerDomCaret
 } from '@renderer/lib/composer-surface'
@@ -209,6 +210,7 @@ export function ComposerEditor({
     const next = serializeComposerDom(surface)
     lastEmittedRef.current = next
     onCaretChange?.(getComposerDomCaret(surface))
+    scrollComposerCaretIntoView(surface)
     if (next !== value) onChange(next)
   }
 

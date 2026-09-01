@@ -1,4 +1,5 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
+import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
 import {
   findDirectlyMentionedConnection,
   getConnectionNameMentionTokens,
@@ -48,6 +49,12 @@ export interface ConnectionRouteContext {
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
   /** Newest prompt host from get-context; used to distinguish local vs hop drift. */
   promptHost?: string
+  /** Learned aliases from get-context. */
+  aliases?: string[]
+  /** Expected / configured host from get-context. */
+  expectedHost?: string
+  /** Fall-back to jump box after a deeper runtime target. */
+  returnToJumpHost?: boolean
 }
 
 /**
@@ -130,7 +137,10 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       connections,
       activeLabel,
       sessionAligned: ctx.sessionAligned,
-      promptHost: ctx.promptHost
+      promptHost: ctx.promptHost,
+      aliases: ctx.aliases,
+      expectedHost: ctx.expectedHost,
+      returnToJumpHost: ctx.returnToJumpHost
     })
   }
 
@@ -141,7 +151,8 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       activeTab,
       mentionedConnection: undefined,
       sessionAligned: ctx.sessionAligned,
-      promptHost: ctx.promptHost
+      promptHost: ctx.promptHost,
+      returnToJumpHost: ctx.returnToJumpHost
     })
   ) {
     return {
@@ -158,9 +169,45 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   // fall-back to the jump box). Reconnect through configured login actions so
   // the agent re-executes on the restored target — not the wrong host.
   // Missing promptHost is not local-shell; only EnvGuard `drifted` reconnects.
+  // On-target (regex / aliases / expected host) means false-positive drift.
   if (ctx.sessionAligned === 'drifted' && activeTab?.connectionId) {
     const connection = connections.find((c) => c.id === activeTab.connectionId)
     if (connection) {
+      if (
+        ctx.promptHost &&
+        ctx.promptHost !== 'local-shell' &&
+        !ctx.returnToJumpHost &&
+        matchesClusterHostRegex(ctx.promptHost, connection.clusterHostRegex)
+      ) {
+        return {
+          targetTabId: activeTabId,
+          connectionId: connection.id,
+          connection,
+          action: 'reuse',
+          label: activeLabel,
+          reason: 'active-cluster-regex'
+        }
+      }
+      if (
+        ctx.promptHost &&
+        ctx.promptHost !== 'local-shell' &&
+        !ctx.returnToJumpHost &&
+        isHostOnTarget(
+          ctx.promptHost,
+          ctx.aliases ?? [],
+          ctx.expectedHost,
+          connection.clusterHostRegex
+        )
+      ) {
+        return {
+          targetTabId: activeTabId,
+          connectionId: connection.id,
+          connection,
+          action: 'reuse',
+          label: activeLabel,
+          reason: 'active-on-target'
+        }
+      }
       return {
         targetTabId: activeTabId,
         connectionId: connection.id,
@@ -256,17 +303,20 @@ export function isActiveLoggedInTerminal(
   options?: {
     sessionAligned?: 'aligned' | 'drifted' | 'unknown'
     promptHost?: string
+    /** Fall-back to jump box after a deeper runtime target. */
+    returnToJumpHost?: boolean
   }
 ): boolean {
   if (!tab) return false
   if (tab.terminalStartError?.trim()) return false
   if (!tab.terminalReady) return false
   if (!(tab.connectionId || tab.isSsh)) return false
-  // EnvGuard drift (exit-to-local or jump-box fall-back) is the only signal
-  // that the PTY left the operation target. A missing promptHost or a bare
-  // `#` misread as local-shell must not force a second login on a ready tab.
+  // EnvGuard drift: only leave-target (local shell or jump fall-back) counts
+  // as logged-out. Hostname≠IP false positives keep a ready remote tab reusable.
   if (options?.sessionAligned === 'drifted') {
-    return false
+    if (isLocalShellPromptHost(options.promptHost)) return false
+    if (options.returnToJumpHost) return false
+    return true
   }
   return true
 }
@@ -280,11 +330,13 @@ export function shouldPreferActiveLoggedIn(input: {
   mentionedConnection?: ConnectionConfig
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
   promptHost?: string
+  returnToJumpHost?: boolean
 }): boolean {
   if (
     !isActiveLoggedInTerminal(input.activeTab, {
       sessionAligned: input.sessionAligned,
-      promptHost: input.promptHost
+      promptHost: input.promptHost,
+      returnToJumpHost: input.returnToJumpHost
     })
   ) {
     return false
@@ -355,6 +407,9 @@ function resolveNamedConnection(input: {
   soft?: boolean
   sessionAligned?: 'aligned' | 'drifted' | 'unknown'
   promptHost?: string
+  aliases?: string[]
+  expectedHost?: string
+  returnToJumpHost?: boolean
 }): ConnectionRouteResult {
   const {
     mentioned,
@@ -370,6 +425,45 @@ function resolveNamedConnection(input: {
 
   if (isSameConnectionTab(activeTab, mentioned)) {
     if (isExplicitReconnectRequest(message) || sessionAligned === 'drifted') {
+      if (
+        sessionAligned === 'drifted' &&
+        !isExplicitReconnectRequest(message) &&
+        input.promptHost &&
+        input.promptHost !== 'local-shell' &&
+        !input.returnToJumpHost &&
+        matchesClusterHostRegex(input.promptHost, mentioned.clusterHostRegex)
+      ) {
+        return {
+          targetTabId: activeTabId,
+          connectionId: mentioned.id,
+          connection: mentioned,
+          action: 'reuse',
+          label: activeLabel,
+          reason: 'active-cluster-regex'
+        }
+      }
+      if (
+        sessionAligned === 'drifted' &&
+        !isExplicitReconnectRequest(message) &&
+        input.promptHost &&
+        input.promptHost !== 'local-shell' &&
+        !input.returnToJumpHost &&
+        isHostOnTarget(
+          input.promptHost,
+          input.aliases ?? [],
+          input.expectedHost,
+          mentioned.clusterHostRegex
+        )
+      ) {
+        return {
+          targetTabId: activeTabId,
+          connectionId: mentioned.id,
+          connection: mentioned,
+          action: 'reuse',
+          label: activeLabel,
+          reason: 'active-on-target'
+        }
+      }
       return {
         targetTabId: activeTabId,
         connectionId: mentioned.id,
