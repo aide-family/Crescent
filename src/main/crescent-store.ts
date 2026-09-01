@@ -546,6 +546,9 @@ function normalizeConnection(value: unknown): ConnectionConfig {
     description: record.description ? String(record.description) : undefined,
     actions: Array.isArray(record.actions)
       ? record.actions.map(String).filter((line) => line.trim())
+      : undefined,
+    clusterHostRegex: record.clusterHostRegex
+      ? String(record.clusterHostRegex).trim() || undefined
       : undefined
   }
 }

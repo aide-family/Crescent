@@ -31,7 +31,8 @@ export type PiSdkFacade = Pick<
 >
 
 type PiModelRuntimeModule = Pick<PiCodingAgentModule, 'ModelRuntime'>
-type PiSdkModule = Pick<PiCodingAgentModule, 'createAgentSession' | 'createBashToolDefinition'>
+type PiSdkModule = Pick<PiCodingAgentModule, 'createAgentSession'>
+type PiBashToolsModule = Pick<PiCodingAgentModule, 'createBashToolDefinition'>
 type PiSettingsModule = Pick<PiCodingAgentModule, 'SettingsManager'>
 type PiPackageManagerModule = Pick<PiCodingAgentModule, 'DefaultPackageManager'>
 type PiResourceLoaderModule = Pick<PiCodingAgentModule, 'DefaultResourceLoader'>
@@ -109,9 +110,10 @@ export function loadPiSdk(): Promise<PiSdkFacade> {
   if (!piSdkFacadePromise) {
     piSdkFacadePromise = (async () => {
       const start = traceStartup('pi-sdk-facade:start')
-      const [sdk, settings, packageManager, resourceLoader, sessionManager, extensions] =
+      const [sdk, bashTools, settings, packageManager, resourceLoader, sessionManager, extensions] =
         await Promise.all([
           importPiSubpath<PiSdkModule>('dist/core/sdk.js', 'pi-sdk'),
+          importPiSubpath<PiBashToolsModule>('dist/core/tools/bash.js', 'pi-bash-tools'),
           importPiSubpath<PiSettingsModule>('dist/core/settings-manager.js', 'pi-settings'),
           importPiSubpath<PiPackageManagerModule>(
             'dist/core/package-manager.js',
@@ -136,7 +138,7 @@ export function loadPiSdk(): Promise<PiSdkFacade> {
         SessionManager: sessionManager.SessionManager,
         createAgentSession: sdk.createAgentSession,
         defineTool: extensions.defineTool,
-        createBashToolDefinition: sdk.createBashToolDefinition
+        createBashToolDefinition: bashTools.createBashToolDefinition
       }
     })().catch((error) => {
       piSdkFacadePromise = undefined

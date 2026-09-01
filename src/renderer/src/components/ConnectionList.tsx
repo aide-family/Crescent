@@ -18,7 +18,7 @@ interface ConnectionListProps {
   onQueryChange: (query: string) => void
   onSelectConnection?: (connection: ConnectionConfig) => void
   renderConnectionCorner?: (connection: ConnectionConfig) => ReactNode
-  renderConnectionActions: (connection: ConnectionConfig) => ReactNode
+  renderConnectionActions?: (connection: ConnectionConfig) => ReactNode
 }
 
 function connectionSourceLabel(connection: ConnectionConfig, t: Dictionary): string {
@@ -135,6 +135,7 @@ export function ConnectionList({
         ) : (
           filteredConnections.map((connection) => {
             const corner = renderConnectionCorner?.(connection)
+            const actions = renderConnectionActions?.(connection)
             return (
               <div
                 key={connection.id}
@@ -174,9 +175,14 @@ export function ConnectionList({
                     />
                   </div>
                 )}
-                <div className="mt-2 flex justify-end" onClick={(event) => event.stopPropagation()}>
-                  {renderConnectionActions(connection)}
-                </div>
+                {actions ? (
+                  <div
+                    className="mt-2 flex justify-end"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {actions}
+                  </div>
+                ) : null}
               </div>
             )
           })

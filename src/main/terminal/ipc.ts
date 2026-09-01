@@ -175,9 +175,13 @@ function getConnectionState(key: string, mode: ConnectionState['mode'] = 'none')
   return created
 }
 
-function setSessionExpectedHost(key: string, host: string | null | undefined): void {
+function setSessionExpectedHost(
+  key: string,
+  host: string | null | undefined,
+  options?: { clusterHostRegex?: string | null }
+): void {
   const state = getConnectionState(key)
-  connectionStates.set(key, setConnectionExpectedHost(state, host))
+  connectionStates.set(key, setConnectionExpectedHost(state, host, options))
 }
 
 /** Sync SSOT mode when a session is created (PTY/PIPE event). */
@@ -785,7 +789,10 @@ export function registerTerminalIpc(): void {
 
   ipcMain.handle(
     'terminal:set-expected-host',
-    (event, payload?: { tabId?: string; host?: string | null }) => {
+    (
+      event,
+      payload?: { tabId?: string; host?: string | null; clusterHostRegex?: string | null }
+    ) => {
       const tabId = normalizeTabId(payload?.tabId)
       if (!tabId || !isUsableTerminalTabId(tabId)) {
         return { ok: false as const, error: 'Missing or reserved terminal tab id.' }
@@ -793,7 +800,11 @@ export function registerTerminalIpc(): void {
       const key = getSessionKey(event.sender.id, tabId)
       sessionWebContents.set(key, event.sender)
       const host = typeof payload?.host === 'string' ? payload.host.trim() : ''
-      setSessionExpectedHost(key, host || null)
+      const clusterHostRegex =
+        typeof payload?.clusterHostRegex === 'string' ? payload.clusterHostRegex : null
+      setSessionExpectedHost(key, host || null, {
+        clusterHostRegex: host ? clusterHostRegex : null
+      })
       return { ok: true as const, host: host || undefined }
     }
   )
@@ -846,7 +857,8 @@ export function registerTerminalIpc(): void {
         const promptHost = resolveSessionAlignment({
           output: buffer,
           expectedHost: state.expectedHost,
-          aliases: state.aliases
+          aliases: state.aliases,
+          clusterHostRegex: state.clusterHostRegex
         }).promptHost
         const result = confirmLoginState(state, promptHost, { localHost })
         const anchored = applyConfirmedLoginAnchor(result.state, {
@@ -1070,7 +1082,8 @@ export function registerTerminalIpc(): void {
       ? resolveSessionAlignment({
           output,
           expectedHost: effectiveExpectedHost || state.expectedHost,
-          aliases: state.aliases
+          aliases: state.aliases,
+          clusterHostRegex: state.clusterHostRegex
         })
       : undefined
 
@@ -1113,7 +1126,8 @@ export function registerTerminalIpc(): void {
         resolved = resolveSessionAlignment({
           output,
           expectedHost: runtimeAnchorHost(learned) ?? learned.expectedHost,
-          aliases: learned.aliases
+          aliases: learned.aliases,
+          clusterHostRegex: learned.clusterHostRegex
         })
       }
     }
@@ -1145,7 +1159,8 @@ export function registerTerminalIpc(): void {
       resolved = resolveSessionAlignment({
         output,
         expectedHost: runtimeAnchorHost(healed) ?? healed.expectedHost,
-        aliases: healed.aliases
+        aliases: healed.aliases,
+        clusterHostRegex: healed.clusterHostRegex
       })
     }
 

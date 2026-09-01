@@ -119,6 +119,8 @@ export interface ConnectionConfig {
   sshOptions?: string[]
   description?: string
   actions?: string[]
+  /** When set, a matching terminal hostname counts as already logged in. */
+  clusterHostRegex?: string
 }
 
 export interface ConnectionInput {
@@ -134,6 +136,8 @@ export interface ConnectionInput {
   sshOptions?: string[]
   description?: string
   actions?: string[]
+  /** When set, a matching terminal hostname counts as already logged in. */
+  clusterHostRegex?: string
 }
 
 export interface AgentPathReference {

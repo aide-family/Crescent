@@ -2,6 +2,7 @@ import type { Dictionary } from '@renderer/i18n'
 import {
   AGENT_LIVE_RUN_MAX_FULL_STEPS,
   AGENT_LOG_ENTRY_MAX_CHARS,
+  AGENT_RESULT_MAX_CHARS,
   AGENT_RUN_STREAM_MAX_CHARS,
   clampAgentText
 } from './agent-text-limits'
@@ -134,12 +135,13 @@ export function clampAgentRunEnvelopeText(
       if (maxFullSteps <= 0) break
     }
 
+    const resultBudget = Math.max(8_192, maxChars - 1_024)
     const minimal = formatAgentRunDocumentCompact({
       logId: view.logId,
       actions: [],
       steps: [],
-      result: view.result?.trim() ? clampAgentText(view.result, 512) : undefined,
-      error: view.error?.trim() ? clampAgentText(view.error, 512) : undefined,
+      result: view.result?.trim() ? clampAgentText(view.result, resultBudget) : undefined,
+      error: view.error?.trim() ? clampAgentText(view.error, resultBudget) : undefined,
       errorKind: view.errorKind,
       elapsedMs: view.elapsedMs,
       loginMeta: view.loginMeta
@@ -158,8 +160,8 @@ function buildSerializedAgentRunDocument(run: AgentRunViewState): SerializedAgen
       ? clampAgentText(run.thinkingText, AGENT_RUN_STREAM_MAX_CHARS)
       : undefined,
     steps: (run.steps ?? []).map((step) => clampRunStepText(step)),
-    result: run.result?.trim() ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
-    error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
+    result: run.result?.trim() ? clampAgentText(run.result, AGENT_RESULT_MAX_CHARS) : undefined,
+    error: run.error?.trim() ? clampAgentText(run.error, AGENT_RESULT_MAX_CHARS) : undefined,
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
     errorResetHint: run.errorResetHint,
@@ -192,8 +194,8 @@ export function toLiveRunView(
       : undefined,
     steps: slimSteps,
     actions: [],
-    result: run.result?.trim() ? clampAgentText(run.result, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
-    error: run.error?.trim() ? clampAgentText(run.error, AGENT_RUN_STREAM_MAX_CHARS) : undefined,
+    result: run.result?.trim() ? run.result : undefined,
+    error: run.error?.trim() ? run.error : undefined,
     errorKind: run.errorKind,
     errorProvider: run.errorProvider,
     errorResetHint: run.errorResetHint,

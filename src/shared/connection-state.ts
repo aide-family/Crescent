@@ -34,6 +34,8 @@ export interface ConnectionState {
   expectedHost?: string
   runtimeExpectedHost?: string
   jumpPromptHost?: string
+  /** Optional regex: matching observed hostnames count as on-target. */
+  clusterHostRegex?: string
   /** Last observed prompt host (normalized). */
   promptHost?: string
   /** Learned aliases: observed prompt hosts that proved to be on target. */
@@ -72,15 +74,20 @@ export function createConnectionState(mode: TerminalMode = 'none'): ConnectionSt
 /** Set (or clear) the expected host; any change invalidates ready/alignment. */
 export function setConnectionExpectedHost(
   state: ConnectionState,
-  host: string | null | undefined
+  host: string | null | undefined,
+  options?: { clusterHostRegex?: string | null }
 ): ConnectionState {
   const expected = normalizeHostToken(host ?? '')
+  const clusterHostRegex = normalizeClusterHostRegex(
+    options && 'clusterHostRegex' in options ? options.clusterHostRegex : state.clusterHostRegex
+  )
   if (!expected) {
     return {
       ...state,
       expectedHost: undefined,
       runtimeExpectedHost: undefined,
       jumpPromptHost: undefined,
+      clusterHostRegex: undefined,
       alignment: 'unknown',
       ready: false,
       lastError: undefined
@@ -91,20 +98,44 @@ export function setConnectionExpectedHost(
     expectedHost: expected,
     runtimeExpectedHost: undefined,
     jumpPromptHost: undefined,
+    clusterHostRegex,
     alignment: 'unknown',
     ready: false,
     lastError: undefined
   }
 }
 
-/** True when observed host is considered on-target (expected or learned alias). */
+/** True when observed host matches a configured cluster hostname regex. */
+export function matchesClusterHostRegex(
+  observedHost: string | undefined,
+  clusterHostRegex?: string
+): boolean {
+  const pattern = normalizeClusterHostRegex(clusterHostRegex)
+  if (!pattern) return false
+  const observed = normalizeHostToken(observedHost ?? '')
+  if (!observed) return false
+  try {
+    return new RegExp(pattern).test(observed)
+  } catch {
+    return false
+  }
+}
+
+function normalizeClusterHostRegex(value: string | null | undefined): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed || undefined
+}
+
+/** True when observed host is considered on-target (expected, regex, or learned alias). */
 export function isHostOnTarget(
   observedHost: string | undefined,
   aliases: string[],
-  expectedHost?: string
+  expectedHost?: string,
+  clusterHostRegex?: string
 ): boolean {
   const observed = normalizeHostToken(observedHost ?? '')
   if (!observed) return false
+  if (matchesClusterHostRegex(observed, clusterHostRegex)) return true
   if (expectedHost && isPromptHostAligned(observed, expectedHost)) return true
   return aliases.some((alias) => isPromptHostAligned(observed, alias))
 }
@@ -114,7 +145,7 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
   return Boolean(
     state.ready &&
     state.promptHost &&
-    isHostOnTarget(state.promptHost, state.aliases, state.expectedHost)
+    isHostOnTarget(state.promptHost, state.aliases, state.expectedHost, state.clusterHostRegex)
   )
 }
 
@@ -128,7 +159,8 @@ export function resolveGateAlignment(state: ConnectionState, output: string): Te
   const resolved = resolveSessionAlignment({
     output,
     expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
-    aliases: state.aliases
+    aliases: state.aliases,
+    clusterHostRegex: state.clusterHostRegex
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
   if (resolved.promptHost && isReturnToJumpHost(state, resolved.promptHost)) return 'drifted'
@@ -216,7 +248,8 @@ export function evaluateInjectionGuard(
   const resolved = resolveSessionAlignment({
     output,
     expectedHost: effectiveExpectedHost,
-    aliases: state.aliases
+    aliases: state.aliases,
+    clusterHostRegex: state.clusterHostRegex
   })
   const effectiveAlignment = resolveGateAlignment(state, output)
   const observedHost = effectiveAlignment === 'drifted' ? resolved.promptHost : undefined
@@ -320,9 +353,11 @@ export function resolveSessionAlignment(input: {
   output: string
   expectedHost?: string
   aliases: string[]
+  clusterHostRegex?: string
 }): { alignment: TerminalAlignment; promptHost?: string } {
   const expected = normalizeHostToken(input.expectedHost ?? '')
-  if (!expected) return { alignment: 'unknown' }
+  const hasClusterRegex = Boolean(normalizeClusterHostRegex(input.clusterHostRegex))
+  if (!expected && !hasClusterRegex) return { alignment: 'unknown' }
 
   const signal = findNewestPromptSignal(input.output)
   if (signal?.kind === 'waiting') {
@@ -334,7 +369,7 @@ export function resolveSessionAlignment(input: {
     return { alignment: 'drifted', promptHost: 'local-shell' }
   }
   if (signal?.kind === 'host') {
-    if (isHostOnTarget(signal.host, input.aliases, expected)) {
+    if (isHostOnTarget(signal.host, input.aliases, expected || undefined, input.clusterHostRegex)) {
       return { alignment: 'aligned', promptHost: signal.host }
     }
     return { alignment: 'drifted', promptHost: signal.host }
@@ -352,7 +387,8 @@ export function observeConnectionState(state: ConnectionState, output: string): 
   const resolved = resolveSessionAlignment({
     output,
     expectedHost: state.expectedHost,
-    aliases: state.aliases
+    aliases: state.aliases,
+    clusterHostRegex: state.clusterHostRegex
   })
   const promptHost = resolved.promptHost ?? state.promptHost
   const ready =

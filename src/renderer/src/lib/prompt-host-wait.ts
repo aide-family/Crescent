@@ -1,3 +1,4 @@
+import { matchesClusterHostRegex } from '../../../shared/connection-state'
 import {
   findNewestPromptSignal,
   isPromptHostAligned,
@@ -28,6 +29,7 @@ export function waitForRemotePrompt(
     localHost?: string
     acceptAnyRemoteHost?: boolean
     previousHost?: string
+    clusterHostRegex?: string
   }
 ): Promise<PromptWaitSignal> {
   const { tabId } = options
@@ -72,7 +74,8 @@ export function waitForRemotePrompt(
               aliases: options.aliases,
               localHost: options.localHost,
               acceptAnyRemoteHost: options.acceptAnyRemoteHost,
-              previousHost
+              previousHost,
+              clusterHostRegex: options.clusterHostRegex
             })
           ) {
             settle('host')
@@ -127,6 +130,7 @@ export function isLoginPromptReady(
     localHost?: string
     acceptAnyRemoteHost?: boolean
     previousHost?: string
+    clusterHostRegex?: string
   } = {}
 ): boolean {
   const observed = normalizeHostToken(stripSshTarget(promptHost))
@@ -137,6 +141,8 @@ export function isLoginPromptReady(
 
   const previous = normalizeHostToken(stripSshTarget(options.previousHost ?? ''))
   if (previous && isPromptHostAligned(observed, previous)) return false
+
+  if (matchesClusterHostRegex(observed, options.clusterHostRegex)) return true
 
   if (options.acceptAnyRemoteHost) return true
 

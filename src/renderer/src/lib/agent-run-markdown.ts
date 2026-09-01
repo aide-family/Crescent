@@ -1,4 +1,5 @@
 import type { Dictionary } from '@renderer/i18n'
+import { hasAgentTextTruncationMarker } from './agent-text-limits'
 
 export interface ParsedAgentRunMarkdown {
   actionsMarkdown: string
@@ -34,6 +35,19 @@ export function extractResultMarkdown(value: string, t: Dictionary): string {
   }
 
   return stripActionMarkdown(normalized.split('\n'), t)
+}
+
+export function resolveFullAgentResultMarkdown(
+  extracted: string,
+  storedOutput: string | undefined
+): string {
+  const preview = extracted.trim()
+  const full = storedOutput?.trim() ?? ''
+  if (!preview) return full
+  if (!full) return preview
+  if (full.length > preview.length) return full
+  if (hasAgentTextTruncationMarker(preview)) return full
+  return preview
 }
 
 export function parseAgentRunMarkdown(value: string, t: Dictionary): ParsedAgentRunMarkdown | null {

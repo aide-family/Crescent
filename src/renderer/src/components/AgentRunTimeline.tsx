@@ -35,7 +35,11 @@ import {
 } from '@renderer/lib/agent-run-document'
 import { isClassifyingStatusMessage } from '@renderer/lib/agent-event-formatters'
 import { formatLogTime, isConnectionStatusText } from '@renderer/lib/agent-log'
-import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
+import {
+  AGENT_RUN_STREAM_MAX_CHARS,
+  clampAgentText,
+  hasAgentTextTruncationMarker
+} from '@renderer/lib/agent-text-limits'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 import {
@@ -115,6 +119,11 @@ export function AgentRunTimeline({
     hasResultContent,
     elapsedMs: document.elapsedMs
   })
+  const resultBodyMarkdown = document.resultMarkdown?.trim() ?? ''
+  const errorBodyMarkdown = document.errorMarkdown?.trim() ?? ''
+  const resultTruncated = hasAgentTextTruncationMarker(resultBodyMarkdown)
+  const errorTruncated = hasAgentTextTruncationMarker(errorBodyMarkdown)
+  const canOpenFullRun = Boolean(storageRef && runFinished)
   const activity = resolveActivity(document, visibleSteps, t)
   const showActivity = Boolean(activity) && !runFinished && !loginMeta
   return (
@@ -248,11 +257,22 @@ export function AgentRunTimeline({
           )}
           {document.resultMarkdown?.trim() ? (
             <div className="min-w-0 space-y-2 px-3 py-2.5">
+              {resultTruncated && canOpenFullRun ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/25 bg-primary/5 px-2.5 py-2 text-xs text-foreground/85">
+                  <span>{t.input.resultTruncatedHint}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => setFullOverlayTab('result')}
+                  >
+                    {t.input.fullRunViewResult}
+                  </Button>
+                </div>
+              ) : null}
               <div className="min-w-0 text-[15px] leading-relaxed text-foreground">
-                <MarkdownContent
-                  value={clampAgentText(document.resultMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
-                  t={t}
-                />
+                <MarkdownContent value={resultBodyMarkdown} t={t} />
               </div>
               {onInjectSuggestions ? (
                 <ResultSuggestionsPicker
@@ -274,22 +294,48 @@ export function AgentRunTimeline({
               />
             ) : (
               <div className="px-3 py-2.5 text-sm text-destructive">
-                <MarkdownContent
-                  value={clampAgentText(document.errorMarkdown, AGENT_RUN_STREAM_MAX_CHARS)}
-                  t={t}
-                />
+                <MarkdownContent value={errorBodyMarkdown} t={t} />
               </div>
             )
           ) : null}
 
           <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/15 px-3 py-1.5">
-            <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
-              {typeof document.elapsedMs === 'number'
-                ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
-                : document.elapsedMarkdown
-                  ? `${t.input.elapsed}：${document.elapsedMarkdown}`
-                  : null}
-            </span>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="min-w-0 shrink-0 text-left text-[10px] text-muted-foreground">
+                {typeof document.elapsedMs === 'number'
+                  ? `${t.input.elapsed}：${formatDuration(document.elapsedMs)}`
+                  : document.elapsedMarkdown
+                    ? `${t.input.elapsed}：${document.elapsedMarkdown}`
+                    : null}
+              </span>
+              {canOpenFullRun ? (
+                <div className="flex flex-wrap items-center gap-1">
+                  {visibleSteps.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] text-muted-foreground"
+                      onClick={() => setFullOverlayTab('steps')}
+                    >
+                      {t.input.fullRunViewSteps}
+                    </Button>
+                  ) : null}
+                  {(resultBodyMarkdown || errorBodyMarkdown) &&
+                  (!resultTruncated || errorTruncated) ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] text-muted-foreground"
+                      onClick={() => setFullOverlayTab('result')}
+                    >
+                      {t.input.fullRunViewResult}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center justify-end gap-1">
               <Button
                 type="button"

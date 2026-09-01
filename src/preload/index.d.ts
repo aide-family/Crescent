@@ -116,6 +116,7 @@ interface TerminalAgentApi {
     setExpectedHost: (options: {
       tabId: string
       host?: string | null
+      clusterHostRegex?: string | null
     }) => Promise<{ ok: boolean; host?: string; error?: string }>
     confirmLogin: (options: {
       tabId: string

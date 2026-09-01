@@ -152,6 +152,7 @@ const api = {
     setExpectedHost: (options: {
       tabId: string
       host?: string | null
+      clusterHostRegex?: string | null
     }): Promise<{ ok: boolean; host?: string; error?: string }> =>
       ipcRenderer.invoke('terminal:set-expected-host', options),
     confirmLogin: (options: {

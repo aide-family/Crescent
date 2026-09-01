@@ -67,16 +67,21 @@ export function FullAgentRunOverlay({
           setPreviewOnlyHint(true)
         }
 
-        const needsResultFallback =
+        const storedRun = runId?.trim() ? await window.api.storage.getAgentRun(runId.trim()) : null
+        if (cancelled) return
+
+        const parsedResult = parsed?.resultMarkdown?.trim() || parsed?.errorMarkdown?.trim() || ''
+        const storedOutput = storedRun?.output?.trim() || storedRun?.error?.trim() || ''
+        if (storedOutput) {
+          if (!parsedResult || storedOutput.length > parsedResult.length) {
+            setResultFallback(storedOutput)
+          }
+        } else if (
           !parsed?.resultMarkdown?.trim() &&
           !parsed?.errorMarkdown?.trim() &&
-          Boolean(runId?.trim())
-        if (needsResultFallback && runId?.trim()) {
-          const run = await window.api.storage.getAgentRun(runId.trim())
-          if (cancelled) return
-          if (run?.output?.trim()) {
-            setResultFallback(run.output.trim())
-          } else if (!parsed) {
+          runId?.trim()
+        ) {
+          if (!parsed) {
             setError(t.input.fullRunLoadFailed)
           }
         } else if (!parsed) {

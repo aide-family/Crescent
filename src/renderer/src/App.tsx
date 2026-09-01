@@ -35,7 +35,10 @@ import {
   type PasswordPromptRequest
 } from '@renderer/components/AppModals'
 import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
-import { extractResultMarkdown } from '@renderer/lib/agent-run-markdown'
+import {
+  extractResultMarkdown,
+  resolveFullAgentResultMarkdown
+} from '@renderer/lib/agent-run-markdown'
 import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { McpServersSheet } from '@renderer/components/McpServersSheet'
@@ -79,9 +82,7 @@ import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
 import {
   AGENT_LOG_SOFT_LIMIT,
-  AGENT_RUN_STREAM_MAX_CHARS,
   appendElapsedFooter,
-  clampAgentText,
   connectionFailureMarkers,
   formatAgentRunMarkdown,
   hydrateStoredAgentLog,
@@ -1737,7 +1738,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       passwordPromptBuffersRef.current.set(targetTabId, '')
       void window.api.terminal.setExpectedHost({
         tabId: targetTabId,
-        host: resolvedConnection.host
+        host: resolvedConnection.host,
+        clusterHostRegex: resolvedConnection.clusterHostRegex
       })
       try {
         const storedPassword = loginConnection.password || loginConnection.resolvedPassword
@@ -1790,7 +1792,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         const loginSignal = await waitForPromptHostOrTimeout(targetTabId, 20_000, {
           expectedHost: finalTargetHost,
           previousHost,
-          acceptAnyRemoteHost: !finalTargetHost || isIpv4Literal(finalTargetHost)
+          acceptAnyRemoteHost: !finalTargetHost || isIpv4Literal(finalTargetHost),
+          clusterHostRegex: loginConnection.clusterHostRegex
         })
         connTrace(
           'login-stage',
@@ -6587,7 +6590,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           updateAgentRun(chatTabId, (run) => ({
             ...run,
             steps: closeStreamingOpenSteps(run.steps ?? []),
-            result: clampAgentText(resolved.text ?? '', AGENT_RUN_STREAM_MAX_CHARS),
+            result: resolved.text ?? '',
             elapsedMs
           }))
           void persistAgentRun({
@@ -7475,9 +7478,35 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }, 1200)
   }
 
+  async function resolveLogEntryResultMarkdown(entry: AgentLogEntry): Promise<string> {
+    const extracted = extractResultMarkdown(entry.text, t) || entry.text
+    const tabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    try {
+      const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
+      const storedRun =
+        runs.find(
+          (run) =>
+            run.output?.trim() &&
+            extracted.trim() &&
+            (run.output.trim() === extracted.trim() ||
+              run.output.trim().startsWith(extracted.trim().slice(0, 256)))
+        ) ??
+        runs.find(
+          (run) =>
+            Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000
+        )
+      return resolveFullAgentResultMarkdown(
+        extracted,
+        storedRun?.output?.trim() || storedRun?.error?.trim()
+      )
+    } catch {
+      return extracted
+    }
+  }
+
   async function copyLogEntryResult(entry: AgentLogEntry): Promise<void> {
     const tabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    await copyText(extractResultMarkdown(entry.text, t) || entry.text, copyFeedback(t))
+    await copyText(await resolveLogEntryResultMarkdown(entry), copyFeedback(t))
     updateTab(tabId, (tab) => ({ ...tab, copiedLogId: entry.id }))
     window.setTimeout(() => {
       updateTab(tabId, (tab) => ({
@@ -7488,11 +7517,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   function exportLogEntryResultMarkdown(entry: AgentLogEntry): void {
-    void downloadMarkdown(
-      extractResultMarkdown(entry.text, t) || entry.text,
-      buildLogMarkdownFilename(entry, 'result'),
-      t
-    )
+    void (async () => {
+      await downloadMarkdown(
+        await resolveLogEntryResultMarkdown(entry),
+        buildLogMarkdownFilename(entry, 'result'),
+        t
+      )
+    })()
   }
 
   function exportLogEntryFullMarkdown(entry: AgentLogEntry): void {
@@ -8772,6 +8803,7 @@ async function waitForPromptHostOrTimeout(
     expectedHost?: string
     previousHost?: string
     acceptAnyRemoteHost?: boolean
+    clusterHostRegex?: string
   }
 ): Promise<'host' | 'local' | 'none'> {
   return waitForRemotePrompt(
@@ -8792,7 +8824,8 @@ async function waitForPromptHostOrTimeout(
       timeoutMs,
       expectedHost: options?.expectedHost,
       previousHost: options?.previousHost,
-      acceptAnyRemoteHost: options?.acceptAnyRemoteHost
+      acceptAnyRemoteHost: options?.acceptAnyRemoteHost,
+      clusterHostRegex: options?.clusterHostRegex
     }
   )
 }

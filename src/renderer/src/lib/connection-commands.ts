@@ -1,5 +1,6 @@
 import type { Dictionary } from '@renderer/i18n'
 import type { ConnectionConfig } from '../../../shared/agent-types'
+import { matchesClusterHostRegex } from '../../../shared/connection-state'
 import { extractSshDestinationHost, isSshCommandLine } from '../../../shared/ssh-destination'
 import { findNewestPromptSignal, isPromptHostAligned } from '../../../shared/terminal-prompt-host'
 
@@ -14,7 +15,8 @@ export function mergeConnectionInput(
     passwordEnvVar: saved?.passwordEnvVar ?? fallback.passwordEnvVar,
     resolvedPassword: saved?.resolvedPassword ?? fallback.resolvedPassword,
     sshOptions: saved?.sshOptions?.length ? saved.sshOptions : fallback.sshOptions,
-    actions: saved?.actions?.length ? saved.actions : fallback.actions
+    actions: saved?.actions?.length ? saved.actions : fallback.actions,
+    clusterHostRegex: saved?.clusterHostRegex ?? fallback.clusterHostRegex
   }
 }
 
@@ -154,6 +156,17 @@ export function resolveRemainingConnectionCommands(
   const waiting = isWaitingForSecret(env)
 
   if (env.alignment === 'aligned' && !waiting) {
+    return { includeSshCommand: false, commands: [] }
+  }
+
+  // Already on a remote host that matches the connection's cluster regex:
+  // treat as logged in even if alignment briefly reports unknown.
+  if (
+    !waiting &&
+    env.promptHost &&
+    env.promptHost !== 'local-shell' &&
+    matchesClusterHostRegex(env.promptHost, connection.clusterHostRegex)
+  ) {
     return { includeSshCommand: false, commands: [] }
   }
 

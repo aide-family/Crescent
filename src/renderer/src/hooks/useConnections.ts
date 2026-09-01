@@ -17,7 +17,8 @@ export function createEmptyConnectionForm(): ConnectionInput {
     identityFile: '',
     sshOptions: [],
     description: '',
-    actions: []
+    actions: [],
+    clusterHostRegex: ''
   }
 }
 
@@ -34,7 +35,8 @@ export function connectionToForm(connection: ConnectionConfig): ConnectionInput 
     identityFile: connection.identityFile,
     sshOptions: connection.sshOptions,
     description: connection.description,
-    actions: connection.actions
+    actions: connection.actions,
+    clusterHostRegex: connection.clusterHostRegex ?? ''
   }
 }
 
@@ -62,7 +64,8 @@ export function normalizeConnectionInputForSave(
     identityFile: connectionForm.identityFile?.trim() || undefined,
     sshOptions,
     description: connectionForm.description?.trim() || undefined,
-    actions
+    actions,
+    clusterHostRegex: connectionForm.clusterHostRegex?.trim() || undefined
   }
 }
 

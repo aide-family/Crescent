@@ -215,6 +215,10 @@ const en = {
     duplicateAsNew: 'Duplicate as new',
     existing: 'Existing',
     host: 'Host',
+    clusterHostRegex: 'Cluster host regex',
+    clusterHostRegexDescription:
+      'Optional. When set, any terminal hostname matching this regular expression is treated as already logged in.',
+    clusterHostRegexPlaceholder: 'e.g. ^node-\\d+(\\.cluster\\.local)?$',
     identityFile: 'Identity file',
     importAsNew: 'Import as new',
     loginActions: 'Login actions',
@@ -240,6 +244,7 @@ const en = {
     rootPasswordPlaceholder: 'Optional; leave empty to type sudo passwords manually…',
     port: 'Port',
     readOnlyHint: 'Selected connections are read-only. Click Edit to change this copy.',
+    viewDetails: 'View details',
     saveAndConnectSucceeded: 'Connection saved. Connecting now.',
     saveFailed: 'Failed to save connection',
     saveSucceeded: 'Connection saved.',
@@ -498,6 +503,8 @@ const en = {
     fullRunResultTab: 'Result',
     fullRunViewSteps: 'View full process',
     fullRunViewResult: 'View full result',
+    resultTruncatedHint:
+      'The result preview was truncated. Open the full record to read everything.',
     fullRunLoadMoreSteps: 'Load more steps',
     fullRunLoadMoreResult: 'Load more text',
     fullRunLoading: 'Loading from local storage…',

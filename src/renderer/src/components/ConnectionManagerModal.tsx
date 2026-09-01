@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   CopyIcon,
   CopyPlusIcon,
+  InfoIcon,
   Layers2Icon,
   Loader2Icon,
   PanelBottomIcon,
@@ -175,7 +176,9 @@ export function ConnectionManagerModal({
             formatConnectionTarget={formatConnectionTarget}
             onQueryChange={onQueryChange}
             onSelectConnection={(connection) => {
-              onSelectConnection(connection)
+              if (connectionActionBusy) return
+              onConnect(connection)
+              onClose()
             }}
             headerAction={
               <Button type="button" variant="outline" size="xs" onClick={onResetForm}>
@@ -201,7 +204,7 @@ export function ConnectionManagerModal({
             }
             renderConnectionActions={(connection) => (
               <div className="flex flex-wrap items-center justify-end gap-1">
-                {connection.source === 'custom' && (
+                {connection.source === 'custom' ? (
                   <>
                     <Button
                       type="button"
@@ -243,7 +246,21 @@ export function ConnectionManagerModal({
                       <PencilIcon aria-hidden="true" />
                     </Button>
                   </>
-                )}
+                ) : connection.source === 'ssh-config' ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.connections.viewDetails}
+                    title={t.connections.viewDetails}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onSelectConnection(connection)
+                    }}
+                  >
+                    <InfoIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="outline"
@@ -275,26 +292,6 @@ export function ConnectionManagerModal({
                   }}
                 >
                   <PanelBottomIcon aria-hidden="true" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="icon-xs"
-                  aria-label={connectionActionBusy ? t.common.connecting : t.connections.connect}
-                  title={connectionActionBusy ? t.common.connecting : t.connections.connect}
-                  disabled={connectDisabled}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    if (connectionActionBusy) return
-                    onConnect(connection)
-                    onClose()
-                  }}
-                >
-                  {connectionActionBusy ? (
-                    <Loader2Icon className="animate-spin" aria-hidden="true" />
-                  ) : (
-                    <ServerIcon aria-hidden="true" />
-                  )}
                 </Button>
               </div>
             )}
@@ -374,6 +371,23 @@ export function ConnectionManagerModal({
                     />
                   </Field>
                 </div>
+                <Field>
+                  <FieldLabel htmlFor="connection-cluster-host-regex">
+                    {t.connections.clusterHostRegex}
+                  </FieldLabel>
+                  <Input
+                    id="connection-cluster-host-regex"
+                    name="cluster-host-regex"
+                    className={cn('h-8 font-mono', viewableClass)}
+                    value={connectionForm.clusterHostRegex ?? ''}
+                    onChange={(event) => onFormChange('clusterHostRegex', event.target.value)}
+                    placeholder={t.connections.clusterHostRegexPlaceholder}
+                    readOnly={!connectionEditing}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <FieldDescription>{t.connections.clusterHostRegexDescription}</FieldDescription>
+                </Field>
                 <Field>
                   <FieldLabel htmlFor="connection-user">{t.connections.user}</FieldLabel>
                   <Input
