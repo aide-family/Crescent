@@ -348,7 +348,7 @@ const zhCN = {
     terminalReconnectUnavailable: '终端异常，当前会话无法自动恢复，已停止自动命令执行。',
     connectionRecoveryTitle: '终端连接需要处理',
     connectionRecoveryHint: '当前会话尚未就绪。可重试连接，或打开连接列表选择其他主机。',
-    terminalRecoveryBanner: '连接未就绪。查看详情或稍后重试。',
+    terminalRecoveryBanner: '连接未就绪。可重连或查看详情。',
     terminalRecoveryView: '查看',
     terminalRecoveryDismiss: '知道了',
     reinitializingTerminal: '正在重新初始化终端…',

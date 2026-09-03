@@ -333,6 +333,61 @@ export function resolveShellFooterState(tab: {
   return 'pending'
 }
 
+export type TerminalDisconnectStripMode = 'hidden' | 'connecting' | 'disconnected' | 'failed'
+
+/**
+ * Whether the main terminal should show a disconnect/reconnect strip.
+ * Hides the initial "Shell starting" pending state (no connection, no error).
+ */
+export function resolveTerminalDisconnectStrip(input: {
+  hasTerminalTabs: boolean
+  tab: {
+    terminalReady: boolean
+    sessionId?: number
+    terminalStartError?: string
+    connectionId?: string
+  }
+  recovery?: {
+    visible?: boolean
+    connecting?: boolean
+    reason?: string
+    dismissed?: boolean
+  }
+  reconnecting?: boolean
+}): {
+  visible: boolean
+  mode: TerminalDisconnectStripMode
+  reason?: string
+  canReconnect: boolean
+} {
+  const { hasTerminalTabs, tab, recovery, reconnecting } = input
+  if (!hasTerminalTabs || tab.terminalReady || recovery?.dismissed) {
+    return { visible: false, mode: 'hidden', canReconnect: false }
+  }
+
+  const connecting = Boolean(recovery?.connecting || reconnecting)
+  const startError = tab.terminalStartError?.trim() || undefined
+  const recoveryReason = recovery?.reason?.trim() || undefined
+  const reason = startError || recoveryReason
+  const deadWithTarget = !tab.sessionId && Boolean(tab.connectionId)
+  const deadFailed = Boolean(startError)
+  const recoveryVisible = Boolean(recovery?.visible)
+
+  if (!connecting && !deadWithTarget && !deadFailed && !recoveryVisible) {
+    return { visible: false, mode: 'hidden', canReconnect: false }
+  }
+
+  if (connecting) {
+    return { visible: true, mode: 'connecting', reason, canReconnect: false }
+  }
+
+  if (deadFailed || recoveryVisible) {
+    return { visible: true, mode: 'failed', reason, canReconnect: true }
+  }
+
+  return { visible: true, mode: 'disconnected', canReconnect: true }
+}
+
 export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[] {
   return tabs.map((tab) => ({
     tabId: tab.id,

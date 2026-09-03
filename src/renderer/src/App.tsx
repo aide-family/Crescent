@@ -5018,6 +5018,44 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  async function reconnectActiveTerminal(): Promise<void> {
+    const targetTab =
+      tabsRef.current.find((tab) => tab.id === activeTabIdRef.current) ??
+      tabsRef.current.find((tab) => tab.id === sessionChatTab.id)
+    if (!targetTab) return
+
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTab.id)
+    setDismissedRecoveryByChatTab((current) => ({ ...current, [chatTabId]: false }))
+    skipConnectionReconnectRef.current.delete(targetTab.id)
+
+    const attempt = connectionAttemptByChatTab[chatTabId] ?? createIdleConnectionAttempt()
+    if (attempt.pipeFallback || targetTab.terminalMode === 'pipe') {
+      await reinitActiveTerminal()
+      return
+    }
+
+    if (targetTab.connectionId) {
+      await retryActiveConnection()
+      return
+    }
+
+    if (attempt.phase === 'connecting' || reconnectingTabsRef.current.has(targetTab.id)) return
+    updateConnectionAttempt(chatTabId, (current) =>
+      beginConnectionRetry(current, `local-reconnect-${Date.now()}`)
+    )
+    const ok = await restoreLocalTerminal(targetTab.id)
+    if (ok) {
+      markChatTabReady(chatTabId)
+      return
+    }
+    const failedTab = tabsRef.current.find((tab) => tab.id === targetTab.id)
+    updateConnectionAttempt(chatTabId, (current) =>
+      markConnectionFailed(current, {
+        reason: failedTab?.terminalStartError?.trim() || t.terminal.terminalReconnectFailed
+      })
+    )
+  }
+
   async function reinitActiveTerminal(): Promise<void> {
     const targetTab =
       tabsRef.current.find((tab) => tab.id === activeTabIdRef.current) ??
@@ -8168,6 +8206,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             subterminalResizeRef={subterminalResizeRef}
             subterminalHeightResizeRef={subterminalHeightResizeRef}
             connectionRecovery={connectionRecovery}
+            reconnecting={connectionRecovery.connecting}
             t={t}
             formatConnectionTarget={formatConnectionTarget}
             onNewConnection={openNewConnectionForm}
@@ -8187,8 +8226,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
             onOpenLocalSubterminal={() => void openLocalSubterminal()}
+            onReconnect={() => void reconnectActiveTerminal()}
             onViewRecovery={viewConnectionRecovery}
-            onDismissRecovery={() => dismissConnectionRecovery(sessionChatTab.id)}
+            onDismissRecovery={
+              connectionRecovery.visible
+                ? () => dismissConnectionRecovery(sessionChatTab.id)
+                : undefined
+            }
           />
         )}
         {!hiddenPane && (

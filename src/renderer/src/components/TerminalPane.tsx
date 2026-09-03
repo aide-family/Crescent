@@ -1,5 +1,5 @@
 import type { RefObject } from 'react'
-import { ServerIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, RefreshCwIcon, ServerIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 
 import { ConnectionList } from '@renderer/components/ConnectionList'
 import {
@@ -10,7 +10,7 @@ import {
 import { TerminalTabBar, type TerminalTabMenuState } from '@renderer/components/TerminalTabBar'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
-import type { AgentTerminalTab } from '@renderer/lib/terminal-tabs'
+import { resolveTerminalDisconnectStrip, type AgentTerminalTab } from '@renderer/lib/terminal-tabs'
 import type { ConnectionConfig } from '../../../shared/agent-types'
 
 export function TerminalPane({
@@ -35,6 +35,7 @@ export function TerminalPane({
   subterminalResizeRef,
   subterminalHeightResizeRef,
   connectionRecovery,
+  reconnecting = false,
   t,
   formatConnectionTarget,
   onNewConnection,
@@ -50,6 +51,7 @@ export function TerminalPane({
   onCloseSubterminal,
   onCloseAllSubterminals,
   onOpenLocalSubterminal,
+  onReconnect,
   onViewRecovery,
   onDismissRecovery
 }: {
@@ -81,6 +83,7 @@ export function TerminalPane({
     reason?: string
     dismissed?: boolean
   }
+  reconnecting?: boolean
   t: Dictionary
   formatConnectionTarget: (connection: ConnectionConfig) => string
   onNewConnection: () => void
@@ -96,12 +99,30 @@ export function TerminalPane({
   onCloseSubterminal: (parentTabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (parentTabId: string) => void
   onOpenLocalSubterminal?: () => void
+  onReconnect?: () => void
   onViewRecovery?: () => void
   onDismissRecovery?: () => void
 }): React.JSX.Element {
-  const showTerminalRecovery = Boolean(
-    connectionRecovery?.visible && terminalTabs.length > 0 && !activeTab.terminalReady
-  )
+  const strip = resolveTerminalDisconnectStrip({
+    hasTerminalTabs: terminalTabs.length > 0,
+    tab: activeTab,
+    recovery: connectionRecovery,
+    reconnecting
+  })
+  const reconnectLabel = connectionRecovery?.pipeFallback
+    ? t.input.reinitTerminal
+    : activeTab.connectionId
+      ? t.input.retryConnection
+      : t.app.shellRetry
+  const bannerText =
+    strip.mode === 'connecting'
+      ? t.input.retryConnecting
+      : strip.mode === 'failed' && strip.reason
+        ? strip.reason
+        : strip.mode === 'disconnected' || strip.mode === 'failed'
+          ? t.app.shellDisconnected
+          : t.terminal.terminalRecoveryBanner
+  const showReconnect = Boolean(onReconnect) && strip.canReconnect
 
   return (
     <div
@@ -150,15 +171,32 @@ export function TerminalPane({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            {showTerminalRecovery && !connectionRecovery?.dismissed ? (
+            {strip.visible ? (
               <div className="flex shrink-0 items-center gap-2 border-b border-border/70 border-l-2 border-l-primary bg-card px-3 py-1.5 text-xs">
-                <TriangleAlertIcon
-                  className="size-3.5 shrink-0 text-amber-500"
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                  {t.terminal.terminalRecoveryBanner}
-                </span>
+                {strip.mode === 'connecting' ? (
+                  <Loader2Icon
+                    className="size-3.5 shrink-0 animate-spin text-primary"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <TriangleAlertIcon
+                    className="size-3.5 shrink-0 text-amber-500"
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">{bannerText}</span>
+                {showReconnect ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    disabled={strip.mode === 'connecting'}
+                    onClick={onReconnect}
+                  >
+                    <RefreshCwIcon data-icon="inline-start" />
+                    {reconnectLabel}
+                  </Button>
+                ) : null}
                 {onViewRecovery ? (
                   <Button
                     type="button"
@@ -170,7 +208,7 @@ export function TerminalPane({
                     {t.terminal.terminalRecoveryView}
                   </Button>
                 ) : null}
-                {onDismissRecovery ? (
+                {onDismissRecovery && strip.mode !== 'connecting' ? (
                   <Button
                     type="button"
                     variant="ghost"

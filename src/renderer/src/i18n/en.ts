@@ -376,7 +376,7 @@ const en = {
     connectionRecoveryTitle: 'Terminal connection needs attention',
     connectionRecoveryHint:
       'The session is not ready. Retry the connection or choose another host.',
-    terminalRecoveryBanner: 'Connection is not ready. View details or retry later.',
+    terminalRecoveryBanner: 'Connection is not ready. Reconnect or view details.',
     terminalRecoveryView: 'View',
     terminalRecoveryDismiss: 'Got it',
     reinitializingTerminal: 'Reinitializing terminal…',
