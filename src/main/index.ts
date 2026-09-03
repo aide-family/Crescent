@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Notification } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Notification, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -70,11 +70,17 @@ function installNativeLogFilter(): void {
   }) as typeof process.stderr.write
 }
 
+function getLaunchWorkArea() {
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+}
+
 function createWindow(): BrowserWindow {
-  // Create the browser window.
+  const workArea = getLaunchWorkArea()
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    x: workArea.x,
+    y: workArea.y,
+    width: workArea.width,
+    height: workArea.height,
     show: false,
     autoHideMenuBar: true,
     icon,
@@ -85,6 +91,13 @@ function createWindow(): BrowserWindow {
   })
 
   mainWindow.on('ready-to-show', () => {
+    // macOS ignores maximize() while the window is hidden.
+    if (process.platform === 'darwin') {
+      mainWindow.show()
+      mainWindow.maximize()
+      return
+    }
+    mainWindow.maximize()
     mainWindow.show()
   })
 
