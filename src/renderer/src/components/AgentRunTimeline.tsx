@@ -127,9 +127,9 @@ export function AgentRunTimeline({
   const activity = resolveActivity(document, visibleSteps, t)
   const showActivity = Boolean(activity) && !runFinished && !loginMeta
   return (
-    <div className="min-w-0 space-y-2.5">
+    <div className="app-agent-run min-w-0 space-y-2.5">
       {timelineItems.length > 0 ? (
-        <div className="min-w-0 space-y-2">
+        <div className="app-agent-timeline min-w-0 space-y-2">
           {timelineItems.map((item) => {
             if (item.kind === 'low-risk-group') {
               return <CollapsedLowRiskGroup key={item.id} steps={item.steps} t={t} />
@@ -237,7 +237,7 @@ export function AgentRunTimeline({
           </div>
         </>
       ) : showResult ? (
-        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card/50">
+        <div className="app-agent-result min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card/50">
           {(document.resultMarkdown?.trim() || document.errorMarkdown?.trim()) && (
             <div className="flex items-center gap-2 border-b border-border/60 bg-muted/20 px-3 py-2">
               {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim() ? (
@@ -627,7 +627,7 @@ function ToolCallRow({
   const warnFinish = Boolean(step.interrupted || step.timedOut)
 
   return (
-    <div className="min-w-0 space-y-1.5">
+    <div className="app-agent-tool-step min-w-0 space-y-1.5">
       <div className="flex items-start gap-2 min-w-0">
         {running ? (
           <Loader2Icon

@@ -17,11 +17,16 @@ export function useAppModalA11y(
   } = {}
 ): RefObject<HTMLDivElement | null> {
   const overlayRef = useRef<HTMLDivElement>(null)
+  const optionsRef = useRef(options)
+
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
 
   useEffect(() => {
     if (!open) return
 
-    const { onEscape, panelRef } = options
+    const { onEscape, panelRef } = optionsRef.current
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
 
@@ -64,7 +69,7 @@ export function useAppModalA11y(
       window.removeEventListener('keydown', onKeyDown)
       previousFocus?.focus?.()
     }
-  }, [open, options])
+  }, [open])
 
   return overlayRef
 }

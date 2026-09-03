@@ -146,7 +146,7 @@ export function AgentLogList({
   return (
     <div
       ref={logRef}
-      className="relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm"
+      className="app-agent-log-list relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm"
     >
       {onLoadEarlier && hasEarlierLogs ? (
         <div className="mb-3 flex flex-col items-center gap-2 pt-2">
@@ -195,13 +195,13 @@ export function AgentLogList({
               data-log-kind={entry.kind}
               className={
                 conversation
-                  ? `${logClassName(entry.kind)} min-w-0 ${spacing}`
-                  : `min-w-0 ${spacing}`
+                  ? `app-agent-message app-agent-message-${entry.kind} ${logClassName(entry.kind)} min-w-0 ${spacing}`
+                  : `app-agent-activity-row min-w-0 ${spacing}`
               }
             >
               {conversation ? (
                 <>
-                  <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                  <div className="app-agent-message-meta mb-1.5 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="font-medium text-foreground/70">
                         {logRoleLabel(entry.kind, t)}
@@ -230,30 +230,30 @@ export function AgentLogList({
                       </Button>
                     </div>
                   </div>
-                  <AgentLogContent
-                    entry={entry}
-                    liveRun={liveRunByLogId?.[entry.id]}
-                    tabId={tabId}
-                    t={t}
-                    copied={copiedLogId === entry.id}
-                    feedbackRating={feedbackByLogId?.[entry.id] ?? null}
-                    feedbackBusy={feedbackBusyLogId === entry.id}
-                    savingSop={savingSopLogId === entry.id}
-                    absorbedStatusEntries={
-                      entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined
-                    }
-                    thinkingCollapsedByDefault={thinkingCollapsedByDefault}
-                    onCopyResult={() => onCopyResult(entry)}
-                    onExportResult={() => onExportResult(entry)}
-                    onExportFull={() => onExportFull(entry)}
-                    onExportTrace={() => onExportTrace(entry)}
-                    onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
-                    onResolveApproval={onResolveApproval}
-                    onAddCommandToWhitelist={onAddCommandToWhitelist}
-                    onInjectSuggestions={onInjectSuggestions}
-                    onOpenModelSettings={onOpenModelSettings}
-                    onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
-                  />
+                  <div className="app-agent-message-content">
+                    <AgentLogContent
+                      entry={entry}
+                      liveRun={liveRunByLogId?.[entry.id]}
+                      tabId={tabId}
+                      t={t}
+                      copied={copiedLogId === entry.id}
+                      feedbackRating={feedbackByLogId?.[entry.id] ?? null}
+                      feedbackBusy={feedbackBusyLogId === entry.id}
+                      savingSop={savingSopLogId === entry.id}
+                      absorbedStatusEntries={entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined}
+                      thinkingCollapsedByDefault={thinkingCollapsedByDefault}
+                      onCopyResult={() => onCopyResult(entry)}
+                      onExportResult={() => onExportResult(entry)}
+                      onExportFull={() => onExportFull(entry)}
+                      onExportTrace={() => onExportTrace(entry)}
+                      onOpsFeedback={(rating) => onOpsFeedback(entry, rating)}
+                      onResolveApproval={onResolveApproval}
+                      onAddCommandToWhitelist={onAddCommandToWhitelist}
+                      onInjectSuggestions={onInjectSuggestions}
+                      onOpenModelSettings={onOpenModelSettings}
+                      onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
+                    />
+                  </div>
                 </>
               ) : readyKind && onOpenCaptureDraft ? (
                 <CaptureDraftReadyRow

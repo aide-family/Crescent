@@ -22,6 +22,7 @@ const piPackages = [
 ]
 
 const RENDERER_ASSET_LIMIT_BYTES = 1024 * 1024
+const LAZY_RENDERER_ASSET_NAMES = [/^assets\/mermaid(?:[.-]|$)/]
 
 function posixId(id: string): string {
   return id.replaceAll('\\', '/')
@@ -74,7 +75,11 @@ function enforceRendererAssetLimit(): Plugin {
     generateBundle(_options, bundle) {
       const oversized = Object.values(bundle)
         .map((item) => ({ fileName: item.fileName, size: assetSize(item) }))
-        .filter((item) => item.size > RENDERER_ASSET_LIMIT_BYTES)
+        .filter(
+          (item) =>
+            item.size > RENDERER_ASSET_LIMIT_BYTES &&
+            !LAZY_RENDERER_ASSET_NAMES.some((pattern) => pattern.test(item.fileName))
+        )
       if (oversized.length === 0) return
       const details = oversized
         .map((item) => `  - ${item.fileName} (${(item.size / 1024).toFixed(1)} kB)`)

@@ -28,7 +28,7 @@ export function ActionLogRow({
 
   return (
     <details
-      className={`group rounded-lg border text-[11px] text-muted-foreground shadow-none ${actionLogClassName(entry.kind)}`}
+      className={`app-agent-action group rounded-lg border text-[11px] text-muted-foreground shadow-none ${actionLogClassName(entry.kind)}`}
     >
       <summary className="grid cursor-pointer select-none grid-cols-[4.5rem_4.25rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-1 marker:text-muted-foreground/70">
         <span className="truncate font-medium tracking-wide text-muted-foreground">

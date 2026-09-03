@@ -130,7 +130,67 @@
 }
 
 .app-agent-pane {
-  background: var(--app-panel);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--app-panel-strong) 42%, transparent), transparent 22rem),
+    var(--app-panel);
+}
+
+.app-agent-log-list {
+  background: radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--primary) 4%, transparent), transparent 34rem);
+  scroll-behavior: smooth;
+}
+
+.app-agent-message-meta {
+  min-height: 1.5rem;
+}
+
+.app-agent-message-user {
+  position: relative;
+}
+
+.app-agent-message-user .app-agent-message-meta {
+  justify-content: flex-end;
+}
+
+.app-agent-message-user .app-agent-message-meta > div {
+  flex-direction: row-reverse;
+}
+
+.app-agent-message-assistant .app-agent-message-content {
+  min-width: 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid color-mix(in oklch, var(--primary) 42%, transparent);
+}
+
+.app-agent-message-error {
+  margin-right: 0.25rem;
+}
+
+.app-agent-timeline {
+  position: relative;
+  padding-left: 0.25rem;
+}
+
+.app-agent-timeline > * {
+  min-width: 0;
+}
+
+.app-agent-tool-step {
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: color-mix(in oklch, var(--muted) 18%, transparent);
+}
+
+.app-agent-tool-step:hover {
+  background: color-mix(in oklch, var(--muted) 30%, transparent);
+}
+
+.app-agent-result {
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.app-agent-action {
+  opacity: 0.82;
 }
 
 .flex-row-reverse > .app-terminal-pane,
@@ -513,12 +573,12 @@
 }
 
 .markdown-body {
-  color: color-mix(in oklch, var(--app-markdown-text) 92%, var(--muted-foreground));
+  color: color-mix(in oklch, var(--foreground) 92%, var(--muted-foreground));
 }
 
 .markdown-body :is(h1, h2, h3, h4, h5) {
   text-wrap: pretty;
-  color: var(--app-markdown-text);
+  color: var(--foreground);
 }
 
 .markdown-body a {
@@ -532,7 +592,7 @@
 
 .markdown-body ul,
 .markdown-body ol {
-  color: color-mix(in oklch, var(--app-markdown-text) 88%, var(--app-markdown-muted));
+  color: color-mix(in oklch, var(--foreground) 88%, var(--muted-foreground));
 }
 
 .markdown-body hr {

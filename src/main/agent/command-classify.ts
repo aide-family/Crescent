@@ -84,10 +84,8 @@ export async function classifyCommand(
   } catch (error) {
     const elapsedMs = Date.now() - startedAt
     if (error instanceof CommandAuditTimeoutError) {
-      const level: 'low' | 'high' =
-        hasHighWriteVerb(cmd) && !isStaticallyReadonly(cmd) ? 'high' : 'low'
-      const audit = buildTimeoutFallbackAudit(level, elapsedMs, ctx.locale, cmd)
-      return { level, source: 'timeout-fallback', elapsedMs, audit }
+      const audit = buildTimeoutFallbackAudit('high', elapsedMs, ctx.locale, cmd)
+      return { level: 'high', source: 'timeout-fallback', elapsedMs, audit }
     }
     throw error
   }

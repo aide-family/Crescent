@@ -120,6 +120,7 @@ export interface PiHostRunInput {
 
 export interface PiHostRunResult {
   ok: boolean
+  busy?: boolean
   text?: string
   error?: string
   canceled?: boolean
@@ -127,6 +128,9 @@ export interface PiHostRunResult {
 
 export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult> {
   const { runId, sessionKey, emit } = input
+  if (runIdBySessionKey.has(sessionKey)) {
+    return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
+  }
   const abortController = new AbortController()
   activeRuns.set(runId, { runId, sessionKey, abortRequested: false, abortController })
   runIdBySessionKey.set(sessionKey, runId)

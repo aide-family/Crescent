@@ -18,11 +18,11 @@ export {
 export function logClassName(kind: AgentLogEntry['kind']): string {
   switch (kind) {
     case 'user':
-      return 'ml-10 rounded-2xl rounded-br-md bg-primary/10 px-3.5 py-2.5'
+      return 'ml-auto max-w-[92%] rounded-2xl rounded-br-md bg-primary/10 px-3.5 py-2.5 shadow-[0_4px_18px_color-mix(in_srgb,var(--primary)_6%,transparent)]'
     case 'assistant':
-      return 'mr-1 px-0.5 py-1'
+      return 'mr-1 max-w-[min(100%,54rem)] px-0.5 py-1'
     case 'error':
-      return 'rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-destructive'
+      return 'max-w-[min(100%,54rem)] rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3 text-destructive'
     case 'tool':
     case 'command':
     case 'plan':
