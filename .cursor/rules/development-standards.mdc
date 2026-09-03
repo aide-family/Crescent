@@ -14,7 +14,7 @@ Project skills (`.cursor/skills/`): `pi-dev`, `electron-development`.
 - Read installed `@earendil-works/pi-*` docs/types in `node_modules` before changing agent code. Keep those packages on one version.
 - Import pi only through `src/main/agent/pi-sdk.ts` (`import()`). Never static-import pi into CJS main.
 - Custom tools must be allowlisted, truncate large output, and use `withFileMutationQueue` for file writes.
-- Put pi-facing tests next to the module (`src/main/agent/*.test.ts`).
+- Put pi-facing tests next to the module (`src/main/agent/*.test.ts`) **locally only** — test files are gitignored and must not be committed (`docs/TESTING.md`).
 
 ## Electron (`electron-dev`, `electron`)
 

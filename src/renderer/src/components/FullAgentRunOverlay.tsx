@@ -5,6 +5,7 @@ import { Loader2Icon, XIcon } from 'lucide-react'
 import { MessageInlineContent } from '@renderer/components/AgentReferenceBadges'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import { Button } from '@renderer/components/ui/button'
+import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import type { Dictionary } from '@renderer/i18n'
 import {
   type ParsedAgentRunDocument,
@@ -133,13 +134,7 @@ export function FullAgentRunOverlay({
     }
   }, [activeTab, hasMoreSteps, loading, stepLimit])
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  const overlayRef = useAppModalA11y(true, { onEscape: onClose })
 
   const headingIdPrefix = useMemo(() => `full-run-${logId}-`, [logId])
   const headings = useMemo(
@@ -149,6 +144,7 @@ export function FullAgentRunOverlay({
 
   return createPortal(
     <div
+      ref={overlayRef}
       className="app-fullscreen-overlay fixed inset-0 z-50 flex flex-col overscroll-contain bg-background/98 backdrop-blur"
       role="dialog"
       aria-modal="true"

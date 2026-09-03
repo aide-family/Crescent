@@ -58,6 +58,7 @@ export function AgentLogList({
   onOpenCaptureDraft,
   hasEarlierLogs,
   loadingEarlier,
+  earlierLogsError = null,
   onLoadEarlier
 }: {
   logRef: RefObject<HTMLDivElement | null>
@@ -98,6 +99,7 @@ export function AgentLogList({
   onOpenConnections?: () => void
   hasEarlierLogs?: boolean
   loadingEarlier?: boolean
+  earlierLogsError?: string | null
   onLoadEarlier?: () => void | Promise<void>
 }): React.JSX.Element {
   const markers = connectionFailureMarkers(t)
@@ -147,7 +149,7 @@ export function AgentLogList({
       className="relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm"
     >
       {onLoadEarlier && hasEarlierLogs ? (
-        <div className="mb-3 flex justify-center pt-2">
+        <div className="mb-3 flex flex-col items-center gap-2 pt-2">
           <Button
             type="button"
             variant="outline"
@@ -158,6 +160,11 @@ export function AgentLogList({
           >
             {loadingEarlier ? t.input.loadingEarlierLogs : t.input.loadEarlierLogs}
           </Button>
+          {earlierLogsError ? (
+            <p className="text-center text-[11px] text-destructive" role="alert">
+              {earlierLogsError}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {entries.length === 0 && !thinking ? (

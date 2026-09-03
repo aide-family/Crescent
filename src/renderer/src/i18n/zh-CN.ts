@@ -15,6 +15,7 @@ const zhCN = {
     running: '运行中',
     shellReady: 'Shell 已就绪',
     shellStarting: 'Shell 启动中',
+    catalogLoadFailed: '加载 {resource} 失败。',
     shellDisconnected: '连接已断开 · 待重连',
     shellStopped: 'Shell 已停止',
     shellFailed: 'Shell 启动失败',
@@ -407,6 +408,7 @@ const zhCN = {
       '切换到历史会话会恢复对话内容；若历史会话关联 SSH 连接，会重新打开终端并按当前连接配置登录。',
     empty: '暂无历史会话。',
     loading: '正在加载历史会话…',
+    loadFailed: '加载历史会话失败。',
     refresh: '刷新历史',
     renameTitle: '修改标题',
     runs: '次运行',
@@ -496,6 +498,7 @@ const zhCN = {
     emptyConversationHint:
       '可以向 Crescent 询问集群或工作区问题。bash 命令会显示在终端面板；高风险命令请在对话中审批。',
     loadEarlierLogs: '加载更早消息',
+    loadEarlierLogsFailed: '加载更早消息失败。',
     loadingEarlierLogs: '正在加载…',
     markdownExpandLarge: '展开全部',
     markdownCollapseLarge: '收起预览',

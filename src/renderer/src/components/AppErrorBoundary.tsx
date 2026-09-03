@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Component, Fragment, type ErrorInfo, type ReactNode } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
@@ -11,12 +11,13 @@ interface AppErrorBoundaryProps {
 interface AppErrorBoundaryState {
   hasError: boolean
   message: string
+  remountKey: number
 }
 
 export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
-  state: AppErrorBoundaryState = { hasError: false, message: '' }
+  state: AppErrorBoundaryState = { hasError: false, message: '', remountKey: 0 }
 
-  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
     return {
       hasError: true,
       message: error?.message ? String(error.message).slice(0, 500) : 'Unknown error'
@@ -32,8 +33,18 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     }
   }
 
+  handleContinue = (): void => {
+    this.setState((current) => ({
+      hasError: false,
+      message: '',
+      remountKey: current.remountKey + 1
+    }))
+  }
+
   render(): ReactNode {
-    if (!this.state.hasError) return this.props.children
+    if (!this.state.hasError) {
+      return <Fragment key={this.state.remountKey}>{this.props.children}</Fragment>
+    }
     const { t } = this.props
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
@@ -59,11 +70,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
           >
             {t.recovery.exportDiagnostics}
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => this.setState({ hasError: false, message: '' })}
-          >
+          <Button type="button" variant="ghost" onClick={this.handleContinue}>
             {t.recovery.errorBoundaryContinue}
           </Button>
         </div>

@@ -573,6 +573,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const rootPasswordAutoSubmittedTabsRef = useRef(new Set<string>())
   const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
   const passwordFocusTabIdRef = useRef<string | null>(null)
+  const showConnectionListRef = useRef<() => void>(() => {})
+  const openNewConnectionFormRef = useRef<() => void>(() => {})
   const runAgentConversationRef = useRef<
     | ((
         input: string,
@@ -673,7 +675,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [instructionEditorOpen, setInstructionEditorOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [loadingEarlierLogs, setLoadingEarlierLogs] = useState(false)
+  const [earlierLogsError, setEarlierLogsError] = useState<string | null>(null)
   const [hasEarlierLogs, setHasEarlierLogs] = useState(false)
   const [connectionAttemptByChatTab, setConnectionAttemptByChatTab] = useState<
     Record<string, ConnectionAttemptState>
@@ -937,6 +941,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       Number.POSITIVE_INFINITY
     )
     setLoadingEarlierLogs(true)
+    setEarlierLogsError(null)
     try {
       const rows = await window.api.storage.listAgentLogs({
         tabId: chatTabId,
@@ -964,6 +969,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog.length ??
         sessionChatTab.agentLog.length + hydrated.length
       setHasEarlierLogs(total > nextLen)
+    } catch {
+      setEarlierLogsError(t.input.loadEarlierLogsFailed)
     } finally {
       setLoadingEarlierLogs(false)
     }
@@ -1172,6 +1179,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     ? Math.min(slashCommandIndex, slashCommandOptions.length - 1)
     : 0
   const failedToLoadConfigText = t.terminal.failedToLoadConfig
+  const catalogLoadFailedText = t.app.catalogLoadFailed
   const failedToLoadConnectionsText = t.terminal.failedToLoadConnections
   const failedToLoadModelsText = t.terminal.failedToLoadModels
   const terminalPaneFirst = paneOrder === 'terminal-chat'
@@ -1190,8 +1198,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     void window.api.agent
       .listExtensionCommands(sessionChatTab.id)
       .then(setExtensionCommands)
-      .catch(() => setExtensionCommands([]))
-  }, [sessionChatTab.id, slashCommandQuery])
+      .catch(() => {
+        setExtensionCommands([])
+        toast.error(catalogLoadFailedText.replace('{resource}', 'extension commands'))
+      })
+  }, [catalogLoadFailedText, sessionChatTab.id, slashCommandQuery])
 
   const filteredLocalSkills = useMemo(
     () => filterLocalSkills(skills, localSkillSearchQuery),
@@ -1201,13 +1212,16 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
 
   const refreshSessionHistory = useCallback(async (): Promise<void> => {
     setHistoryLoading(true)
+    setHistoryError(null)
     try {
       const items = await window.api.storage.listSessionHistory(100)
       setHistoryItems(items)
+    } catch {
+      setHistoryError(t.history.loadFailed)
     } finally {
       setHistoryLoading(false)
     }
-  }, [])
+  }, [t.history.loadFailed])
 
   function setHistorySheetOpen(open: boolean): void {
     setHistoryOpen(open)
@@ -2158,13 +2172,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const key = event.key.toLowerCase()
       if (key === 'k') {
         event.preventDefault()
-        showConnectionList()
+        showConnectionListRef.current()
         return
       }
 
       if (key === 't') {
         event.preventDefault()
-        openNewConnectionForm()
+        openNewConnectionFormRef.current()
       }
     }
 
@@ -2173,7 +2187,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     return () => {
       window.removeEventListener('keydown', handleConnectionShortcut)
     }
-  })
+  }, [])
 
   useEffect(() => {
     if (!tabMenu) return
@@ -2441,15 +2455,24 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           void window.api.agent
             .listSkills()
             .then(setSkills)
-            .catch(() => setSkills([]))
+            .catch(() => {
+              setSkills([])
+              toast.error(catalogLoadFailedText.replace('{resource}', 'skills'))
+            })
           void window.api.agent
             .listExtensions()
             .then(setExtensions)
-            .catch(() => setExtensions([]))
+            .catch(() => {
+              setExtensions([])
+              toast.error(catalogLoadFailedText.replace('{resource}', 'extensions'))
+            })
           void window.api.agent
             .listExtensionCommands()
             .then(setExtensionCommands)
-            .catch(() => setExtensionCommands([]))
+            .catch(() => {
+              setExtensionCommands([])
+              toast.error(catalogLoadFailedText.replace('{resource}', 'extension commands'))
+            })
           void window.api.agent
             .listInstructionFiles()
             .then((files) => {
@@ -2458,7 +2481,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
                 files.find((file) => file.name === 'IDENTITY.md')?.content ?? ''
               )
             })
-            .catch(() => setInstructionFiles([]))
+            .catch(() => {
+              setInstructionFiles([])
+              toast.error(catalogLoadFailedText.replace('{resource}', 'instruction files'))
+            })
         })
       })
       .catch((error) => {
@@ -2478,7 +2504,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     return () => {
       cancelled = true
     }
-  }, [failedToLoadConfigText, failedToLoadConnectionsText, failedToLoadModelsText, writeLine])
+  }, [
+    catalogLoadFailedText,
+    failedToLoadConfigText,
+    failedToLoadConnectionsText,
+    failedToLoadModelsText,
+    writeLine
+  ])
 
   useEffect(() => {
     const unsubscribe = window.api.agent.onEvent((event) => {
@@ -2988,6 +3020,18 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       setConfig(nextConfig)
       setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
       setModels(flattenProviderModels(nextConfig.providers))
+      const loadCatalog = async <T,>(
+        resource: string,
+        loader: () => Promise<T>,
+        fallback: T
+      ): Promise<T> => {
+        try {
+          return await loader()
+        } catch {
+          toast.error(catalogLoadFailedText.replace('{resource}', resource))
+          return fallback
+        }
+      }
       const [
         nextSkills,
         nextExtensions,
@@ -2997,13 +3041,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         nextConnections,
         nextModels
       ] = await Promise.all([
-        window.api.agent.listSkills().catch(() => [] as AgentSkillOption[]),
-        window.api.agent.listExtensions().catch(() => [] as AgentExtensionOption[]),
-        window.api.agent.listExtensionCommands(chatTabId).catch(() => []),
-        window.api.agent.listWikiDocuments().catch(() => [] as WikiDocumentSummary[]),
-        window.api.agent.listInstructionFiles().catch(() => [] as LocalInstructionDocument[]),
-        window.api.connections.list().catch(() => [] as ConnectionConfig[]),
-        window.api.agent.getModels().catch(() => [])
+        loadCatalog('skills', () => window.api.agent.listSkills(), [] as AgentSkillOption[]),
+        loadCatalog(
+          'extensions',
+          () => window.api.agent.listExtensions(),
+          [] as AgentExtensionOption[]
+        ),
+        loadCatalog(
+          'extension commands',
+          () => window.api.agent.listExtensionCommands(chatTabId),
+          []
+        ),
+        loadCatalog(
+          'wiki',
+          () => window.api.agent.listWikiDocuments(),
+          [] as WikiDocumentSummary[]
+        ),
+        loadCatalog(
+          'instruction files',
+          () => window.api.agent.listInstructionFiles(),
+          [] as LocalInstructionDocument[]
+        ),
+        loadCatalog('connections', () => window.api.connections.list(), [] as ConnectionConfig[]),
+        loadCatalog('models', () => window.api.agent.getModels(), [] as AgentModelOption[])
       ])
       setSkills(nextSkills)
       setExtensions(nextExtensions)
@@ -5415,6 +5475,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     resetConnectionForm()
     setConnectionModalOpen(true)
   }
+
+  showConnectionListRef.current = showConnectionList
+  openNewConnectionFormRef.current = openNewConnectionForm
 
   async function saveConnection(
     connectAfterSave = false,
@@ -7893,6 +7956,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       onOpenChange={setHistorySheetOpen}
       t={t}
       loading={historyLoading}
+      error={historyError}
       items={historyItems}
       titleEditingId={historyTitleEditingId}
       titleDraft={historyTitleDraft}
@@ -8265,6 +8329,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             selectedSlashCommandIndex={selectedSlashCommandIndex}
             terminalPaneFirst={terminalPaneFirst}
             terminalHidden={hiddenPane === 'terminal'}
+            terminalStartError={
+              hiddenPane === 'terminal' ? activeTab?.terminalStartError?.trim() : undefined
+            }
             activeModel={activeModel}
             activeModelSelectionValue={activeModelSelectionValue}
             activeTabModelId={activeTabModelId}
@@ -8311,6 +8378,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onOpenCaptureDraft={openCaptureDraft}
             hasEarlierLogs={hasEarlierLogs}
             loadingEarlier={loadingEarlierLogs}
+            earlierLogsError={earlierLogsError}
             onLoadEarlier={() => void loadEarlierAgentLogs()}
             onInjectSuggestions={(texts) => {
               const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)

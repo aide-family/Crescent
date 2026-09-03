@@ -1,4 +1,4 @@
-import type { FormEvent, KeyboardEvent, Ref } from 'react'
+import { type FormEvent, type KeyboardEvent, useRef } from 'react'
 import { TriangleAlertIcon } from 'lucide-react'
 
 import { ImeSafeInput } from '@renderer/components/ImeSafeFields'
@@ -7,6 +7,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
 import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
+import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import type { Dictionary } from '@renderer/i18n'
 import type { CommandApprovalRequest, CommandRiskLevel } from '../../../shared/agent-types'
 
@@ -35,10 +36,14 @@ export function CloseTabsConfirmModal({
   onConfirm: () => void
   onDontAskAgainChange: (checked: boolean) => void
 }): React.JSX.Element | null {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useAppModalA11y(Boolean(request), { onEscape: onCancel, panelRef })
+
   if (!request) return null
 
   return (
     <div
+      ref={overlayRef}
       className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
@@ -47,7 +52,10 @@ export function CloseTabsConfirmModal({
         if (event.target === event.currentTarget) onCancel()
       }}
     >
-      <div className="app-modal-panel w-full max-w-md overflow-hidden rounded-xl border bg-background">
+      <div
+        ref={panelRef}
+        className="app-modal-panel w-full max-w-md overflow-hidden rounded-xl border bg-background"
+      >
         <div className="app-modal-header flex items-start gap-3 border-b px-4 py-3">
           <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
           <div className="min-w-0">
@@ -91,37 +99,6 @@ export function CloseTabsConfirmModal({
   )
 }
 
-export function PasswordPromptModal({
-  request,
-  t,
-  value,
-  error,
-  inputRef,
-  onChange,
-  onCancel,
-  onSubmit
-}: {
-  request: PasswordPromptRequest | null
-  t: Dictionary
-  value: string
-  error: string
-  inputRef: Ref<HTMLInputElement>
-  onChange: (value: string) => void
-  onCancel: () => void
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void
-}): React.JSX.Element | null {
-  // Kept for API compatibility; password prompts now render inline in the chat pane.
-  void request
-  void t
-  void value
-  void error
-  void inputRef
-  void onChange
-  void onCancel
-  void onSubmit
-  return null
-}
-
 /** Inline password prompt in the conversation pane (command-approval style). */
 export function PasswordPromptInlineCard({
   request,
@@ -137,7 +114,7 @@ export function PasswordPromptInlineCard({
   t: Dictionary
   value: string
   error: string
-  inputRef: Ref<HTMLInputElement>
+  inputRef: React.Ref<HTMLInputElement>
   onChange: (value: string) => void
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -225,16 +202,26 @@ export function CommandApprovalModal({
   onRejectionReasonChange: (value: string) => void
   onResolve: (approved: boolean) => void
 }): React.JSX.Element | null {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useAppModalA11y(Boolean(commandApproval), {
+    onEscape: () => onResolve(false),
+    panelRef
+  })
+
   if (!commandApproval) return null
 
   return (
     <div
+      ref={overlayRef}
       className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby="command-review-title"
     >
-      <div className="app-modal-panel flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background">
+      <div
+        ref={panelRef}
+        className="app-modal-panel flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background"
+      >
         <div className="app-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">

@@ -16,7 +16,9 @@ npm run typecheck
 npm run build
 ```
 
-- If any step fails, fix it and re-run the full `npm run ci`. Do not commit a red tree.
+When local test files exist (gitignored — see `docs/TESTING.md`), also run `npm run test:local` before commit.
+
+- If any step fails, fix it and re-run the full gate. Do not commit a red tree.
 - Do not use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
 - The `pre-commit` hook also runs `npm run ci`. Treat a hook failure as a hard stop.
 - Docs-only or config-only commits still require a green `npm run ci`.

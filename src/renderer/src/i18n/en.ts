@@ -15,6 +15,7 @@ const en = {
     running: 'Running',
     shellReady: 'Shell ready',
     shellStarting: 'Shell starting',
+    catalogLoadFailed: 'Failed to load {resource}.',
     shellDisconnected: 'Connection lost · reconnect pending',
     shellStopped: 'Shell stopped',
     shellFailed: 'Shell failed to start',
@@ -441,6 +442,7 @@ const en = {
       'Switching to a history session restores the chat. If it was linked to SSH, Crescent opens a terminal and logs in using the current connection configuration.',
     empty: 'No history sessions yet.',
     loading: 'Loading history sessions…',
+    loadFailed: 'Failed to load session history.',
     refresh: 'Refresh history',
     renameTitle: 'Rename title',
     runs: 'runs',
@@ -537,6 +539,7 @@ const en = {
     emptyConversationHint:
       'Ask Crescent about your cluster or workspace. Bash commands appear in the terminal pane; approve high-risk commands in the chat.',
     loadEarlierLogs: 'Load earlier messages',
+    loadEarlierLogsFailed: 'Failed to load earlier messages.',
     loadingEarlierLogs: 'Loading…',
     markdownExpandLarge: 'Expand all',
     markdownCollapseLarge: 'Collapse preview',

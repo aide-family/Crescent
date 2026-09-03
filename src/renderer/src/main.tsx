@@ -78,12 +78,16 @@ function BootShell({
   }, [])
 
   if (mode === 'loading') {
-    return <div className="min-h-screen bg-background" />
+    return <div className="h-full bg-background" />
   }
   if (mode === 'crash-loop') {
     return <RendererCrashLoopPanel t={dictionary} />
   }
-  return <App recoveryMode={mode === 'pending' ? 'pending' : 'none'} />
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <App recoveryMode={mode === 'pending' ? 'pending' : 'none'} />
+    </div>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(

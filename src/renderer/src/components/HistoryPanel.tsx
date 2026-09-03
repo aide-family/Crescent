@@ -20,6 +20,7 @@ export interface HistoryPanelProps {
   onOpenChange: (open: boolean) => void
   t: Dictionary
   loading: boolean
+  error?: string | null
   items: StoredSessionHistoryItem[]
   titleEditingId: string | null
   titleDraft: string
@@ -53,6 +54,7 @@ export function HistoryPanel({
   onOpenChange,
   t,
   loading,
+  error = null,
   items,
   titleEditingId,
   titleDraft,
@@ -83,10 +85,16 @@ export function HistoryPanel({
               {t.history.loading}
             </div>
           )}
-          {!loading && items.length === 0 && (
+          {!loading && error ? (
+            <div className="app-empty-state text-destructive" role="alert">
+              {error}
+            </div>
+          ) : null}
+          {!loading && !error && items.length === 0 && (
             <div className="app-empty-state">{t.history.empty}</div>
           )}
           {!loading &&
+            !error &&
             items.map((item) => {
               const editing = titleEditingId === item.tabId
 

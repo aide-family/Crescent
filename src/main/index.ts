@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Notification, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -12,6 +12,7 @@ import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
 import { initSystemLogging, setSystemLogLevel } from './logging'
 import { readAgentConfig } from './crescent-store'
 import { isKnownNativeLogNoise } from './native-log-filter'
+import { openExternalUrlIfAllowed } from './open-external-url'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -119,7 +120,7 @@ function createWindow(): BrowserWindow {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    void openExternalUrlIfAllowed(details.url)
     return { action: 'deny' }
   })
 
@@ -224,15 +225,9 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
   ipcMain.handle('app:open-external', async (_event, url: unknown) => {
-    if (typeof url !== 'string' || !url.trim()) return { ok: false }
-    try {
-      const parsed = new URL(url)
-      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false }
-      await shell.openExternal(parsed.toString())
-      return { ok: true }
-    } catch {
-      return { ok: false }
-    }
+    if (typeof url !== 'string') return { ok: false }
+    const ok = await openExternalUrlIfAllowed(url)
+    return { ok }
   })
   initializeCrescentDatabase()
   registerRendererRecoveryIpc(icon)

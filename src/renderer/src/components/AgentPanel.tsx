@@ -86,6 +86,7 @@ export function AgentPanel({
   selectedSlashCommandIndex,
   terminalPaneFirst,
   terminalHidden,
+  terminalStartError,
   activeModel,
   activeModelSelectionValue,
   activeTabModelId,
@@ -149,6 +150,7 @@ export function AgentPanel({
   onOpenCaptureDraft,
   hasEarlierLogs,
   loadingEarlier,
+  earlierLogsError,
   onLoadEarlier,
   sessionInputTokens,
   sessionOutputTokens
@@ -166,6 +168,7 @@ export function AgentPanel({
   selectedSlashCommandIndex: number
   terminalPaneFirst: boolean
   terminalHidden: boolean
+  terminalStartError?: string
   activeModel?: AgentModelOption
   activeModelSelectionValue: string
   activeTabModelId: string
@@ -239,6 +242,7 @@ export function AgentPanel({
   onOpenCaptureDraft?: (kind: CaptureKind) => void
   hasEarlierLogs?: boolean
   loadingEarlier?: boolean
+  earlierLogsError?: string | null
   onLoadEarlier?: () => void | Promise<void>
   sessionInputTokens: number
   sessionOutputTokens: number
@@ -280,6 +284,15 @@ export function AgentPanel({
           <PanelLeftCloseIcon className="h-3.5 w-3.5" aria-hidden="true" />
         )}
       </button>
+      {terminalHidden && terminalStartError ? (
+        <div
+          className="mx-4 mt-2 flex shrink-0 items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          role="alert"
+        >
+          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>{t.terminal.failedToStartShellReason.replace('{reason}', terminalStartError)}</span>
+        </div>
+      ) : null}
       <AgentLogList
         logRef={agentLogRef}
         entries={sessionChatTab.agentLog}
@@ -313,6 +326,7 @@ export function AgentPanel({
         onOpenCaptureDraft={onOpenCaptureDraft}
         hasEarlierLogs={hasEarlierLogs}
         loadingEarlier={loadingEarlier}
+        earlierLogsError={earlierLogsError}
         onLoadEarlier={onLoadEarlier}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&

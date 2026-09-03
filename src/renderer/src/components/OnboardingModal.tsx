@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useRef } from 'react'
 import { BookOpenIcon, PlugIcon, ServerIcon, SparklesIcon } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import type { Dictionary } from '@renderer/i18n'
 
 export function OnboardingModal({
@@ -21,19 +22,14 @@ export function OnboardingModal({
   onOpenSkills: () => void
   onAddExampleOpenApi: () => void
 }): React.JSX.Element | null {
-  useEffect(() => {
-    if (!open) return
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onDismiss()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onDismiss])
+  const panelRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useAppModalA11y(open, { onEscape: onDismiss, panelRef })
 
   if (!open) return null
 
   return (
     <div
+      ref={overlayRef}
       className="app-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 overscroll-contain"
       role="dialog"
       aria-modal="true"
@@ -42,7 +38,10 @@ export function OnboardingModal({
         if (event.target === event.currentTarget) onDismiss()
       }}
     >
-      <div className="app-modal-panel w-full max-w-lg overflow-hidden rounded-xl border bg-background">
+      <div
+        ref={panelRef}
+        className="app-modal-panel w-full max-w-lg overflow-hidden rounded-xl border bg-background"
+      >
         <div className="app-modal-header border-b px-4 py-3">
           <h2 id="onboarding-title" className="text-sm font-semibold text-pretty">
             {t.onboarding.title}

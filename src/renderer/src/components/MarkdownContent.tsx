@@ -20,6 +20,7 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
+import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import { Separator } from '@renderer/components/ui/separator'
 import {
   Select,
@@ -543,24 +544,23 @@ function MermaidBlock({
   const [panning, setPanning] = useState(false)
   const [exportSelectKey, setExportSelectKey] = useState(0)
   const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
+  const expandedPanelRef = useRef<HTMLDivElement | null>(null)
+
+  const closeExpanded = useCallback((): void => {
+    setExpanded(false)
+    setZoom(1)
+    setPanning(false)
+    expandedPanRef.current = null
+  }, [])
+
+  const expandedOverlayRef = useAppModalA11y(expanded, {
+    onEscape: closeExpanded,
+    panelRef: expandedPanelRef
+  })
 
   useEffect(() => {
     zoomRef.current = zoom
   }, [zoom])
-
-  useEffect(() => {
-    if (!expanded) return
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        setExpanded(false)
-        setZoom(1)
-        setPanning(false)
-        expandedPanRef.current = null
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [expanded])
 
   useEffect(() => {
     if (!closed) {
@@ -889,12 +889,16 @@ function MermaidBlock({
       {expanded && svg
         ? createPortal(
             <div
+              ref={expandedOverlayRef}
               className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain"
               role="dialog"
               aria-modal="true"
               aria-label={t.common.enlarge}
             >
-              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+              <div
+                ref={expandedPanelRef}
+                className="flex items-center justify-between gap-2 border-b px-3 py-2"
+              >
                 <span className="text-xs text-muted-foreground">mermaid · {zoomPercent}%</span>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Button
@@ -955,12 +959,7 @@ function MermaidBlock({
                     size="icon"
                     aria-label={t.common.close}
                     title={t.common.close}
-                    onClick={() => {
-                      setExpanded(false)
-                      setZoom(1)
-                      setPanning(false)
-                      expandedPanRef.current = null
-                    }}
+                    onClick={closeExpanded}
                   >
                     <XIcon aria-hidden="true" />
                   </Button>

@@ -26,6 +26,20 @@ interface PendingCommandApproval {
   purposeAbort?: AbortController
 }
 
+const DEFAULT_COMMAND_APPROVAL_TIMEOUT_MS = 60_000
+const MIN_COMMAND_APPROVAL_TIMEOUT_MS = 5_000
+const MAX_COMMAND_APPROVAL_TIMEOUT_MS = 10 * 60_000
+
+function normalizeApprovalTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_COMMAND_APPROVAL_TIMEOUT_MS
+  }
+  return Math.min(
+    MAX_COMMAND_APPROVAL_TIMEOUT_MS,
+    Math.max(MIN_COMMAND_APPROVAL_TIMEOUT_MS, Math.floor(timeoutMs))
+  )
+}
+
 const pendingCommandApprovals = new Map<string, PendingCommandApproval>()
 
 export function dismissCommandApprovalRequest(
@@ -105,13 +119,14 @@ export function requestCommandApproval(input: {
   if (input.webContents.isDestroyed()) return Promise.resolve({ approved: false })
 
   const requestId = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const effectiveTimeoutMs = normalizeApprovalTimeoutMs(input.timeoutMs)
   const request: CommandApprovalRequest = {
     id: requestId,
     runId: input.runId,
     tabId: input.tabId,
     chatTabId: input.chatTabId,
     command: input.command,
-    timeoutMs: input.timeoutMs,
+    timeoutMs: effectiveTimeoutMs,
     audit: input.audit
   }
 
@@ -121,8 +136,11 @@ export function requestCommandApproval(input: {
       resolve(decision)
     }
     const timeout = setTimeout(() => {
-      settlePendingCommandApproval(requestId, { approved: false })
-    }, 60 * 1000)
+      settlePendingCommandApproval(requestId, {
+        approved: false,
+        rejectionReason: `Command approval timed out after ${effectiveTimeoutMs}ms.`
+      })
+    }, effectiveTimeoutMs)
     const onAbort = (): void => {
       settlePendingCommandApproval(requestId, {
         approved: false,
