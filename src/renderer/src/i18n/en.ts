@@ -427,6 +427,9 @@ const en = {
     shellExited: 'Shell exited with code',
     subterminalActive: 'Active',
     subterminalExited: 'Exited',
+    subterminalAgentRunning: 'Running',
+    subterminalAgentDone: 'Done',
+    subterminalAgentError: 'Error',
     subterminal: 'Sub-terminal',
     temporarySubterminal: 'Sub-terminal',
     subterminalLimitReached: 'At most 3 sub-terminals per terminal',
@@ -798,6 +801,9 @@ const en = {
     agentStyleGuidedHint: 'Pair through the investigation: goal, evidence, next step.',
     agentStyleTeach: 'Teach',
     agentStyleTeachHint: 'Explain why this check and what the evidence means. For learning.',
+    subagentsEnabled: 'Subagents',
+    subagentsEnabledHint:
+      'Let the parent agent delegate scout, reviewer, worker, and similar tasks. Each child uses a docked sub-terminal; parent commands stay on the current pane.',
     showAgentThinking: 'Show thinking process',
     showAgentThinkingHint:
       'Overrides the style default. Swift/Concise/Guided hide thinking; Teach shows it.',

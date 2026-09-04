@@ -11,7 +11,7 @@ Do not patch a single UI or prompt symptom in isolation. Decisions must fit Cres
 
 - Crescent owns SSH, MCP, subterminals, command review, secrets, wiki, and skill persistence. Pi is the guest agent runtime.
 - Do not enable `pi-mcp-adapter` or `pi-subagents` as the product plane. Do not load project `.pi/extensions`.
-- Host features that the model should invoke (subterminals, capture, similar) follow `open_subterminal`: `defineTool` in main, catalog entry, preload-whitelisted IPC, renderer-owned UI. Not a project extension, not bash/`write` to disk.
+- Host features that the model should invoke (subterminals, capture, subagents) follow `open_subterminal` / `subagent`: `defineTool` in main, catalog entry, preload-whitelisted IPC, renderer-owned UI. Not a project extension, not bash/`write` to disk. Host `subagent` binds each child to a docked subterminal; do not adopt `npm:pi-subagents` FleetView or detached runners as the product plane.
 - Before changing `src/main/agent/`, read installed `@earendil-works/pi-*` types. Import Pi only through `src/main/agent/pi-sdk.ts` (`import()`).
 - `createAgentSession` `tools` is an allowlist that **replaces** the default set. Custom tools must also be listed if an allowlist is passed.
 

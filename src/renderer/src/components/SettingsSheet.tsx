@@ -110,6 +110,7 @@ export interface SettingsSheetProps {
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onAgentStyleChange: (style: AgentStyle) => void
+  onSubagentsEnabledChange: (enabled: boolean) => void
   onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
@@ -164,6 +165,7 @@ export function SettingsSheet({
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
+  onSubagentsEnabledChange,
   onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
@@ -426,6 +428,24 @@ export function SettingsSheet({
                   </SelectContent>
                 </Select>
                 <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
+              </Field>
+              <Field>
+                <label
+                  htmlFor="subagents-enabled"
+                  className="app-list-row flex items-start justify-between gap-3"
+                >
+                  <span className="space-y-1">
+                    <span className="block text-sm font-medium">{t.settings.subagentsEnabled}</span>
+                    <FieldDescription>{t.settings.subagentsEnabledHint}</FieldDescription>
+                  </span>
+                  <Input
+                    id="subagents-enabled"
+                    type="checkbox"
+                    checked={Boolean(config.subagentsEnabled)}
+                    onChange={(event) => onSubagentsEnabledChange(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 accent-primary"
+                  />
+                </label>
               </Field>
               <Field>
                 <FieldLabel htmlFor="log-level">{t.settings.logLevel}</FieldLabel>

@@ -16,10 +16,12 @@ export interface HostedSessionSnapshot {
 
 export function hostedSessionToolProfile(
   mcpServers: AgentMcpServerConfig[] = [],
-  extensionFingerprint = 'none'
+  extensionFingerprint = 'none',
+  subagentsEnabled = false
 ): string {
   const ext = extensionFingerprint.trim() || 'none'
-  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}:ext:${ext}`
+  const sub = subagentsEnabled ? 'subagents' : 'nosubagents'
+  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}:ext:${ext}:${sub}`
 }
 
 /**

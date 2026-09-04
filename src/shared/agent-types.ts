@@ -39,6 +39,11 @@ export interface AgentConfig {
   loadGlobalAgentSkills: boolean
   /** Extension ids (file/dir basename) that should not be loaded. */
   disabledExtensions: string[]
+  /**
+   * When true, the parent session registers the host `subagent` tool.
+   * Each child gets a dedicated docked subterminal; parent bash stays on the current pane.
+   */
+  subagentsEnabled: boolean
   mcpServers: AgentMcpServerConfig[]
   /** Minimum level recorded to ~/.crescent/logs (default: info). */
   logLevel?: SystemLogLevel
@@ -242,6 +247,8 @@ export interface AgentRunInput {
   tabId?: string
   /** Visible terminal pane where bash commands are executed (main or subterminal). */
   executionTabId?: string
+  /** SSH connection of the current execution pane, if that pane is remote. */
+  executionConnectionId?: string
   /** Recent terminal scrollback for command review / agent context. */
   terminalContext?: string
   /** @deprecated Prefer executionTabId; kept for compatibility. */
@@ -722,6 +729,8 @@ export type AgentEvent =
 export interface AgentEventMeta {
   runId?: string
   tabId?: string
+  /** True when the event originated from a host-owned child subagent session. */
+  fromSubagent?: boolean
 }
 
 export interface OpenApiOperationMeta {

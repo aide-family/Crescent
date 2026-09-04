@@ -30,6 +30,11 @@ export interface PtyBashExecContext {
    * the execution tab instead of the main pane.
    */
   subterminalName?: string
+  /** SSH connection of the current execution pane, if remote. */
+  connectionId?: string
+  isSsh?: boolean
+  /** True when this context belongs to a host-owned child subagent. */
+  fromSubagent?: boolean
   /** Fingerprints of commands that already failed in this run (normalized). */
   failedFingerprints?: Set<string>
 }
@@ -66,21 +71,56 @@ export function getPtyBashExecContext(sessionKey: string): PtyBashExecContext | 
   return execContextBySessionKey.get(sessionKey)
 }
 
-export function updatePtyBashExecutionTabId(sessionKey: string, executionTabId: string): boolean {
+export function updatePtyBashExecutionTabId(
+  sessionKey: string,
+  executionTabId: string,
+  environment?: { connectionId?: string; isSsh?: boolean }
+): boolean {
   const existing = execContextBySessionKey.get(sessionKey)
   if (!existing) return false
   const nextId = executionTabId.trim()
   if (!nextId) return false
   existing.executionTabId = nextId
   existing.subterminalName = undefined
+  if (environment) {
+    existing.isSsh = Boolean(environment.isSsh)
+    existing.connectionId = environment.isSsh ? environment.connectionId?.trim() : undefined
+  }
   execContextBySessionKey.set(sessionKey, existing)
   return true
 }
 
+export function bindPtyBashExecContextClone(input: {
+  fromSessionKey: string
+  toSessionKey: string
+  executionTabId: string
+  fromSubagent?: boolean
+}): boolean {
+  const parent = execContextBySessionKey.get(input.fromSessionKey)
+  if (!parent) return false
+  const executionTabId = input.executionTabId.trim()
+  if (!executionTabId || !input.toSessionKey.trim()) return false
+  execContextBySessionKey.set(input.toSessionKey, {
+    ...parent,
+    executionTabId,
+    subterminalName: undefined,
+    fromSubagent: Boolean(input.fromSubagent)
+  })
+  return true
+}
+
 export function clearPtyBashExecContext(sessionKey: string): void {
-  const existing = execContextBySessionKey.get(sessionKey)
-  if (existing?.runId) clearFailedCommandFingerprints(existing.runId)
   execContextBySessionKey.delete(sessionKey)
+}
+
+export function clearPtyBashExecContextsForRun(runId: string): void {
+  const normalized = runId.trim()
+  if (!normalized) return
+  for (const [key, context] of execContextBySessionKey.entries()) {
+    if (context.runId !== normalized) continue
+    execContextBySessionKey.delete(key)
+  }
+  clearFailedCommandFingerprints(normalized)
 }
 
 /**
@@ -170,6 +210,7 @@ async function executeReviewedPtyCommand(input: {
   const executableCommand = normalizeInteractivePrivilegeCommand(input.command)
   const timeoutMs = normalizeTimeout(input.timeoutMs)
   const executionTabId = context.executionTabId
+  const fromSubagent = context.fromSubagent || undefined
   const fingerprint = normalizeCommand(executableCommand)
   const failed = context.failedFingerprints ?? getFailedCommandFingerprints(context.runId)
   const zh = Boolean(context.locale?.toLowerCase().startsWith('zh'))
@@ -182,7 +223,8 @@ async function executeReviewedPtyCommand(input: {
       type: 'status',
       message,
       runId: context.runId,
-      tabId: executionTabId
+      tabId: executionTabId,
+      fromSubagent
     })
     return {
       ok: false,
@@ -202,7 +244,8 @@ async function executeReviewedPtyCommand(input: {
       phase: 'started',
       command: executableCommand,
       runId: context.runId,
-      tabId: executionTabId
+      tabId: executionTabId,
+      fromSubagent
     })
 
     const result = context.subterminalName
@@ -255,7 +298,8 @@ async function executeReviewedPtyCommand(input: {
       },
       elapsedMs: Date.now() - startedAt,
       runId: context.runId,
-      tabId: formattedResult.subterminalTabId || executionTabId
+      tabId: formattedResult.subterminalTabId || executionTabId,
+      fromSubagent
     })
 
     return formattedResult
@@ -265,7 +309,8 @@ async function executeReviewedPtyCommand(input: {
     type: 'status',
     message: 'Command review is classifying risk.',
     runId: context.runId,
-    tabId: executionTabId
+    tabId: executionTabId,
+    fromSubagent
   })
 
   const classified = await classifyCommand(executableCommand, {
@@ -280,7 +325,8 @@ async function executeReviewedPtyCommand(input: {
     command: executableCommand,
     audit: classified.audit,
     runId: context.runId,
-    tabId: executionTabId
+    tabId: executionTabId,
+    fromSubagent
   })
 
   if (classified.level === 'low') {
@@ -291,7 +337,8 @@ async function executeReviewedPtyCommand(input: {
           ? `Command matched whitelist: ${classified.whitelistRule}`
           : 'Command audit classified this as read-only inspection.',
       runId: context.runId,
-      tabId: executionTabId
+      tabId: executionTabId,
+      fromSubagent
     })
     return executeWithProgress()
   }
@@ -317,7 +364,8 @@ async function executeReviewedPtyCommand(input: {
         ? `Command rejected by user.\nUser rejection reason: ${rejectionReason}`
         : 'Command rejected by user.',
       runId: context.runId,
-      tabId: executionTabId
+      tabId: executionTabId,
+      fromSubagent
     })
     return {
       ok: false,
@@ -338,7 +386,8 @@ async function executeReviewedPtyCommand(input: {
       ? `Command approved by user.\nUser approval note: ${approval.note.trim()}`
       : 'Command approved by user.',
     runId: context.runId,
-    tabId: executionTabId
+    tabId: executionTabId,
+    fromSubagent
   })
 
   const result = await executeWithProgress()

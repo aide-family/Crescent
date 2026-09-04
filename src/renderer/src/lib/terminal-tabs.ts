@@ -260,6 +260,8 @@ export interface TemporarySubterminal {
   terminalMode?: 'pty' | 'pipe'
   sessionId?: number
   terminalReady?: boolean
+  agentName?: string
+  agentStatus?: 'running' | 'done' | 'error'
 }
 
 // A known problematic PTY title leaked a bare `topology` token; block any

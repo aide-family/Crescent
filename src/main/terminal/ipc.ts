@@ -156,7 +156,7 @@ const terminalUserInterruptNotifiers = new Map<string, Set<() => void>>()
 /** In-flight automated command waiters (Stop / Ctrl+C can await settle). */
 const pendingCommandPromises = new Map<string, Promise<TerminalCommandExecutionResult>>()
 const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
-const MAX_TEMPORARY_SUBTERMINALS = 3
+export const MAX_TEMPORARY_SUBTERMINALS = 3
 const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
 
 /** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs and raw terminal echo. */
@@ -530,6 +530,16 @@ export function openTemporarySubterminal(
     shell: session.shell,
     cwd: session.cwd
   }
+}
+
+export function listTemporarySubterminalNames(
+  webContents: WebContents,
+  parentTabId: string | undefined
+): string[] {
+  const parent = normalizeTabId(parentTabId)
+  if (!parent) return []
+  const poolKey = getSessionKey(webContents.id, parent)
+  return (temporarySubterminals.get(poolKey) ?? []).map((entry) => entry.name)
 }
 
 export function readTemporarySubterminalOutput(

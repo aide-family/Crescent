@@ -317,6 +317,17 @@ interface TerminalAgentApi {
         terminalMode: 'pty' | 'pipe'
         connectionId?: string
         chatTabId?: string
+        agentName?: string
+        agentStatus?: 'running' | 'done' | 'error'
+      }) => void
+    ) => () => void
+    onSubagentStatus: (
+      callback: (payload: {
+        parentTabId: string
+        tabId: string
+        name: string
+        agentName: string
+        agentStatus: 'running' | 'done' | 'error'
       }) => void
     ) => () => void
     onCaptureRequested: (callback: (payload: AgentCaptureRequestedPayload) => void) => () => void

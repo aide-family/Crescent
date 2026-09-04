@@ -58,6 +58,18 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     stateChanging: true
   },
   {
+    name: 'subagent',
+    method: 'post',
+    path: 'pi://crescent/subagent',
+    description:
+      'Delegate a focused task to a child agent in its own docked subterminal. Parent bash stays on the current pane.',
+    source: 'built-in',
+    risk: 'medium',
+    requiresApproval: false,
+    external: false,
+    stateChanging: true
+  },
+  {
     name: 'create-skill',
     method: 'post',
     path: 'pi://crescent/create-skill',

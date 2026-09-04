@@ -14,6 +14,7 @@ export interface PiEventBridgeMeta {
   tabId?: string
   /** Host locale for resetHint / waiting status (`zh*` → zh). */
   locale?: string
+  fromSubagent?: boolean
 }
 
 const MAX_TOOL_RESULT_CHARS = 8_000
@@ -28,7 +29,7 @@ export function mapPiSessionEventToAgentEvents(
   event: AgentSessionEvent,
   meta: PiEventBridgeMeta
 ): AgentEvent[] {
-  const base = { runId: meta.runId, tabId: meta.tabId }
+  const base = { runId: meta.runId, tabId: meta.tabId, fromSubagent: meta.fromSubagent }
 
   switch (event.type) {
     case 'agent_start':

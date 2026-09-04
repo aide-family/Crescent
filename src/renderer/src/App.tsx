@@ -405,6 +405,7 @@ const emptyConfig: AgentConfig = {
   skillRoot: '~/.crescent/skills',
   loadGlobalAgentSkills: false,
   disabledExtensions: [],
+  subagentsEnabled: false,
   mcpServers: []
 }
 const emptyProvider: AgentProviderConfig = {
@@ -2526,10 +2527,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         return
       }
       if (event.type === 'command' && event.phase === 'started' && event.runId && event.tabId) {
-        for (const [ownerTabId, runId] of activeRunIdRef.current) {
-          if (runId === event.runId) {
-            setActiveExecutionTerminal(ownerTabId, event.tabId)
-            break
+        if (!event.fromSubagent) {
+          for (const [ownerTabId, runId] of activeRunIdRef.current) {
+            if (runId === event.runId) {
+              setActiveExecutionTerminal(ownerTabId, event.tabId)
+              break
+            }
           }
         }
       }
@@ -2610,6 +2613,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           return
         }
 
+        const parentTab = tabsRef.current.find((tab) => tab.id === payload.parentTabId)
+        const existing = parentTab?.subTerminals.find((item) => item.id === payload.tabId)
+        const alreadyReady = Boolean(existing?.terminalReady && existing.status === 'active')
+
         ensureSubterminal(payload.parentTabId, {
           id: payload.tabId,
           name: payload.name,
@@ -2619,11 +2626,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
           status: 'active',
           isSsh: payload.mode === 'ssh',
           terminalMode: payload.terminalMode,
-          terminalReady: true
+          terminalReady: true,
+          agentName: payload.agentName ?? existing?.agentName,
+          agentStatus: payload.agentStatus ?? existing?.agentStatus
         })
         setSubterminalCollapsed(false)
 
-        if (payload.mode !== 'ssh' || !payload.connectionId) {
+        if (alreadyReady || payload.mode !== 'ssh' || !payload.connectionId) {
           const parentTab = tabsRef.current.find((tab) => tab.id === payload.parentTabId)
           if (parentTab?.connectionId) {
             markChatTabReady(resolveSessionChatTabId(tabsRef.current, payload.parentTabId))
@@ -2698,6 +2707,21 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       })()
     })
   }, [ensureSubterminal, executeConnectionAutomation, markChatTabReady, t])
+
+  useEffect(() => {
+    return window.api.agent.onSubagentStatus((payload) => {
+      ensureSubterminal(payload.parentTabId, {
+        id: payload.tabId,
+        name: payload.name,
+        output: '',
+        rawOutput: '',
+        cwd: '',
+        status: 'active',
+        agentName: payload.agentName,
+        agentStatus: payload.agentStatus
+      })
+    })
+  }, [ensureSubterminal])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
@@ -6686,6 +6710,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const chatTab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
       const runModelSelection = resolveTabModelSelection(chatTab ?? runTab, config, visibleModels)
       const executionTabId = activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId
+      const executionTabForRun =
+        tabsRef.current.find((candidate) => candidate.id === executionTabId) ?? runTab
+      const executionConnectionId =
+        executionTabForRun?.isSsh && executionTabForRun.connectionId
+          ? executionTabForRun.connectionId
+          : undefined
       let terminalContext = ''
       try {
         const context = await window.api.terminal.getContext(executionTabId)
@@ -6733,6 +6763,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         model: runModelSelection.model,
         tabId: chatTabId,
         executionTabId,
+        executionConnectionId,
         terminalContext,
         locale,
         agentStyle: normalizeAgentStyle(sessionAgentStyle),
@@ -8200,6 +8231,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
             onAgentStyleChange={persistAgentStyle}
+            onSubagentsEnabledChange={(enabled) =>
+              void persistAgentConfigPatch({ subagentsEnabled: enabled })
+            }
             onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
             onShowAgentThinkingChange={persistShowAgentThinking}
             onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}

@@ -16,7 +16,7 @@ import {
 import { loadMcpPiTools } from './pi-mcp-tools'
 import { loadPiSdk, type PiSdkFacade } from './pi-sdk'
 import {
-  clearPtyBashExecContext,
+  clearPtyBashExecContextsForRun,
   createPtyBashToolDefinition,
   interruptPtyCommandsForRun,
   settlePtyInterruptsBeforeSessionAbort,
@@ -28,6 +28,11 @@ import {
   rejectAllSubterminalReadyWaiters
 } from './pi-open-subterminal'
 import { CREATE_CAPTURE_DISCIPLINE, createCaptureToolDefinitions } from './pi-create-capture'
+import {
+  abortChildSessionsForRun,
+  createSubagentToolDefinition,
+  SUBAGENT_DISCIPLINE
+} from './pi-subagent'
 import {
   hostedSessionToolProfile,
   needsModelChange,
@@ -110,6 +115,8 @@ export interface PiHostRunInput {
   conversationContext?: string
   webContents: WebContents
   executionTabId: string
+  /** SSH connection of the current execution pane, if remote. */
+  executionConnectionId?: string
   terminalContext?: string
   locale?: string
   agentStyle?: AgentStyle
@@ -183,7 +190,9 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       locale: input.locale,
       config: input.config,
       emit,
-      signal: abortController.signal
+      signal: abortController.signal,
+      connectionId: input.executionConnectionId?.trim() || undefined,
+      isSsh: Boolean(input.executionConnectionId?.trim())
     })
 
     emit({
@@ -380,7 +389,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     } catch {
       // Usage is best-effort; never block run teardown.
     }
-    clearPtyBashExecContext(sessionKey)
+    clearPtyBashExecContextsForRun(runId)
     const hosted = hostedSessions.get(sessionKey)
     hosted?.unsubscribe?.()
     if (hosted) hosted.unsubscribe = undefined
@@ -400,6 +409,7 @@ export async function cancelPiAgentRun(runId: string): Promise<boolean> {
   rejectPendingApprovalsForRun(runId, 'Agent run was canceled.')
   rejectPendingExtensionUiForRun(runId, 'Agent run was canceled.')
   rejectAllSubterminalReadyWaiters('Agent run was canceled.')
+  await abortChildSessionsForRun(runId)
   const hosted = hostedSessions.get(active.sessionKey)
   try {
     await settlePtyInterruptsBeforeSessionAbort({
@@ -538,7 +548,11 @@ async function ensureHostedSession(
     disabledExtensions: config.disabledExtensions,
     packageFingerprint: computePiPackageFingerprint()
   })
-  const toolProfile = hostedSessionToolProfile(config.mcpServers, extensionFingerprint)
+  const toolProfile = hostedSessionToolProfile(
+    config.mcpServers,
+    extensionFingerprint,
+    Boolean(config.subagentsEnabled)
+  )
   if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
     return existing as HostedSession
   }
@@ -577,13 +591,17 @@ async function ensureHostedSession(
         base: base ?? '',
         instructionContext,
         openSubterminalDiscipline: OPEN_SUBTERMINAL_DISCIPLINE,
-        createCaptureDiscipline: CREATE_CAPTURE_DISCIPLINE
+        createCaptureDiscipline: CREATE_CAPTURE_DISCIPLINE,
+        subagentDiscipline: config.subagentsEnabled ? SUBAGENT_DISCIPLINE : undefined
       })
   })
   await resourceLoader.reload()
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
   const captureTools = await createCaptureToolDefinitions(pi, sessionKey)
+  const subagentTool = config.subagentsEnabled
+    ? await createSubagentToolDefinition(pi, sessionKey)
+    : undefined
   const mcp = await loadMcpPiTools(pi, config.mcpServers)
 
   const { session, extensionsResult } = await pi.createAgentSession({
@@ -596,6 +614,7 @@ async function ensureHostedSession(
     customTools: [
       ptyBashTool as never,
       openSubterminalTool as never,
+      ...(subagentTool ? [subagentTool as never] : []),
       ...(captureTools as never[]),
       ...(mcp.tools as never[])
     ],

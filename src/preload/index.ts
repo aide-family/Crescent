@@ -486,6 +486,8 @@ const api = {
         terminalMode: 'pty' | 'pipe'
         connectionId?: string
         chatTabId?: string
+        agentName?: string
+        agentStatus?: 'running' | 'done' | 'error'
       }) => void
     ): (() => void) => {
       const listener = (
@@ -498,11 +500,36 @@ const api = {
           terminalMode: 'pty' | 'pipe'
           connectionId?: string
           chatTabId?: string
+          agentName?: string
+          agentStatus?: 'running' | 'done' | 'error'
         }
       ): void => callback(payload)
 
       ipcRenderer.on('agent:subterminal-opened', listener)
       return () => ipcRenderer.removeListener('agent:subterminal-opened', listener)
+    },
+    onSubagentStatus: (
+      callback: (payload: {
+        parentTabId: string
+        tabId: string
+        name: string
+        agentName: string
+        agentStatus: 'running' | 'done' | 'error'
+      }) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        payload: {
+          parentTabId: string
+          tabId: string
+          name: string
+          agentName: string
+          agentStatus: 'running' | 'done' | 'error'
+        }
+      ): void => callback(payload)
+
+      ipcRenderer.on('agent:subagent-status', listener)
+      return () => ipcRenderer.removeListener('agent:subagent-status', listener)
     },
     onCaptureRequested: (
       callback: (payload: AgentCaptureRequestedPayload) => void

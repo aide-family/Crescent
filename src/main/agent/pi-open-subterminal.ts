@@ -32,6 +32,8 @@ export interface AgentSubterminalOpenedPayload {
   terminalMode: 'pty' | 'pipe'
   connectionId?: string
   chatTabId?: string
+  agentName?: string
+  agentStatus?: 'running' | 'done' | 'error'
 }
 
 interface SubterminalReadyWaiter {
@@ -160,6 +162,9 @@ export async function openAgentSubterminal(input: {
   params: OpenSubterminalParams
   webContents?: WebContents
   signal?: AbortSignal
+  /** When false, keep parent bash on the current pane (child subagent panes). Default true. */
+  rerouteParentBash?: boolean
+  agentName?: string
 }): Promise<{
   ok: boolean
   tabId?: string
@@ -238,7 +243,13 @@ export async function openAgentSubterminal(input: {
     }
   }
 
-  updatePtyBashExecutionTabId(input.sessionKey, opened.tabId)
+  const rerouteParentBash = input.rerouteParentBash !== false
+  if (rerouteParentBash) {
+    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
+      isSsh: mode === 'ssh',
+      connectionId: mode === 'ssh' ? connectionId : undefined
+    })
+  }
 
   const payload: AgentSubterminalOpenedPayload = {
     parentTabId,
@@ -247,7 +258,9 @@ export async function openAgentSubterminal(input: {
     mode,
     terminalMode: opened.mode ?? 'pipe',
     connectionId: mode === 'ssh' ? connectionId : undefined,
-    chatTabId: context.chatTabId
+    chatTabId: context.chatTabId,
+    agentName: input.agentName?.trim() || undefined,
+    agentStatus: input.agentName ? 'running' : undefined
   }
   safeWebContentsSend(webContents, 'agent:subterminal-opened', payload)
 

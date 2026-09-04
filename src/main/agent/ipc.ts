@@ -706,6 +706,7 @@ export function registerAgentIpc(): void {
       conversationContext: payload?.conversationContext,
       webContents: event.sender,
       executionTabId,
+      executionConnectionId: payload?.executionConnectionId?.trim() || undefined,
       terminalContext: payload?.terminalContext,
       locale: payload?.locale,
       agentStyle: normalizeAgentStyle(payload?.agentStyle ?? agentConfig.agentStyle),

@@ -276,7 +276,10 @@ export function SubterminalPanel({
                     <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
                       <div className="min-w-0">
                         <p className="truncate font-medium">
-                          {t.terminal.subterminal}: {subterminal.name}
+                          {subterminal.agentName
+                            ? `${subterminal.agentName}`
+                            : `${t.terminal.subterminal}: ${subterminal.name}`}
+                          {subterminal.agentName ? ` · ${subterminal.name}` : ''}
                           {subterminal.connectionName ? ` · ${subterminal.connectionName}` : ''}
                         </p>
                         {subterminal.cwd && (
@@ -286,11 +289,31 @@ export function SubterminalPanel({
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        <Badge variant={subterminal.status === 'active' ? 'secondary' : 'outline'}>
-                          {subterminal.status === 'active'
-                            ? t.terminal.subterminalActive
-                            : t.terminal.subterminalExited}
-                        </Badge>
+                        {subterminal.agentStatus ? (
+                          <Badge
+                            variant={
+                              subterminal.agentStatus === 'running'
+                                ? 'default'
+                                : subterminal.agentStatus === 'error'
+                                  ? 'destructive'
+                                  : 'outline'
+                            }
+                          >
+                            {subterminal.agentStatus === 'running'
+                              ? t.terminal.subterminalAgentRunning
+                              : subterminal.agentStatus === 'error'
+                                ? t.terminal.subterminalAgentError
+                                : t.terminal.subterminalAgentDone}
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant={subterminal.status === 'active' ? 'secondary' : 'outline'}
+                          >
+                            {subterminal.status === 'active'
+                              ? t.terminal.subterminalActive
+                              : t.terminal.subterminalExited}
+                          </Badge>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"

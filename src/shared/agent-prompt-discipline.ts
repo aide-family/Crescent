@@ -5,6 +5,7 @@ export interface InvariantAgentPromptInput {
   instructionContext?: string
   openSubterminalDiscipline?: string
   createCaptureDiscipline?: string
+  subagentDiscipline?: string
 }
 
 /**
@@ -20,7 +21,7 @@ export function buildInvariantAgentPrompt(input: InvariantAgentPromptInput): str
     'File tools (read, write, edit) operate on the agent workspace cwd.',
     "The bash tool executes in the user's visible terminal pane (main terminal or a docked subterminal).",
     'Commands are pasted into the terminal so the user can see them; high-risk commands require in-chat approval before execution.',
-    'Never run concurrent bash against the same terminal pane — that causes input conflicts. For parallel workstreams, call open_subterminal first and bash in the new pane.',
+    'Never run concurrent bash against the same terminal pane — that causes input conflicts. For parallel workstreams, call open_subterminal first and bash in the new pane, or use the subagent tool when Subagents mode is on.',
     'Prefer bash for cluster/host inspection when the user is already in the target environment.',
     '',
     '# Communication vs execution',
@@ -81,7 +82,8 @@ export function buildInvariantAgentPrompt(input: InvariantAgentPromptInput): str
     '- 目标环境未就绪时等待工具结果，不要改口问用户怎么连；直接执行任务。',
     '',
     input.openSubterminalDiscipline?.trim() ?? '',
-    input.createCaptureDiscipline?.trim() ?? ''
+    input.createCaptureDiscipline?.trim() ?? '',
+    input.subagentDiscipline?.trim() ?? ''
   ]
     .filter(Boolean)
     .join('\n')
