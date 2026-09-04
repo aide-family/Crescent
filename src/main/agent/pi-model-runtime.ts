@@ -63,26 +63,56 @@ export async function resolvePiModel(
   runtime: ModelRuntime
 ): Promise<Model<Api> | undefined> {
   const providers = getAgentProviders(config)
+  const matched = resolveEnabledRuntimeModel(config, providers, {
+    getModel: (providerId, modelId) => runtime.getModel(providerId, modelId),
+    available: [],
+    all: []
+  })
+  if (matched) return matched
+
+  const available = filterRuntimeModelsByEnabledProviders(await runtime.getAvailable(), providers)
+  if (available.length > 0) return available[0]
+
+  return filterRuntimeModelsByEnabledProviders(runtime.getModels(), providers)[0]
+}
+
+export function resolveEnabledRuntimeModel<T extends { provider: string; id: string }>(
+  config: Pick<AgentConfig, 'providerId' | 'model'>,
+  providers: AgentProviderConfig[],
+  lookup: {
+    getModel: (providerId: string, modelId: string) => T | undefined
+    available: readonly T[]
+    all: readonly T[]
+  }
+): T | undefined {
+  const enabledIds = enabledRuntimeProviderIds(providers)
   const providerId = sanitizeProviderId(config.providerId || providers[0]?.id || '')
   const modelId = config.model.trim()
 
-  if (providerId && modelId) {
-    const exact = runtime.getModel(providerId, modelId)
-    if (exact) return exact
+  if (providerId && modelId && enabledIds.has(providerId)) {
+    const exact = lookup.getModel(providerId, modelId)
+    if (exact && enabledIds.has(exact.provider)) return exact
   }
 
   if (modelId) {
     for (const provider of providers) {
-      const candidate = runtime.getModel(sanitizeProviderId(provider.id), modelId)
-      if (candidate) return candidate
+      const candidate = lookup.getModel(sanitizeProviderId(provider.id), modelId)
+      if (candidate && enabledIds.has(candidate.provider)) return candidate
     }
   }
 
-  const available = await runtime.getAvailable()
+  const available = filterRuntimeModelsByEnabledProviders(lookup.available, providers)
   if (available.length > 0) return available[0]
 
-  const all = runtime.getModels()
-  return all[0]
+  return filterRuntimeModelsByEnabledProviders(lookup.all, providers)[0]
+}
+
+export function filterRuntimeModelsByEnabledProviders<T extends { provider: string }>(
+  models: readonly T[],
+  providers: AgentProviderConfig[]
+): T[] {
+  const enabledIds = enabledRuntimeProviderIds(providers)
+  return models.filter((model) => enabledIds.has(model.provider))
 }
 
 export function resolveThinkingLevelForModel(
@@ -107,7 +137,7 @@ export async function listPiAvailableModels(config: AgentConfig): Promise<
     providers.map((provider) => [sanitizeProviderId(provider.id), provider.name || provider.id])
   )
 
-  const models = await runtime.getAvailable()
+  const models = filterRuntimeModelsByEnabledProviders(await runtime.getAvailable(), providers)
   if (models.length > 0) {
     return models.map((model) => ({
       id: model.id,
@@ -170,6 +200,10 @@ export function toProviderConfigInput(provider: AgentProviderConfig): ProviderCo
       }
     })
   }
+}
+
+function enabledRuntimeProviderIds(providers: AgentProviderConfig[]): Set<string> {
+  return new Set(providers.map((provider) => sanitizeProviderId(provider.id)))
 }
 
 function sanitizeProviderId(value: string): string {

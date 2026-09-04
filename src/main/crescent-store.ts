@@ -23,6 +23,7 @@ import {
   projectOpenApiProfileFields,
   resolveActiveOpenApiProfile
 } from '../shared/openapi-profiles'
+import { selectEnabledAgentProvider } from '../shared/agent-providers'
 import { normalizeMcpServers } from '../shared/mcp-servers'
 import { DEFAULT_AGENT_STYLE, normalizeAgentStyle } from '../shared/agent-style'
 import { normalizeSystemLogLevel } from '../shared/log-levels'
@@ -370,12 +371,7 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
   const providers = normalizeAgentProviders(config)
   const requestedProviderId = String(config.providerId ?? '').trim()
   const requestedModel = String(config.model ?? '').trim()
-  const provider =
-    providers.find((candidate) => candidate.id === requestedProviderId) ??
-    providers.find((candidate) => candidate.models.some((model) => model.id === requestedModel)) ??
-    providers[0]
-  const defaultModel = provider?.models[0]?.id ?? providers[0]?.models[0]?.id ?? ''
-  const modelOk = Boolean(provider?.models.some((candidate) => candidate.id === requestedModel))
+  const selection = selectEnabledAgentProvider(providers, requestedProviderId, requestedModel)
   const openApi = normalizeOpenApiProfiles(config)
   const activeOpenApiProfile = resolveActiveOpenApiProfile({
     ...config,
@@ -393,8 +389,8 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
 
   return {
     providers,
-    providerId: provider?.id,
-    model: modelOk ? requestedModel : defaultModel,
+    providerId: selection.providerId,
+    model: selection.model,
     workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
     agentStyle: normalizeAgentStyle(config.agentStyle),
     showAgentThinking:
@@ -498,6 +494,7 @@ function normalizeAgentProvider(value: unknown): AgentProviderConfig {
     name: String(record.name || id),
     baseUrl: String(record.baseUrl || ''),
     apiKey: record.apiKey ? String(record.apiKey) : '',
+    enabled: record.enabled !== false,
     models
   }
 }

@@ -185,6 +185,7 @@ import {
   type CaptureLogEntry
 } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
+import { isAgentProviderEnabled, selectEnabledAgentProvider } from '../../shared/agent-providers'
 import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
 import {
   buildConnectionCommands,
@@ -411,6 +412,7 @@ const emptyProvider: AgentProviderConfig = {
   name: '',
   baseUrl: '',
   apiKey: '',
+  enabled: true,
   models: []
 }
 const emptyMcpServer: AgentMcpServerConfig = {
@@ -1062,12 +1064,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     emptyProvider,
     emptyMcpServer
   })
+  const enabledProviders = config.providers.filter(isAgentProviderEnabled)
   const activeTabProviderId = sessionChatTab.providerId ?? config.providerId
-  const activeProviderId = config.providers.some((provider) => provider.id === activeTabProviderId)
-    ? (activeTabProviderId ?? config.providers[0]?.id ?? '')
+  const activeProviderId = enabledProviders.some((provider) => provider.id === activeTabProviderId)
+    ? (activeTabProviderId ?? enabledProviders[0]?.id ?? '')
     : (visibleModels.find((model) => model.id === (sessionChatTab.model ?? config.model))
         ?.providerId ??
-      config.providers[0]?.id ??
+      enabledProviders[0]?.id ??
       '')
   const filteredModels = visibleModels.filter((model) => model.providerId === activeProviderId)
   const activeTabModelId =
@@ -7311,6 +7314,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     })
   }
 
+  function toggleProviderEnabled(providerId: string, enabled: boolean): void {
+    const targetId = providerId.trim()
+    if (!targetId) return
+
+    setConfig((current) => {
+      const providers = current.providers.map((provider) =>
+        provider.id === targetId ? { ...provider, enabled } : provider
+      )
+      const selection = selectEnabledAgentProvider(
+        providers,
+        current.providerId ?? '',
+        current.model
+      )
+      return {
+        ...current,
+        providers,
+        providerId: selection.providerId,
+        model: selection.model
+      }
+    })
+    setValidation(undefined)
+  }
+
   function createProvider(): void {
     const id = `provider-${Date.now()}`
     const provider: AgentProviderConfig = {
@@ -7318,6 +7344,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       name: '',
       baseUrl: '',
       apiKey: '',
+      enabled: true,
       models: []
     }
 
@@ -7346,8 +7373,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     if (!window.confirm(`${t.confirm.deleteProvider}\n\n${label}`)) return
 
     const remainingProviders = config.providers.filter((provider) => provider.id !== targetId)
-    const nextProvider = remainingProviders[0]
-    const modelProvider = remainingProviders.find((provider) =>
+    const remainingEnabled = remainingProviders.filter(isAgentProviderEnabled)
+    const nextProvider = remainingEnabled[0] ?? remainingProviders[0]
+    const modelProvider = remainingEnabled.find((provider) =>
       provider.models.some((model) => model.id === config.model)
     )
     const modelStillAvailable = Boolean(modelProvider)
@@ -8167,6 +8195,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
             onCreateProvider={createProvider}
             onToggleProviderDetails={toggleProviderDetails}
+            onToggleProviderEnabled={toggleProviderEnabled}
             onDeleteProvider={deleteSettingsProvider}
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}

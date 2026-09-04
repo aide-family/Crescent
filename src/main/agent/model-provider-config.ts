@@ -1,3 +1,4 @@
+import { isAgentProviderEnabled } from '../../shared/agent-providers'
 import type { AgentConfig, AgentProviderConfig } from './types'
 
 export interface ProviderModelInfo {
@@ -111,6 +112,7 @@ export function getDefaultAgentProviders(
     name: provider.name ?? id,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey ?? '',
+    enabled: true,
     models: provider.models.map((model) => ({
       id: model.id,
       name: model.name,
@@ -123,7 +125,7 @@ export function getAgentProviders(
   agentConfig: AgentConfig,
   _providerRegistryConfig: ProviderRegistryConfig = defaultProviderRegistryConfig
 ): AgentProviderConfig[] {
-  if (agentConfig.providers?.length) return agentConfig.providers
+  if (!agentConfig.providers?.length) return []
 
-  return []
+  return agentConfig.providers.filter(isAgentProviderEnabled)
 }

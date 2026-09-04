@@ -531,14 +531,21 @@ export function resolveTabModelSelection(
   config: AgentConfig,
   models: AgentModelOption[]
 ): { providerId?: string; model: string } {
-  const providerId = tab?.providerId ?? config.providerId
-  const providerModels = models.filter((model) => model.providerId === providerId)
-  const model =
-    tab?.model && providerModels.some((candidate) => candidate.id === tab.model)
-      ? tab.model
-      : (providerModels[0]?.id ?? config.model)
+  const requestedProviderId = tab?.providerId ?? config.providerId
+  const providerModels = models.filter((model) => model.providerId === requestedProviderId)
+  if (providerModels.length > 0) {
+    const model =
+      tab?.model && providerModels.some((candidate) => candidate.id === tab.model)
+        ? tab.model
+        : providerModels[0].id
+    return { providerId: requestedProviderId, model }
+  }
 
-  return { providerId, model }
+  const fallback = models[0]
+  return {
+    providerId: fallback?.providerId ?? config.providerId,
+    model: fallback?.id ?? config.model
+  }
 }
 
 export function resolveSessionAgentStyle(

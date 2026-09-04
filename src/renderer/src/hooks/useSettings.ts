@@ -33,7 +33,7 @@ export function useSettings({
 } {
   const configured = useMemo(() => Boolean(config.model.trim()), [config.model])
   const modelOptions = useMemo(() => flattenProviderModels(config.providers), [config.providers])
-  const visibleModels = modelOptions.length ? modelOptions : models
+  const visibleModels = config.providers.length > 0 ? modelOptions : models
   const settingsProvider =
     config.providers.find((provider) => provider.id === settingsProviderId) ??
     config.providers[0] ??

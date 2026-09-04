@@ -4,6 +4,7 @@ import {
   FileTextIcon,
   PencilIcon,
   PlusIcon,
+  PowerIcon,
   SettingsIcon,
   Trash2Icon,
   XIcon
@@ -104,6 +105,7 @@ export interface SettingsSheetProps {
   closeTerminalConfirmEnabled: boolean
   onCreateProvider: () => void
   onToggleProviderDetails: (providerId: string) => void
+  onToggleProviderEnabled: (providerId: string, enabled: boolean) => void
   onDeleteProvider: (providerId: string) => void
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
@@ -158,6 +160,7 @@ export function SettingsSheet({
   closeTerminalConfirmEnabled,
   onCreateProvider,
   onToggleProviderDetails,
+  onToggleProviderEnabled,
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
@@ -248,6 +251,10 @@ export function SettingsSheet({
                   const modelCount = provider.models.length
                   const hasApiKey = Boolean(provider.apiKey?.trim())
                   const canDeleteProvider = config.providers.length > 1
+                  const enabled = provider.enabled !== false
+                  const enableLabel = enabled
+                    ? t.settings.disableProvider
+                    : t.settings.enableProvider
 
                   return (
                     <div
@@ -264,10 +271,16 @@ export function SettingsSheet({
                           <div className="flex min-w-0 items-center gap-2">
                             <StatusDot
                               state={
-                                provider.baseUrl.trim() && modelCount > 0 ? 'ready' : 'not-ready'
+                                enabled && provider.baseUrl.trim() && modelCount > 0
+                                  ? 'ready'
+                                  : 'not-ready'
                               }
                             />
-                            <span className="truncate text-[13px] font-medium">
+                            <span
+                              className={`truncate text-[13px] font-medium ${
+                                enabled ? '' : 'text-muted-foreground'
+                              }`}
+                            >
                               {provider.name.trim() || provider.id || t.settings.newProvider}
                             </span>
                           </div>
@@ -296,6 +309,27 @@ export function SettingsSheet({
                               {t.settings.model}
                             </Badge>
                           )}
+                          {!enabled && (
+                            <Badge variant="secondary" className="h-5 text-[10px]">
+                              {t.settings.providerStatusDisabled}
+                            </Badge>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={enableLabel}
+                            title={enableLabel}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onToggleProviderEnabled(provider.id, !enabled)
+                            }}
+                          >
+                            <PowerIcon
+                              className={enabled ? 'text-primary' : 'text-muted-foreground'}
+                              aria-hidden="true"
+                            />
+                          </Button>
                           <Button
                             type="button"
                             variant="ghost"
@@ -613,6 +647,26 @@ export function SettingsSheet({
               </div>
               <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                 <FieldGroup className="gap-4">
+                  <label
+                    htmlFor="provider-enabled"
+                    className="flex items-center justify-between gap-3 px-0.5 py-0.5"
+                  >
+                    <span className="space-y-0.5">
+                      <span className="block text-sm font-medium">
+                        {t.settings.providerEnabled}
+                      </span>
+                      <FieldDescription>{t.settings.providerEnabledHint}</FieldDescription>
+                    </span>
+                    <Input
+                      id="provider-enabled"
+                      type="checkbox"
+                      checked={editingProvider.enabled !== false}
+                      onChange={(event) =>
+                        onToggleProviderEnabled(editingProvider.id, event.target.checked)
+                      }
+                      className="size-4 shrink-0 accent-primary"
+                    />
+                  </label>
                   <div className="grid grid-cols-2 gap-2">
                     <Field>
                       <FieldLabel htmlFor="provider-id">{t.settings.providerId}</FieldLabel>

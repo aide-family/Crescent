@@ -92,6 +92,8 @@ export interface AgentProviderConfig {
   name: string
   baseUrl: string
   apiKey?: string
+  /** When false, the provider stays saved but its models cannot be selected or used. */
+  enabled: boolean
   models: AgentProviderModelConfig[]
 }
 

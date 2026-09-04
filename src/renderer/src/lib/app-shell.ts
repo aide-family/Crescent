@@ -1,3 +1,4 @@
+import { isAgentProviderEnabled } from '../../../shared/agent-providers'
 import type { AgentConfig } from '../../../shared/agent-types'
 
 export type PaneOrder = 'terminal-chat' | 'chat-terminal'
@@ -6,7 +7,16 @@ export const CLOSE_TERMINAL_CONFIRM_STORAGE_KEY = 'crescent.closeTerminalConfirm
 export const PANE_ORDER_STORAGE_KEY = 'crescent.paneOrder'
 
 export function hasConfiguredModelSelection(config: AgentConfig): boolean {
-  return Boolean(config.providerId?.trim() && config.model.trim() && config.providers.length > 0)
+  const providerId = config.providerId?.trim()
+  const model = config.model.trim()
+  if (!providerId || !model) return false
+
+  return config.providers.some(
+    (provider) =>
+      isAgentProviderEnabled(provider) &&
+      provider.id === providerId &&
+      provider.models.some((candidate) => candidate.id === model)
+  )
 }
 
 export function resolveInitialPaneOrder(): PaneOrder {

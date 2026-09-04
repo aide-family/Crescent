@@ -1,3 +1,4 @@
+import { isAgentProviderEnabled } from '../../../shared/agent-providers'
 import type {
   AgentModelOption,
   AgentProviderConfig,
@@ -64,7 +65,7 @@ export function parseCommandWhitelist(value: string): string[] {
 }
 
 export function flattenProviderModels(providers: AgentProviderConfig[]): AgentModelOption[] {
-  return providers.flatMap((provider) =>
+  return providers.filter(isAgentProviderEnabled).flatMap((provider) =>
     provider.models.map((model) => ({
       id: model.id,
       name: model.name || model.id,
