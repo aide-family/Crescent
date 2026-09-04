@@ -55,9 +55,14 @@ export function serializeComposerDom(root: HTMLElement): string {
   return normalizeComposerSerializedValue(result)
 }
 
-/** Collapse whitespace-only / leftover BR serialization to empty for placeholder. */
+/**
+ * Collapse space/tab-only drafts to empty for placeholder.
+ * Preserve intentional newlines from Shift+Enter so the DOM is not rebuilt away.
+ */
 export function normalizeComposerSerializedValue(value: string): string {
-  return value.trim().length === 0 ? '' : value
+  if (value.length === 0) return ''
+  if (!value.includes('\n') && value.trim().length === 0) return ''
+  return value
 }
 
 export function getComposerDomCaret(root: HTMLElement): number {

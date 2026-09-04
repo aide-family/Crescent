@@ -486,7 +486,9 @@ export function AgentPanel({
           </div>
           <div
             className={`app-composer relative rounded-lg p-1.5${
-              sessionChatTab.agentThinking ? ' app-composer-thinking' : ''
+              sessionChatTab.agentThinking || sessionChatTab.agentBusy
+                ? ' app-composer-thinking'
+                : ''
             }`}
           >
             <SlashCommandMenu

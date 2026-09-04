@@ -227,7 +227,7 @@ export function ComposerEditor({
       suppressContentEditableWarning
       spellCheck={false}
       data-placeholder={placeholder}
-      data-empty={value.trim().length === 0 ? 'true' : undefined}
+      data-empty={value.length === 0 ? 'true' : undefined}
       onInput={() => {
         if (composingRef.current) return
         emitFromDom()

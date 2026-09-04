@@ -252,6 +252,12 @@
   background: var(--app-panel);
 }
 
+@property --composer-flow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
 .app-composer {
   border: 1px solid var(--border);
   background: var(--app-panel-strong);
@@ -261,7 +267,11 @@
 }
 
 .app-composer-thinking {
-  border-color: color-mix(in oklch, var(--primary) 55%, var(--border));
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--primary) 18%, transparent),
+    0 0 14px color-mix(in oklch, #a855f7 16%, transparent),
+    0 0 18px color-mix(in oklch, var(--primary) 14%, transparent);
 }
 
 .app-composer-thinking::before {
@@ -269,13 +279,16 @@
   inset: -1px;
   z-index: 0;
   border-radius: inherit;
-  padding: 1px;
+  padding: 2px;
   background: conic-gradient(
-    from 0deg,
-    transparent 0deg 245deg,
-    color-mix(in oklch, var(--primary) 35%, transparent) 285deg,
-    var(--primary) 330deg,
-    transparent 360deg
+    from var(--composer-flow-angle),
+    #ff6b6b 0deg,
+    #f59e0b 60deg,
+    #13c2c2 120deg,
+    #3b82f6 180deg,
+    #a855f7 240deg,
+    #ec4899 300deg,
+    #ff6b6b 360deg
   );
   content: '';
   pointer-events: none;
@@ -287,7 +300,7 @@
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: app-composer-thinking-rotate 1.8s linear infinite;
+  animation: app-composer-thinking-flow 2s linear infinite;
 }
 
 .app-composer-thinking > * {
@@ -295,13 +308,13 @@
   z-index: 1;
 }
 
-@keyframes app-composer-thinking-rotate {
+@keyframes app-composer-thinking-flow {
   to {
-    transform: rotate(360deg);
+    --composer-flow-angle: 360deg;
   }
 }
 
-.app-composer:focus-within {
+.app-composer:focus-within:not(.app-composer-thinking) {
   border-color: color-mix(in oklch, var(--ring) 45%, var(--border));
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--ring) 28%, transparent);
 }
@@ -840,6 +853,19 @@
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  .app-composer-thinking {
+    border-color: color-mix(in oklch, var(--primary) 75%, var(--border));
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, #a855f7 28%, transparent),
+      0 0 0 2px color-mix(in oklch, var(--primary) 35%, transparent),
+      0 0 10px color-mix(in oklch, var(--primary) 14%, transparent);
+  }
+
+  .app-composer-thinking::before {
+    display: none;
+    animation: none;
   }
 }
 
