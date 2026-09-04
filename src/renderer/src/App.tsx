@@ -5471,6 +5471,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     }
   }
 
+  function connectFromConnectionCard(connection: ConnectionConfig): void {
+    setConnectionSearchQuery('')
+    connectFromConnectionManager(connection)
+  }
+
   function openNewConnectionForm(): void {
     resetConnectionForm()
     setConnectionModalOpen(true)
@@ -8285,7 +8290,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onCloseAllTabs={closeAllTabs}
             onConnectionQueryChange={setConnectionSearchQuery}
             onShowConnectionList={showConnectionList}
-            onConnect={connectFromConnectionManager}
+            onConnect={connectFromConnectionCard}
             onSubterminalCollapsedChange={setSubterminalCollapsed}
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
@@ -8560,7 +8565,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         onClose={() => setConnectionModalOpen(false)}
         onQueryChange={setConnectionSearchQuery}
         onSelectConnection={selectConnection}
-        onConnect={connectFromConnectionManager}
+        onConnect={connectFromConnectionCard}
         onConnectInSession={(connection) => {
           openConnectionInCurrentSession(connection)
           setConnectionModalOpen(false)

@@ -484,7 +484,11 @@ export function AgentPanel({
               </Select>
             )}
           </div>
-          <div className="app-composer relative rounded-lg p-1.5">
+          <div
+            className={`app-composer relative rounded-lg p-1.5${
+              sessionChatTab.agentThinking ? ' app-composer-thinking' : ''
+            }`}
+          >
             <SlashCommandMenu
               visible={slashMenuVisible}
               listRef={slashCommandListRef}

@@ -260,6 +260,47 @@
     box-shadow 160ms ease;
 }
 
+.app-composer-thinking {
+  border-color: color-mix(in oklch, var(--primary) 55%, var(--border));
+}
+
+.app-composer-thinking::before {
+  position: absolute;
+  inset: -1px;
+  z-index: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg 245deg,
+    color-mix(in oklch, var(--primary) 35%, transparent) 285deg,
+    var(--primary) 330deg,
+    transparent 360deg
+  );
+  content: '';
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: app-composer-thinking-rotate 1.8s linear infinite;
+}
+
+.app-composer-thinking > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes app-composer-thinking-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .app-composer:focus-within {
   border-color: color-mix(in oklch, var(--ring) 45%, var(--border));
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--ring) 28%, transparent);

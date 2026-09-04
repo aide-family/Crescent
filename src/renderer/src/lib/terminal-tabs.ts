@@ -167,6 +167,8 @@ export interface AgentTerminalTab {
   terminalReady: boolean
   /** Last local/PTY start failure; cleared on successful start. */
   terminalStartError?: string
+  /** True after the running shell/PTY has exited; distinguishes it from startup. */
+  terminalExited?: boolean
   terminalCwd: string
   terminalMode: 'pty' | 'pipe'
   terminalOutput: string
@@ -302,6 +304,7 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     sessionId: input?.sessionId,
     terminalReady: input?.terminalReady ?? false,
     terminalStartError: input?.terminalStartError,
+    terminalExited: input?.terminalExited ?? false,
     terminalCwd: input?.terminalCwd ?? '',
     terminalMode: input?.terminalMode ?? 'pty',
     terminalOutput: input?.terminalOutput ?? '',
@@ -345,6 +348,7 @@ export function resolveTerminalDisconnectStrip(input: {
     terminalReady: boolean
     sessionId?: number
     terminalStartError?: string
+    terminalExited?: boolean
     connectionId?: string
   }
   recovery?: {
@@ -370,10 +374,11 @@ export function resolveTerminalDisconnectStrip(input: {
   const recoveryReason = recovery?.reason?.trim() || undefined
   const reason = startError || recoveryReason
   const deadWithTarget = !tab.sessionId && Boolean(tab.connectionId)
+  const exited = Boolean(tab.terminalExited)
   const deadFailed = Boolean(startError)
   const recoveryVisible = Boolean(recovery?.visible)
 
-  if (!connecting && !deadWithTarget && !deadFailed && !recoveryVisible) {
+  if (!connecting && !deadWithTarget && !exited && !deadFailed && !recoveryVisible) {
     return { visible: false, mode: 'hidden', canReconnect: false }
   }
 

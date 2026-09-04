@@ -209,7 +209,8 @@ export function useXtermLifecycle({
       updateTab(event.tabId, (current) => ({
         ...current,
         sessionId: undefined,
-        terminalReady: false
+        terminalReady: false,
+        terminalExited: true
       }))
       if (event.tabId === activeTabIdRef.current) {
         terminal.writeln(`\r\n\x1b[31m${shellExitedText} ${event.exitCode}.\x1b[0m`)
