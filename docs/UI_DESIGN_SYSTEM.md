@@ -15,6 +15,7 @@ Crescent uses a compact iTerm-inspired desktop style. The goal is a quiet operat
 - Search and filter controls stay fixed; result lists scroll independently.
 - Sticky section headers must touch the container edge when pinned.
 - Avoid cards inside cards; use cards only for repeated items, modals, or framed tools.
+- Interactive list tiles use `.app-list-row` with optional `data-selected="true"`. Idle background is `--background` (theme page); hover lifts via accent + primary-tinted border. Do not invent local `bg-card/70` / `hover:bg-muted/25` card classes.
 - Use icons for compact repeated actions and keep text labels for primary commands.
 
 ## Component Rules

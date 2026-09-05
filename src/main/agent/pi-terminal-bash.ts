@@ -104,7 +104,9 @@ export function bindPtyBashExecContextClone(input: {
     ...parent,
     executionTabId,
     subterminalName: undefined,
-    fromSubagent: Boolean(input.fromSubagent)
+    fromSubagent: Boolean(input.fromSubagent),
+    // Child panes keep an independent failure set so siblings/parent are not blocked.
+    failedFingerprints: new Set()
   })
   return true
 }

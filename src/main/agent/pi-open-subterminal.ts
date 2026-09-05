@@ -2,7 +2,11 @@ import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
 import { safeWebContentsSend } from '../safe-ipc-send'
-import { openTemporarySubterminal, resolveParentTerminalTabId } from '../terminal/ipc'
+import {
+  closeTemporarySubterminal,
+  openTemporarySubterminal,
+  resolveParentTerminalTabId
+} from '../terminal/ipc'
 import { listConnections } from '../connections/ipc'
 import { loadPiAi, type PiSdkFacade } from './pi-sdk'
 import { getPtyBashExecContext, updatePtyBashExecutionTabId } from './pi-terminal-bash'
@@ -15,6 +19,11 @@ export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
   '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。'
 ].join('\n')
+
+/** Local panes: soft-succeed on UI ack timeout so bash can still target the pane. */
+export const LOCAL_SUBTERMINAL_READY_TIMEOUT_MS = 20_000
+/** SSH panes: wait for login ack; timeout must fail (renderer login budget ~90s). */
+export const SSH_SUBTERMINAL_READY_TIMEOUT_MS = 90_000
 
 export type OpenSubterminalMode = 'local' | 'ssh'
 
@@ -65,8 +74,24 @@ export function resolveAgentSubterminalReady(payload: {
 
 /** Reject every in-flight open_subterminal ready waiter (e.g. on Stop). */
 export function rejectAllSubterminalReadyWaiters(reason: string): number {
+  return rejectSubterminalReadyWaiters(reason)
+}
+
+/** Reject ready waiters; optionally only for the given tab ids. */
+export function rejectSubterminalReadyWaiters(
+  reason: string,
+  tabIds?: ReadonlySet<string> | readonly string[]
+): number {
+  const filter =
+    tabIds === undefined
+      ? undefined
+      : tabIds instanceof Set
+        ? tabIds
+        : new Set([...tabIds].map((id) => id.trim()).filter(Boolean))
+
   let count = 0
   for (const [tabId, waiter] of readyWaiters.entries()) {
+    if (filter && !filter.has(tabId)) continue
     clearTimeout(waiter.timeout)
     if (waiter.signal && waiter.abortHandler) {
       waiter.signal.removeEventListener('abort', waiter.abortHandler)
@@ -81,8 +106,10 @@ export function rejectAllSubterminalReadyWaiters(reason: string): number {
 export function waitForRendererReady(
   tabId: string,
   signal?: AbortSignal,
-  timeoutMs = 20_000
+  timeoutMs = LOCAL_SUBTERMINAL_READY_TIMEOUT_MS,
+  options?: { failOnTimeout?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
+  const failOnTimeout = options?.failOnTimeout === true
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve({ ok: false, error: 'Agent run was canceled.' })
@@ -115,6 +142,13 @@ export function waitForRendererReady(
     }
 
     const timeout = setTimeout(() => {
+      if (failOnTimeout) {
+        finish({
+          ok: false,
+          error: 'Timed out waiting for UI ack (SSH login / pane ready).'
+        })
+        return
+      }
       finish({
         ok: true,
         error: 'Timed out waiting for UI ack; bash will still target this subterminal.'
@@ -233,6 +267,7 @@ export async function openAgentSubterminal(input: {
   }
 
   if (input.signal?.aborted) {
+    closeTemporarySubterminal(webContents, opened.tabId)
     return {
       ok: false,
       tabId: opened.tabId,
@@ -264,8 +299,13 @@ export async function openAgentSubterminal(input: {
   }
   safeWebContentsSend(webContents, 'agent:subterminal-opened', payload)
 
-  const ready = await waitForRendererReady(opened.tabId, input.signal)
+  const readyTimeoutMs =
+    mode === 'ssh' ? SSH_SUBTERMINAL_READY_TIMEOUT_MS : LOCAL_SUBTERMINAL_READY_TIMEOUT_MS
+  const ready = await waitForRendererReady(opened.tabId, input.signal, readyTimeoutMs, {
+    failOnTimeout: mode === 'ssh'
+  })
   if (!ready.ok) {
+    closeTemporarySubterminal(webContents, opened.tabId)
     return {
       ok: false,
       tabId: opened.tabId,
@@ -276,12 +316,21 @@ export async function openAgentSubterminal(input: {
     }
   }
 
-  const hintParts = [
-    `Subsequent bash commands now run in subterminal "${payload.name}" (${opened.tabId}).`,
+  const hintParts: string[] = []
+  if (rerouteParentBash) {
+    hintParts.push(
+      `Subsequent bash commands now run in subterminal "${payload.name}" (${opened.tabId}).`
+    )
+  } else {
+    hintParts.push(
+      `Subterminal "${payload.name}" (${opened.tabId}) is ready; parent bash stays on the current pane.`
+    )
+  }
+  hintParts.push(
     mode === 'local'
       ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts).'
       : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands.'
-  ]
+  )
   if (ready.error) hintParts.push(ready.error)
 
   return {

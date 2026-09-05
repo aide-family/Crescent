@@ -92,9 +92,15 @@ export function isSubagentProfileName(value: string): value is SubagentProfileNa
 }
 
 const HOST_ONLY_TOOLS = new Set(['subagent', 'open_subterminal', 'create-skill', 'create-sop'])
+const WRITER_TOOLS = new Set<SubagentToolName>(['edit', 'write'])
 
 export function childProfileOmitsHostTools(profile: SubagentProfile): boolean {
   return profile.tools.every((tool) => !HOST_ONLY_TOOLS.has(tool))
+}
+
+/** True when the profile may mutate workspace files (must not run in parallel). */
+export function profileHasWriters(profile: SubagentProfile): boolean {
+  return profile.tools.some((tool) => WRITER_TOOLS.has(tool))
 }
 
 export function resolveSubagentProfile(name: string): SubagentProfile | undefined {

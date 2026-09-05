@@ -198,7 +198,8 @@ import {
   mergeConnectionInput,
   resolveRemainingConnectionCommands,
   shouldSkipReuseRelogin,
-  stripStoredPassword
+  stripStoredPassword,
+  toConnectionClipboardPayload
 } from '@renderer/lib/connection-commands'
 import {
   applyConnectionNameOverwrite,
@@ -1082,7 +1083,11 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     (model) => model.id === activeTabModelId && model.providerId === activeProviderId
   )
   const activeModelSelectionValue = buildModelSelectionValue(activeProviderId, activeTabModelId)
-  const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
+  const availableToolRefs = useMemo(
+    () =>
+      buildAvailableToolRefs(validation, { subagentsEnabled: Boolean(config.subagentsEnabled) }),
+    [validation, config.subagentsEnabled]
+  )
   const mcpToolRefs = useMemo(
     () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
     [availableToolRefs]
@@ -2241,7 +2246,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       const autofill = decideRootPasswordAutofill({
         rootPassword: connection?.rootPassword,
         alreadyAttempted: rootPasswordAutoSubmittedTabsRef.current.has(tabId),
-        isAutomatedLogin: false
+        isAutomatedLogin: false,
+        promptLine
       })
       if (autofill.action === 'auto-submit') {
         rootPasswordAutoSubmittedTabsRef.current.add(tabId)
@@ -2713,10 +2719,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       ensureSubterminal(payload.parentTabId, {
         id: payload.tabId,
         name: payload.name,
-        output: '',
-        rawOutput: '',
-        cwd: '',
-        status: 'active',
         agentName: payload.agentName,
         agentStatus: payload.agentStatus
       })
@@ -4630,9 +4632,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       return restoreLocalTerminal(tabId)
     }
 
-    // Recovery brake #1: read SSOT first. Already on target -> nothing to do.
+    // Recovery brake #1: read SSOT first. Live PTY already on target -> nothing to do.
     const context = await window.api.terminal.getContext(tabId)
-    if (context.alignment === 'aligned') {
+    if (context.mode !== 'none' && context.alignment === 'aligned') {
       connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
       return true
     }
@@ -4895,12 +4897,17 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         promptHost: context.promptHost,
         alignment: context.alignment ?? context.sessionAligned,
         output: context.output,
+        mode: context.mode,
         ready: context.ready,
         aliases: context.aliases,
         returnToJumpHost: context.returnToJumpHost,
         preferSshCommand: false as const
       }
-      if (!waitingForSecret && shouldSkipReuseRelogin(connection, loginEnv)) {
+      if (
+        context.mode !== 'none' &&
+        !waitingForSecret &&
+        shouldSkipReuseRelogin(connection, loginEnv)
+      ) {
         connTrace(
           'connect-reuse-skip-relogin',
           `tab=${targetTabId}`,
@@ -7515,21 +7522,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }
 
   async function copyConnection(connection: ConnectionConfig): Promise<void> {
-    const value: ConnectionInput = {
-      name: connection.name,
-      host: connection.host,
-      user: connection.user,
-      password: connection.password,
-      passwordEnvVar: connection.passwordEnvVar,
-      rootPassword: connection.rootPassword,
-      port: connection.port,
-      identityFile: connection.identityFile,
-      sshOptions: connection.sshOptions,
-      description: connection.description,
-      actions: connection.actions
-    }
-
-    await copyText(JSON.stringify(value, null, 2), copyFeedback(t))
+    await copyText(
+      JSON.stringify(toConnectionClipboardPayload(connection), null, 2),
+      copyFeedback(t)
+    )
   }
 
   function importConnectionFromText(): void {
@@ -8302,7 +8298,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         {hiddenPane === 'chat' && (
           <button
             type="button"
-            className="chat-pane-rail group absolute inset-y-0 right-2 z-20 my-auto flex h-28 w-8 items-center justify-center rounded-lg border border-border/70 bg-card/90 shadow-md transition-[width,border-color,background-color] duration-200 hover:w-9 hover:border-primary/40 hover:bg-card"
+            className="chat-pane-rail group absolute inset-y-0 right-2 z-20 my-auto flex h-28 w-8 items-center justify-center rounded-lg border border-border/70 bg-background shadow-sm transition-[width,border-color,background-color] duration-200 hover:w-9 hover:border-primary/40 hover:bg-accent"
             aria-label={t.app.showChat}
             title={t.app.showChat}
             onClick={() => setHiddenPane(null)}

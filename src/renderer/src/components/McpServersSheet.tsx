@@ -272,9 +272,8 @@ export function McpServersSheet({
                   return (
                     <div
                       key={server.id}
-                      className={`flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25 ${
-                        selected ? 'border-primary/50 bg-primary/8' : 'border-border/70'
-                      }`}
+                      data-selected={selected ? 'true' : undefined}
+                      className="app-list-row flex min-w-0 flex-col text-xs"
                     >
                       <div className="flex min-w-0 items-start gap-1">
                         <button

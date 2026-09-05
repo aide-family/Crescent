@@ -63,7 +63,7 @@ export function CaptureDraftReadyRow({
   return (
     <button
       type="button"
-      className="flex w-full items-center gap-2 rounded-md border-l-2 border-primary bg-primary/8 px-2.5 py-1.5 text-left text-[11px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="flex w-full items-center gap-2 rounded-md border border-border/65 border-l-2 border-l-primary bg-background px-2.5 py-1.5 text-left text-[11px] outline-none transition-[border-color,background-color] hover:border-primary/40 hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
       onClick={onOpen}
     >
       <span className="min-w-0 flex-1 truncate font-medium text-foreground">{text}</span>

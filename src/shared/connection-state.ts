@@ -116,6 +116,9 @@ export function patchConnectionClusterHostRegex(
   }
 }
 
+/** Cap user-supplied cluster regex length to limit ReDoS surface. */
+export const MAX_CLUSTER_HOST_REGEX_LENGTH = 200
+
 /** True when observed host matches a configured cluster hostname regex. */
 export function matchesClusterHostRegex(
   observedHost: string | undefined,
@@ -132,9 +135,39 @@ export function matchesClusterHostRegex(
   }
 }
 
-function normalizeClusterHostRegex(value: string | null | undefined): string | undefined {
+/**
+ * Validate / normalize a cluster host regex at save time.
+ * Rejects invalid syntax, excessive length, and nested-quantifier heuristics.
+ */
+export function validateClusterHostRegex(
+  value: string | null | undefined
+): { ok: true; value?: string } | { ok: false; error: string } {
   const trimmed = typeof value === 'string' ? value.trim() : ''
-  return trimmed || undefined
+  if (!trimmed) return { ok: true, value: undefined }
+  if (trimmed.length > MAX_CLUSTER_HOST_REGEX_LENGTH) {
+    return {
+      ok: false,
+      error: `Cluster host regex must be at most ${MAX_CLUSTER_HOST_REGEX_LENGTH} characters.`
+    }
+  }
+  // Nested quantifiers / stacked wildcards are a common ReDoS smell.
+  if (/(?:\+|\*|\}|\{)\s*(?:\+|\*|\{)/.test(trimmed) || /(?:\.\*){3,}/.test(trimmed)) {
+    return {
+      ok: false,
+      error: 'Cluster host regex looks too complex; simplify the pattern.'
+    }
+  }
+  try {
+    void new RegExp(trimmed)
+  } catch {
+    return { ok: false, error: 'Cluster host regex is not a valid regular expression.' }
+  }
+  return { ok: true, value: trimmed }
+}
+
+function normalizeClusterHostRegex(value: string | null | undefined): string | undefined {
+  const validated = validateClusterHostRegex(value)
+  return validated.ok ? validated.value : undefined
 }
 
 /** True when observed host is considered on-target (expected, regex, or learned alias). */

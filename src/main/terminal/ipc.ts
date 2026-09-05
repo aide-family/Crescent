@@ -542,6 +542,20 @@ export function listTemporarySubterminalNames(
   return (temporarySubterminals.get(poolKey) ?? []).map((entry) => entry.name)
 }
 
+/** Stop a temporary subterminal session and free its pool slot (e.g. ready timeout). */
+export function closeTemporarySubterminal(
+  webContents: WebContents,
+  tabId: string | undefined
+): void {
+  const normalized = normalizeTabId(tabId)
+  if (!normalized) return
+  const key = getSessionKey(webContents.id, normalized)
+  stopSession(key)
+  connectionStates.delete(key)
+  sessionWebContents.delete(key)
+  releaseTemporarySubterminalByTabId(webContents.id, normalized)
+}
+
 export function readTemporarySubterminalOutput(
   webContents: WebContents,
   parentTabId: string | undefined,
@@ -1224,17 +1238,19 @@ export function registerTerminalIpc(): void {
     }
     const session = sessions.get(key)
     if (!session) {
+      // No live PTY: never report aligned/ready from stale SSOT or output buffer.
+      // Restore/reconnect must recreate a session instead of short-circuiting.
       return {
         mode: 'none',
         output,
         cwd: '',
         shell: '',
         expectedHost: expectedHost || undefined,
-        sessionAligned,
-        alignment,
+        sessionAligned: 'unknown' as const,
+        alignment: 'unknown' as const,
         promptHost,
         aliases: state?.aliases ?? [],
-        ready,
+        ready: false,
         jumpPromptHost: state?.jumpPromptHost,
         runtimeExpectedHost: state?.runtimeExpectedHost,
         returnToJumpHost
@@ -1313,8 +1329,21 @@ function stopSession(key: string): void {
   terminalOutputBuffers.delete(key)
   terminalAutomationFilterStates.delete(key)
   automationEchoSuppressions.delete(key)
-  // Keep connectionStates / sessionWebContents across soft PTY restarts
-  // so reconnect can re-gate before automation re-sets the host.
+  // Keep connectionStates / sessionWebContents across soft PTY restarts so
+  // reconnect can re-gate, but invalidate ready/alignment — a dead PTY is
+  // never "already on target".
+  invalidateConnectionSessionLiveness(key)
+}
+
+function invalidateConnectionSessionLiveness(key: string): void {
+  const state = connectionStates.get(key)
+  if (!state) return
+  connectionStates.set(key, {
+    ...state,
+    alignment: 'unknown',
+    ready: false,
+    lastError: undefined
+  })
 }
 
 function detectEnvironmentDriftForSession(
@@ -1721,6 +1750,7 @@ function deleteIfCurrent(key: string, sessionId: number): void {
   if (sessions.get(key)?.id === sessionId) {
     sessions.delete(key)
     terminalAutomationFilterStates.delete(key)
+    invalidateConnectionSessionLiveness(key)
   }
 }
 

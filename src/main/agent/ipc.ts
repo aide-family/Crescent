@@ -519,7 +519,9 @@ export function registerAgentIpc(): void {
       await validateModel(nextConfig)
       const cwd = resolveAgentWorkspaceCwd(nextConfig)
       const mcpCatalog = await listMcpToolCatalog(nextConfig.mcpServers)
-      const builtInTools = BUILT_IN_TOOL_CATALOG.map((tool) =>
+      const builtInTools = BUILT_IN_TOOL_CATALOG.filter(
+        (tool) => tool.name !== 'subagent' || nextConfig.subagentsEnabled === true
+      ).map((tool) =>
         tool.name === 'bash'
           ? {
               ...tool,
@@ -1083,7 +1085,28 @@ async function pickSavePath(
     : await dialog.showSaveDialog(options)
 
   if (selection.canceled || !selection.filePath) return { ok: false, canceled: true }
-  return { ok: true, path: resolve(selection.filePath) }
+  const path = resolve(selection.filePath)
+  rememberAllowedSavePath(path)
+  return { ok: true, path }
+}
+
+/** Paths returned by pickSavePath; writeDataUrlFile only accepts these. */
+const allowedSavePaths = new Map<string, number>()
+const ALLOWED_SAVE_PATH_TTL_MS = 5 * 60_000
+
+function rememberAllowedSavePath(path: string): void {
+  const now = Date.now()
+  for (const [entry, expiresAt] of allowedSavePaths.entries()) {
+    if (expiresAt <= now) allowedSavePaths.delete(entry)
+  }
+  allowedSavePaths.set(path, now + ALLOWED_SAVE_PATH_TTL_MS)
+}
+
+function consumeAllowedSavePath(path: string): boolean {
+  const expiresAt = allowedSavePaths.get(path)
+  if (expiresAt === undefined) return false
+  allowedSavePaths.delete(path)
+  return expiresAt > Date.now()
 }
 
 async function writeDataUrlFile(input: {
@@ -1094,6 +1117,12 @@ async function writeDataUrlFile(input: {
   const match = input.dataUrl?.match(/^data:[^,]*;base64,(.+)$/)
   if (!path) return { ok: false, error: 'A save path is required.' }
   if (!match) return { ok: false, error: 'A base64 data URL is required.' }
+  if (!consumeAllowedSavePath(path)) {
+    return {
+      ok: false,
+      error: 'Save path must come from a recent save dialog selection.'
+    }
+  }
 
   try {
     await fs.writeFile(path, Buffer.from(match[1], 'base64'))

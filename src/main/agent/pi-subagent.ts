@@ -2,7 +2,11 @@ import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
 import { safeWebContentsSend } from '../safe-ipc-send'
-import { listTemporarySubterminalNames, MAX_TEMPORARY_SUBTERMINALS } from '../terminal/ipc'
+import {
+  closeTemporarySubterminal,
+  listTemporarySubterminalNames,
+  MAX_TEMPORARY_SUBTERMINALS
+} from '../terminal/ipc'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
 import { extractAssistantTextFromMessages, mapPiSessionEventToAgentEvents } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
@@ -22,6 +26,8 @@ import {
 } from './pi-terminal-bash'
 import { openAgentSubterminal, resolveOpenSubterminalParentTabId } from './pi-open-subterminal'
 import {
+  childProfileOmitsHostTools,
+  profileHasWriters,
   resolveSubagentProfile,
   SUBAGENT_PROFILE_NAMES,
   type SubagentProfile,
@@ -127,28 +133,81 @@ export function allocateSubagentPaneNames(input: {
   const existing = new Set(input.existingNames.map(normalizeSubterminalPaneName))
   const batch = new Set<string>()
   const names: string[] = []
-  let newSlots = 0
 
   for (const agent of input.agents) {
     const base = normalizeSubterminalPaneName(agent)
     let candidate = base
     let suffix = 2
-    while (batch.has(candidate)) {
+    // Never reuse an existing pane name — wrong mode / busy / user panes are unsafe.
+    while (existing.has(candidate) || batch.has(candidate)) {
       candidate = normalizeSubterminalPaneName(`${base}-${suffix}`)
       suffix += 1
     }
     batch.add(candidate)
     names.push(candidate)
-    if (!existing.has(candidate)) newSlots += 1
   }
 
-  if (existing.size + newSlots > max) {
+  if (existing.size + names.length > max) {
     return {
       ok: false,
       error: `At most ${max} sub-terminals per terminal. Reuse or close a pane, then retry.`
     }
   }
   return { ok: true, names }
+}
+
+/** Truncate string fields before stringify so parent models never see mid-JSON cuts. */
+export function formatSubagentToolResultText(result: {
+  ok: boolean
+  results: SubagentChildResult[]
+  error?: string
+}): string {
+  const budget = Math.max(
+    512,
+    Math.floor(MAX_CHILD_RESULT_CHARS / Math.max(1, result.results.length))
+  )
+  const compact = {
+    ok: result.ok,
+    error: result.error ? truncateText(result.error, 400) : undefined,
+    results: result.results.map((child) => ({
+      agent: child.agent,
+      pane: child.pane,
+      tabId: child.tabId,
+      ok: child.ok,
+      text: child.text ? truncateText(child.text, budget) : undefined,
+      error: child.error ? truncateText(child.error, 400) : undefined
+    }))
+  }
+  const text = JSON.stringify(compact, null, 2)
+  if (text.length <= MAX_CHILD_RESULT_CHARS) return text
+  return JSON.stringify(
+    {
+      ok: result.ok,
+      truncated: true,
+      error: result.error ? truncateText(result.error, 200) : 'Result truncated for size.',
+      results: compact.results.map((child) => ({
+        agent: child.agent,
+        pane: child.pane,
+        ok: child.ok,
+        text: child.text ? truncateText(child.text, 200) : undefined,
+        error: child.error ? truncateText(child.error, 120) : undefined
+      }))
+    },
+    null,
+    2
+  ).slice(0, MAX_CHILD_RESULT_CHARS)
+}
+
+function truncateText(value: string, max: number): string {
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(0, max - 1))}…`
+}
+
+export function tasksIncludeWriters(tasks: SubagentTask[]): boolean {
+  return tasks.some((task) => {
+    const profile = resolveSubagentProfile(task.agent)
+    return profile ? profileHasWriters(profile) : false
+  })
 }
 
 export async function abortChildSessionsForRun(runId: string): Promise<void> {
@@ -227,9 +286,8 @@ export async function createSubagentToolDefinition(
         params,
         signal
       })
-      const text = JSON.stringify(result, null, 2)
       return {
-        content: [{ type: 'text', text: text.slice(0, MAX_CHILD_RESULT_CHARS) }],
+        content: [{ type: 'text', text: formatSubagentToolResultText(result) }],
         details: result
       }
     }
@@ -248,6 +306,15 @@ async function runSubagentTool(input: {
   const parsed = parseSubagentToolParams(input.params)
   if (!parsed.ok) return { ok: false, results: [], error: parsed.error }
 
+  if (parsed.tasks.length > 1 && tasksIncludeWriters(parsed.tasks)) {
+    return {
+      ok: false,
+      results: [],
+      error:
+        'Parallel tasks[] cannot include writer agents (worker / delegate). Run them sequentially, or use read-only agents only.'
+    }
+  }
+
   const parent = getPtyBashExecContext(input.parentSessionKey)
   if (!parent?.webContents || parent.webContents.isDestroyed()) {
     return {
@@ -265,17 +332,20 @@ async function runSubagentTool(input: {
   })
   if (!allocated.ok) return { ok: false, results: [], error: allocated.error }
 
-  const results = await Promise.all(
-    parsed.tasks.map((task, index) =>
-      runChildSubagent({
-        parentSessionKey: input.parentSessionKey,
-        childId: `${task.agent}-${index + 1}`,
-        paneName: allocated.names[index] ?? task.agent,
-        task,
-        signal: input.signal
-      })
-    )
-  )
+  const runOne = (task: SubagentTask, index: number): Promise<SubagentChildResult> =>
+    runChildSubagent({
+      parentSessionKey: input.parentSessionKey,
+      childId: `${task.agent}-${index + 1}`,
+      paneName: allocated.names[index] ?? task.agent,
+      task,
+      signal: input.signal
+    })
+
+  // Read-only profiles may fan out; writers are already rejected above when parallel.
+  const results =
+    parsed.tasks.length === 1
+      ? [await runOne(parsed.tasks[0], 0)]
+      : await Promise.all(parsed.tasks.map((task, index) => runOne(task, index)))
 
   const ok = results.every((result) => result.ok)
   return { ok, results, error: ok ? undefined : 'One or more subagents failed.' }
@@ -291,6 +361,14 @@ async function runChildSubagent(input: {
   const profile = resolveSubagentProfile(input.task.agent)
   if (!profile) {
     return { agent: input.task.agent, pane: input.paneName, ok: false, error: 'Unknown agent.' }
+  }
+  if (!childProfileOmitsHostTools(profile)) {
+    return {
+      agent: profile.name,
+      pane: input.paneName,
+      ok: false,
+      error: 'Child profile must not include host-only tools.'
+    }
   }
 
   const parent = getPtyBashExecContext(input.parentSessionKey)
@@ -332,6 +410,7 @@ async function runChildSubagent(input: {
     fromSubagent: true
   })
   if (!bound) {
+    closeTemporarySubterminal(parent.webContents, opened.tabId)
     return {
       agent: profile.name,
       pane: opened.name || input.paneName,

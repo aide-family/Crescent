@@ -4,6 +4,7 @@ import { LOCAL_CONNECTION_ID } from '../lib/app-runtime'
 import { buildSshCommand, parseLoginActions, parseSshOptions } from '../lib/connection-commands'
 import { filterConnections } from '../lib/connections'
 import type { ConnectionConfig, ConnectionInput } from '../../../shared/agent-types'
+import { validateClusterHostRegex } from '../../../shared/connection-state'
 
 export function createEmptyConnectionForm(): ConnectionInput {
   return {
@@ -52,6 +53,9 @@ export function normalizeConnectionInputForSave(
 
   if (!name || !host) return null
 
+  const clusterHostRegexResult = validateClusterHostRegex(connectionForm.clusterHostRegex)
+  if (!clusterHostRegexResult.ok) return null
+
   return {
     id: connectionForm.id,
     name,
@@ -65,7 +69,7 @@ export function normalizeConnectionInputForSave(
     sshOptions,
     description: connectionForm.description?.trim() || undefined,
     actions,
-    clusterHostRegex: connectionForm.clusterHostRegex?.trim() || undefined
+    clusterHostRegex: clusterHostRegexResult.value
   }
 }
 

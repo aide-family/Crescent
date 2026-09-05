@@ -19,6 +19,8 @@ type ModelRuntime = Awaited<
 type ProviderConfigInput = Parameters<ModelRuntime['registerProvider']>[1]
 
 let runtimePromise: Promise<ModelRuntime> | undefined
+/** Provider ids currently registered into the process-lifetime ModelRuntime. */
+const registeredRuntimeProviderIds = new Set<string>()
 
 export async function getCrescentModelRuntime(): Promise<ModelRuntime> {
   if (!runtimePromise) {
@@ -39,10 +41,27 @@ export async function syncCrescentProvidersToModelRuntime(
 ): Promise<ModelRuntime> {
   const runtime = await getCrescentModelRuntime()
   const providers = getAgentProviders(config)
+  const enabledIds = new Set(providers.map((provider) => sanitizeProviderId(provider.id)))
+
+  for (const providerId of [...registeredRuntimeProviderIds]) {
+    if (enabledIds.has(providerId)) continue
+    try {
+      await runtime.removeRuntimeApiKey(providerId)
+    } catch {
+      // Best effort — key may already be absent.
+    }
+    try {
+      runtime.unregisterProvider(providerId)
+    } catch {
+      // Best effort — provider may already be gone.
+    }
+    registeredRuntimeProviderIds.delete(providerId)
+  }
 
   for (const provider of providers) {
     const providerId = sanitizeProviderId(provider.id)
     runtime.registerProvider(providerId, toProviderConfigInput(provider))
+    registeredRuntimeProviderIds.add(providerId)
     const apiKey =
       provider.apiKey?.trim() ||
       config.openAiApiKey?.trim() ||

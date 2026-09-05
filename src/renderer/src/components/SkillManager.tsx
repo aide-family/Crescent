@@ -56,10 +56,7 @@ export type SkillPreviewState = {
   catalogResultId?: string
 }
 
-const CARD_CLASS =
-  'flex min-w-0 flex-col rounded-lg border bg-card/70 px-2.5 py-2 text-xs transition-[border-color,background-color] hover:bg-muted/25'
-const CARD_SELECTED_CLASS = 'border-primary/50 bg-primary/8'
-const CARD_IDLE_CLASS = 'border-border/70'
+const CARD_CLASS = 'app-list-row flex min-w-0 flex-col text-xs'
 
 export interface SkillManagerProps {
   open: boolean
@@ -377,7 +374,8 @@ export function SkillManager({
                         return (
                           <div
                             key={skill.path}
-                            className={`${CARD_CLASS} ${selected ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS}`}
+                            data-selected={selected ? 'true' : undefined}
+                            className={CARD_CLASS}
                           >
                             <div className="flex min-w-0 items-start gap-1">
                               <button
@@ -508,7 +506,8 @@ export function SkillManager({
                           return (
                             <div
                               key={result.id}
-                              className={`${CARD_CLASS} ${selected ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS}`}
+                              data-selected={selected ? 'true' : undefined}
+                              className={CARD_CLASS}
                             >
                               <div className="flex min-w-0 flex-col gap-1.5">
                                 <button

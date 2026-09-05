@@ -52,6 +52,8 @@ export type ConnectionLoginEnvironment = {
   promptHost?: string
   alignment?: 'aligned' | 'drifted' | 'unknown'
   output?: string
+  /** Live terminal mode from get-context; `none` means no PTY — never skip restore. */
+  mode?: 'none' | 'pty' | 'pipe'
   /** SSOT login-verified flag from get-context (independent of transient drift). */
   ready?: boolean
   /** Learned prompt-host aliases from get-context. */
@@ -234,6 +236,8 @@ export function shouldSkipReuseRelogin(
   connection: ConnectionConfig,
   env: ConnectionLoginEnvironment
 ): boolean {
+  // Dead PTY: never treat stale SSOT as already logged in.
+  if (env.mode === 'none') return false
   return resolveRemainingConnectionCommands(connection, env).commands.length === 0
 }
 
@@ -241,7 +245,20 @@ export function stripStoredPassword(connection: ConnectionConfig): ConnectionCon
   return {
     ...connection,
     password: undefined,
+    rootPassword: undefined,
     resolvedPassword: undefined
+  }
+}
+
+/** Clipboard / export payload: secrets stripped, presence flags retained. */
+export function toConnectionClipboardPayload(
+  connection: ConnectionConfig
+): Record<string, unknown> {
+  const stripped = stripStoredPassword(connection)
+  return {
+    ...stripped,
+    hasPassword: Boolean(connection.password?.trim() || connection.resolvedPassword?.trim()),
+    hasRootPassword: Boolean(connection.rootPassword?.trim())
   }
 }
 

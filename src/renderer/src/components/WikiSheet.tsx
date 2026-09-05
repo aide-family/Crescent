@@ -229,11 +229,8 @@ function WikiDocumentList({
           <button
             key={document.id}
             type="button"
-            className={`block w-full min-w-0 overflow-hidden rounded-lg border px-2.5 py-2 text-left text-xs transition-[border-color,background-color] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-              selectedWikiDocument?.id === document.id
-                ? 'border-primary/50 bg-primary/8'
-                : 'border-border/70 hover:bg-muted/25'
-            }`}
+            data-selected={selectedWikiDocument?.id === document.id ? 'true' : undefined}
+            className="app-list-row block w-full min-w-0 overflow-hidden text-left text-xs outline-none"
             onClick={() => onOpenDocument(document)}
           >
             <span className="block truncate text-[13px] font-medium">{document.title}</span>

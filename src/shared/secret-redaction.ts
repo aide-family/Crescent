@@ -1,13 +1,21 @@
 const REDACTED = '[REDACTED]'
 
 const SENSITIVE_KEY_PATTERN =
-  /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret|password|passwd|token|bearer)$/i
+  /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret|password|passwd|token|bearer|root[_-]?password|resolved[_-]?password)$/i
 
 const SENSITIVE_HEADER_PATTERN =
   /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token)$/i
 
+/** Matches keys that embed password/secret substrings (e.g. rootPassword). */
+const SENSITIVE_KEY_SUBSTRING_PATTERN = /(password|passwd|secret|token|api[_-]?key)/i
+
 export function redactSensitiveValue(key: string, value: unknown): unknown {
-  if (SENSITIVE_KEY_PATTERN.test(key.trim()) || SENSITIVE_HEADER_PATTERN.test(key.trim())) {
+  const normalized = key.trim()
+  if (
+    SENSITIVE_KEY_PATTERN.test(normalized) ||
+    SENSITIVE_HEADER_PATTERN.test(normalized) ||
+    SENSITIVE_KEY_SUBSTRING_PATTERN.test(normalized)
+  ) {
     return REDACTED
   }
 

@@ -601,11 +601,6 @@
   box-shadow: none;
 }
 
-.app-sheet-main [role='button']:hover,
-.app-wiki-grid button:hover {
-  background: var(--accent);
-}
-
 .app-sheet-detail {
   max-width: min(52vw, 680px);
 }
@@ -705,24 +700,43 @@
 
 .app-list-row {
   min-width: 0;
-  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
   border-radius: 0.5rem;
-  background: color-mix(in oklch, var(--card) 72%, transparent);
+  background: var(--background);
   padding: 0.5rem 0.625rem;
   transition:
     border-color 120ms ease,
-    background-color 120ms ease;
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .app-list-row:hover {
-  border-color: var(--border);
-  background: color-mix(in oklch, var(--muted) 26%, transparent);
+  border-color: color-mix(in oklch, var(--primary) 26%, var(--border));
+  background: color-mix(in oklch, var(--accent) 72%, var(--background));
+}
+
+.app-list-row:focus-visible {
+  outline: none;
+  border-color: color-mix(in oklch, var(--ring) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent);
 }
 
 .app-list-row[data-selected='true'] {
   border-color: color-mix(in oklch, var(--primary) 48%, transparent);
   background: color-mix(in oklch, var(--primary) 8%, transparent);
   box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.app-list-row[data-selected='true']:hover {
+  border-color: color-mix(in oklch, var(--primary) 58%, transparent);
+  background: color-mix(in oklch, var(--primary) 11%, transparent);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.app-list-row[data-selected='true']:focus-visible {
+  box-shadow:
+    inset 2px 0 0 var(--primary),
+    0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent);
 }
 
 .app-empty-state {

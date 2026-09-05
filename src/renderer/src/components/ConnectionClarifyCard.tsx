@@ -122,10 +122,10 @@ export function ConnectionClarifyCard({
                 role="option"
                 aria-selected={selected}
                 data-clarify-option={selected ? 'selected' : undefined}
-                className={`flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none transition-[background-color] focus-visible:ring-2 focus-visible:ring-ring/50 ${
+                className={`flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] outline-none transition-[background-color,color] focus-visible:ring-2 focus-visible:ring-ring/50 ${
                   selected
                     ? 'bg-primary/12 text-foreground'
-                    : 'text-muted-foreground hover:bg-muted/40'
+                    : 'bg-background text-muted-foreground hover:bg-accent hover:text-foreground'
                 }`}
                 onClick={() => setSelectedIndex(index)}
                 onDoubleClick={() =>

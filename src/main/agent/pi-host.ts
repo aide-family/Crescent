@@ -16,6 +16,7 @@ import {
 import { loadMcpPiTools } from './pi-mcp-tools'
 import { loadPiSdk, type PiSdkFacade } from './pi-sdk'
 import {
+  clearPtyBashExecContext,
   clearPtyBashExecContextsForRun,
   createPtyBashToolDefinition,
   interruptPtyCommandsForRun,
@@ -105,6 +106,32 @@ interface ActiveRun {
 const hostedSessions = new Map<string, HostedSession>()
 const activeRuns = new Map<string, ActiveRun>()
 const runIdBySessionKey = new Map<string, string>()
+/** Sessions currently running an extension command (counts as busy for reload/dispose). */
+const extensionBusyBySessionKey = new Set<string>()
+/** Serialize ensure/dispose per session key. */
+const sessionMutexTails = new Map<string, Promise<unknown>>()
+
+async function withSessionMutex<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
+  const previous = sessionMutexTails.get(sessionKey) ?? Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const current = previous.then(() => gate)
+  sessionMutexTails.set(
+    sessionKey,
+    current.catch(() => undefined)
+  )
+  await previous.catch(() => undefined)
+  try {
+    return await fn()
+  } finally {
+    release()
+    if (sessionMutexTails.get(sessionKey) === current) {
+      sessionMutexTails.delete(sessionKey)
+    }
+  }
+}
 
 export interface PiHostRunInput {
   runId: string
@@ -447,7 +474,7 @@ export async function runPiExtensionCommand(input: {
 }): Promise<{ ok: boolean; busy?: boolean; error?: string }> {
   const name = input.name.trim()
   if (!name) return { ok: false, error: 'Extension command name is empty.' }
-  if (runIdBySessionKey.has(input.sessionKey)) {
+  if (runIdBySessionKey.has(input.sessionKey) || extensionBusyBySessionKey.has(input.sessionKey)) {
     return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
   }
 
@@ -464,11 +491,14 @@ export async function runPiExtensionCommand(input: {
   const command = runner?.getCommand(name)
   if (!command || !runner) return { ok: false, error: `Unknown extension command: ${name}` }
 
+  extensionBusyBySessionKey.add(input.sessionKey)
   try {
     await command.handler(input.args?.trim() ?? '', runner.createCommandContext())
     return { ok: true }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    extensionBusyBySessionKey.delete(input.sessionKey)
   }
 }
 
@@ -486,6 +516,7 @@ export interface ReloadCrescentRuntimeResult {
 
 function isHostedSessionBusy(sessionKey: string, hosted: HostedSession): boolean {
   if (runIdBySessionKey.has(sessionKey)) return true
+  if (extensionBusyBySessionKey.has(sessionKey)) return true
   try {
     return Boolean(hosted.session.isStreaming)
   } catch {
@@ -542,6 +573,13 @@ async function ensureHostedSession(
   sessionKey: string,
   config: AgentConfig
 ): Promise<HostedSession> {
+  return withSessionMutex(sessionKey, () => ensureHostedSessionUnlocked(sessionKey, config))
+}
+
+async function ensureHostedSessionUnlocked(
+  sessionKey: string,
+  config: AgentConfig
+): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
   const extensionFingerprint = computeExtensionFingerprint({
@@ -557,7 +595,10 @@ async function ensureHostedSession(
     return existing as HostedSession
   }
   if (existing) {
-    await disposeHostedSession(existing)
+    if (extensionBusyBySessionKey.has(sessionKey) || runIdBySessionKey.has(sessionKey)) {
+      throw new Error('Cannot recreate agent session while a run or extension command is active.')
+    }
+    await disposeHostedSessionUnlocked(existing)
     hostedSessions.delete(sessionKey)
   }
 
@@ -656,7 +697,12 @@ async function ensureHostedSession(
 }
 
 async function disposeHostedSession(hosted: HostedSession): Promise<void> {
+  return withSessionMutex(hosted.sessionKey, () => disposeHostedSessionUnlocked(hosted))
+}
+
+async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void> {
   clearExtensionUiBinding(hosted.sessionKey)
+  clearPtyBashExecContext(hosted.sessionKey)
   try {
     hosted.unsubscribe?.()
     hosted.unsubscribe = undefined

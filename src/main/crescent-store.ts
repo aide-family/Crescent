@@ -27,6 +27,7 @@ import { selectEnabledAgentProvider } from '../shared/agent-providers'
 import { normalizeMcpServers } from '../shared/mcp-servers'
 import { DEFAULT_AGENT_STYLE, normalizeAgentStyle } from '../shared/agent-style'
 import { normalizeSystemLogLevel } from '../shared/log-levels'
+import { validateClusterHostRegex } from '../shared/connection-state'
 import type {
   AgentConfig,
   AgentLongTermMemory,
@@ -615,9 +616,12 @@ function normalizeConnection(value: unknown): ConnectionConfig {
     actions: Array.isArray(record.actions)
       ? record.actions.map(String).filter((line) => line.trim())
       : undefined,
-    clusterHostRegex: record.clusterHostRegex
-      ? String(record.clusterHostRegex).trim() || undefined
-      : undefined
+    clusterHostRegex: (() => {
+      const validated = validateClusterHostRegex(
+        record.clusterHostRegex ? String(record.clusterHostRegex) : undefined
+      )
+      return validated.ok ? validated.value : undefined
+    })()
   }
 }
 
