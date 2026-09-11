@@ -40,6 +40,7 @@ import {
   clampAgentText,
   hasAgentTextTruncationMarker
 } from '@renderer/lib/agent-text-limits'
+import { copyFeedback, copyText } from '@renderer/lib/operation-feedback'
 import type { AgentRunStep } from '@renderer/lib/terminal-tabs'
 import type { CommandRiskLevel, OpsHistoryRating } from '../../../shared/agent-types'
 import {
@@ -74,6 +75,8 @@ export function AgentRunTimeline({
   onInjectSuggestions,
   onOpenModelSettings,
   onSaveAsSop,
+  onInterruptCommand,
+  fallbackExecutionTabId,
   thinkingCollapsedByDefault = true
 }: {
   document: ParsedAgentRunDocument
@@ -94,6 +97,8 @@ export function AgentRunTimeline({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
+  onInterruptCommand?: (tabId: string) => void
+  fallbackExecutionTabId?: string
   thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
   const [fullOverlayTab, setFullOverlayTab] = useState<FullAgentRunOverlayTab | null>(null)
@@ -185,7 +190,16 @@ export function AgentRunTimeline({
                 previous?.kind === 'approval' &&
                 Boolean(step.command?.trim()) &&
                 previous.command.trim() === step.command?.trim()
-              return <ToolCallRow key={step.id} step={step} t={t} hideCommand={hideCommand} />
+              return (
+                <ToolCallRow
+                  key={step.id}
+                  step={step}
+                  t={t}
+                  hideCommand={hideCommand}
+                  onInterruptCommand={onInterruptCommand}
+                  fallbackExecutionTabId={fallbackExecutionTabId}
+                />
+              )
             }
             if (step.kind === 'approval') {
               return (
@@ -237,7 +251,7 @@ export function AgentRunTimeline({
           </div>
         </>
       ) : showResult ? (
-        <div className="app-agent-result min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card/50">
+        <div className="app-agent-result min-w-0 rounded-xl border border-border/70 bg-card/50">
           {(document.resultMarkdown?.trim() || document.errorMarkdown?.trim()) && (
             <div className="flex items-center gap-2 border-b border-border/60 bg-muted/20 px-3 py-2">
               {document.errorMarkdown?.trim() && !document.resultMarkdown?.trim() ? (
@@ -341,8 +355,10 @@ export function AgentRunTimeline({
                 type="button"
                 variant="ghost"
                 size="icon-xs"
+                className="select-none"
                 aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
                 title={copied ? t.common.copied : t.common.copyResultTooltip}
+                onPointerDown={(event) => event.preventDefault()}
                 onClick={onCopyResult}
               >
                 {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
@@ -597,11 +613,15 @@ function UserSupplementStepRow({
 function ToolCallRow({
   step,
   t,
-  hideCommand = false
+  hideCommand = false,
+  onInterruptCommand,
+  fallbackExecutionTabId
 }: {
   step: Extract<AgentRunStep, { kind: 'tool' }>
   t: Dictionary
   hideCommand?: boolean
+  onInterruptCommand?: (tabId: string) => void
+  fallbackExecutionTabId?: string
 }): React.JSX.Element {
   const running = step.phase === 'started'
   const command = step.command?.trim()
@@ -651,6 +671,21 @@ function ToolCallRow({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="text-xs font-medium text-foreground/80">{toolLabel}</span>
             <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+            {running && isPtyCommand && onInterruptCommand ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                aria-label={t.terminal.interruptCommand}
+                title={t.terminal.interruptCommand}
+                onClick={() => {
+                  const target = step.tabId?.trim() || fallbackExecutionTabId?.trim()
+                  if (target) onInterruptCommand(target)
+                }}
+              >
+                Ctrl+C
+              </Button>
+            ) : null}
           </div>
           {batchParts ? (
             <BatchCommandGroupCard
@@ -764,11 +799,11 @@ function BatchCommandSegment({
 
   async function copyOutput(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(part.output || part.command)
+      await copyText(part.output || part.command, copyFeedback(t))
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
-      // Clipboard may be unavailable.
+      // copyText already toasted the failure.
     }
   }
 
@@ -790,9 +825,10 @@ function BatchCommandSegment({
         </button>
         <button
           type="button"
-          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted/50"
+          className="shrink-0 rounded p-1 text-muted-foreground select-none hover:bg-muted/50"
           title={t.commandReview.batchCopyOutput}
           aria-label={t.commandReview.batchCopyOutput}
+          onPointerDown={(event) => event.preventDefault()}
           onClick={() => void copyOutput()}
         >
           <CopyIcon className="size-3" aria-hidden="true" />
@@ -1237,8 +1273,10 @@ function ResultActionBar({
           type="button"
           variant="ghost"
           size="icon-xs"
+          className="select-none"
           aria-label={copied ? t.common.copied : t.common.copyResultTooltip}
           title={copied ? t.common.copied : t.common.copyResultTooltip}
+          onPointerDown={(event) => event.preventDefault()}
           onClick={onCopyResult}
         >
           {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
@@ -1733,11 +1771,11 @@ function CommandBlock({
 
   async function copyCommand(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(command)
+      await copyText(command, copyFeedback(t))
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
-      // Clipboard may be unavailable in restricted contexts.
+      // copyText already toasted the failure.
     }
   }
 
@@ -1748,34 +1786,24 @@ function CommandBlock({
 
   return (
     <div className={`relative min-w-0 rounded border ${toneClass}`}>
-      <button
-        type="button"
-        className="block w-full cursor-pointer rounded text-left"
-        title={t.input.copyCommand}
-        aria-label={t.input.copyCommand}
-        onClick={() => void copyCommand()}
+      <pre
+        className={`p-2 pr-16 font-mono text-[11px] whitespace-pre-wrap break-words ${
+          needsFold && !expanded ? 'line-clamp-2' : ''
+        }`}
       >
-        <pre
-          className={`overflow-hidden p-2 pr-16 font-mono text-[11px] whitespace-pre-wrap break-words ${
-            needsFold && !expanded ? 'line-clamp-2' : ''
-          }`}
-        >
-          {command}
-        </pre>
-      </button>
+        {command}
+      </pre>
       <div className="absolute top-1 right-1 flex items-center gap-0.5">
         {needsFold ? (
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground"
+            className="size-6 text-muted-foreground select-none"
             aria-label={expanded ? t.input.collapseCommand : t.input.expandCommand}
             title={expanded ? t.input.collapseCommand : t.input.expandCommand}
-            onClick={(event) => {
-              event.stopPropagation()
-              setExpanded((value) => !value)
-            }}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? (
               <ChevronUpIcon className="size-3.5" aria-hidden="true" />
@@ -1788,13 +1816,11 @@ function CommandBlock({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-6 text-muted-foreground"
+          className="size-6 text-muted-foreground select-none"
           aria-label={copied ? t.common.copied : t.input.copyCommand}
           title={copied ? t.common.copied : t.input.copyCommand}
-          onClick={(event) => {
-            event.stopPropagation()
-            void copyCommand()
-          }}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => void copyCommand()}
         >
           {copied ? (
             <CheckIcon className="size-3.5 text-primary" aria-hidden="true" />

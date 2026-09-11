@@ -89,7 +89,6 @@ export const defaultAgentConfig: AgentConfig = {
   skillRoot: CRESCENT_USER_SKILLS_TILDE,
   loadGlobalAgentSkills: false,
   disabledExtensions: [],
-  subagentsEnabled: false,
   mcpServers: [],
   logLevel: 'info'
 }
@@ -413,7 +412,6 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     skillRoot: normalizeSkillRoot(config.skillRoot),
     loadGlobalAgentSkills: normalizeLoadGlobalAgentSkills(config),
     disabledExtensions: normalizeDisabledExtensionIds(config.disabledExtensions),
-    subagentsEnabled: config.subagentsEnabled === true,
     mcpServers: normalizeMcpServers(config.mcpServers),
     logLevel: normalizeSystemLogLevel(config.logLevel)
   }

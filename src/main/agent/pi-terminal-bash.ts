@@ -8,6 +8,7 @@ import {
   interruptAndAwaitPendingTerminalCommands,
   type TerminalCommandExecutionResult
 } from '../terminal/ipc'
+import { registerPtyExecutionTabChecker } from '../terminal/input-lock'
 import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
 import type { PiSdkFacade } from './pi-sdk'
@@ -61,6 +62,15 @@ export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<
 }
 
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
+
+registerPtyExecutionTabChecker((tabId) => {
+  const id = tabId.trim()
+  if (!id) return false
+  for (const context of execContextBySessionKey.values()) {
+    if (context.executionTabId === id) return true
+  }
+  return false
+})
 
 export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecContext): void {
   context.failedFingerprints = getFailedCommandFingerprints(context.runId)

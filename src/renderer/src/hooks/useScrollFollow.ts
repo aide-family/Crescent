@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react'
 
 import {
-  DEFAULT_SCROLL_FOLLOW_IDLE_MS,
   DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX,
   isNearScrollBottom,
   scrollToBottom,
@@ -10,14 +9,13 @@ import {
 
 export interface UseScrollFollowOptions {
   thresholdPx?: number
-  idleMs?: number
   /** When true, scroll to bottom regardless of user scroll state. */
   forceFollow?: boolean
 }
 
 /**
- * Auto-follow scroll for overflow containers. Pauses while the user scrolls away
- * from the bottom; resumes after idle timeout or when scrolled back near bottom.
+ * Auto-follow scroll for overflow containers. Stays pinned to the bottom while
+ * the user is at/near it; scrolling away stays parked until they return (or force).
  */
 export function useScrollFollow(
   containerRef: RefObject<HTMLElement | null>,
@@ -28,35 +26,33 @@ export function useScrollFollow(
   isFollowing: () => boolean
 } {
   const thresholdPx = options.thresholdPx ?? DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX
-  const idleMs = options.idleMs ?? DEFAULT_SCROLL_FOLLOW_IDLE_MS
   const forceFollow = options.forceFollow ?? false
 
-  const userScrollingRef = useRef(false)
-  const userScrollIdleTimerRef = useRef<number | null>(null)
+  const followingRef = useRef(true)
+  const ignoreScrollRef = useRef(false)
 
   const followNow = useCallback(
     (force = false): void => {
       const el = containerRef.current
       if (!el) return
-      const nearBottom = isNearScrollBottom(el, thresholdPx)
       if (
         shouldFollowScroll({
           force,
-          nearBottom,
-          userScrolling: userScrollingRef.current
+          following: followingRef.current
         })
       ) {
-        scrollToBottom(el)
+        followingRef.current = true
+        ignoreScrollRef.current = true
+        scrollToBottom(el, () => {
+          followingRef.current = true
+          ignoreScrollRef.current = false
+        })
       }
     },
-    [containerRef, thresholdPx]
+    [containerRef]
   )
 
-  const isFollowing = useCallback((): boolean => {
-    const el = containerRef.current
-    if (!el) return true
-    return !userScrollingRef.current || isNearScrollBottom(el, thresholdPx)
-  }, [containerRef, thresholdPx])
+  const isFollowing = useCallback((): boolean => followingRef.current, [])
 
   useEffect(() => {
     const el = containerRef.current
@@ -95,23 +91,8 @@ export function useScrollFollow(
     mutationObserver.observe(el, { childList: true, subtree: true })
 
     const handleScroll = (): void => {
-      const nearBottom = isNearScrollBottom(el, thresholdPx)
-      if (nearBottom) {
-        userScrollingRef.current = false
-        if (userScrollIdleTimerRef.current != null) {
-          window.clearTimeout(userScrollIdleTimerRef.current)
-          userScrollIdleTimerRef.current = null
-        }
-        return
-      }
-      userScrollingRef.current = true
-      if (userScrollIdleTimerRef.current != null) {
-        window.clearTimeout(userScrollIdleTimerRef.current)
-      }
-      userScrollIdleTimerRef.current = window.setTimeout(() => {
-        userScrollingRef.current = false
-        userScrollIdleTimerRef.current = null
-      }, idleMs)
+      if (ignoreScrollRef.current) return
+      followingRef.current = isNearScrollBottom(el, thresholdPx)
     }
 
     el.addEventListener('scroll', handleScroll, { passive: true })
@@ -119,10 +100,6 @@ export function useScrollFollow(
 
     return () => {
       el.removeEventListener('scroll', handleScroll)
-      if (userScrollIdleTimerRef.current != null) {
-        window.clearTimeout(userScrollIdleTimerRef.current)
-        userScrollIdleTimerRef.current = null
-      }
       if (mutationFrame != null) {
         window.cancelAnimationFrame(mutationFrame)
       }
@@ -132,7 +109,7 @@ export function useScrollFollow(
     }
     // followSignals + forceFollow drive re-follow when content or policy changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerRef, followNow, forceFollow, idleMs, thresholdPx, ...followSignals])
+  }, [containerRef, followNow, forceFollow, thresholdPx, ...followSignals])
 
   return { followNow, isFollowing }
 }

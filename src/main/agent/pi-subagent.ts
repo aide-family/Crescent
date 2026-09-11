@@ -35,12 +35,26 @@ import {
 } from './subagent-profiles'
 
 export const SUBAGENT_DISCIPLINE = [
-  '# Subagents',
-  '- When Subagents mode is on, call subagent to delegate focused workstreams.',
-  '- Each child runs bash in its own docked subterminal; parent bash stays on the current pane.',
-  '- Parallel tasks[] only for independent read-only work (scout, reviewer, oracle, researcher).',
-  '- Run worker / implementation sequentially — do not parallelize writers.',
-  '- Never concurrent bash on the same pane. Do not use open_subterminal merely to fan out agents.'
+  '# Multi-agent',
+  'Before acting on a user request, decide solo vs multi-agent. Do not wait for the user to enable a mode or ask for subagents.',
+  '',
+  'Enter multi-agent when it raises quality or cuts wall-clock time:',
+  '- Two or more independent workstreams (multi-host / cluster fan-out, compare A vs B, separate trees)',
+  '- Specialist roles (scout/researcher then reviewer; parallel read-only gathers)',
+  '- Broad investigation that would serialize slowly on the parent',
+  '',
+  'Stay solo when:',
+  '- Single-path sequential work, one environment, one command sequence',
+  '- Short Q&A, small edit, or a single bash/read',
+  '- No remaining docked panes (max 3)',
+  '',
+  'If multi-agent: you MUST call the subagent tool. The host binds each child to its own docked subterminal; parent bash stays on the current pane.',
+  'Never fake multi-agent with concurrent bash on one pane.',
+  'Never spawn child agents via open_subterminal alone — that tool is extra panes for THIS agent (local hosts / extra SSH).',
+  '',
+  'Parallel tasks[] only for independent read-only work (scout, reviewer, oracle, researcher).',
+  'Run worker / delegate sequentially — do not parallelize writers.',
+  'Children must not spawn further subagents.'
 ].join('\n')
 
 const MAX_CHILD_RESULT_CHARS = 8_000
@@ -266,17 +280,17 @@ export async function createSubagentToolDefinition(
     name: 'subagent',
     label: 'Subagent',
     description: [
-      'Delegate a focused task to a child Crescent agent with its own docked subterminal.',
-      'Parent bash stays on the current pane.',
+      'Decide solo vs multi-agent first. Multi-agent MUST use this tool: each child gets its own docked subterminal. Parent bash stays on the current pane.',
       'Single: { agent, task }. Parallel: { tasks: [{ agent, task }, ...] } (max 3 panes).',
       `Agents: ${SUBAGENT_PROFILE_NAMES.join(', ')}.`,
-      'Use parallel only for independent read-only work. Run worker sequentially.'
+      'Use parallel only for independent read-only work. Run worker sequentially. Do not spawn agents via open_subterminal.'
     ].join(' '),
     promptSnippet: 'subagent — run a focused child agent in a dedicated docked subterminal',
     promptGuidelines: [
-      'Use subagent to delegate scout, reviewer, oracle, researcher, worker, or delegate tasks.',
+      'Before acting, decide solo vs multi-agent. If multi-agent, call subagent — never open_subterminal merely to fan out agents.',
+      'Each child already has its own docked subterminal; parent bash stays on the current pane.',
       'Call subagent with tasks[] only for independent read-only workstreams; keep worker sequential.',
-      'Never run concurrent bash on the same terminal pane; each subagent already has its own pane.'
+      'Never run concurrent bash on the same terminal pane.'
     ],
     parameters,
     executionMode: 'sequential',

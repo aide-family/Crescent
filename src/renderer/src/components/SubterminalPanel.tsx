@@ -12,10 +12,10 @@ import {
   filterCrescentBootstrapOutput,
   getSubterminalWidths
 } from '@renderer/lib/terminal-text'
-import {
-  appendTerminalOutputRing,
-  readTerminalOutputRing
-} from '@renderer/lib/terminal-output-ring'
+import { readTerminalOutputRing } from '@renderer/lib/terminal-output-ring'
+import { applyXtermInputLock } from '@renderer/lib/xterm-input-lock'
+import { TerminalLockOverlay } from '@renderer/components/TerminalLockOverlay'
+import { createXtermReplayGate, hydrateXtermFromHistory } from '@renderer/lib/xterm-hydrate'
 import { attachXtermScrollFollow, writeXtermAndFollow } from '@renderer/lib/xterm-scroll-follow'
 import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
 
@@ -35,14 +35,30 @@ export interface SubterminalHeightResizeState {
 
 function SubterminalXtermPane({
   subterminal,
-  shellExitedText
+  shellExitedText,
+  inputLocked,
+  commandRunning,
+  t,
+  onInterrupt
 }: {
   subterminal: TemporarySubterminal
   shellExitedText: string
+  inputLocked: boolean
+  commandRunning: boolean
+  t: Dictionary
+  onInterrupt?: (tabId: string) => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const inputLockedRef = useRef(false)
+
+  useEffect(() => {
+    inputLockedRef.current = inputLocked
+    const terminal = terminalRef.current
+    if (!terminal) return
+    applyXtermInputLock(terminal, inputLocked)
+  }, [inputLocked])
 
   useEffect(() => {
     const host = hostRef.current
@@ -64,32 +80,26 @@ function SubterminalXtermPane({
     fitAddonRef.current = fitAddon
 
     const scrollFollow = attachXtermScrollFollow(terminal)
-
-    if (subterminal.rawOutput) {
-      writeXtermAndFollow(
-        terminal,
-        filterCrescentBootstrapOutput(subterminal.rawOutput),
-        scrollFollow
-      )
-    } else {
-      const ring = readTerminalOutputRing(subterminal.id)
-      if (ring) {
-        writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(ring), scrollFollow)
-      }
-    }
+    const replayGate = createXtermReplayGate()
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const inputDisposable = terminal.onData((data) => {
+      if (inputLockedRef.current) return
+      if (!replayGate.shouldForwardInput()) return
       scrollFollow.resetFollow()
       terminal.scrollToBottom()
       window.api.terminal.write(data, subterminal.id)
     })
 
+    const history = subterminal.rawOutput
+      ? filterCrescentBootstrapOutput(subterminal.rawOutput)
+      : filterCrescentBootstrapOutput(readTerminalOutputRing(subterminal.id))
+    hydrateXtermFromHistory(terminal, history, scrollFollow, () => replayGate.release())
+
     const stopData = window.api.terminal.onData((event) => {
       if (event.tabId !== subterminal.id) return
       const filtered = bootstrapFilter.push(event.data)
       if (filtered) {
-        appendTerminalOutputRing(subterminal.id, filtered)
         writeXtermAndFollow(terminal, filtered, scrollFollow)
       }
     })
@@ -118,6 +128,7 @@ function SubterminalXtermPane({
       scrollFollow.followIfEnabled()
     })
     resizeObserver.observe(host)
+    applyXtermInputLock(terminal, inputLockedRef.current)
 
     return () => {
       inputDisposable.dispose()
@@ -133,7 +144,18 @@ function SubterminalXtermPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subterminal.id, shellExitedText])
 
-  return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-black/40" />
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div ref={hostRef} className="absolute inset-0 overflow-hidden bg-black/40" />
+      {inputLocked ? (
+        <TerminalLockOverlay
+          commandRunning={commandRunning}
+          t={t}
+          onInterrupt={() => onInterrupt?.(subterminal.id)}
+        />
+      ) : null}
+    </div>
+  )
 }
 
 export function SubterminalPanel({
@@ -143,6 +165,10 @@ export function SubterminalPanel({
   resizeRef,
   heightResizeRef,
   t,
+  executionTerminalId,
+  agentBusy,
+  commandRunning,
+  onInterruptCommand,
   onCollapsedChange,
   onCloseSubterminal,
   onCloseAllSubterminals,
@@ -154,6 +180,10 @@ export function SubterminalPanel({
   resizeRef: MutableRefObject<SubterminalResizeState | null>
   heightResizeRef: MutableRefObject<SubterminalHeightResizeState | null>
   t: Dictionary
+  executionTerminalId?: string
+  agentBusy?: boolean
+  commandRunning?: boolean
+  onInterruptCommand?: (tabId: string) => void
   onCollapsedChange: (collapsed: boolean) => void
   onCloseSubterminal: (tabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (tabId: string) => void
@@ -330,6 +360,14 @@ export function SubterminalPanel({
                     <SubterminalXtermPane
                       subterminal={subterminal}
                       shellExitedText={t.terminal.shellExited}
+                      inputLocked={Boolean(
+                        agentBusy && executionTerminalId && subterminal.id === executionTerminalId
+                      )}
+                      commandRunning={Boolean(
+                        commandRunning && subterminal.id === executionTerminalId
+                      )}
+                      t={t}
+                      onInterrupt={onInterruptCommand}
                     />
                   </section>
                   {nextSubterminal && (

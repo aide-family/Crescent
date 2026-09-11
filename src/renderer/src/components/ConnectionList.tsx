@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from 'react'
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { SearchIcon, StarIcon } from 'lucide-react'
 
 import { Input } from '@renderer/components/ui/input'
@@ -13,6 +13,7 @@ interface ConnectionListProps {
   t: Dictionary
   className?: string
   headerAction?: ReactNode
+  autoFocusSearch?: boolean
   showCustomMetadata?: boolean
   formatConnectionTarget: (connection: ConnectionConfig) => string
   onQueryChange: (query: string) => void
@@ -74,6 +75,7 @@ export function ConnectionList({
   t,
   className = '',
   headerAction,
+  autoFocusSearch = false,
   showCustomMetadata = false,
   formatConnectionTarget,
   onQueryChange,
@@ -81,6 +83,16 @@ export function ConnectionList({
   renderConnectionCorner,
   renderConnectionActions
 }: ConnectionListProps): React.JSX.Element {
+  const searchFieldRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!autoFocusSearch) return
+    const input = searchFieldRef.current?.querySelector('input')
+    if (!input) return
+    const timer = window.setTimeout(() => input.focus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [autoFocusSearch])
+
   function moveSelection(currentId: string, direction: 1 | -1): void {
     if (!onSelectConnection) return
     const index = filteredConnections.findIndex((item) => item.id === currentId)
@@ -119,7 +131,7 @@ export function ConnectionList({
             <div className="flex shrink-0 items-center gap-2">{headerAction}</div>
           ) : null}
         </div>
-        <div className="app-search-field">
+        <div ref={searchFieldRef} className="app-search-field">
           <SearchIcon aria-hidden="true" />
           <Input
             type="search"

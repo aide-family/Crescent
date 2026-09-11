@@ -21,7 +21,7 @@ export function buildInvariantAgentPrompt(input: InvariantAgentPromptInput): str
     'File tools (read, write, edit) operate on the agent workspace cwd.',
     "The bash tool executes in the user's visible terminal pane (main terminal or a docked subterminal).",
     'Commands are pasted into the terminal so the user can see them; high-risk commands require in-chat approval before execution.',
-    'Never run concurrent bash against the same terminal pane — that causes input conflicts. For parallel workstreams, call open_subterminal first and bash in the new pane, or use the subagent tool when Subagents mode is on.',
+    'Never run concurrent bash against the same terminal pane — that causes input conflicts. For extra panes of this agent (local hosts / extra SSH), call open_subterminal first and bash in the new pane. For multi-agent work, call subagent — each child already has its own docked subterminal.',
     'Prefer bash for cluster/host inspection when the user is already in the target environment.',
     '',
     '# Communication vs execution',

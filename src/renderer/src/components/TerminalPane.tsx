@@ -8,6 +8,7 @@ import {
   type SubterminalResizeState
 } from '@renderer/components/SubterminalPanel'
 import { TerminalTabBar, type TerminalTabMenuState } from '@renderer/components/TerminalTabBar'
+import { TerminalLockOverlay } from '@renderer/components/TerminalLockOverlay'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { resolveTerminalDisconnectStrip, type AgentTerminalTab } from '@renderer/lib/terminal-tabs'
@@ -51,6 +52,9 @@ export function TerminalPane({
   onCloseSubterminal,
   onCloseAllSubterminals,
   onOpenLocalSubterminal,
+  onInterruptCommand,
+  commandRunning = false,
+  agentBusy = false,
   onReconnect,
   onViewRecovery,
   onDismissRecovery
@@ -99,6 +103,9 @@ export function TerminalPane({
   onCloseSubterminal: (parentTabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (parentTabId: string) => void
   onOpenLocalSubterminal?: () => void
+  onInterruptCommand?: (tabId: string) => void
+  commandRunning?: boolean
+  agentBusy?: boolean
   onReconnect?: () => void
   onViewRecovery?: () => void
   onDismissRecovery?: () => void
@@ -224,6 +231,13 @@ export function TerminalPane({
             ) : null}
             <div className="relative min-h-0 flex-1">
               <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
+              {agentBusy && executionTerminalId === activeTabId ? (
+                <TerminalLockOverlay
+                  commandRunning={commandRunning}
+                  t={t}
+                  onInterrupt={() => onInterruptCommand?.(activeTabId)}
+                />
+              ) : null}
             </div>
           </div>
         )}
@@ -234,6 +248,10 @@ export function TerminalPane({
           resizeRef={subterminalResizeRef}
           heightResizeRef={subterminalHeightResizeRef}
           t={t}
+          executionTerminalId={executionTerminalId}
+          agentBusy={agentBusy}
+          commandRunning={commandRunning}
+          onInterruptCommand={onInterruptCommand}
           onCollapsedChange={onSubterminalCollapsedChange}
           onCloseSubterminal={onCloseSubterminal}
           onCloseAllSubterminals={onCloseAllSubterminals}

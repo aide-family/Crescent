@@ -69,6 +69,7 @@ import { useScrollFollow } from '@renderer/hooks/useScrollFollow'
 import {
   connectionToForm,
   createEmptyConnectionForm,
+  formatConnectionSaveError,
   normalizeConnectionInputForSave,
   useConnections
 } from '@renderer/hooks/useConnections'
@@ -80,6 +81,8 @@ import {
 } from '@renderer/hooks/useTerminalTabs'
 import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
+import { useTerminalOutputRing } from '@renderer/hooks/useTerminalOutputRing'
+import { findRunningPtyCommandTabId, isTerminalPaneLocked } from '@renderer/lib/terminal-lock'
 import {
   AGENT_LOG_SOFT_LIMIT,
   appendElapsedFooter,
@@ -108,10 +111,16 @@ import {
 import {
   CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
   PANE_ORDER_STORAGE_KEY,
+  WORKBENCH_LAYOUT_STORAGE_KEY,
   formatPipePrompt,
   hasConfiguredModelSelection,
+  isWorkbenchLayout,
+  persistWorkbenchLayout,
   resolveInitialPaneOrder,
-  type PaneOrder
+  resolveInitialWorkbenchLayout,
+  revealChatFromTerminalLayout,
+  type PaneOrder,
+  type WorkbenchLayout
 } from '@renderer/lib/app-shell'
 import {
   appendRunStatusStep,
@@ -406,7 +415,6 @@ const emptyConfig: AgentConfig = {
   skillRoot: '~/.crescent/skills',
   loadGlobalAgentSkills: false,
   disabledExtensions: [],
-  subagentsEnabled: false,
   mcpServers: []
 }
 const emptyProvider: AgentProviderConfig = {
@@ -502,7 +510,13 @@ function resolveSubterminalTabState(
   }
 }
 
-function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): React.JSX.Element {
+function App({
+  recoveryMode = 'none',
+  initialWorkbenchLayout = null
+}: {
+  recoveryMode?: 'none' | 'pending'
+  initialWorkbenchLayout?: WorkbenchLayout | null
+}): React.JSX.Element {
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -781,8 +795,15 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
   const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
   // First-open shows the terminal and keeps the chat area hidden; the chat can
-  // be summoned from the right-edge rail or the header toggle.
-  const [hiddenPane, setHiddenPane] = useState<'terminal' | 'chat' | null>('chat')
+  // be summoned from the right-edge rail or the layout toggle.
+  const [workbenchLayout, setWorkbenchLayout] = useState<WorkbenchLayout>(() =>
+    resolveInitialWorkbenchLayout(initialWorkbenchLayout)
+  )
+  const persistAndSetWorkbenchLayout = useCallback((layout: WorkbenchLayout) => {
+    persistWorkbenchLayout(layout)
+    void window.api.app.setWorkbenchLayout(layout)
+    setWorkbenchLayout(layout)
+  }, [])
   const [paneOrder, setPaneOrder] = useState<PaneOrder>(() => resolveInitialPaneOrder())
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
@@ -832,7 +853,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     tabsRef,
     terminalPage,
     setTerminalPage,
-    setHiddenPane,
+    setWorkbenchLayout,
     emptyLocalTab,
     updateTab,
     localTerminalTitle: t.connections.localTerminal,
@@ -1083,11 +1104,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     (model) => model.id === activeTabModelId && model.providerId === activeProviderId
   )
   const activeModelSelectionValue = buildModelSelectionValue(activeProviderId, activeTabModelId)
-  const availableToolRefs = useMemo(
-    () =>
-      buildAvailableToolRefs(validation, { subagentsEnabled: Boolean(config.subagentsEnabled) }),
-    [validation, config.subagentsEnabled]
-  )
+  const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
   const mcpToolRefs = useMemo(
     () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
     [availableToolRefs]
@@ -1111,11 +1128,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     : modelValidationError
       ? `${t.app.aiNotReady}: ${modelValidationError}`
       : t.app.aiReady
-  const terminalVisible = hiddenPane !== 'terminal' && terminalPage === 'terminal'
+  const terminalVisible = workbenchLayout !== 'chat' && terminalPage === 'terminal'
   const {
     displayConnections,
     filteredDisplayConnections,
     connectionFormReady,
+    clusterHostRegexValidation,
     connectionCommandPreview
   } = useConnections({
     connections,
@@ -2151,6 +2169,21 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   }, [paneOrder])
 
   useEffect(() => {
+    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+  }, [workbenchLayout])
+
+  useEffect(() => {
+    if (isWorkbenchLayout(initialWorkbenchLayout)) {
+      persistWorkbenchLayout(initialWorkbenchLayout)
+      return
+    }
+    const cached = localStorage.getItem(WORKBENCH_LAYOUT_STORAGE_KEY)
+    if (isWorkbenchLayout(cached)) {
+      void window.api.app.setWorkbenchLayout(cached)
+    }
+  }, [initialWorkbenchLayout])
+
+  useEffect(() => {
     localStorage.setItem(
       CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
       closeTerminalConfirmEnabled ? 'true' : 'false'
@@ -2833,9 +2866,29 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
   )
 
   const activeTabExists = tabs.some((tab) => tab.id === activeTabId)
+  const executionTerminalId = executionTerminalByChatId[sessionChatTab.id]
+  const sessionLiveRun = useMemo(() => {
+    const entries = sessionChatTab.agentLog ?? []
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]
+      if (entry.kind === 'assistant' && liveRunByLogId[entry.id]) {
+        return liveRunByLogId[entry.id]
+      }
+    }
+    return undefined
+  }, [sessionChatTab.agentLog, liveRunByLogId])
+  const runningCommandTabId = findRunningPtyCommandTabId(sessionLiveRun?.steps, executionTerminalId)
+  const terminalInputLocked = isTerminalPaneLocked({
+    tabId: activeTabId,
+    executionTerminalId,
+    agentBusy: sessionChatTab.agentBusy
+  })
+
+  useTerminalOutputRing()
 
   useXtermLifecycle({
     terminalVisible,
+    inputLocked: terminalInputLocked,
     activeTabId,
     activeTabExists,
     activeTabIdRef,
@@ -3667,7 +3720,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     )
     setActiveTabId(existingTab?.id ?? restoredTab.id)
     setHistoryOpen(false)
-    setHiddenPane(null)
+    setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
 
     if (connection) {
       const liveTabId = existingTab?.id ?? restoredTab.id
@@ -4434,6 +4487,12 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       .catch(() => {
         // Persistence is best-effort; the next session load will refresh totals.
       })
+  }
+
+  function interruptAgentCommand(tabId: string): void {
+    const target = tabId.trim()
+    if (!target) return
+    void window.api.terminal.interrupt(target)
   }
 
   function stopAgentRun(
@@ -5274,7 +5333,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     setSlashCommandOpen(false)
     setSlashCommandIndex(0)
     flushSync(() => {
-      setHiddenPane(null)
+      setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
       setTerminalPage('terminal')
       setTabs(nextTabs)
       setActiveTabId(nextTab.id)
@@ -5451,7 +5510,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       terminalReady: true
     })
     setSubterminalCollapsed(false)
-    setHiddenPane(null)
+    setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
     setTerminalPage('terminal')
     appendLog(
       { kind: 'status', text: `${t.terminal.openedSubterminal}: ${connection.name}` },
@@ -5497,7 +5556,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         return
       }
 
-      setHiddenPane(null)
+      setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
       setTerminalPage('terminal')
       void connectToConnection(connection).finally(releaseBusy)
     } catch {
@@ -5523,89 +5582,105 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
     options?: { overwriteExistingId?: string }
   ): Promise<void> {
     if (connectionActionBusyRef.current) return
-    const normalizedInput = normalizeConnectionInputForSave(
-      connectionForm,
-      connectionActionsText,
-      connectionSshOptionsText
-    )
-    if (!normalizedInput) return
-
-    const input = normalizedInput.id
-      ? normalizedInput
-      : { ...normalizedInput, id: createCustomConnectionId() }
-
-    const conflict = findCustomConnectionNameConflict(connections, input)
-    if (conflict && options?.overwriteExistingId !== conflict.id) {
-      setConnectionNameConflict({
-        existingId: conflict.id,
-        name: conflict.name.trim(),
-        connectAfterSave
-      })
-      setConnectionEditing(true)
-      setConnectionSaveMessage({
-        type: 'error',
-        text: t.connections.nameConflict.replace('{name}', conflict.name.trim())
-      })
-      return
-    }
-
-    const overwrite = conflict
-      ? applyConnectionNameOverwrite(input, conflict.id)
-      : { input, deleteId: undefined }
-
-    connectionActionBusyRef.current = true
-    setConnectionActionBusy(true)
-    setConnectionSaveMessage(null)
 
     try {
-      let nextConnections = await window.api.connections.save(overwrite.input)
-      if (overwrite.deleteId) {
-        nextConnections = await window.api.connections.delete(overwrite.deleteId)
-      }
-      setConnections(nextConnections)
-      setConnectionNameConflict(null)
-      const fallbackConnection: ConnectionConfig = {
-        ...overwrite.input,
-        id: overwrite.input.id ?? '',
-        source: 'custom'
-      }
-      const savedConnection = mergeConnectionInput(
-        nextConnections.find((connection) => connection.id === overwrite.input.id),
-        fallbackConnection
+      const normalizedInput = normalizeConnectionInputForSave(
+        connectionForm,
+        connectionActionsText,
+        connectionSshOptionsText
       )
-
-      setConnectionSaveMessage({
-        type: 'success',
-        text: connectAfterSave ? t.connections.saveAndConnectSucceeded : t.connections.saveSucceeded
-      })
-
-      if (savedConnection?.id) {
-        await syncClusterHostRegexToLiveTabs(savedConnection.id, savedConnection.clusterHostRegex)
-      }
-
-      if (connectAfterSave && savedConnection) {
-        // Busy flag already held; open terminal without re-entering the guard.
-        if (isLocalConnection(savedConnection)) {
-          openLocalTerminal()
-        } else {
-          openConnectionTerminal(savedConnection)
-        }
-        setConnectionModalOpen(false)
-        resetConnectionForm()
+      if (!normalizedInput.ok) {
+        setConnectionSaveMessage({
+          type: 'error',
+          text: formatConnectionSaveError(normalizedInput, t)
+        })
         return
       }
 
-      if (savedConnection) {
-        editConnection(savedConnection)
+      const input = normalizedInput.value.id
+        ? normalizedInput.value
+        : { ...normalizedInput.value, id: createCustomConnectionId() }
+
+      const conflict = findCustomConnectionNameConflict(connections, input)
+      if (conflict && options?.overwriteExistingId !== conflict.id) {
+        setConnectionNameConflict({
+          existingId: conflict.id,
+          name: conflict.name.trim(),
+          connectAfterSave
+        })
+        setConnectionEditing(true)
+        setConnectionSaveMessage({
+          type: 'error',
+          text: t.connections.nameConflict.replace('{name}', conflict.name.trim())
+        })
+        return
+      }
+
+      const overwrite = conflict
+        ? applyConnectionNameOverwrite(input, conflict.id)
+        : { input, deleteId: undefined }
+
+      connectionActionBusyRef.current = true
+      setConnectionActionBusy(true)
+      setConnectionSaveMessage(null)
+
+      try {
+        let nextConnections = await window.api.connections.save(overwrite.input)
+        if (overwrite.deleteId) {
+          nextConnections = await window.api.connections.delete(overwrite.deleteId)
+        }
+        setConnections(nextConnections)
+        setConnectionNameConflict(null)
+        const fallbackConnection: ConnectionConfig = {
+          ...overwrite.input,
+          id: overwrite.input.id ?? '',
+          source: 'custom'
+        }
+        const savedConnection = mergeConnectionInput(
+          nextConnections.find((connection) => connection.id === overwrite.input.id),
+          fallbackConnection
+        )
+
+        setConnectionSaveMessage({
+          type: 'success',
+          text: connectAfterSave
+            ? t.connections.saveAndConnectSucceeded
+            : t.connections.saveSucceeded
+        })
+
+        if (savedConnection?.id) {
+          await syncClusterHostRegexToLiveTabs(savedConnection.id, savedConnection.clusterHostRegex)
+        }
+
+        if (connectAfterSave && savedConnection) {
+          // Busy flag already held; open terminal without re-entering the guard.
+          if (isLocalConnection(savedConnection)) {
+            openLocalTerminal()
+          } else {
+            openConnectionTerminal(savedConnection)
+          }
+          setConnectionModalOpen(false)
+          resetConnectionForm()
+          return
+        }
+
+        if (savedConnection) {
+          editConnection(savedConnection)
+        }
+      } catch (error) {
+        setConnectionSaveMessage({
+          type: 'error',
+          text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
+        })
+      } finally {
+        connectionActionBusyRef.current = false
+        setConnectionActionBusy(false)
       }
     } catch (error) {
       setConnectionSaveMessage({
         type: 'error',
         text: `${t.connections.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
       })
-    } finally {
-      connectionActionBusyRef.current = false
-      setConnectionActionBusy(false)
     }
   }
 
@@ -8220,6 +8295,8 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             saved={saved}
             importingOpenApi={importingOpenApi}
             closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
+            workbenchLayout={workbenchLayout}
+            onWorkbenchLayoutChange={persistAndSetWorkbenchLayout}
             onCreateProvider={createProvider}
             onToggleProviderDetails={toggleProviderDetails}
             onToggleProviderEnabled={toggleProviderEnabled}
@@ -8227,9 +8304,6 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onApplyDefaultModel={applyDefaultModel}
             onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
             onAgentStyleChange={persistAgentStyle}
-            onSubagentsEnabledChange={(enabled) =>
-              void persistAgentConfigPatch({ subagentsEnabled: enabled })
-            }
             onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
             onShowAgentThinkingChange={persistShowAgentThinking}
             onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
@@ -8295,13 +8369,13 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
       <section
         className={`app-frame relative flex min-h-0 flex-1 ${terminalPaneFirst ? 'flex-row' : 'flex-row-reverse'}`}
       >
-        {hiddenPane === 'chat' && (
+        {workbenchLayout === 'terminal' && (
           <button
             type="button"
             className="chat-pane-rail group absolute inset-y-0 right-2 z-20 my-auto flex h-28 w-8 items-center justify-center rounded-lg border border-border/70 bg-background shadow-sm transition-[width,border-color,background-color] duration-200 hover:w-9 hover:border-primary/40 hover:bg-accent"
             aria-label={t.app.showChat}
             title={t.app.showChat}
-            onClick={() => setHiddenPane(null)}
+            onClick={() => persistAndSetWorkbenchLayout('split')}
           >
             <span className="flex flex-col items-center gap-2 text-muted-foreground transition-colors group-hover:text-foreground">
               <MessageSquareIcon className="h-4 w-4" aria-hidden="true" />
@@ -8311,10 +8385,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             </span>
           </button>
         )}
-        {hiddenPane !== 'terminal' && (
+        {workbenchLayout !== 'chat' && (
           <TerminalPane
             widthPercent={terminalPanePercent}
-            fillWidth={hiddenPane === 'chat'}
+            fillWidth={workbenchLayout === 'terminal'}
             terminalTabs={terminalTabs}
             labelTabs={tabs}
             terminalPage={terminalPage}
@@ -8354,6 +8428,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
             onOpenLocalSubterminal={() => void openLocalSubterminal()}
+            onInterruptCommand={interruptAgentCommand}
+            commandRunning={Boolean(runningCommandTabId)}
+            agentBusy={sessionChatTab.agentBusy}
             onReconnect={() => void reconnectActiveTerminal()}
             onViewRecovery={viewConnectionRecovery}
             onDismissRecovery={
@@ -8363,7 +8440,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             }
           />
         )}
-        {!hiddenPane && (
+        {workbenchLayout === 'split' && (
           <div
             className="app-pane-resizer w-1.5 shrink-0 cursor-col-resize outline-none focus-visible:ring-0"
             role="separator"
@@ -8378,7 +8455,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             }}
           />
         )}
-        {hiddenPane !== 'chat' && (
+        {workbenchLayout !== 'terminal' && (
           <AgentPanel
             sessionChatTab={sessionChatTab}
             sessionChatTabs={sessionChatTabs}
@@ -8391,10 +8468,9 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             slashMenuVisible={slashMenuVisible}
             slashCommandOptions={slashCommandOptions}
             selectedSlashCommandIndex={selectedSlashCommandIndex}
-            terminalPaneFirst={terminalPaneFirst}
-            terminalHidden={hiddenPane === 'terminal'}
+            terminalHidden={workbenchLayout === 'chat'}
             terminalStartError={
-              hiddenPane === 'terminal' ? activeTab?.terminalStartError?.trim() : undefined
+              workbenchLayout === 'chat' ? activeTab?.terminalStartError?.trim() : undefined
             }
             activeModel={activeModel}
             activeModelSelectionValue={activeModelSelectionValue}
@@ -8548,10 +8624,10 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
             onPasswordPromptChange={setPasswordPromptValue}
             onPasswordPromptCancel={cancelPasswordPrompt}
             onPasswordPromptSubmit={submitPasswordPrompt}
-            onToggleTerminalPane={() => {
-              setHiddenPane((current) => (current === 'terminal' ? null : 'terminal'))
-            }}
-            onHideChatPane={() => setHiddenPane('chat')}
+            workbenchLayout={workbenchLayout}
+            onWorkbenchLayoutChange={persistAndSetWorkbenchLayout}
+            onInterruptCommand={interruptAgentCommand}
+            runningCommandTabId={runningCommandTabId}
             onSelectSession={(groupId) => {
               const focusTab =
                 getSessionTerminals(tabsRef.current, groupId).find(
@@ -8616,6 +8692,7 @@ function App({ recoveryMode = 'none' }: { recoveryMode?: 'none' | 'pending' }): 
         connectionActionsText={connectionActionsText}
         connectionCommandPreview={connectionCommandPreview}
         connectionFormReady={connectionFormReady}
+        clusterHostRegexValidation={clusterHostRegexValidation}
         connectionSaveMessage={connectionSaveMessage}
         connectionNameConflict={connectionNameConflict}
         connectionActionBusy={connectionActionBusy}

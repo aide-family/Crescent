@@ -31,29 +31,51 @@ export function notifyOperationError(message: string, error: unknown): void {
   })
 }
 
+export const COPY_FALLBACK_TEXTAREA_CSS =
+  'position:fixed;left:-9999px;top:0;opacity:0;user-select:text;-webkit-user-select:text'
+
+export function applyCopyFallbackTextareaStyle(textArea: { style: { cssText: string } }): void {
+  textArea.style.cssText = COPY_FALLBACK_TEXTAREA_CSS
+}
+
+function notifyCopySuccess(feedback?: OperationFeedback): void {
+  if (feedback) toast.success(feedback.success)
+}
+
 export async function copyText(value: string, feedback?: OperationFeedback): Promise<void> {
   try {
+    const writeHost = globalThis.window?.api?.app?.writeClipboardText
+    if (writeHost) {
+      const result = await writeHost(value)
+      if (result.ok) {
+        notifyCopySuccess(feedback)
+        return
+      }
+    }
+  } catch {
+    // Fall through to Chromium clipboard APIs.
+  }
+
+  try {
     await navigator.clipboard.writeText(value)
-    if (feedback) toast.success(feedback.success)
+    notifyCopySuccess(feedback)
     return
   } catch (clipboardError) {
     const textArea = document.createElement('textarea')
     try {
       textArea.value = value
-      textArea.style.position = 'fixed'
-      textArea.style.left = '-9999px'
-      textArea.style.top = '0'
+      applyCopyFallbackTextareaStyle(textArea)
       document.body.appendChild(textArea)
       textArea.focus()
       textArea.select()
       const copied = document.execCommand('copy')
       if (!copied) throw clipboardError
-      if (feedback) toast.success(feedback.success)
+      notifyCopySuccess(feedback)
     } catch (fallbackError) {
       if (feedback) notifyOperationError(feedback.failed, fallbackError)
       throw fallbackError
     } finally {
-      document.body.removeChild(textArea)
+      textArea.remove()
     }
   }
 }

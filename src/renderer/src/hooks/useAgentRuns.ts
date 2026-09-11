@@ -555,6 +555,7 @@ export function useAgentRuns({
                   name: 'bash',
                   toolCallId: event.toolCallId || openStep.toolCallId,
                   command: command || openStep.command,
+                  tabId: event.tabId?.trim() || openStep.tabId,
                   // Prefer plain command over JSON args for display.
                   argsText: command || openStep.command ? undefined : argsOrResult || undefined
                 }
@@ -568,7 +569,8 @@ export function useAgentRuns({
               phase: 'started',
               argsText: isPty && command ? undefined : argsOrResult || undefined,
               command: command || undefined,
-              toolCallId: event.toolCallId
+              toolCallId: event.toolCallId,
+              tabId: event.tabId?.trim() || undefined
             })
             return { ...run, steps }
           }
@@ -586,6 +588,7 @@ export function useAgentRuns({
                 isError: Boolean(event.isError) || Boolean(existing.isError),
                 command: existing.command || command || undefined,
                 toolCallId: event.toolCallId || existing.toolCallId,
+                tabId: event.tabId?.trim() || existing.tabId,
                 argsText: existing.command || command ? undefined : existing.argsText
               }
               return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
@@ -600,7 +603,8 @@ export function useAgentRuns({
             resultText: argsOrResult || undefined,
             isError: Boolean(event.isError),
             command: command || undefined,
-            toolCallId: event.toolCallId
+            toolCallId: event.toolCallId,
+            tabId: event.tabId?.trim() || undefined
           })
           return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })
@@ -622,6 +626,7 @@ export function useAgentRuns({
                 ...steps[openIndex],
                 name: 'bash',
                 command: event.command || steps[openIndex].command,
+                tabId: event.tabId?.trim() || steps[openIndex].tabId,
                 argsText: undefined
               }
               return { ...run, steps }
@@ -632,7 +637,8 @@ export function useAgentRuns({
               kind: 'tool',
               name: 'bash',
               phase: 'started',
-              command: event.command
+              command: event.command,
+              tabId: event.tabId?.trim() || undefined
             })
             return { ...run, steps }
           }
@@ -655,6 +661,7 @@ export function useAgentRuns({
                 interrupted: Boolean(event.result?.interrupted),
                 timedOut: Boolean(event.result?.timedOut),
                 command: existing.command || event.command,
+                tabId: event.tabId?.trim() || existing.tabId,
                 argsText: undefined
               }
               return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
@@ -673,6 +680,7 @@ export function useAgentRuns({
               interrupted: Boolean(event.result?.interrupted) || Boolean(existing.interrupted),
               timedOut: Boolean(event.result?.timedOut) || Boolean(existing.timedOut),
               command: existing.command || event.command,
+              tabId: event.tabId?.trim() || existing.tabId,
               argsText: undefined
             }
             return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
@@ -687,7 +695,8 @@ export function useAgentRuns({
             resultText: observation || undefined,
             isError: event.result ? !event.result.ok : false,
             interrupted: Boolean(event.result?.interrupted),
-            timedOut: Boolean(event.result?.timedOut)
+            timedOut: Boolean(event.result?.timedOut),
+            tabId: event.tabId?.trim() || undefined
           })
           return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })

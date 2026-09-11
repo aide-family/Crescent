@@ -15,7 +15,9 @@ import {
   filterCrescentBootstrapOutput,
   parseSubterminalTabId
 } from '../lib/terminal-text'
-import { appendTerminalOutputRing, readTerminalOutputRing } from '../lib/terminal-output-ring'
+import { readTerminalOutputRing } from '../lib/terminal-output-ring'
+import { applyXtermInputLock } from '../lib/xterm-input-lock'
+import { createXtermReplayGate, hydrateXtermFromHistory } from '../lib/xterm-hydrate'
 import { attachXtermScrollFollow, writeXtermAndFollow } from '../lib/xterm-scroll-follow'
 import {
   resolveSessionChatTabId,
@@ -26,6 +28,7 @@ import type { ConnectionConfig } from '../../../shared/agent-types'
 
 interface UseXtermLifecycleInput {
   terminalVisible: boolean
+  inputLocked?: boolean
   activeTabId: string
   activeTabExists: boolean
   activeTabIdRef: MutableRefObject<string>
@@ -63,6 +66,7 @@ interface UseXtermLifecycleInput {
 
 export function useXtermLifecycle({
   terminalVisible,
+  inputLocked = false,
   activeTabId,
   activeTabExists,
   activeTabIdRef,
@@ -122,6 +126,15 @@ export function useXtermLifecycle({
     [activeTabIdRef, pipePromptRef, syncPipeContext, terminalCwdRef]
   )
 
+  const inputLockedRef = useRef(false)
+
+  useEffect(() => {
+    inputLockedRef.current = inputLocked
+    const terminal = terminalRef.current
+    if (!terminal) return
+    applyXtermInputLock(terminal, inputLocked)
+  }, [inputLocked, terminalRef])
+
   useEffect(() => {
     if (!terminalVisible) return
 
@@ -148,18 +161,12 @@ export function useXtermLifecycle({
     fitAddon.fit()
 
     const scrollFollow = attachXtermScrollFollow(terminal)
-
-    if (tab.terminalOutput) {
-      writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(tab.terminalOutput), scrollFollow)
-    } else {
-      const ring = readTerminalOutputRing(tab.id)
-      if (ring) {
-        writeXtermAndFollow(terminal, filterCrescentBootstrapOutput(ring), scrollFollow)
-      }
-    }
+    const replayGate = createXtermReplayGate()
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
+      if (inputLockedRef.current) return
+      if (!replayGate.shouldForwardInput()) return
       scrollFollow.resetFollow()
       terminal.scrollToBottom()
       if (terminalModeRef.current === 'pipe') {
@@ -169,18 +176,19 @@ export function useXtermLifecycle({
 
       window.api.terminal.write(data, activeTabIdRef.current)
     })
+
+    const history = tab.terminalOutput
+      ? filterCrescentBootstrapOutput(tab.terminalOutput)
+      : filterCrescentBootstrapOutput(readTerminalOutputRing(tab.id))
+    hydrateXtermFromHistory(terminal, history, scrollFollow, () => replayGate.release())
+
     const stopTerminalData = window.api.terminal.onData((event) => {
       const subterminal = parseSubterminalTabId(event.tabId)
-      if (subterminal) {
-        // Subterminal xterm pane owns display; keep a ring only (no React concat).
-        appendTerminalOutputRing(event.tabId, event.data)
-        return
-      }
+      if (subterminal) return
 
       const filtered = bootstrapFilter.push(event.data)
       if (!filtered) return
 
-      appendTerminalOutputRing(event.tabId, filtered)
       if (event.tabId === activeTabIdRef.current) {
         writeXtermAndFollow(terminal, filtered, scrollFollow)
       }
@@ -328,6 +336,7 @@ export function useXtermLifecycle({
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
+    applyXtermInputLock(terminal, inputLockedRef.current)
 
     return () => {
       resizeObserver.disconnect()

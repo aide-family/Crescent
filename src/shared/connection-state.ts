@@ -119,50 +119,117 @@ export function patchConnectionClusterHostRegex(
 /** Cap user-supplied cluster regex length to limit ReDoS surface. */
 export const MAX_CLUSTER_HOST_REGEX_LENGTH = 200
 
-/** True when observed host matches a configured cluster hostname regex. */
+export type ClusterHostPatternReason = 'too-long' | 'too-complex' | 'invalid'
+
+export type ClusterHostPatternValidation =
+  | { ok: true; value?: string; regex?: string }
+  | { ok: false; error: string; reason: ClusterHostPatternReason }
+
+const GLOB_META = /[*?]/
+const REGEX_ESCAPE = /[\\^$+{}[\]().|]/
+const REDOS_NESTED_QUANTIFIER = /(?:\+|\*|\}|\{)\s*(?:\+|\*|\{)/
+const REDOS_STACKED_WILDCARDS = /(?:\.\*){3,}/
+
+function looksLikeRedos(pattern: string): boolean {
+  return REDOS_NESTED_QUANTIFIER.test(pattern) || REDOS_STACKED_WILDCARDS.test(pattern)
+}
+
+function tryCompileRegex(source: string): boolean {
+  try {
+    void new RegExp(source)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Convert a glob (`*.gd17.*`) to an anchored JS regex source. */
+export function globToAnchoredRegexSource(glob: string): string {
+  let compiled = ''
+  for (const char of glob) {
+    if (char === '*') compiled += '.*'
+    else if (char === '?') compiled += '.'
+    else if (char === '.' || REGEX_ESCAPE.test(char)) compiled += `\\${char}`
+    else compiled += char
+  }
+  return `^${compiled}$`
+}
+
+/**
+ * Compile a cluster host pattern. Accepts JS regex, or glob with `*` / `?`
+ * when the raw string is not a valid regex. The returned `value` is the
+ * original user string (persisted); `regex` is what matchers should compile.
+ */
+export function compileClusterHostPattern(
+  value: string | null | undefined
+): ClusterHostPatternValidation {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed) return { ok: true, value: undefined }
+  if (trimmed.length > MAX_CLUSTER_HOST_REGEX_LENGTH) {
+    return {
+      ok: false,
+      reason: 'too-long',
+      error: `Cluster host regex must be at most ${MAX_CLUSTER_HOST_REGEX_LENGTH} characters.`
+    }
+  }
+
+  if (tryCompileRegex(trimmed)) {
+    if (looksLikeRedos(trimmed)) {
+      return {
+        ok: false,
+        reason: 'too-complex',
+        error: 'Cluster host regex looks too complex; simplify the pattern.'
+      }
+    }
+    return { ok: true, value: trimmed, regex: trimmed }
+  }
+
+  if (GLOB_META.test(trimmed)) {
+    const regex = globToAnchoredRegexSource(trimmed)
+    if (!tryCompileRegex(regex) || looksLikeRedos(regex)) {
+      return {
+        ok: false,
+        reason: 'too-complex',
+        error: 'Cluster host regex looks too complex; simplify the pattern.'
+      }
+    }
+    return { ok: true, value: trimmed, regex }
+  }
+
+  return {
+    ok: false,
+    reason: 'invalid',
+    error: 'Cluster host regex is not a valid regular expression.'
+  }
+}
+
+/** True when observed host matches a configured cluster hostname regex or glob. */
 export function matchesClusterHostRegex(
   observedHost: string | undefined,
   clusterHostRegex?: string
 ): boolean {
-  const pattern = normalizeClusterHostRegex(clusterHostRegex)
-  if (!pattern) return false
+  const compiled = compileClusterHostPattern(clusterHostRegex)
+  if (!compiled.ok || !compiled.regex) return false
   const observed = normalizeHostToken(observedHost ?? '')
   if (!observed) return false
   try {
-    return new RegExp(pattern).test(observed)
+    return new RegExp(compiled.regex).test(observed)
   } catch {
     return false
   }
 }
 
 /**
- * Validate / normalize a cluster host regex at save time.
- * Rejects invalid syntax, excessive length, and nested-quantifier heuristics.
+ * Validate / normalize a cluster host pattern at save time.
+ * Accepts JS regex or glob (`*.gd17.*`). Rejects invalid syntax, excessive
+ * length, and nested-quantifier heuristics (checked on the compiled regex).
  */
 export function validateClusterHostRegex(
   value: string | null | undefined
-): { ok: true; value?: string } | { ok: false; error: string } {
-  const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed) return { ok: true, value: undefined }
-  if (trimmed.length > MAX_CLUSTER_HOST_REGEX_LENGTH) {
-    return {
-      ok: false,
-      error: `Cluster host regex must be at most ${MAX_CLUSTER_HOST_REGEX_LENGTH} characters.`
-    }
-  }
-  // Nested quantifiers / stacked wildcards are a common ReDoS smell.
-  if (/(?:\+|\*|\}|\{)\s*(?:\+|\*|\{)/.test(trimmed) || /(?:\.\*){3,}/.test(trimmed)) {
-    return {
-      ok: false,
-      error: 'Cluster host regex looks too complex; simplify the pattern.'
-    }
-  }
-  try {
-    void new RegExp(trimmed)
-  } catch {
-    return { ok: false, error: 'Cluster host regex is not a valid regular expression.' }
-  }
-  return { ok: true, value: trimmed }
+): ClusterHostPatternValidation {
+  const compiled = compileClusterHostPattern(value)
+  if (!compiled.ok) return compiled
+  return { ok: true, value: compiled.value }
 }
 
 function normalizeClusterHostRegex(value: string | null | undefined): string | undefined {

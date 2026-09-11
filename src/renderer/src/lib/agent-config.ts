@@ -77,15 +77,10 @@ export function flattenProviderModels(providers: AgentProviderConfig[]): AgentMo
 }
 
 export function buildAvailableToolRefs(
-  validation: AgentValidationResult | undefined,
-  options?: { subagentsEnabled?: boolean }
+  validation: AgentValidationResult | undefined
 ): AgentToolReference[] {
-  const subagentsEnabled = options?.subagentsEnabled === true
-  const catalog = BUILT_IN_TOOL_CATALOG.filter(
-    (tool) => tool.name !== 'subagent' || subagentsEnabled
-  )
-  const builtInToolNames = new Set(catalog.map((tool) => tool.name))
-  const builtInTools: AgentToolReference[] = catalog.map((tool) => ({
+  const builtInToolNames = new Set(BUILT_IN_TOOL_CATALOG.map((tool) => tool.name))
+  const builtInTools: AgentToolReference[] = BUILT_IN_TOOL_CATALOG.map((tool) => ({
     id: `built-in:${tool.name}`,
     name: tool.name,
     description: `${tool.method.toUpperCase()} ${tool.path} - ${tool.description}`,

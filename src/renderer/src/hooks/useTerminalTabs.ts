@@ -19,6 +19,7 @@ import {
   toStoredSessionTabs,
   type AgentTerminalTab
 } from '../lib/terminal-tabs'
+import { revealChatFromTerminalLayout, type WorkbenchLayout } from '../lib/app-shell'
 import type { StoredSessionTab } from '../../../shared/agent-types'
 
 export interface CloseTabPromotionPlan {
@@ -88,7 +89,7 @@ interface UseTerminalTabsInput {
   tabsRef: MutableRefObject<AgentTerminalTab[]>
   terminalPage: 'terminal' | 'connections'
   setTerminalPage: Dispatch<SetStateAction<'terminal' | 'connections'>>
-  setHiddenPane: Dispatch<SetStateAction<'terminal' | 'chat' | null>>
+  setWorkbenchLayout: Dispatch<SetStateAction<WorkbenchLayout>>
   emptyLocalTab: AgentTerminalTab
   updateTab: (tabId: string, updater: (tab: AgentTerminalTab) => AgentTerminalTab) => void
   localTerminalTitle: string
@@ -104,7 +105,7 @@ export function useTerminalTabs({
   tabsRef,
   terminalPage,
   setTerminalPage,
-  setHiddenPane,
+  setWorkbenchLayout,
   emptyLocalTab,
   updateTab,
   localTerminalTitle,
@@ -192,14 +193,14 @@ export function useTerminalTabs({
       flushSync(() => {
         setActiveTabId(tabId)
         setTerminalPage('terminal')
-        setHiddenPane(null)
+        setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
       })
     },
-    [activeTabIdRef, setActiveTabId, setHiddenPane, setTerminalPage]
+    [activeTabIdRef, setActiveTabId, setWorkbenchLayout, setTerminalPage]
   )
 
   const openLocalTerminal = useCallback((): void => {
-    setHiddenPane(null)
+    setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
     setTerminalPage('terminal')
 
     const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
@@ -236,7 +237,7 @@ export function useTerminalTabs({
     localTerminalTitle,
     providerId,
     setActiveTabId,
-    setHiddenPane,
+    setWorkbenchLayout,
     setTabs,
     setTerminalPage,
     tabsRef,

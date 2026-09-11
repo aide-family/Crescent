@@ -75,7 +75,12 @@ interface TerminalAgentApi {
     exportRendererDiagnostics: () => Promise<{ ok: boolean; canceled?: boolean; path?: string }>
     reportDiagnosticError: (message: string) => void
     setLocale: (locale: 'zh-CN' | 'en') => Promise<{ ok: boolean; locale: 'zh-CN' | 'en' }>
+    getWorkbenchLayout: () => Promise<{ layout: 'split' | 'chat' | 'terminal' | null }>
+    setWorkbenchLayout: (
+      layout: 'split' | 'chat' | 'terminal'
+    ) => Promise<{ ok: boolean; layout?: 'split' | 'chat' | 'terminal'; error?: string }>
     openExternal: (url: string) => Promise<{ ok: boolean }>
+    writeClipboardText: (value: string) => Promise<{ ok: boolean; error?: string }>
     onOpenSettings: (callback: () => void) => () => void
     onAttentionClicked: (
       callback: (payload: { pendingId?: string; tabId?: string; chatTabId?: string }) => void
@@ -158,6 +163,7 @@ interface TerminalAgentApi {
       cwd?: string
       error?: string
     }>
+    interrupt: (tabId: string) => Promise<{ ok: boolean; interrupted: boolean; error?: string }>
     onData: (callback: (event: { tabId: string; data: string }) => void) => () => void
     onPrompt: (
       callback: (event: { tabId: string; cwd: string; prompt?: string }) => void

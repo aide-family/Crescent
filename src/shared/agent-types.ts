@@ -39,11 +39,6 @@ export interface AgentConfig {
   loadGlobalAgentSkills: boolean
   /** Extension ids (file/dir basename) that should not be loaded. */
   disabledExtensions: string[]
-  /**
-   * When true, the parent session registers the host `subagent` tool.
-   * Each child gets a dedicated docked subterminal; parent bash stays on the current pane.
-   */
-  subagentsEnabled: boolean
   mcpServers: AgentMcpServerConfig[]
   /** Minimum level recorded to ~/.crescent/logs (default: info). */
   logLevel?: SystemLogLevel

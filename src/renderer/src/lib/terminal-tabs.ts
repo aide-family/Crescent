@@ -105,6 +105,8 @@ export type AgentRunStep =
       interrupted?: boolean
       timedOut?: boolean
       toolCallId?: string
+      /** Terminal pane where this PTY command is running. */
+      tabId?: string
       seq?: number
     }
   | {

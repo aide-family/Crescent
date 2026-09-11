@@ -1,10 +1,25 @@
 import { useMemo } from 'react'
 
+import type { Dictionary } from '@renderer/i18n'
 import { LOCAL_CONNECTION_ID } from '../lib/app-runtime'
 import { buildSshCommand, parseLoginActions, parseSshOptions } from '../lib/connection-commands'
 import { filterConnections } from '../lib/connections'
 import type { ConnectionConfig, ConnectionInput } from '../../../shared/agent-types'
-import { validateClusterHostRegex } from '../../../shared/connection-state'
+import {
+  MAX_CLUSTER_HOST_REGEX_LENGTH,
+  validateClusterHostRegex,
+  type ClusterHostPatternReason,
+  type ClusterHostPatternValidation
+} from '../../../shared/connection-state'
+
+export type ConnectionSaveInputResult =
+  | { ok: true; value: ConnectionInput }
+  | {
+      ok: false
+      reason: 'missing-name' | 'missing-host' | 'invalid-cluster-regex'
+      detail?: string
+      clusterReason?: ClusterHostPatternReason
+    }
 
 export function createEmptyConnectionForm(): ConnectionInput {
   return {
@@ -41,35 +56,76 @@ export function connectionToForm(connection: ConnectionConfig): ConnectionInput 
   }
 }
 
+export function formatClusterHostPatternError(
+  result: Extract<ClusterHostPatternValidation, { ok: false }>,
+  t: Dictionary
+): string {
+  if (result.reason === 'too-long') {
+    return t.connections.clusterHostRegexTooLong.replace(
+      '{max}',
+      String(MAX_CLUSTER_HOST_REGEX_LENGTH)
+    )
+  }
+  if (result.reason === 'too-complex') return t.connections.clusterHostRegexTooComplex
+  return t.connections.clusterHostRegexInvalid
+}
+
+export function formatConnectionSaveError(
+  result: Extract<ConnectionSaveInputResult, { ok: false }>,
+  t: Dictionary
+): string {
+  if (result.reason === 'missing-name') return t.connections.saveMissingName
+  if (result.reason === 'missing-host') return t.connections.saveMissingHost
+  return formatClusterHostPatternError(
+    {
+      ok: false,
+      reason: result.clusterReason ?? 'invalid',
+      error: result.detail ?? ''
+    },
+    t
+  )
+}
+
 export function normalizeConnectionInputForSave(
   connectionForm: ConnectionInput,
   connectionActionsText: string,
   connectionSshOptionsText: string
-): ConnectionInput | null {
+): ConnectionSaveInputResult {
   const actions = parseLoginActions(connectionActionsText)
   const sshOptions = parseSshOptions(connectionSshOptionsText)
   const name = connectionForm.name.trim()
   const host = connectionForm.host.trim()
 
-  if (!name || !host) return null
+  if (!name) return { ok: false, reason: 'missing-name' }
+  if (!host) return { ok: false, reason: 'missing-host' }
 
   const clusterHostRegexResult = validateClusterHostRegex(connectionForm.clusterHostRegex)
-  if (!clusterHostRegexResult.ok) return null
+  if (!clusterHostRegexResult.ok) {
+    return {
+      ok: false,
+      reason: 'invalid-cluster-regex',
+      clusterReason: clusterHostRegexResult.reason,
+      detail: clusterHostRegexResult.error
+    }
+  }
 
   return {
-    id: connectionForm.id,
-    name,
-    host,
-    user: connectionForm.user?.trim() || undefined,
-    password: connectionForm.password?.trim() || undefined,
-    passwordEnvVar: connectionForm.passwordEnvVar?.trim() || undefined,
-    rootPassword: connectionForm.rootPassword?.trim() || undefined,
-    port: connectionForm.port || undefined,
-    identityFile: connectionForm.identityFile?.trim() || undefined,
-    sshOptions,
-    description: connectionForm.description?.trim() || undefined,
-    actions,
-    clusterHostRegex: clusterHostRegexResult.value
+    ok: true,
+    value: {
+      id: connectionForm.id,
+      name,
+      host,
+      user: connectionForm.user?.trim() || undefined,
+      password: connectionForm.password?.trim() || undefined,
+      passwordEnvVar: connectionForm.passwordEnvVar?.trim() || undefined,
+      rootPassword: connectionForm.rootPassword?.trim() || undefined,
+      port: connectionForm.port || undefined,
+      identityFile: connectionForm.identityFile?.trim() || undefined,
+      sshOptions,
+      description: connectionForm.description?.trim() || undefined,
+      actions,
+      clusterHostRegex: clusterHostRegexResult.value
+    }
   }
 }
 
@@ -94,6 +150,7 @@ export function useConnections({
   displayConnections: ConnectionConfig[]
   filteredDisplayConnections: ConnectionConfig[]
   connectionFormReady: boolean
+  clusterHostRegexValidation: ClusterHostPatternValidation
   connectionCommandPreview: string
 } {
   const localConnection = useMemo<ConnectionConfig>(
@@ -117,9 +174,17 @@ export function useConnections({
     [displayConnections, query]
   )
 
+  const clusterHostRegexValidation = useMemo(
+    () => validateClusterHostRegex(connectionForm.clusterHostRegex),
+    [connectionForm.clusterHostRegex]
+  )
+
   const connectionFormReady = useMemo(
-    () => Boolean(connectionForm.name.trim() && connectionForm.host.trim()),
-    [connectionForm.host, connectionForm.name]
+    () =>
+      Boolean(
+        connectionForm.name.trim() && connectionForm.host.trim() && clusterHostRegexValidation.ok
+      ),
+    [clusterHostRegexValidation.ok, connectionForm.host, connectionForm.name]
   )
 
   const connectionCommandPreview = useMemo(() => {
@@ -143,6 +208,7 @@ export function useConnections({
     displayConnections,
     filteredDisplayConnections,
     connectionFormReady,
+    clusterHostRegexValidation,
     connectionCommandPreview
   }
 }

@@ -28,10 +28,17 @@ export function attachXtermScrollFollow(terminal: Terminal): XtermScrollFollow {
 
 /** Write PTY output and scroll to bottom when auto-follow is enabled. */
 export function writeXtermAndFollow(
-  terminal: Terminal,
+  terminal: Pick<Terminal, 'write'>,
   data: string,
-  follow: XtermScrollFollow
+  follow: XtermScrollFollow,
+  onWriteComplete?: () => void
 ): void {
-  if (!data) return
-  terminal.write(data, () => follow.followIfEnabled())
+  if (!data) {
+    onWriteComplete?.()
+    return
+  }
+  terminal.write(data, () => {
+    follow.followIfEnabled()
+    onWriteComplete?.()
+  })
 }

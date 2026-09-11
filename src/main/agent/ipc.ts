@@ -519,9 +519,7 @@ export function registerAgentIpc(): void {
       await validateModel(nextConfig)
       const cwd = resolveAgentWorkspaceCwd(nextConfig)
       const mcpCatalog = await listMcpToolCatalog(nextConfig.mcpServers)
-      const builtInTools = BUILT_IN_TOOL_CATALOG.filter(
-        (tool) => tool.name !== 'subagent' || nextConfig.subagentsEnabled === true
-      ).map((tool) =>
+      const builtInTools = BUILT_IN_TOOL_CATALOG.map((tool) =>
         tool.name === 'bash'
           ? {
               ...tool,

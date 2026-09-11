@@ -17,7 +17,8 @@ export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '- 需要登录另一台主机 / 新 SSH，而当前终端无法到达或不该离开：优先 open_subterminal(mode=ssh, connectionId=...)，再在该子终端执行；不要只做分析。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
-  '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。'
+  '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。',
+  '- open_subterminal 只给当前智能体加窗格，不能用来拉起子智能体；多 agent 必须调用 subagent。'
 ].join('\n')
 
 /** Local panes: soft-succeed on UI ack timeout so bash can still target the pane. */

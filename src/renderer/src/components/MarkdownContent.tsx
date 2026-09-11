@@ -231,7 +231,7 @@ export function MarkdownContent({
   const renderValue = expanded ? value : buildMarkdownPreview(value)
 
   return (
-    <div className="markdown-body select-text min-w-0 space-y-2 overflow-hidden leading-relaxed break-words">
+    <div className="markdown-body select-text flex min-w-0 flex-col gap-2 leading-relaxed break-words">
       {renderMarkdownBlocks(renderValue, t, { headingIdPrefix, streaming })}
       {oversized ? (
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -463,9 +463,13 @@ function MarkdownCodeBlock({
   const label = language || 'text'
 
   async function copyCode(): Promise<void> {
-    await copyText(code, copyFeedback(t))
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
+    try {
+      await copyText(code, copyFeedback(t))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch {
+      // copyText already toasted the failure.
+    }
   }
 
   if (isMermaidCodeLanguage(normalizedLanguage)) {
@@ -482,7 +486,7 @@ function MarkdownCodeBlock({
   }
 
   return (
-    <div className="app-code-panel group min-w-0 overflow-hidden rounded-lg border">
+    <div className="app-code-panel group min-w-0 rounded-lg border">
       <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center justify-between gap-2 pr-1 pl-3">
         <span className="app-code-panel-lang min-w-0 truncate">
           {closed ? label : `${label || 'text'}…`}
@@ -491,9 +495,10 @@ function MarkdownCodeBlock({
           type="button"
           variant="ghost"
           size="xs"
-          className="h-7 shrink-0 gap-1 px-2 text-[11px] text-[var(--app-markdown-muted)] hover:bg-white/8 hover:text-[var(--app-markdown-text)]"
+          className="h-7 shrink-0 gap-1 px-2 text-[11px] text-[var(--app-markdown-muted)] select-none hover:bg-white/8 hover:text-[var(--app-markdown-text)]"
           aria-label={copied ? t.common.copied : t.common.copy}
           title={copied ? t.common.copied : t.common.copy}
+          onPointerDown={(event) => event.preventDefault()}
           onClick={() => void copyCode()}
         >
           {copied ? (
@@ -876,9 +881,10 @@ function MermaidBlock({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="h-6 w-6"
+            className="h-6 w-6 select-none"
             aria-label={copied ? t.common.copied : t.common.copy}
             title={copied ? t.common.copied : t.common.copy}
+            onPointerDown={(event) => event.preventDefault()}
             onClick={() => void onCopy()}
           >
             {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
@@ -942,8 +948,10 @@ function MermaidBlock({
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="select-none"
                     aria-label={copied ? t.common.copied : t.common.copy}
                     title={copied ? t.common.copied : t.common.copy}
+                    onPointerDown={(event) => event.preventDefault()}
                     onClick={() => void onCopy()}
                   >
                     {copied ? (
@@ -1028,7 +1036,7 @@ function MarkdownTable({ lines }: { lines: string[] }): React.JSX.Element {
   const rows = bodyLines.map(splitMarkdownTableRow)
 
   return (
-    <div className="markdown-table min-w-0 overflow-hidden rounded-md border">
+    <div className="markdown-table min-w-0 overflow-x-auto rounded-md border">
       <table className="w-full table-fixed border-collapse text-left text-xs">
         <thead>
           <tr>

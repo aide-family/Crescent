@@ -24,9 +24,11 @@ import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
 import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
+import { formatClusterHostPatternError } from '@renderer/hooks/useConnections'
 import type { Dictionary } from '@renderer/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { ConnectionConfig, ConnectionInput } from '../../../shared/agent-types'
+import type { ClusterHostPatternValidation } from '../../../shared/connection-state'
 
 type ConnectionFormChange = <K extends keyof ConnectionInput>(
   key: K,
@@ -49,6 +51,7 @@ export function ConnectionManagerModal({
   connectionActionsText,
   connectionCommandPreview,
   connectionFormReady,
+  clusterHostRegexValidation,
   connectionSaveMessage,
   connectionNameConflict,
   connectionActionBusy = false,
@@ -90,6 +93,7 @@ export function ConnectionManagerModal({
   connectionActionsText: string
   connectionCommandPreview: string
   connectionFormReady: boolean
+  clusterHostRegexValidation: ClusterHostPatternValidation
   connectionSaveMessage: SkillManageMessage | null
   connectionNameConflict: { name: string } | null
   connectionActionBusy?: boolean
@@ -133,6 +137,10 @@ export function ConnectionManagerModal({
     (connection) => connection.id === selectedConnectionId
   )
   const canEditConnection = !selectedConnection || selectedConnection.source === 'custom'
+  const clusterHostRegexInvalid = !clusterHostRegexValidation.ok
+  const clusterHostRegexMessage = clusterHostRegexInvalid
+    ? formatClusterHostPatternError(clusterHostRegexValidation, t)
+    : t.connections.clusterHostRegexDescription
   const canSaveConnection =
     connectionEditing && connectionFormReady && canEditConnection && !connectionActionBusy
   const connectDisabled = connectionActionBusy
@@ -185,6 +193,7 @@ export function ConnectionManagerModal({
             t={t}
             showCustomMetadata
             formatConnectionTarget={formatConnectionTarget}
+            autoFocusSearch
             onQueryChange={onQueryChange}
             onSelectConnection={(connection) => {
               if (connectionActionBusy) return
@@ -460,7 +469,7 @@ export function ConnectionManagerModal({
                     />
                   </Field>
                 </div>
-                <Field>
+                <Field data-invalid={clusterHostRegexInvalid || undefined}>
                   <FieldLabel htmlFor="connection-cluster-host-regex">
                     {t.connections.clusterHostRegex}
                   </FieldLabel>
@@ -474,8 +483,9 @@ export function ConnectionManagerModal({
                     readOnly={!connectionEditing}
                     autoComplete="off"
                     spellCheck={false}
+                    aria-invalid={clusterHostRegexInvalid || undefined}
                   />
-                  <FieldDescription>{t.connections.clusterHostRegexDescription}</FieldDescription>
+                  <FieldDescription>{clusterHostRegexMessage}</FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="connection-user">{t.connections.user}</FieldLabel>

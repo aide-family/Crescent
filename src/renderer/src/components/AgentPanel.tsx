@@ -8,15 +8,14 @@ import {
 } from 'react'
 import {
   ArrowUpIcon,
+  Columns2Icon,
   FileIcon,
   FolderOpenIcon,
   Loader2Icon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  PanelRightCloseIcon,
-  PanelRightOpenIcon,
+  MessageSquareIcon,
   PaperclipIcon,
   PlusIcon,
+  SquareTerminalIcon,
   TriangleAlertIcon
 } from 'lucide-react'
 
@@ -32,6 +31,7 @@ import {
 import { SlashCommandMenu } from '@renderer/components/SlashCommandMenu'
 import { StatusDot, TerminalActivityDot } from '@renderer/components/StatusIndicators'
 import { Button } from '@renderer/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
 import type { ConnectionClarifyConfirmPayload } from '@renderer/lib/connection-route'
 import {
   Select,
@@ -60,6 +60,7 @@ import {
   type AgentTerminalTab
 } from '@renderer/lib/terminal-tabs'
 import { buildModelSelectionValue } from '@renderer/lib/app-runtime'
+import type { WorkbenchLayout } from '@renderer/lib/app-shell'
 import {
   agentStyleHint,
   agentStyleSelectOptions,
@@ -84,7 +85,6 @@ export function AgentPanel({
   slashMenuVisible,
   slashCommandOptions,
   selectedSlashCommandIndex,
-  terminalPaneFirst,
   terminalHidden,
   terminalStartError,
   activeModel,
@@ -119,8 +119,10 @@ export function AgentPanel({
   onOpenModelSettings,
   onClarifyConfirm,
   onClarifyDismiss,
-  onToggleTerminalPane,
-  onHideChatPane,
+  workbenchLayout,
+  onWorkbenchLayoutChange,
+  onInterruptCommand,
+  runningCommandTabId,
   onSelectSession,
   onSelectTerminal,
   onModelChange,
@@ -166,7 +168,6 @@ export function AgentPanel({
   slashMenuVisible: boolean
   slashCommandOptions: SlashCommandOption[]
   selectedSlashCommandIndex: number
-  terminalPaneFirst: boolean
   terminalHidden: boolean
   terminalStartError?: string
   activeModel?: AgentModelOption
@@ -207,8 +208,10 @@ export function AgentPanel({
   onOpenModelSettings?: () => void
   onClarifyConfirm?: (payload: ConnectionClarifyConfirmPayload) => void
   onClarifyDismiss?: () => void
-  onToggleTerminalPane: () => void
-  onHideChatPane: () => void
+  workbenchLayout: WorkbenchLayout
+  onWorkbenchLayoutChange: (layout: WorkbenchLayout) => void
+  onInterruptCommand?: (tabId: string) => void
+  runningCommandTabId?: string
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
   onModelChange: (selection: string) => void
@@ -271,19 +274,6 @@ export function AgentPanel({
 
   return (
     <aside className="app-agent-pane relative flex min-h-0 min-w-[360px] flex-1 flex-col">
-      <button
-        type="button"
-        className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/50 opacity-70 transition-[background-color,color,opacity] hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
-        aria-label={t.app.hideChat}
-        title={t.app.hideChat}
-        onClick={onHideChatPane}
-      >
-        {terminalPaneFirst ? (
-          <PanelRightCloseIcon className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : (
-          <PanelLeftCloseIcon className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-      </button>
       {terminalHidden && terminalStartError ? (
         <div
           className="mx-4 mt-2 flex shrink-0 items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
@@ -328,6 +318,8 @@ export function AgentPanel({
         loadingEarlier={loadingEarlier}
         earlierLogsError={earlierLogsError}
         onLoadEarlier={onLoadEarlier}
+        onInterruptCommand={onInterruptCommand}
+        fallbackExecutionTabId={executionTerminalId}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
       onClarifyConfirm &&
@@ -373,6 +365,23 @@ export function AgentPanel({
             ))}
           </div>
         ) : null}
+        {terminalHidden && runningCommandTabId && onInterruptCommand ? (
+          <div className="flex items-center gap-2 rounded-md border border-primary/35 bg-primary/5 px-2 py-1">
+            <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+              {t.terminal.commandRunningHidden}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              aria-label={t.terminal.interruptCommand}
+              title={t.terminal.interruptCommand}
+              onClick={() => onInterruptCommand(runningCommandTabId)}
+            >
+              Ctrl+C
+            </Button>
+          </div>
+        ) : null}
         <SessionUsageBar
           inputTokens={sessionInputTokens}
           outputTokens={sessionOutputTokens}
@@ -381,27 +390,37 @@ export function AgentPanel({
         />
         <form onSubmit={onSubmit} className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              aria-label={terminalHidden ? t.app.showTerminal : t.app.hideTerminal}
-              title={terminalHidden ? t.app.showTerminal : t.app.hideTerminal}
-              onClick={onToggleTerminalPane}
+            <ToggleGroup
+              type="single"
+              value={workbenchLayout}
+              onValueChange={(value) => {
+                if (value === 'split' || value === 'chat' || value === 'terminal') {
+                  onWorkbenchLayoutChange(value)
+                }
+              }}
+              variant="outline"
+              size="xs"
+              className="shrink-0"
+              aria-label={t.app.layoutGroup}
             >
-              {terminalHidden ? (
-                terminalPaneFirst ? (
-                  <PanelLeftOpenIcon aria-hidden="true" />
-                ) : (
-                  <PanelRightOpenIcon aria-hidden="true" />
-                )
-              ) : terminalPaneFirst ? (
-                <PanelLeftCloseIcon aria-hidden="true" />
-              ) : (
-                <PanelRightCloseIcon aria-hidden="true" />
-              )}
-            </Button>
+              <ToggleGroupItem
+                value="split"
+                aria-label={t.app.layoutSplit}
+                title={t.app.layoutSplit}
+              >
+                <Columns2Icon />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="chat" aria-label={t.app.layoutChat} title={t.app.layoutChat}>
+                <MessageSquareIcon />
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="terminal"
+                aria-label={t.app.layoutTerminal}
+                title={t.app.layoutTerminal}
+              >
+                <SquareTerminalIcon />
+              </ToggleGroupItem>
+            </ToggleGroup>
             <Select
               key={getSessionGroupId(sessionChatTab)}
               value={getSessionGroupId(sessionChatTab)}

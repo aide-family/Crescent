@@ -29,6 +29,11 @@ import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import { createPendingCommandController } from './pending-command'
 import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
+import {
+  isPtyExecutionTabLocked,
+  resolveUserCommandInterrupt,
+  shouldBlockTerminalUserInput
+} from './input-lock'
 
 interface TerminalSession {
   id: number
@@ -357,6 +362,25 @@ export function executeCommandInTerminal(
   }
 
   return pending.promise
+}
+
+/**
+ * User Ctrl+C: interrupt only if a waiter is in flight.
+ * Does not send ^C to an idle shell and does not abort the Pi session.
+ */
+export function interruptPendingTerminalCommandIfRunning(
+  senderId: number,
+  tabId?: string
+): boolean {
+  const normalizedTabId = normalizeTabId(tabId)
+  if (!normalizedTabId) return false
+  const key = getSessionKey(senderId, normalizedTabId)
+  if (
+    resolveUserCommandInterrupt({ hasPendingCommand: pendingCommandPromises.has(key) }) === 'noop'
+  ) {
+    return false
+  }
+  return interruptPendingTerminalCommands(senderId, normalizedTabId)
 }
 
 /** Interrupt any in-flight automated command on a tab (Ctrl+C + settle interrupted). */
@@ -1020,6 +1044,13 @@ export function registerTerminalIpc(): void {
     }
   )
 
+  ipcMain.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
+    const tabId = normalizeTabId(payload?.tabId)
+    if (!tabId) return { ok: false, interrupted: false, error: 'Missing tabId' }
+    const interrupted = interruptPendingTerminalCommandIfRunning(event.sender.id, tabId)
+    return { ok: true, interrupted }
+  })
+
   ipcMain.on('terminal:write', (event, payload: { data?: string; tabId?: string } | string) => {
     const data = typeof payload === 'string' ? payload : payload?.data
     if (typeof data !== 'string') return
@@ -1048,6 +1079,8 @@ export function registerTerminalIpc(): void {
       )
       return
     }
+
+    if (isUserInputLocked(event.sender.id, tabId)) return
 
     session.write(data)
     if (data.includes('\x03')) {
@@ -1080,6 +1113,8 @@ export function registerTerminalIpc(): void {
         )
         return
       }
+
+      if (isUserInputLocked(event.sender.id, tabId)) return
 
       if (!payload?.execute && session.mode === 'pipe') {
         sendIfAlive(
@@ -2224,4 +2259,11 @@ function isUsableTerminalTabId(tabId: string): boolean {
 
 function getSessionKey(senderId: number, tabId: string): string {
   return `${senderId}:${tabId}`
+}
+
+function isUserInputLocked(senderId: number, tabId: string): boolean {
+  return shouldBlockTerminalUserInput({
+    hasPendingCommand: pendingCommandPromises.has(getSessionKey(senderId, tabId)),
+    isAgentExecutionTab: isPtyExecutionTabLocked(tabId)
+  })
 }

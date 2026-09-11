@@ -53,6 +53,8 @@ export function AgentLogList({
   onInjectSuggestions,
   onOpenModelSettings,
   onSaveAsSop,
+  onInterruptCommand,
+  fallbackExecutionTabId,
   captureReadyLogs = [],
   hiddenCaptureReadyLogIds = [],
   onOpenCaptureDraft,
@@ -88,6 +90,8 @@ export function AgentLogList({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: (entry: AgentLogEntry) => void
+  onInterruptCommand?: (tabId: string) => void
+  fallbackExecutionTabId?: string
   captureReadyLogs?: Array<{ logId: number; kind: CaptureKind }>
   hiddenCaptureReadyLogIds?: number[]
   onOpenCaptureDraft?: (kind: CaptureKind) => void
@@ -146,7 +150,7 @@ export function AgentLogList({
   return (
     <div
       ref={logRef}
-      className="app-agent-log-list relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm"
+      className="app-agent-log-list relative z-0 min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-4 pb-4 text-sm select-text"
     >
       {onLoadEarlier && hasEarlierLogs ? (
         <div className="mb-3 flex flex-col items-center gap-2 pt-2">
@@ -218,8 +222,10 @@ export function AgentLogList({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
+                        className="select-none"
                         aria-label={t.common.copySelectionOrMessage}
                         title={t.common.copySelectionOrMessage}
+                        onPointerDown={(event) => event.preventDefault()}
                         onClick={() => onCopyEntry(entry)}
                       >
                         {copiedLogId === entry.id ? (
@@ -240,7 +246,9 @@ export function AgentLogList({
                       feedbackRating={feedbackByLogId?.[entry.id] ?? null}
                       feedbackBusy={feedbackBusyLogId === entry.id}
                       savingSop={savingSopLogId === entry.id}
-                      absorbedStatusEntries={entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined}
+                      absorbedStatusEntries={
+                        entry.kind === 'assistant' ? absorbedByAssistantId.get(entry.id) : undefined
+                      }
                       thinkingCollapsedByDefault={thinkingCollapsedByDefault}
                       onCopyResult={() => onCopyResult(entry)}
                       onExportResult={() => onExportResult(entry)}
@@ -252,6 +260,8 @@ export function AgentLogList({
                       onInjectSuggestions={onInjectSuggestions}
                       onOpenModelSettings={onOpenModelSettings}
                       onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
+                      onInterruptCommand={onInterruptCommand}
+                      fallbackExecutionTabId={fallbackExecutionTabId}
                     />
                   </div>
                 </>

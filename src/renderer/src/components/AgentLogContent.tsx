@@ -66,6 +66,8 @@ export function AgentLogContent({
   onInjectSuggestions,
   onOpenModelSettings,
   onSaveAsSop,
+  onInterruptCommand,
+  fallbackExecutionTabId,
   thinkingCollapsedByDefault
 }: {
   entry: AgentLogEntry
@@ -88,6 +90,8 @@ export function AgentLogContent({
   onInjectSuggestions?: (texts: string[]) => void
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
+  onInterruptCommand?: (tabId: string) => void
+  fallbackExecutionTabId?: string
   thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
   if (isConversationLog(entry.kind)) {
@@ -174,6 +178,8 @@ export function AgentLogContent({
           onInjectSuggestions={onInjectSuggestions}
           onOpenModelSettings={onOpenModelSettings}
           onSaveAsSop={onSaveAsSop}
+          onInterruptCommand={onInterruptCommand}
+          fallbackExecutionTabId={fallbackExecutionTabId}
           thinkingCollapsedByDefault={thinkingCollapsedByDefault}
         />
       )

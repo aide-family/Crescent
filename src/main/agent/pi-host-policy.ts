@@ -7,7 +7,7 @@
 import { hostedMcpToolFingerprint } from '../../shared/mcp-servers'
 import type { AgentMcpServerConfig } from '../../shared/agent-types'
 
-export const HOSTED_SESSION_TOOL_PROFILE = 'pty-bash-open-subterminal-capture-v1'
+export const HOSTED_SESSION_TOOL_PROFILE = 'pty-bash-open-subterminal-capture-subagent-v1'
 
 export interface HostedSessionSnapshot {
   cwd: string
@@ -16,12 +16,10 @@ export interface HostedSessionSnapshot {
 
 export function hostedSessionToolProfile(
   mcpServers: AgentMcpServerConfig[] = [],
-  extensionFingerprint = 'none',
-  subagentsEnabled = false
+  extensionFingerprint = 'none'
 ): string {
   const ext = extensionFingerprint.trim() || 'none'
-  const sub = subagentsEnabled ? 'subagents' : 'nosubagents'
-  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}:ext:${ext}:${sub}`
+  return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}:ext:${ext}`
 }
 
 /**

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Notification, screen } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Notification, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -8,11 +8,14 @@ import {
   attachRendererCrashRecovery,
   registerRendererRecoveryIpc
 } from './renderer-recovery'
+import { registerWorkbenchLayoutIpc } from './workbench-layout-ipc'
 import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
 import { initSystemLogging, setSystemLogLevel } from './logging'
 import { readAgentConfig } from './crescent-store'
 import { isKnownNativeLogNoise } from './native-log-filter'
 import { openExternalUrlIfAllowed } from './open-external-url'
+import { parseClipboardWriteText } from './clipboard-write'
+import { isAllowedRendererPermission } from './renderer-permissions'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -126,11 +129,11 @@ function createWindow(): BrowserWindow {
 
   mainWindow.webContents.session.setPermissionRequestHandler(
     (_webContents, permission, callback) => {
-      callback(permission === 'media')
+      callback(isAllowedRendererPermission(permission))
     }
   )
   mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
-    return permission === 'media'
+    return isAllowedRendererPermission(permission)
   })
 
   // HMR for renderer base on electron-vite cli.
@@ -229,8 +232,15 @@ app.whenReady().then(async () => {
     const ok = await openExternalUrlIfAllowed(url)
     return { ok }
   })
+  ipcMain.handle('app:write-clipboard-text', (_event, value: unknown) => {
+    const text = parseClipboardWriteText(value)
+    if (text === null) return { ok: false, error: 'Invalid clipboard payload.' }
+    clipboard.writeText(text)
+    return { ok: true }
+  })
   initializeCrescentDatabase()
   registerRendererRecoveryIpc(icon)
+  registerWorkbenchLayoutIpc()
   const { ensureDefaultInstructionFiles } = await import('./agent/instruction-files')
   ensureDefaultInstructionFiles()
   registerAgentIpc()

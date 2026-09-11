@@ -62,7 +62,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     method: 'post',
     path: 'pi://crescent/subagent',
     description:
-      'Delegate a focused task to a child agent in its own docked subterminal. Parent bash stays on the current pane.',
+      'Decide solo vs multi-agent, then delegate. Each child runs in its own docked subterminal. Parent bash stays on the current pane.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,

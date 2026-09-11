@@ -44,6 +44,30 @@
     user-select: text;
   }
 
+  .select-text
+    :is(
+      button,
+      [data-slot='button'],
+      .select-none,
+      .app-agent-message-meta,
+      .app-code-panel-header,
+      .app-mermaid-panel > :first-child,
+      .app-code-panel > :first-child
+    ),
+  .select-text
+    :is(
+      button,
+      [data-slot='button'],
+      .select-none,
+      .app-agent-message-meta,
+      .app-code-panel-header,
+      .app-mermaid-panel > :first-child,
+      .app-code-panel > :first-child
+    )
+    * {
+    user-select: none;
+  }
+
   * {
     scrollbar-color: color-mix(in oklch, var(--primary) 46%, transparent)
       color-mix(in oklch, var(--muted) 28%, transparent);
@@ -131,12 +155,20 @@
 
 .app-agent-pane {
   background:
-    linear-gradient(180deg, color-mix(in oklch, var(--app-panel-strong) 42%, transparent), transparent 22rem),
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--app-panel-strong) 42%, transparent),
+      transparent 22rem
+    ),
     var(--app-panel);
 }
 
 .app-agent-log-list {
-  background: radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--primary) 4%, transparent), transparent 34rem);
+  background: radial-gradient(
+    circle at 50% 0%,
+    color-mix(in oklch, var(--primary) 4%, transparent),
+    transparent 34rem
+  );
   scroll-behavior: smooth;
 }
 
@@ -673,7 +705,7 @@
 
 .markdown-body table,
 .markdown-body .markdown-table {
-  overflow: hidden;
+  overflow-x: auto;
   border-color: var(--app-markdown-border);
   border-radius: 0.375rem;
   background: var(--app-markdown-surface);
@@ -770,7 +802,6 @@
 
 .app-code-panel,
 .app-mermaid-panel {
-  overflow: hidden;
   border-color: var(--app-markdown-border);
   box-shadow: none;
   background: var(--app-markdown-canvas);

@@ -586,11 +586,7 @@ async function ensureHostedSessionUnlocked(
     disabledExtensions: config.disabledExtensions,
     packageFingerprint: computePiPackageFingerprint()
   })
-  const toolProfile = hostedSessionToolProfile(
-    config.mcpServers,
-    extensionFingerprint,
-    Boolean(config.subagentsEnabled)
-  )
+  const toolProfile = hostedSessionToolProfile(config.mcpServers, extensionFingerprint)
   if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
     return existing as HostedSession
   }
@@ -633,16 +629,14 @@ async function ensureHostedSessionUnlocked(
         instructionContext,
         openSubterminalDiscipline: OPEN_SUBTERMINAL_DISCIPLINE,
         createCaptureDiscipline: CREATE_CAPTURE_DISCIPLINE,
-        subagentDiscipline: config.subagentsEnabled ? SUBAGENT_DISCIPLINE : undefined
+        subagentDiscipline: SUBAGENT_DISCIPLINE
       })
   })
   await resourceLoader.reload()
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
   const captureTools = await createCaptureToolDefinitions(pi, sessionKey)
-  const subagentTool = config.subagentsEnabled
-    ? await createSubagentToolDefinition(pi, sessionKey)
-    : undefined
+  const subagentTool = await createSubagentToolDefinition(pi, sessionKey)
   const mcp = await loadMcpPiTools(pi, config.mcpServers)
 
   const { session, extensionsResult } = await pi.createAgentSession({
@@ -655,7 +649,7 @@ async function ensureHostedSessionUnlocked(
     customTools: [
       ptyBashTool as never,
       openSubterminalTool as never,
-      ...(subagentTool ? [subagentTool as never] : []),
+      subagentTool as never,
       ...(captureTools as never[]),
       ...(mcp.tools as never[])
     ],

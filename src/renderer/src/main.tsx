@@ -7,6 +7,7 @@ import { AppErrorBoundary } from '@renderer/components/AppErrorBoundary'
 import { RendererCrashLoopPanel } from '@renderer/components/RendererCrashLoopPanel'
 import App from './App'
 import { dictionaries, type Locale } from './i18n'
+import { parseWorkbenchLayout, type WorkbenchLayout } from '@renderer/lib/app-shell'
 
 function resolveBootLocale(): Locale {
   try {
@@ -59,33 +60,44 @@ function BootShell({
 }: {
   dictionary: (typeof dictionaries)[Locale]
 }): React.JSX.Element {
-  const [mode, setMode] = useState<'loading' | 'none' | 'pending' | 'crash-loop'>('loading')
+  const [boot, setBoot] = useState<{
+    mode: 'none' | 'pending' | 'crash-loop'
+    layout: WorkbenchLayout | null
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    void window.api.app
-      .getRendererRecoveryMode()
-      .then((result) => {
+    void Promise.all([
+      window.api.app.getRendererRecoveryMode(),
+      window.api.app.getWorkbenchLayout().catch(() => ({ layout: null }))
+    ])
+      .then(([recovery, layoutResult]) => {
         if (cancelled) return
-        setMode(result.mode)
+        setBoot({
+          mode: recovery.mode,
+          layout: parseWorkbenchLayout(layoutResult.layout)
+        })
       })
       .catch(() => {
-        if (!cancelled) setMode('none')
+        if (!cancelled) setBoot({ mode: 'none', layout: null })
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  if (mode === 'loading') {
+  if (boot == null) {
     return <div className="h-full bg-background" />
   }
-  if (mode === 'crash-loop') {
+  if (boot.mode === 'crash-loop') {
     return <RendererCrashLoopPanel t={dictionary} />
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <App recoveryMode={mode === 'pending' ? 'pending' : 'none'} />
+      <App
+        recoveryMode={boot.mode === 'pending' ? 'pending' : 'none'}
+        initialWorkbenchLayout={boot.layout}
+      />
     </div>
   )
 }

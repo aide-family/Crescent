@@ -16,6 +16,7 @@ import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
 import { Input } from '@renderer/components/ui/input'
+import { ToggleGroup, ToggleGroupItem } from '@renderer/components/ui/toggle-group'
 import { Separator } from '@renderer/components/ui/separator'
 import {
   Sheet,
@@ -38,6 +39,7 @@ import {
 import type { Dictionary } from '@renderer/i18n'
 import { agentStyleSelectOptions } from '@renderer/lib/agent-style-ui'
 import { buildModelSelectionValue, parseModelSelectionValue } from '@renderer/lib/app-runtime'
+import { isWorkbenchLayout, type WorkbenchLayout } from '@renderer/lib/app-shell'
 import {
   formatPinnedWorkflowsText,
   parsePinnedWorkflowsText
@@ -103,6 +105,8 @@ export interface SettingsSheetProps {
   saved: boolean
   importingOpenApi: boolean
   closeTerminalConfirmEnabled: boolean
+  workbenchLayout: WorkbenchLayout
+  onWorkbenchLayoutChange: (layout: WorkbenchLayout) => void
   onCreateProvider: () => void
   onToggleProviderDetails: (providerId: string) => void
   onToggleProviderEnabled: (providerId: string, enabled: boolean) => void
@@ -110,7 +114,6 @@ export interface SettingsSheetProps {
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onAgentStyleChange: (style: AgentStyle) => void
-  onSubagentsEnabledChange: (enabled: boolean) => void
   onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
@@ -159,13 +162,14 @@ export function SettingsSheet({
   saved,
   importingOpenApi,
   closeTerminalConfirmEnabled,
+  workbenchLayout,
+  onWorkbenchLayoutChange,
   onCreateProvider,
   onToggleProviderDetails,
   onToggleProviderEnabled,
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
-  onSubagentsEnabledChange,
   onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
@@ -430,24 +434,6 @@ export function SettingsSheet({
                 <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
               </Field>
               <Field>
-                <label
-                  htmlFor="subagents-enabled"
-                  className="app-list-row flex items-start justify-between gap-3"
-                >
-                  <span className="space-y-1">
-                    <span className="block text-sm font-medium">{t.settings.subagentsEnabled}</span>
-                    <FieldDescription>{t.settings.subagentsEnabledHint}</FieldDescription>
-                  </span>
-                  <Input
-                    id="subagents-enabled"
-                    type="checkbox"
-                    checked={Boolean(config.subagentsEnabled)}
-                    onChange={(event) => onSubagentsEnabledChange(event.target.checked)}
-                    className="mt-0.5 size-4 shrink-0 accent-primary"
-                  />
-                </label>
-              </Field>
-              <Field>
                 <FieldLabel htmlFor="log-level">{t.settings.logLevel}</FieldLabel>
                 <Select
                   value={normalizeSystemLogLevel(config.logLevel)}
@@ -515,6 +501,31 @@ export function SettingsSheet({
                     className="mt-0.5 size-4 shrink-0 accent-primary"
                   />
                 </label>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="workbench-layout">{t.settings.workbenchLayout}</FieldLabel>
+                <ToggleGroup
+                  id="workbench-layout"
+                  type="single"
+                  value={workbenchLayout}
+                  onValueChange={(value) => {
+                    if (isWorkbenchLayout(value)) onWorkbenchLayoutChange(value)
+                  }}
+                  variant="outline"
+                  size="sm"
+                  aria-label={t.settings.workbenchLayout}
+                >
+                  <ToggleGroupItem value="split" aria-label={t.app.layoutSplit}>
+                    {t.app.layoutSplit}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="chat" aria-label={t.app.layoutChat}>
+                    {t.app.layoutChat}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="terminal" aria-label={t.app.layoutTerminal}>
+                    {t.app.layoutTerminal}
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>{t.settings.workbenchLayoutHint}</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>

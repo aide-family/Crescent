@@ -1117,15 +1117,15 @@ export function appendOperationRecordToDb(record: OperationRecord): OperationRec
   return record
 }
 
-export function readCrescentDbFlag(key: string): boolean {
+export function readCrescentDbValue(key: string): string | undefined {
   const row = getDatabase().prepare('SELECT value FROM app_metadata WHERE key = ?').get(key) as
     | { value?: string }
     | undefined
 
-  return row?.value === 'true'
+  return typeof row?.value === 'string' ? row.value : undefined
 }
 
-export function writeCrescentDbFlag(key: string, value: boolean): void {
+export function writeCrescentDbValue(key: string, value: string): void {
   getDatabase()
     .prepare(
       `
@@ -1136,7 +1136,15 @@ export function writeCrescentDbFlag(key: string, value: boolean): void {
         updated_at = excluded.updated_at
     `
     )
-    .run(key, value ? 'true' : 'false', new Date().toISOString())
+    .run(key, value, new Date().toISOString())
+}
+
+export function readCrescentDbFlag(key: string): boolean {
+  return readCrescentDbValue(key) === 'true'
+}
+
+export function writeCrescentDbFlag(key: string, value: boolean): void {
+  writeCrescentDbValue(key, value ? 'true' : 'false')
 }
 
 function getDatabase(): DatabaseSync {
