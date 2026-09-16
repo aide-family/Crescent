@@ -6,6 +6,7 @@ import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminalWithPermissionRequest,
   interruptAndAwaitPendingTerminalCommands,
+  resolveParentTerminalTabId,
   type TerminalCommandExecutionResult
 } from '../terminal/ipc'
 import { registerPtyExecutionTabChecker } from '../terminal/input-lock'
@@ -34,6 +35,8 @@ export interface PtyBashExecContext {
   /** SSH connection of the current execution pane, if remote. */
   connectionId?: string
   isSsh?: boolean
+  /** SSH connection of the parent/main pane; survives local subterminal reroute. */
+  parentConnectionId?: string
   /** True when this context belongs to a host-owned child subagent. */
   fromSubagent?: boolean
   /** Fingerprints of commands that already failed in this run (normalized). */
@@ -56,6 +59,47 @@ export function clearFailedCommandFingerprints(runId: string): void {
   failedFingerprintsByRunId.delete(runId)
 }
 
+const failedSshSubterminalByRunId = new Map<string, Set<string>>()
+
+export function getFailedSshSubterminalConnectionIds(runId: string): Set<string> {
+  let set = failedSshSubterminalByRunId.get(runId)
+  if (!set) {
+    set = new Set()
+    failedSshSubterminalByRunId.set(runId, set)
+  }
+  return set
+}
+
+export function recordFailedSshSubterminalConnection(runId: string, connectionId: string): void {
+  const id = connectionId.trim()
+  const key = runId.trim()
+  if (!id || !key) return
+  getFailedSshSubterminalConnectionIds(key).add(id)
+}
+
+export function clearFailedSshSubterminalConnectionIds(runId: string): void {
+  failedSshSubterminalByRunId.delete(runId)
+}
+
+/** Pure helper for tests: whether a missing-session bash error should return to the parent pane. */
+export function isMissingTerminalSessionError(error?: string): boolean {
+  return Boolean(error?.includes('No active terminal session'))
+}
+
+export function shouldRestoreParentAfterMissingSession(input: {
+  error?: string
+  executionTabId: string
+  fromSubagent?: boolean
+}): { restore: boolean; parentTabId: string } {
+  const parentTabId = resolveParentTerminalTabId(input.executionTabId)
+  if (input.fromSubagent) return { restore: false, parentTabId }
+  if (!isMissingTerminalSessionError(input.error)) return { restore: false, parentTabId }
+  if (!parentTabId || parentTabId === input.executionTabId) {
+    return { restore: false, parentTabId }
+  }
+  return { restore: true, parentTabId }
+}
+
 /** Pure helper for tests: whether a normalized fingerprint is blocked. */
 export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<string>): boolean {
   return Boolean(fingerprint && failed.has(fingerprint))
@@ -74,6 +118,9 @@ registerPtyExecutionTabChecker((tabId) => {
 
 export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecContext): void {
   context.failedFingerprints = getFailedCommandFingerprints(context.runId)
+  if (!context.parentConnectionId?.trim()) {
+    context.parentConnectionId = context.isSsh ? context.connectionId?.trim() : undefined
+  }
   execContextBySessionKey.set(sessionKey, context)
 }
 
@@ -133,6 +180,7 @@ export function clearPtyBashExecContextsForRun(runId: string): void {
     execContextBySessionKey.delete(key)
   }
   clearFailedCommandFingerprints(normalized)
+  clearFailedSshSubterminalConnectionIds(normalized)
 }
 
 /**
@@ -190,6 +238,7 @@ export function createPtyBashToolDefinition(
 
         const combinedSignal = combineAbortSignals(options.signal, context.signal)
         const result = await executeReviewedPtyCommand({
+          sessionKey,
           context,
           command,
           timeoutMs:
@@ -213,12 +262,13 @@ export function createPtyBashToolDefinition(
 }
 
 async function executeReviewedPtyCommand(input: {
+  sessionKey: string
   context: PtyBashExecContext
   command: string
   timeoutMs?: number
   signal?: AbortSignal
 }): Promise<TerminalCommandExecutionResult> {
-  const { context } = input
+  const { context, sessionKey } = input
   const executableCommand = normalizeInteractivePrivilegeCommand(input.command)
   const timeoutMs = normalizeTimeout(input.timeoutMs)
   const executionTabId = context.executionTabId
@@ -260,23 +310,49 @@ async function executeReviewedPtyCommand(input: {
       fromSubagent
     })
 
-    const result = context.subterminalName
-      ? await executeCommandInTemporaryTerminal(
-          context.webContents,
-          executionTabId,
-          context.subterminalName,
-          ptyCommand,
-          timeoutMs,
-          'wait',
-          input.signal
-        )
-      : await executeCommandInTerminalWithPermissionRequest(
-          context.webContents,
-          ptyCommand,
-          timeoutMs,
-          executionTabId,
-          input.signal
-        )
+    const runOnTab = async (tabId: string): Promise<TerminalCommandExecutionResult> =>
+      context.subterminalName
+        ? executeCommandInTemporaryTerminal(
+            context.webContents,
+            tabId,
+            context.subterminalName,
+            ptyCommand,
+            timeoutMs,
+            'wait',
+            input.signal
+          )
+        : executeCommandInTerminalWithPermissionRequest(
+            context.webContents,
+            ptyCommand,
+            timeoutMs,
+            tabId,
+            input.signal
+          )
+
+    let targetTabId = executionTabId
+    let result = await runOnTab(targetTabId)
+    const restore = shouldRestoreParentAfterMissingSession({
+      error: result.error,
+      executionTabId: targetTabId,
+      fromSubagent
+    })
+    if (!result.ok && restore.restore) {
+      updatePtyBashExecutionTabId(sessionKey, restore.parentTabId, {
+        isSsh: Boolean(context.parentConnectionId),
+        connectionId: context.parentConnectionId
+      })
+      context.emit({
+        type: 'status',
+        message: zh
+          ? '子终端已关闭，已回到主终端并重试该命令。不要再次 open_subterminal。'
+          : 'Subterminal closed; restored bash to the main terminal and retrying. Do not call open_subterminal again.',
+        runId: context.runId,
+        tabId: restore.parentTabId,
+        fromSubagent
+      })
+      targetTabId = restore.parentTabId
+      result = await runOnTab(targetTabId)
+    }
 
     if (!result.ok && fingerprint) {
       failed.add(fingerprint)
@@ -310,7 +386,7 @@ async function executeReviewedPtyCommand(input: {
       },
       elapsedMs: Date.now() - startedAt,
       runId: context.runId,
-      tabId: formattedResult.subterminalTabId || executionTabId,
+      tabId: formattedResult.subterminalTabId || targetTabId,
       fromSubagent
     })
 

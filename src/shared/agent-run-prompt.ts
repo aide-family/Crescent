@@ -87,6 +87,19 @@ export function buildLanguageDirective(locale: string | undefined): string {
 }
 
 /**
+ * Hot Pi sessions already hold message history (including compaction summaries).
+ * Re-injecting the UI log duplicates that context and can undo compaction.
+ */
+export function conversationContextForPrompt(
+  conversationContext: string | undefined,
+  hasLiveSessionMessages: boolean
+): string | undefined {
+  if (hasLiveSessionMessages) return undefined
+  const trimmed = conversationContext?.trim()
+  return trimmed || undefined
+}
+
+/**
  * Assemble the user-facing prompt for a Pi agent run.
  * Order: language → working style → conversation → terminal → SOP → skills → user input.
  */

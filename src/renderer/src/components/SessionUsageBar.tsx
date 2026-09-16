@@ -1,4 +1,4 @@
-import { ArrowDownIcon, ArrowUpIcon, FileJsonIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, FileJsonIcon, FoldVerticalIcon } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -8,19 +8,34 @@ import {
   TooltipTrigger
 } from '@renderer/components/ui/tooltip'
 import type { Dictionary } from '@renderer/i18n'
-import { formatCompactTokenCount } from '../../../shared/session-token-usage'
+import {
+  formatCompactTokenCount,
+  formatContextUsagePercent
+} from '../../../shared/session-token-usage'
 
 export function SessionUsageBar({
   inputTokens,
   outputTokens,
+  contextPercent,
+  contextPending,
+  compactDisabled,
   t,
-  onExportSessionTrace
+  onExportSessionTrace,
+  onCompactContext
 }: {
   inputTokens: number
   outputTokens: number
+  contextPercent?: number | null
+  contextPending?: boolean
+  compactDisabled?: boolean
   t: Dictionary
   onExportSessionTrace: () => void
+  onCompactContext?: () => void
 }): React.JSX.Element {
+  const contextLabel = contextPending
+    ? t.common.contextUsagePending
+    : `${t.common.contextUsage} ${formatContextUsagePercent(contextPercent)}`
+
   return (
     <div
       className="flex h-7 items-center gap-2 px-0.5"
@@ -30,7 +45,35 @@ export function SessionUsageBar({
       <TooltipProvider delayDuration={200}>
         <TokenCount direction="input" count={inputTokens} label={t.common.inputTokens} />
         <TokenCount direction="output" count={outputTokens} label={t.common.outputTokens} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="inline-flex items-center text-[11px] tabular-nums text-muted-foreground"
+              aria-label={contextLabel}
+            >
+              {contextPending ? '—' : formatContextUsagePercent(contextPercent)}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{contextLabel}</TooltipContent>
+        </Tooltip>
         <span className="flex-1" />
+        {onCompactContext ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.common.compactContext}
+                disabled={compactDisabled}
+                onClick={onCompactContext}
+              >
+                <FoldVerticalIcon aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t.common.compactContext}</TooltipContent>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

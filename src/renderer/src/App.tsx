@@ -234,6 +234,7 @@ import { formatConnectionTarget } from '@renderer/lib/connections'
 import {
   formatSuggestionsForInput,
   isActiveLoggedInTerminal,
+  isLeaveTargetDrift,
   prioritizeClarifyOptions,
   routeConnection,
   formatConnectionClarifyOptions,
@@ -342,6 +343,7 @@ import {
   matchesStyleSlashCommand,
   matchesToolSlashCommand,
   matchesWikiSlashCommand,
+  parseCompactSlashCommand,
   replaceSlashCommandInput,
   type SlashCommandOption
 } from '@renderer/lib/slash-commands'
@@ -740,6 +742,12 @@ function App({
   const [liveSessionUsageByTabId, setLiveSessionUsageByTabId] = useState<
     Record<string, { input: number; output: number }>
   >({})
+  const [liveContextUsageByTabId, setLiveContextUsageByTabId] = useState<
+    Record<string, { tokens: number | null; contextWindow: number; percent: number | null }>
+  >({})
+  const [contextCompactingByTabId, setContextCompactingByTabId] = useState<Record<string, boolean>>(
+    {}
+  )
   const liveRunUsageRef = useRef(new Map<string, { input: number; output: number }>())
   const [appVersion, setAppVersion] = useState('')
   const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
@@ -864,6 +872,7 @@ function App({
     sessionUsageBaselineByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE,
     liveSessionUsageByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE
   )
+  const sessionContextUsage = liveContextUsageByTabId[sessionChatTab.id]
   const captureDialogJob =
     captureDialogKind == null
       ? undefined
@@ -2560,9 +2569,26 @@ function App({
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
       if (event.type === 'usage') {
-        const usage = { input: event.input, output: event.output }
-        if (event.runId) liveRunUsageRef.current.set(event.runId, usage)
-        setLiveSessionUsageByTabId((current) => ({ ...current, [chatTabId]: usage }))
+        const hasTokenDelta = event.input > 0 || event.output > 0
+        if (hasTokenDelta || event.contextWindow == null) {
+          const usage = { input: event.input, output: event.output }
+          if (event.runId) liveRunUsageRef.current.set(event.runId, usage)
+          setLiveSessionUsageByTabId((current) => ({ ...current, [chatTabId]: usage }))
+        }
+        if (event.contextWindow != null) {
+          setLiveContextUsageByTabId((current) => ({
+            ...current,
+            [chatTabId]: {
+              tokens: event.contextTokens ?? null,
+              contextWindow: event.contextWindow as number,
+              percent: event.contextPercent ?? null
+            }
+          }))
+        }
+        return
+      }
+      if (event.type === 'status' && !activeAgentRunRef.current.has(chatTabId)) {
+        appendSystemToRunOrLog(chatTabId, localizeAgentEventMessage(event.message, t))
         return
       }
       if (event.type === 'command' && event.phase === 'started' && event.runId && event.tabId) {
@@ -2579,7 +2605,7 @@ function App({
     })
 
     return unsubscribe
-  }, [appendAgentEvent])
+  }, [appendAgentEvent, appendSystemToRunOrLog, t])
 
   useEffect(() => {
     return window.api.agent.onExtensionUiRequest((request) => {
@@ -3179,6 +3205,45 @@ function App({
         `${t.capture.reloadFailed}: ${error instanceof Error ? error.message : String(error)}`,
         { duration: TOAST_INTERVENTION_DURATION_MS }
       )
+    }
+  }
+
+  async function compactCurrentSession(instructions?: string): Promise<void> {
+    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
+    const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
+    if (tab?.agentBusy || contextCompactingByTabId[chatTabId]) {
+      toast.error(t.input.compactBusy)
+      return
+    }
+
+    setContextCompactingByTabId((current) => ({ ...current, [chatTabId]: true }))
+    const loadingToast = toast.loading(t.input.slashCompact)
+    try {
+      const result = await window.api.agent.compact({
+        sessionKey: chatTabId,
+        tabId: chatTabId,
+        instructions,
+        locale
+      })
+      if (!result.ok) {
+        const message = result.busy
+          ? t.input.compactBusy
+          : result.error === 'No live session to compact.'
+            ? t.input.compactNoSession
+            : result.error || t.input.compactFailed
+        toast.error(message, { id: loadingToast })
+        return
+      }
+      toast.success(t.input.compactSucceeded, { id: loadingToast })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error), { id: loadingToast })
+    } finally {
+      setContextCompactingByTabId((current) => {
+        if (!current[chatTabId]) return current
+        const next = { ...current }
+        delete next[chatTabId]
+        return next
+      })
     }
   }
 
@@ -5823,6 +5888,13 @@ function App({
       return
     }
 
+    const compactCommand = parseCompactSlashCommand(displayInput)
+    if (compactCommand) {
+      updateTab(chatTabId, (current) => applyComposerInput(current, ''))
+      void compactCurrentSession(compactCommand.instructions)
+      return
+    }
+
     const captureIntent = parseCaptureIntent(displayInput)
     if (captureIntent) {
       updateTab(chatTabId, (current) => applyComposerInput(current, ''))
@@ -5947,8 +6019,11 @@ function App({
       // Only clear readiness on real leave-target drift (local shell or jump
       // fall-back). Hostname≠IP false positives must keep terminalReady so
       // inspection reuses the live PTY instead of re-typing login actions.
-      const leftTarget =
-        terminalContext.promptHost === 'local-shell' || Boolean(terminalContext.returnToJumpHost)
+      const leftTarget = isLeaveTargetDrift({
+        sessionAligned: terminalContext.sessionAligned,
+        promptHost: terminalContext.promptHost,
+        returnToJumpHost: terminalContext.returnToJumpHost
+      })
       if (leftTarget) {
         const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
         updateConnectionAttempt(driftedChatTabId, (state) =>
@@ -8497,8 +8572,14 @@ function App({
             onExportFull={(entry) => void exportLogEntryFullMarkdown(entry)}
             onExportTrace={(entry) => void exportLogEntryTrace(entry)}
             onExportSessionTrace={() => void exportSessionTrace()}
+            onCompactContext={() => void compactCurrentSession()}
+            compactDisabled={
+              sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id])
+            }
             sessionInputTokens={sessionTokenUsage.input}
             sessionOutputTokens={sessionTokenUsage.output}
+            contextPercent={sessionContextUsage?.percent}
+            contextPending={sessionContextUsage != null && sessionContextUsage.tokens == null}
             onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
             feedbackByLogId={opsFeedbackByLogId}
             feedbackBusyLogId={opsFeedbackBusyLogId}

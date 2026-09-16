@@ -1,6 +1,7 @@
 import { isIpv4Literal, isPlausibleSshHost, sanitizeExpectedTargetHost } from './ssh-destination'
 import {
   findNewestPromptSignal,
+  isLocalMachinePromptHost,
   isLocalShellPromptVisible,
   isPromptHostAligned,
   normalizeHostToken
@@ -266,12 +267,17 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
  * prompt (exit-to-local); unverified hostless prompts stay unknown.
  * Falling back to the jump box after a deeper runtime anchor is always drift.
  */
-export function resolveGateAlignment(state: ConnectionState, output: string): TerminalAlignment {
+export function resolveGateAlignment(
+  state: ConnectionState,
+  output: string,
+  localHost?: string
+): TerminalAlignment {
   const resolved = resolveSessionAlignment({
     output,
     expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
     aliases: state.aliases,
-    clusterHostRegex: state.clusterHostRegex
+    clusterHostRegex: state.clusterHostRegex,
+    localHost
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
   if (resolved.promptHost && isReturnToJumpHost(state, resolved.promptHost)) return 'drifted'
@@ -360,9 +366,10 @@ export function evaluateInjectionGuard(
     output,
     expectedHost: effectiveExpectedHost,
     aliases: state.aliases,
-    clusterHostRegex: state.clusterHostRegex
+    clusterHostRegex: state.clusterHostRegex,
+    localHost: options.localHost
   })
-  const effectiveAlignment = resolveGateAlignment(state, output)
+  const effectiveAlignment = resolveGateAlignment(state, output, options.localHost)
   const observedHost = effectiveAlignment === 'drifted' ? resolved.promptHost : undefined
   if (!observedHost) {
     return {
@@ -465,6 +472,8 @@ export function resolveSessionAlignment(input: {
   expectedHost?: string
   aliases: string[]
   clusterHostRegex?: string
+  /** Crescent client hostname (`os.hostname()`); laptop prompts map to local-shell. */
+  localHost?: string
 }): { alignment: TerminalAlignment; promptHost?: string } {
   const expected = normalizeHostToken(input.expectedHost ?? '')
   const hasClusterRegex = Boolean(normalizeClusterHostRegex(input.clusterHostRegex))
@@ -480,6 +489,10 @@ export function resolveSessionAlignment(input: {
     return { alignment: 'drifted', promptHost: 'local-shell' }
   }
   if (signal?.kind === 'host') {
+    // Laptop hostname after SSH drop is leave-target, not a peer hop.
+    if (isLocalMachinePromptHost(signal.host, input.localHost)) {
+      return { alignment: 'drifted', promptHost: 'local-shell' }
+    }
     if (isHostOnTarget(signal.host, input.aliases, expected || undefined, input.clusterHostRegex)) {
       return { alignment: 'aligned', promptHost: signal.host }
     }
@@ -494,12 +507,17 @@ export function resolveSessionAlignment(input: {
 }
 
 /** Re-evaluate state from a fresh buffer observation (no learning here). */
-export function observeConnectionState(state: ConnectionState, output: string): ConnectionState {
+export function observeConnectionState(
+  state: ConnectionState,
+  output: string,
+  localHost?: string
+): ConnectionState {
   const resolved = resolveSessionAlignment({
     output,
     expectedHost: state.expectedHost,
     aliases: state.aliases,
-    clusterHostRegex: state.clusterHostRegex
+    clusterHostRegex: state.clusterHostRegex,
+    localHost
   })
   const promptHost = resolved.promptHost ?? state.promptHost
   const ready =

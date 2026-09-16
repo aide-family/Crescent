@@ -55,6 +55,7 @@ import {
 } from './generate-capture'
 import {
   cancelPiAgentRun,
+  compactHostedSession,
   listHostedExtensionCommands,
   reloadCrescentRuntime,
   runPiAgent,
@@ -103,6 +104,7 @@ import type {
   AgentCommitCaptureDraftInput,
   AgentPathReference,
   AgentRunInput,
+  AgentCompactInput,
   CommandApprovalDecision,
   ExtensionUiDecision,
   PastedAttachmentInput,
@@ -113,6 +115,7 @@ import type {
 } from './types'
 
 const activeSkillInstalls = new Map<string, { cancel: () => void }>()
+const MAX_COMPACT_INSTRUCTIONS = 2_000
 
 export function registerAgentIpc(): void {
   ipcMain.handle('agent:get-config', () => {
@@ -350,6 +353,31 @@ export function registerAgentIpc(): void {
     return reloadCrescentRuntime({
       sessionKey: sessionKey || undefined,
       config: readAgentConfig()
+    })
+  })
+
+  ipcMain.handle('agent:compact', async (event, payload?: AgentCompactInput) => {
+    const sessionKey =
+      (typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : '') ||
+      (typeof payload?.tabId === 'string' ? payload.tabId.trim() : '')
+    if (!sessionKey) return { ok: false, error: 'Missing session.' }
+
+    const rawInstructions = typeof payload?.instructions === 'string' ? payload.instructions : ''
+    const instructions = rawInstructions.trim().slice(0, MAX_COMPACT_INSTRUCTIONS) || undefined
+    const locale = typeof payload?.locale === 'string' ? payload.locale : undefined
+    const tabId = typeof payload?.tabId === 'string' ? payload.tabId.trim() : sessionKey
+
+    return compactHostedSession({
+      sessionKey,
+      tabId,
+      instructions,
+      locale,
+      emit: (agentEvent) => {
+        safeWebContentsSend(event.sender, 'agent:event', {
+          ...agentEvent,
+          tabId: agentEvent.tabId ?? tabId
+        })
+      }
     })
   })
 

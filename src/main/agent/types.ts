@@ -38,6 +38,8 @@ export type {
   AgentCommitCaptureDraftResult,
   CaptureKind,
   AgentRunInput,
+  AgentCompactInput,
+  AgentCompactResult,
   AgentSkillContext,
   AgentSkillInstallResult,
   AgentSkillOption,

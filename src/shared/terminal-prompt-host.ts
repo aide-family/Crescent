@@ -96,7 +96,9 @@ function isLocalPromptLine(line: string): boolean {
 
 function looksLikePromptLine(line: string): boolean {
   return (
-    /[@].*[:#$]/.test(line) || /\[[\w.-]+@[\w.-]+/.test(line) || /[\w.-]+@[\w.-]+\s*[#$]/.test(line)
+    /[@].*[:#$%]/.test(line) ||
+    /\[[\w.-]+@[\w.-]+/.test(line) ||
+    /[\w.-]+@[\w.-]+\s*[#$%]/.test(line)
   )
 }
 
@@ -120,6 +122,21 @@ export function isPromptHostAligned(
     observed.startsWith(`${expected}.`) ||
     expected.startsWith(`${observed}.`)
   )
+}
+
+/**
+ * True when the observed prompt host is the Crescent client machine
+ * (`os.hostname()`, including Bonjour `.local`). Empty localHost is not local.
+ */
+export function isLocalMachinePromptHost(
+  observedHost: string | undefined,
+  localHost: string | undefined
+): boolean {
+  const observed = normalizeHostToken(observedHost ?? '')
+  const local = normalizeHostToken(localHost ?? '')
+  if (!observed || !local) return false
+  if (observed === 'local-shell') return true
+  return isPromptHostAligned(observed, local)
 }
 
 /** Latest observed host from output that fails alignment, if any. */
@@ -196,7 +213,9 @@ function matchPromptHostsInLine(line: string): string[] {
   // Prompt-like: [user@host …], user@host:…#, user@host#
   // Avoid matching email-like tokens mid-sentence without prompt markers when possible.
   const looksLikePrompt =
-    /[@].*[:#$]/.test(line) || /\[[\w.-]+@[\w.-]+/.test(line) || /[\w.-]+@[\w.-]+\s*[#$]/.test(line)
+    /[@].*[:#$%]/.test(line) ||
+    /\[[\w.-]+@[\w.-]+/.test(line) ||
+    /[\w.-]+@[\w.-]+\s*[#$%]/.test(line)
   if (!looksLikePrompt) return []
 
   const hosts: string[] = []

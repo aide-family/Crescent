@@ -928,7 +928,8 @@ export function registerTerminalIpc(): void {
           output: buffer,
           expectedHost: state.expectedHost,
           aliases: state.aliases,
-          clusterHostRegex: state.clusterHostRegex
+          clusterHostRegex: state.clusterHostRegex,
+          localHost
         }).promptHost
         const result = confirmLoginState(state, promptHost, { localHost })
         const anchored = applyConfirmedLoginAnchor(result.state, {
@@ -1164,7 +1165,8 @@ export function registerTerminalIpc(): void {
           output,
           expectedHost: effectiveExpectedHost || state.expectedHost,
           aliases: state.aliases,
-          clusterHostRegex: state.clusterHostRegex
+          clusterHostRegex: state.clusterHostRegex,
+          localHost: hostname()
         })
       : undefined
 
@@ -1208,7 +1210,8 @@ export function registerTerminalIpc(): void {
           output,
           expectedHost: runtimeAnchorHost(learned) ?? learned.expectedHost,
           aliases: learned.aliases,
-          clusterHostRegex: learned.clusterHostRegex
+          clusterHostRegex: learned.clusterHostRegex,
+          localHost: hostname()
         })
       }
     }
@@ -1241,13 +1244,14 @@ export function registerTerminalIpc(): void {
         output,
         expectedHost: runtimeAnchorHost(healed) ?? healed.expectedHost,
         aliases: healed.aliases,
-        clusterHostRegex: healed.clusterHostRegex
+        clusterHostRegex: healed.clusterHostRegex,
+        localHost: hostname()
       })
     }
 
     const promptHost = resolved?.promptHost ?? state?.promptHost
     const gateAlignment = state
-      ? resolveGateAlignment(state, output)
+      ? resolveGateAlignment(state, output, hostname())
       : (resolved?.alignment ?? 'unknown')
     const alignment = gateAlignment
     const hasSsotTarget = Boolean(expectedHost || state?.clusterHostRegex)

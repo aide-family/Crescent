@@ -20,6 +20,8 @@ import type {
   AgentPathReference,
   PastedAttachmentInput,
   AgentRunInput,
+  AgentCompactInput,
+  AgentCompactResult,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
   AgentSkillOption,
@@ -430,6 +432,8 @@ const api = {
       ipcRenderer.invoke('agent:generate-sop', input),
     reloadRuntime: (input?: AgentReloadRuntimeInput): Promise<AgentReloadRuntimeResult> =>
       ipcRenderer.invoke('agent:reload-runtime', input ?? {}),
+    compact: (input: AgentCompactInput): Promise<AgentCompactResult> =>
+      ipcRenderer.invoke('agent:compact', input),
     generateCaptureDraft: (
       input: AgentGenerateCaptureDraftInput
     ): Promise<AgentGenerateCaptureDraftResult> =>

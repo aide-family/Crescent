@@ -74,8 +74,24 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   } = ctx
 
   const activeLabel = formatTabLabel(activeTab)
+  const leaveTarget = isLeaveTargetDrift({
+    sessionAligned: ctx.sessionAligned,
+    promptHost: ctx.promptHost,
+    returnToJumpHost: ctx.returnToJumpHost
+  })
 
-  if (resumeRequested || explicitNonTerminal || explicitLocalFile) {
+  // Continue / resume must not skip reconnect when the session left the target.
+  // Local-file and non-terminal requests still stay put.
+  if (explicitNonTerminal || explicitLocalFile) {
+    return {
+      targetTabId: activeTabId,
+      connectionId: activeTab?.connectionId,
+      action: 'reuse',
+      label: activeLabel,
+      reason: 'skip-intent'
+    }
+  }
+  if (resumeRequested && !leaveTarget) {
     return {
       targetTabId: activeTabId,
       connectionId: activeTab?.connectionId,
@@ -353,6 +369,16 @@ export function shouldPreferActiveLoggedIn(input: {
 /** True only for a parsed local-shell prompt — undefined is "unknown", not local. */
 export function isLocalShellPromptHost(promptHost: string | undefined): boolean {
   return promptHost === 'local-shell'
+}
+
+/** Leave-target drift: back on the laptop shell or fallen back to the jump box. */
+export function isLeaveTargetDrift(input: {
+  sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
+  returnToJumpHost?: boolean
+}): boolean {
+  if (input.sessionAligned !== 'drifted') return false
+  return isLocalShellPromptHost(input.promptHost) || Boolean(input.returnToJumpHost)
 }
 
 /** Put the active connection first and optionally mark it as current. */

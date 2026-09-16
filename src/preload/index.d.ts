@@ -19,6 +19,8 @@ import type {
   AgentPathReference,
   PastedAttachmentInput,
   AgentRunInput,
+  AgentCompactInput,
+  AgentCompactResult,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
   AgentSkillOption,
@@ -292,6 +294,7 @@ interface TerminalAgentApi {
     ) => Promise<AgentConnectionIntentResult>
     generateSop: (input: AgentGenerateSopInput) => Promise<AgentGenerateSopResult>
     reloadRuntime: (input?: AgentReloadRuntimeInput) => Promise<AgentReloadRuntimeResult>
+    compact: (input: AgentCompactInput) => Promise<AgentCompactResult>
     generateCaptureDraft: (
       input: AgentGenerateCaptureDraftInput
     ) => Promise<AgentGenerateCaptureDraftResult>

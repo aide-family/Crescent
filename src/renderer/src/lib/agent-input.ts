@@ -12,6 +12,11 @@ import type {
 } from '../../../shared/agent-types'
 import { hasExplicitLocalWorkIntent } from '../../../shared/agent-local-intent'
 
+/** Cold-start UI log injection only (hot Pi sessions skip this path). */
+export const COLD_START_ASSISTANT_MAX_CHARS = 4_000
+export const COLD_START_ENTRY_MAX_CHARS = 2_200
+export const COLD_START_CONVERSATION_TOTAL_MAX_CHARS = 8_000
+
 export function isContinueIntent(value: string): boolean {
   const normalized = value
     .trim()
@@ -320,17 +325,19 @@ export function buildRecentConversationContext(
   const compactEntries = entries
     .filter((entry) => entry.id !== latestAssistant?.id)
     .slice(-4)
-    .map((entry) => formatRecentConversationEntry(entry, t, 2200))
+    .map((entry) => formatRecentConversationEntry(entry, t, COLD_START_ENTRY_MAX_CHARS))
     .filter(Boolean)
 
   const latestAssistantContext = latestAssistant
     ? [
         `${t.input.resumeRecentContext} - latest assistant result`,
-        formatRecentConversationEntry(latestAssistant, t, 40_000)
+        formatRecentConversationEntry(latestAssistant, t, COLD_START_ASSISTANT_MAX_CHARS)
       ].join('\n')
     : ''
 
-  return [...compactEntries, latestAssistantContext].filter(Boolean).join('\n\n')
+  const text = [...compactEntries, latestAssistantContext].filter(Boolean).join('\n\n')
+  if (text.length <= COLD_START_CONVERSATION_TOTAL_MAX_CHARS) return text
+  return text.slice(-COLD_START_CONVERSATION_TOTAL_MAX_CHARS)
 }
 
 export function formatRecentConversationEntry(

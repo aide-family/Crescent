@@ -43,6 +43,11 @@ export function formatCompactTokenCount(value: number): string {
   return formatCompactScaled(value / 1_000_000, 'M')
 }
 
+export function formatContextUsagePercent(percent: number | null | undefined): string {
+  if (percent == null || !Number.isFinite(percent)) return '—'
+  return `${Math.max(0, Math.min(100, Math.round(percent)))}%`
+}
+
 function formatCompactScaled(scaled: number, suffix: 'k' | 'M'): string {
   const digits = scaled >= 100 ? 0 : 1
   const text = scaled.toFixed(digits).replace(/\.0$/, '')

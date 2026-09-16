@@ -155,7 +155,11 @@ export function AgentPanel({
   earlierLogsError,
   onLoadEarlier,
   sessionInputTokens,
-  sessionOutputTokens
+  sessionOutputTokens,
+  contextPercent,
+  contextPending,
+  onCompactContext,
+  compactDisabled
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -197,6 +201,8 @@ export function AgentPanel({
   onExportFull: (entry: AgentLogEntry) => void
   onExportTrace: (entry: AgentLogEntry) => void
   onExportSessionTrace: () => void
+  onCompactContext?: () => void
+  compactDisabled?: boolean
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
@@ -249,6 +255,8 @@ export function AgentPanel({
   onLoadEarlier?: () => void | Promise<void>
   sessionInputTokens: number
   sessionOutputTokens: number
+  contextPercent?: number | null
+  contextPending?: boolean
 }): React.JSX.Element {
   const [referenceMenuOpen, setReferenceMenuOpen] = useState(false)
   const referenceMenuRef = useRef<HTMLDivElement | null>(null)
@@ -385,8 +393,12 @@ export function AgentPanel({
         <SessionUsageBar
           inputTokens={sessionInputTokens}
           outputTokens={sessionOutputTokens}
+          contextPercent={contextPercent}
+          contextPending={contextPending}
+          compactDisabled={compactDisabled}
           t={t}
           onExportSessionTrace={onExportSessionTrace}
+          onCompactContext={onCompactContext}
         />
         <form onSubmit={onSubmit} className="space-y-1.5">
           <div className="flex items-center gap-2">

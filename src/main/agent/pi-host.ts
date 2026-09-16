@@ -63,7 +63,7 @@ import {
   classifyProviderError,
   isQuotaExhaustedError
 } from '../../shared/provider-error'
-import { buildPromptText } from '../../shared/agent-run-prompt'
+import { buildPromptText, conversationContextForPrompt } from '../../shared/agent-run-prompt'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
 import { normalizeAgentStyle, type AgentStyle } from '../../shared/agent-style'
 import { diffSessionTokenUsage, snapshotSessionTokenUsage } from '../../shared/session-token-usage'
@@ -108,6 +108,8 @@ const activeRuns = new Map<string, ActiveRun>()
 const runIdBySessionKey = new Map<string, string>()
 /** Sessions currently running an extension command (counts as busy for reload/dispose). */
 const extensionBusyBySessionKey = new Set<string>()
+/** Manual compaction in flight (serialize against prompt / dispose). */
+const compactingBySessionKey = new Set<string>()
 /** Serialize ensure/dispose per session key. */
 const sessionMutexTails = new Map<string, Promise<unknown>>()
 
@@ -162,7 +164,7 @@ export interface PiHostRunResult {
 
 export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult> {
   const { runId, sessionKey, emit } = input
-  if (runIdBySessionKey.has(sessionKey)) {
+  if (runIdBySessionKey.has(sessionKey) || compactingBySessionKey.has(sessionKey)) {
     return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
   }
   const abortController = new AbortController()
@@ -241,8 +243,13 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     const bridgeLocale = input.locale?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
     hosted.unsubscribe?.()
 
+    const hasLiveSessionMessages = hostedSessionHasMessages(hosted.session)
     const promptText = buildPromptText({
       ...input,
+      conversationContext: conversationContextForPrompt(
+        input.conversationContext,
+        hasLiveSessionMessages
+      ),
       agentStyle: normalizeAgentStyle(input.agentStyle ?? input.config.agentStyle)
     })
     // Reused sessions can still be settling after abort; wait before a fresh prompt
@@ -310,7 +317,11 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
         emit(agentEvent)
       }
 
-      if (event.type === 'turn_end' || event.type === 'message_end') {
+      if (
+        event.type === 'compaction_end' ||
+        event.type === 'turn_end' ||
+        event.type === 'message_end'
+      ) {
         emitUsageDelta()
       }
     })
@@ -474,7 +485,11 @@ export async function runPiExtensionCommand(input: {
 }): Promise<{ ok: boolean; busy?: boolean; error?: string }> {
   const name = input.name.trim()
   if (!name) return { ok: false, error: 'Extension command name is empty.' }
-  if (runIdBySessionKey.has(input.sessionKey) || extensionBusyBySessionKey.has(input.sessionKey)) {
+  if (
+    runIdBySessionKey.has(input.sessionKey) ||
+    extensionBusyBySessionKey.has(input.sessionKey) ||
+    compactingBySessionKey.has(input.sessionKey)
+  ) {
     return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
   }
 
@@ -517,11 +532,80 @@ export interface ReloadCrescentRuntimeResult {
 function isHostedSessionBusy(sessionKey: string, hosted: HostedSession): boolean {
   if (runIdBySessionKey.has(sessionKey)) return true
   if (extensionBusyBySessionKey.has(sessionKey)) return true
+  if (compactingBySessionKey.has(sessionKey)) return true
   try {
     return Boolean(hosted.session.isStreaming)
   } catch {
     return false
   }
+}
+
+export interface CompactHostedSessionInput {
+  sessionKey: string
+  tabId?: string
+  instructions?: string
+  locale?: string
+  emit: (event: AgentEvent) => void
+}
+
+export interface CompactHostedSessionResult {
+  ok: boolean
+  busy?: boolean
+  error?: string
+  tokensBefore?: number
+  estimatedTokensAfter?: number
+}
+
+export async function compactHostedSession(
+  input: CompactHostedSessionInput
+): Promise<CompactHostedSessionResult> {
+  const sessionKey = input.sessionKey.trim()
+  if (!sessionKey) return { ok: false, error: 'Missing session.' }
+
+  return withSessionMutex(sessionKey, async () => {
+    const hosted = hostedSessions.get(sessionKey)
+    if (!hosted) {
+      return { ok: false, error: 'No live session to compact.' }
+    }
+    if (isHostedSessionBusy(sessionKey, hosted)) {
+      return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
+    }
+
+    const runId = `compact-${Date.now().toString(36)}`
+    const tabId = input.tabId?.trim() || sessionKey
+    compactingBySessionKey.add(sessionKey)
+    hosted.unsubscribe?.()
+    hosted.unsubscribe = hosted.session.subscribe((event) => {
+      for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
+        runId,
+        tabId,
+        locale: input.locale
+      })) {
+        input.emit(agentEvent)
+      }
+      if (event.type === 'compaction_end') {
+        emitContextUsage(input.emit, runId, tabId, hosted.session)
+      }
+    })
+
+    try {
+      const result = await hosted.session.compact(input.instructions)
+      emitContextUsage(input.emit, runId, tabId, hosted.session)
+      return {
+        ok: true,
+        tokensBefore: result.tokensBefore,
+        estimatedTokensAfter: result.estimatedTokensAfter
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      input.emit({ type: 'error', message, runId, tabId })
+      return { ok: false, error: message }
+    } finally {
+      hosted.unsubscribe?.()
+      hosted.unsubscribe = undefined
+      compactingBySessionKey.delete(sessionKey)
+    }
+  })
 }
 
 export async function reloadCrescentRuntime(
@@ -759,12 +843,58 @@ function collectSkillRoots(config: AgentConfig): string[] {
   return [...new Set(roots)]
 }
 
+function hostedSessionHasMessages(session: AgentSession): boolean {
+  try {
+    return session.messages.length > 0
+  } catch {
+    return false
+  }
+}
+
 function readHostedSessionTokenUsage(session: AgentSession): { input: number; output: number } {
   try {
     return snapshotSessionTokenUsage(session.getSessionStats())
   } catch {
     return snapshotSessionTokenUsage(undefined)
   }
+}
+
+function readHostedSessionContextUsage(session: AgentSession): {
+  contextTokens?: number | null
+  contextWindow?: number
+  contextPercent?: number | null
+} {
+  try {
+    const usage = session.getContextUsage()
+    if (!usage || typeof usage.contextWindow !== 'number' || usage.contextWindow <= 0) {
+      return {}
+    }
+    return {
+      contextTokens: usage.tokens,
+      contextWindow: usage.contextWindow,
+      contextPercent: usage.percent
+    }
+  } catch {
+    return {}
+  }
+}
+
+function emitContextUsage(
+  emit: (event: AgentEvent) => void,
+  runId: string,
+  tabId: string | undefined,
+  session: AgentSession
+): void {
+  const context = readHostedSessionContextUsage(session)
+  if (context.contextWindow == null) return
+  emit({
+    type: 'usage',
+    input: 0,
+    output: 0,
+    ...context,
+    runId,
+    tabId
+  })
 }
 
 function emitRunUsageDelta(
@@ -775,10 +905,12 @@ function emitRunUsageDelta(
   session: AgentSession
 ): void {
   const delta = diffSessionTokenUsage(before, readHostedSessionTokenUsage(session))
+  const context = readHostedSessionContextUsage(session)
   emit({
     type: 'usage',
     input: delta.input,
     output: delta.output,
+    ...context,
     runId,
     tabId
   })

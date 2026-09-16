@@ -110,7 +110,21 @@ export function mapPiSessionEventToAgentEvents(
       ]
     }
     case 'compaction_start':
-      return [{ type: 'status', message: `Compacting context (${event.reason})…`, ...base }]
+      return [
+        {
+          type: 'status',
+          message: formatCompactionStart(event.reason, resolveBridgeLocale(meta.locale)),
+          ...base
+        }
+      ]
+    case 'compaction_end':
+      return [
+        {
+          type: 'status',
+          message: formatCompactionEnd(event, resolveBridgeLocale(meta.locale)),
+          ...base
+        }
+      ]
     default:
       return []
   }
@@ -174,6 +188,53 @@ function extractToolResultText(result: unknown): string {
   } catch {
     return String(result)
   }
+}
+
+type CompactionReason = 'manual' | 'threshold' | 'overflow'
+
+function formatCompactionReason(reason: CompactionReason, locale: 'zh' | 'en'): string {
+  if (locale === 'zh') {
+    if (reason === 'manual') return '手动'
+    if (reason === 'overflow') return '溢出'
+    return '阈值'
+  }
+  return reason
+}
+
+function formatCompactionStart(reason: CompactionReason, locale: 'zh' | 'en'): string {
+  const label = formatCompactionReason(reason, locale)
+  return locale === 'zh' ? `正在压缩上下文（${label}）…` : `Compacting context (${label})…`
+}
+
+function formatCompactionEnd(
+  event: Extract<AgentSessionEvent, { type: 'compaction_end' }>,
+  locale: 'zh' | 'en'
+): string {
+  const label = formatCompactionReason(event.reason, locale)
+  if (event.aborted) {
+    return locale === 'zh'
+      ? `上下文压缩已中止（${label}）。`
+      : `Context compaction aborted (${label}).`
+  }
+  if (event.errorMessage) {
+    return locale === 'zh'
+      ? `上下文压缩失败（${label}）：${event.errorMessage}`
+      : `Context compaction failed (${label}): ${event.errorMessage}`
+  }
+  const before = event.result?.tokensBefore
+  const after = event.result?.estimatedTokensAfter
+  if (locale === 'zh') {
+    const beforeText = typeof before === 'number' ? `压缩前 ${before} token` : ''
+    const afterText = typeof after === 'number' ? `，压缩后约 ${after}` : ''
+    return beforeText
+      ? `上下文已压缩（${label}）：${beforeText}${afterText}。`
+      : `上下文已压缩（${label}）。`
+  }
+  const beforeText = typeof before === 'number' ? `${before} tokens before` : ''
+  const afterText = typeof after === 'number' ? `, ~${after} after` : ''
+  return beforeText
+    ? `Context compacted (${label}): ${beforeText}${afterText}.`
+    : `Context compacted (${label}).`
 }
 
 export function extractAssistantTextFromMessages(messages: unknown[]): string {

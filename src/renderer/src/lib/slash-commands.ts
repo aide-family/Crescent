@@ -189,6 +189,14 @@ export function replaceSlashCommandInput(
   return `${prefix}\n${next}${after}`
 }
 
+export function parseCompactSlashCommand(input: string): { instructions?: string } | null {
+  const trimmed = input.trim()
+  const match = /^\/compact(?:\s+([\s\S]*))?$/i.exec(trimmed)
+  if (!match) return null
+  const instructions = match[1]?.trim()
+  return instructions ? { instructions } : {}
+}
+
 export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
   return [
     {
@@ -204,6 +212,13 @@ export function buildSlashCommandOptions(t: Dictionary): SlashCommandOption[] {
       description: t.input.slashReloadDescription,
       value: '/reload',
       keywords: ['reload', 'refresh', 'config', '重载', '刷新', '配置']
+    },
+    {
+      id: 'compact',
+      title: t.input.slashCompact,
+      description: t.input.slashCompactDescription,
+      value: '/compact',
+      keywords: ['compact', 'compress', 'context', 'summary', '压缩', '上下文', '摘要']
     },
     {
       id: 'style',

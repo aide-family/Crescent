@@ -703,7 +703,15 @@ export type AgentEvent =
     } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
   | ({ type: 'token'; text: string } & AgentEventMeta)
-  | ({ type: 'usage'; input: number; output: number } & AgentEventMeta)
+  | ({
+      type: 'usage'
+      input: number
+      output: number
+      /** Absolute context-window fill; null immediately after compaction. */
+      contextTokens?: number | null
+      contextWindow?: number
+      contextPercent?: number | null
+    } & AgentEventMeta)
   | ({
       type: 'error'
       message: string
@@ -801,6 +809,27 @@ export interface StoredAgentRun {
 export interface SessionTokenUsage {
   input: number
   output: number
+}
+
+export interface SessionContextUsage {
+  tokens: number | null
+  contextWindow: number
+  percent: number | null
+}
+
+export interface AgentCompactInput {
+  sessionKey?: string
+  tabId?: string
+  instructions?: string
+  locale?: string
+}
+
+export interface AgentCompactResult {
+  ok: boolean
+  busy?: boolean
+  error?: string
+  tokensBefore?: number
+  estimatedTokensAfter?: number
 }
 
 export type OpsHistoryRating = 'like' | 'dislike'

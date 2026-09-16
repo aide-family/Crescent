@@ -9,12 +9,18 @@ import {
 } from '../terminal/ipc'
 import { listConnections } from '../connections/ipc'
 import { loadPiAi, type PiSdkFacade } from './pi-sdk'
-import { getPtyBashExecContext, updatePtyBashExecutionTabId } from './pi-terminal-bash'
+import {
+  getFailedSshSubterminalConnectionIds,
+  getPtyBashExecContext,
+  recordFailedSshSubterminalConnection,
+  updatePtyBashExecutionTabId
+} from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
   '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
-  '- 需要登录另一台主机 / 新 SSH，而当前终端无法到达或不该离开：优先 open_subterminal(mode=ssh, connectionId=...)，再在该子终端执行；不要只做分析。',
+  '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。主机负责恢复主终端；在当前 pane 用 bash。',
+  '- mode=ssh 只用于登录另一台已保存连接（不同 connectionId）；不要用子终端逃避当前连接的重连。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
   '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。',
@@ -192,6 +198,37 @@ export function resolveOpenSubterminalParentTabId(executionTabId: string): strin
   return resolveParentTerminalTabId(executionTabId)
 }
 
+export const SAME_CONNECTION_SUBTERMINAL_ERROR =
+  'Do not open_subterminal for the current session SSH connection. The host restores the main terminal; retry bash on the current pane after reconnect. Use mode=ssh only with a different saved connectionId.'
+
+export const FAILED_SSH_SUBTERMINAL_RETRY_ERROR =
+  'SSH subterminal login to this connection already failed in this run. Do not open another pane. Wait for the host to restore the main terminal, then retry bash there.'
+
+export function shouldRefuseSameConnectionSshSubterminal(input: {
+  mode: OpenSubterminalMode
+  connectionId?: string
+  parentConnectionId?: string
+  rerouteParentBash: boolean
+}): boolean {
+  if (!input.rerouteParentBash) return false
+  if (input.mode !== 'ssh') return false
+  const wanted = input.connectionId?.trim()
+  const parent = input.parentConnectionId?.trim()
+  return Boolean(wanted && parent && wanted === parent)
+}
+
+export function shouldRefuseFailedSshSubterminalRetry(input: {
+  mode: OpenSubterminalMode
+  connectionId?: string
+  failedConnectionIds?: ReadonlySet<string>
+  rerouteParentBash: boolean
+}): boolean {
+  if (!input.rerouteParentBash) return false
+  if (input.mode !== 'ssh') return false
+  const id = input.connectionId?.trim()
+  return Boolean(id && input.failedConnectionIds?.has(id))
+}
+
 export async function openAgentSubterminal(input: {
   sessionKey: string
   params: OpenSubterminalParams
@@ -254,6 +291,30 @@ export async function openAgentSubterminal(input: {
     return { ok: false, error: 'Agent run was canceled.' }
   }
 
+  const rerouteParentBash = input.rerouteParentBash !== false
+  const parentConnectionId =
+    context.parentConnectionId?.trim() || (context.isSsh ? context.connectionId?.trim() : undefined)
+  if (
+    shouldRefuseSameConnectionSshSubterminal({
+      mode,
+      connectionId,
+      parentConnectionId,
+      rerouteParentBash
+    })
+  ) {
+    return { ok: false, error: SAME_CONNECTION_SUBTERMINAL_ERROR }
+  }
+  if (
+    shouldRefuseFailedSshSubterminalRetry({
+      mode,
+      connectionId,
+      failedConnectionIds: getFailedSshSubterminalConnectionIds(context.runId),
+      rerouteParentBash
+    })
+  ) {
+    return { ok: false, error: FAILED_SSH_SUBTERMINAL_RETRY_ERROR }
+  }
+
   const parentTabId = resolveOpenSubterminalParentTabId(context.executionTabId)
   const name =
     input.params.name?.trim() ||
@@ -279,14 +340,6 @@ export async function openAgentSubterminal(input: {
     }
   }
 
-  const rerouteParentBash = input.rerouteParentBash !== false
-  if (rerouteParentBash) {
-    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
-      isSsh: mode === 'ssh',
-      connectionId: mode === 'ssh' ? connectionId : undefined
-    })
-  }
-
   const payload: AgentSubterminalOpenedPayload = {
     parentTabId,
     tabId: opened.tabId,
@@ -307,6 +360,10 @@ export async function openAgentSubterminal(input: {
   })
   if (!ready.ok) {
     closeTemporarySubterminal(webContents, opened.tabId)
+    const canceled = ready.error === 'Agent run was canceled.'
+    if (mode === 'ssh' && connectionId && rerouteParentBash && !canceled) {
+      recordFailedSshSubterminalConnection(context.runId, connectionId)
+    }
     return {
       ok: false,
       tabId: opened.tabId,
@@ -315,6 +372,13 @@ export async function openAgentSubterminal(input: {
       parentTabId,
       error: ready.error || 'Agent run was canceled.'
     }
+  }
+
+  if (rerouteParentBash) {
+    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
+      isSsh: mode === 'ssh',
+      connectionId: mode === 'ssh' ? connectionId : undefined
+    })
   }
 
   const hintParts: string[] = []
@@ -362,14 +426,14 @@ export async function createOpenSubterminalToolDefinition(
     description: [
       'Open a docked subterminal and route subsequent bash there.',
       'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
-      'Use mode=ssh with connectionId to open a new SSH session in a subterminal.',
+      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the host restores the main terminal).',
       'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
       'Do not only analyze — call this tool then execute.'
     ].join(' '),
     promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
-      'For a new SSH target the current pane cannot reach, call open_subterminal(mode=ssh, connectionId=...).',
+      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the host restores the main terminal.',
       'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
     parameters,
