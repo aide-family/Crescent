@@ -1,5 +1,6 @@
 import {
   type ClipboardEvent,
+  type FormEvent,
   type KeyboardEvent,
   type RefObject,
   useLayoutEffect,
@@ -17,9 +18,16 @@ import {
 } from '@renderer/lib/composer-ref-tokens'
 import { shouldSkipComposerDomRebuild } from '@renderer/lib/composer-rebuild-policy'
 import {
+  hasComposerNewlineModifier,
+  isComposerNewlineEnter,
+  shouldIgnoreComposerInputAfterNewline
+} from '@renderer/lib/composer-newline'
+import {
   createComposerPadBr,
+  ensureComposerEmptySurface,
   getComposerDomCaret,
   insertComposerNewline,
+  isCanonicalComposerEmptyDom,
   scrollComposerCaretIntoView,
   serializeComposerDom,
   setComposerDomCaret
@@ -80,12 +88,33 @@ export function ComposerEditor({
   const pendingCaretRef = useRef<number | null>(null)
   const composingRef = useRef(false)
   const compositionEndedAtRef = useRef(0)
+  const newlineImeWarmupAtRef = useRef(0)
   const mountedRef = useRef(false)
-  const lookupsRef = useRef({ skillRefs, wikiRefs, toolRefs, pathRefs, t, onChange, value })
+  const lookupsRef = useRef({
+    skillRefs,
+    wikiRefs,
+    toolRefs,
+    pathRefs,
+    t,
+    onChange,
+    onCaretChange,
+    value
+  })
 
   useLayoutEffect(() => {
-    lookupsRef.current = { skillRefs, wikiRefs, toolRefs, pathRefs, t, onChange, value }
+    lookupsRef.current = {
+      skillRefs,
+      wikiRefs,
+      toolRefs,
+      pathRefs,
+      t,
+      onChange,
+      onCaretChange,
+      value
+    }
+  }, [onCaretChange, onChange, pathRefs, skillRefs, t, toolRefs, value, wikiRefs])
 
+  useLayoutEffect(() => {
     const surface = surfaceRef.current
     if (agentInputRef) {
       if (!surface) agentInputRef.current = null
@@ -97,6 +126,16 @@ export function ComposerEditor({
             return serializeComposerDom(surface)
           },
           setSelectionRange(start: number, end = start) {
+            if (
+              composingRef.current ||
+              shouldIgnoreComposerInputAfterNewline(
+                newlineImeWarmupAtRef.current,
+                performance.now(),
+                composingRef.current
+              )
+            ) {
+              return
+            }
             setComposerDomCaret(surface, end)
           }
         }
@@ -106,12 +145,19 @@ export function ComposerEditor({
 
     const isEcho = mountedRef.current && value === lastEmittedRef.current
     mountedRef.current = true
+    const newlineWarmup = shouldIgnoreComposerInputAfterNewline(
+      newlineImeWarmupAtRef.current,
+      performance.now(),
+      composingRef.current
+    )
     if (
       shouldSkipComposerDomRebuild({
         composing: composingRef.current,
         isEcho,
         valueLength: value.length,
-        composerFocused: document.activeElement === surface
+        composerFocused: document.activeElement === surface,
+        newlineWarmup,
+        canonicalEmpty: isCanonicalComposerEmptyDom(surface)
       })
     ) {
       previousValueRef.current = value
@@ -127,10 +173,11 @@ export function ComposerEditor({
     chipRootsRef.current = []
     surface.replaceChildren()
 
-    const skillById = new Map(skillRefs.map((item) => [item.id, item]))
-    const wikiById = new Map(wikiRefs.map((item) => [item.id, item]))
-    const toolById = new Map(toolRefs.map((item) => [item.id, item]))
-    const pathById = new Map(pathRefs.map((item) => [item.id, item]))
+    const latest = lookupsRef.current
+    const skillById = new Map(latest.skillRefs.map((item) => [item.id, item]))
+    const wikiById = new Map(latest.wikiRefs.map((item) => [item.id, item]))
+    const toolById = new Map(latest.toolRefs.map((item) => [item.id, item]))
+    const pathById = new Map(latest.pathRefs.map((item) => [item.id, item]))
 
     for (const part of flattenComposerSegmentsForInline(value)) {
       if (part.type === 'br') {
@@ -167,7 +214,7 @@ export function ComposerEditor({
             kind={part.kind}
             id={part.id}
             label={label}
-            t={t}
+            t={latest.t}
             removable
             atomic
             isMcp={tool?.source === 'mcp'}
@@ -192,10 +239,21 @@ export function ComposerEditor({
     lastEmittedRef.current = value
     const caret = pendingCaretRef.current
     if (caret == null) return
+    if (
+      composingRef.current ||
+      shouldIgnoreComposerInputAfterNewline(
+        newlineImeWarmupAtRef.current,
+        performance.now(),
+        composingRef.current
+      )
+    ) {
+      pendingCaretRef.current = null
+      return
+    }
     setComposerDomCaret(surface, caret)
-    onCaretChange?.(caret)
+    lookupsRef.current.onCaretChange?.(caret)
     pendingCaretRef.current = null
-  }, [agentInputRef, onCaretChange, onChange, pathRefs, skillRefs, t, toolRefs, value, wikiRefs])
+  }, [agentInputRef, value])
 
   useLayoutEffect(() => {
     return () => {
@@ -208,10 +266,17 @@ export function ComposerEditor({
     const surface = surfaceRef.current
     if (!surface) return
     const next = serializeComposerDom(surface)
+    if (next === '') ensureComposerEmptySurface(surface)
     lastEmittedRef.current = next
-    onCaretChange?.(getComposerDomCaret(surface))
+    lookupsRef.current.onCaretChange?.(getComposerDomCaret(surface))
     scrollComposerCaretIntoView(surface)
-    if (next !== value) onChange(next)
+    if (next !== lookupsRef.current.value) lookupsRef.current.onChange(next)
+  }
+
+  function isComposerInputComposing(event: FormEvent<HTMLElement>): boolean {
+    if (composingRef.current) return true
+    const native = event.nativeEvent
+    return 'isComposing' in native && native.isComposing === true
   }
 
   return (
@@ -228,13 +293,23 @@ export function ComposerEditor({
       spellCheck={false}
       data-placeholder={placeholder}
       data-empty={value.length === 0 ? 'true' : undefined}
-      onInput={() => {
-        if (composingRef.current) return
+      onInput={(event) => {
+        if (isComposerInputComposing(event)) return
+        if (
+          shouldIgnoreComposerInputAfterNewline(
+            newlineImeWarmupAtRef.current,
+            performance.now(),
+            composingRef.current
+          )
+        ) {
+          return
+        }
         emitFromDom()
       }}
       onCompositionStart={() => {
         composingRef.current = true
         compositionEndedAtRef.current = 0
+        newlineImeWarmupAtRef.current = 0
       }}
       onCompositionEnd={() => {
         composingRef.current = false
@@ -244,7 +319,7 @@ export function ComposerEditor({
       onSelect={() => {
         const surface = surfaceRef.current
         if (!surface) return
-        onCaretChange?.(getComposerDomCaret(surface))
+        lookupsRef.current.onCaretChange?.(getComposerDomCaret(surface))
       }}
       onPaste={(event) => {
         onPaste(event)
@@ -264,7 +339,7 @@ export function ComposerEditor({
         const imeActive = isImeKeyEvent(event) || composingRef.current
         const enterConfirmsIme =
           event.key === 'Enter' &&
-          !event.shiftKey &&
+          !hasComposerNewlineModifier(event) &&
           shouldIgnoreEnterAfterImeConfirm(compositionEndedAtRef.current)
 
         if (enterConfirmsIme) {
@@ -282,9 +357,10 @@ export function ComposerEditor({
         onKeyDown(event)
         if (event.defaultPrevented) return
 
-        if (event.key === 'Enter' && event.shiftKey) {
+        if (isComposerNewlineEnter(event)) {
           event.preventDefault()
           insertComposerNewline(event.currentTarget)
+          newlineImeWarmupAtRef.current = performance.now()
           emitFromDom()
         }
       }}

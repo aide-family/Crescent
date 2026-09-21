@@ -19,7 +19,15 @@ export function shouldBlockTerminalUserInput(input: {
   return input.hasPendingCommand || input.isAgentExecutionTab
 }
 
-/** User Ctrl+C: interrupt only an in-flight waiter. Never aborts the Pi session. */
+/** Ctrl+C / ETX must reach the PTY even while other user input is locked. */
+export function isTerminalInterruptPayload(data: string): boolean {
+  return data.includes('\x03')
+}
+
+/**
+ * User Ctrl+C: interrupt an in-flight waiter when one exists. Never aborts the Pi session.
+ * The PTY still receives SIGINT even when no waiter is pending.
+ */
 export function resolveUserCommandInterrupt(input: {
   hasPendingCommand: boolean
 }): 'interrupt' | 'noop' {

@@ -162,8 +162,15 @@ export function resolveRemainingConnectionCommands(
   const loginActions = buildConnectionLoginActions(connection)
   const full = sshCommand ? [sshCommand, ...loginActions] : loginActions
   const waiting = isWaitingForSecret(env)
+  const liveSignal = env.output ? findNewestPromptSignal(env.output) : undefined
+  const liveRemoteHost = liveSignal?.kind === 'host' ? liveSignal.host : undefined
 
-  if (env.alignment === 'aligned' && !waiting) {
+  // Dead PTY: ignore stale remote promptHost / SSOT and type the full login.
+  if (env.mode === 'none') {
+    return remainingWithoutLeadingSsh(full)
+  }
+
+  if (liveRemoteHost && env.alignment === 'aligned' && !waiting) {
     return { includeSshCommand: false, commands: [] }
   }
 
@@ -171,9 +178,8 @@ export function resolveRemainingConnectionCommands(
   // treat as logged in even if alignment briefly reports unknown.
   if (
     !waiting &&
-    env.promptHost &&
-    env.promptHost !== 'local-shell' &&
-    matchesClusterHostRegex(env.promptHost, connection.clusterHostRegex)
+    liveRemoteHost &&
+    matchesClusterHostRegex(liveRemoteHost, connection.clusterHostRegex)
   ) {
     return { includeSshCommand: false, commands: [] }
   }
@@ -181,13 +187,7 @@ export function resolveRemainingConnectionCommands(
   // Login already verified and the PTY still shows a remote prompt — do not
   // re-type password/actions for hostname≠IP false-positive drift. Jump-box
   // fall-back still needs remaining hops.
-  if (
-    !waiting &&
-    env.ready === true &&
-    !env.returnToJumpHost &&
-    env.promptHost &&
-    env.promptHost !== 'local-shell'
-  ) {
+  if (!waiting && env.ready === true && !env.returnToJumpHost && liveRemoteHost) {
     return { includeSshCommand: false, commands: [] }
   }
 
@@ -197,8 +197,8 @@ export function resolveRemainingConnectionCommands(
   if (
     !waiting &&
     !env.returnToJumpHost &&
-    env.promptHost &&
-    isHostOnTarget(env.promptHost, env.aliases ?? [], undefined, connection.clusterHostRegex)
+    liveRemoteHost &&
+    isHostOnTarget(liveRemoteHost, env.aliases ?? [], undefined, connection.clusterHostRegex)
   ) {
     return { includeSshCommand: false, commands: [] }
   }
@@ -214,21 +214,20 @@ export function resolveRemainingConnectionCommands(
     return { includeSshCommand: false, commands }
   }
 
-  if (isLocalLoginEnvironment(env) || (!env.promptHost && env.preferSshCommand !== false)) {
+  // Empty buffer, local/`~`, or no live host signal: type the full ssh chain.
+  // Stale SSOT promptHost must not skip or slice hops.
+  if (isLocalLoginEnvironment(env) || liveSignal?.kind === 'local' || !liveRemoteHost) {
     return remainingWithoutLeadingSsh(full)
   }
 
-  if (env.promptHost && env.promptHost !== 'local-shell') {
-    const afterHost = sliceCommandsAfterHop(full, env.promptHost)
-    const commands = afterHost === full ? skipInitialSshHop(full) : afterHost
-    return remainingWithoutLeadingSsh(commands)
-  }
+  const afterHost = sliceCommandsAfterHop(full, liveRemoteHost)
+  const commands = afterHost === full ? skipInitialSshHop(full) : afterHost
+  return remainingWithoutLeadingSsh(commands)
+}
 
-  if (env.preferSshCommand === false) {
-    return remainingWithoutLeadingSsh(skipInitialSshHop(full))
-  }
-
-  return remainingWithoutLeadingSsh(full)
+/** Live PTY/pipe only — `none` or missing mode must not type remaining login. */
+export function hasLiveTerminalSession(mode: string | undefined): boolean {
+  return mode === 'pty' || mode === 'pipe'
 }
 
 /** True when connect-reuse should mark ready and skip typing login actions. */
@@ -237,7 +236,7 @@ export function shouldSkipReuseRelogin(
   env: ConnectionLoginEnvironment
 ): boolean {
   // Dead PTY: never treat stale SSOT as already logged in.
-  if (env.mode === 'none') return false
+  if (!hasLiveTerminalSession(env.mode)) return false
   return resolveRemainingConnectionCommands(connection, env).commands.length === 0
 }
 

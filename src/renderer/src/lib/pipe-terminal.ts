@@ -119,6 +119,11 @@ export function handlePipeTerminalInput(
       continue
     }
 
+    if (char === '\x03') {
+      void window.api.terminal.interrupt(tabId)
+      continue
+    }
+
     if (char === '\r') {
       next = commitPipeCommand(terminal, next, tabId)
       continue
@@ -158,19 +163,33 @@ export function handlePipeTerminalInput(
   return next
 }
 
+export function isUsableTerminalSize(cols: number, rows: number): boolean {
+  return Number.isFinite(cols) && Number.isFinite(rows) && cols >= 1 && rows >= 1
+}
+
+/** LF→CRLF belongs on PIPE sessions only; a PTY already applies ONLCR. */
+export function applyTerminalConvertEol(terminal: Terminal, mode: 'pty' | 'pipe'): void {
+  terminal.options.convertEol = mode === 'pipe'
+}
+
+/** Fit the xterm grid, then push the same cols/rows to the PTY. */
+export function fitAndSyncPty(terminal: Terminal, fitAddon: FitAddon, tabId: string): void {
+  fitAddon.fit()
+  const { cols, rows } = terminal
+  if (!isUsableTerminalSize(cols, rows)) return
+  window.api.terminal.resize({ cols, rows, tabId })
+}
+
 /** Observe host size and push cols/rows to the PTY for the given tab. */
 export function observeTerminalHostResize(
   host: HTMLElement,
+  terminal: Terminal,
   fitAddon: FitAddon,
   tabId: string,
   onAfterFit?: () => void
 ): ResizeObserver {
   const resizeObserver = new ResizeObserver(() => {
-    fitAddon.fit()
-    const dimensions = fitAddon.proposeDimensions()
-    if (dimensions) {
-      window.api.terminal.resize({ cols: dimensions.cols, rows: dimensions.rows, tabId })
-    }
+    fitAndSyncPty(terminal, fitAddon, tabId)
     onAfterFit?.()
   })
   resizeObserver.observe(host)

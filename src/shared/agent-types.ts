@@ -37,8 +37,6 @@ export interface AgentConfig {
   skillRoot: string
   /** When true, also load skills from ~/.agents/skills. Writes still go to skillRoot. */
   loadGlobalAgentSkills: boolean
-  /** Extension ids (file/dir basename) that should not be loaded. */
-  disabledExtensions: string[]
   mcpServers: AgentMcpServerConfig[]
   /** Minimum level recorded to ~/.crescent/logs (default: info). */
   logLevel?: SystemLogLevel
@@ -528,97 +526,6 @@ export interface AgentSkillOption {
   path: string
   source: string
   removable?: boolean
-}
-
-export interface AgentExtensionOption {
-  id: string
-  name: string
-  path: string
-  kind: 'file' | 'directory' | 'package'
-  enabled: boolean
-  tools: string[]
-  commands: string[]
-  loadError?: string
-  source?: string
-  description?: string
-}
-
-export interface AgentExtensionCommand {
-  name: string
-  description: string
-  extensionId: string
-}
-
-export type ExtensionUiNotifyType = 'info' | 'warning' | 'error'
-
-export type ExtensionUiRequest =
-  | {
-      id: string
-      method: 'confirm'
-      title: string
-      message: string
-      timeoutMs?: number
-      runId?: string
-      tabId?: string
-    }
-  | {
-      id: string
-      method: 'select'
-      title: string
-      options: string[]
-      timeoutMs?: number
-      runId?: string
-      tabId?: string
-    }
-  | {
-      id: string
-      method: 'input'
-      title: string
-      placeholder?: string
-      timeoutMs?: number
-      runId?: string
-      tabId?: string
-    }
-  | {
-      id: string
-      method: 'editor'
-      title: string
-      prefill?: string
-      timeoutMs?: number
-      runId?: string
-      tabId?: string
-    }
-  | {
-      id: string
-      method: 'notify'
-      message: string
-      notifyType?: ExtensionUiNotifyType
-      runId?: string
-      tabId?: string
-    }
-
-export interface ExtensionUiDecision {
-  requestId: string
-  cancelled?: boolean
-  confirmed?: boolean
-  value?: string
-}
-
-export interface ExtensionUiDismiss {
-  requestId: string
-  runId?: string
-}
-
-export interface AgentPiPackageSearchResult {
-  id: string
-  name: string
-  description: string
-  version: string
-  source: string
-  url: string
-  downloads?: number
-  publisher: string
-  types: string[]
 }
 
 export interface AgentSkillSearchResult {

@@ -18,8 +18,8 @@ import {
   isReturnToJumpHost,
   learnHostAlias,
   patchConnectionClusterHostRegex,
-  promoteSubterminalLogin,
   resolveGateAlignment,
+  resolveLoginConfirmTarget,
   resolveSessionAlignment,
   runtimeAnchorHost,
   setConnectionExpectedHost,
@@ -27,10 +27,12 @@ import {
 } from '../../shared/connection-state'
 import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
+import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './graceful-teardown'
 import { createPendingCommandController } from './pending-command'
 import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
 import {
   isPtyExecutionTabLocked,
+  isTerminalInterruptPayload,
   resolveUserCommandInterrupt,
   shouldBlockTerminalUserInput
 } from './input-lock'
@@ -136,8 +138,9 @@ const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
 /**
  * Per-tab connection state SSOT. Written ONLY by: prompt observations,
- * ready/login confirmation, expected-host updates, subterminal ssh results and
- * PTY/PIPE events. Everything else reads through this map.
+ * ready/login confirmation, expected-host updates, and PTY/PIPE events.
+ * Subterminal login never writes the parent tab. Everything else reads
+ * through this map.
  */
 const connectionStates = new Map<string, ConnectionState>()
 /** Owning renderer for drift notifications (kept across soft restarts). */
@@ -163,6 +166,49 @@ const pendingCommandPromises = new Map<string, Promise<TerminalCommandExecutionR
 const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
 export const MAX_TEMPORARY_SUBTERMINALS = 3
 const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
+const restoringSessionKeys = new Set<string>()
+let onMainTabLoginConfirmed: ((tabId: string) => void) | undefined
+
+export function registerMainTabLoginConfirmedHandler(handler: (tabId: string) => void): void {
+  onMainTabLoginConfirmed = handler
+}
+
+export function markTerminalSessionRestoring(
+  senderId: number,
+  tabId: string,
+  restoring: boolean
+): void {
+  const normalized = normalizeTabId(tabId)
+  if (!normalized) return
+  const key = getSessionKey(senderId, normalized)
+  if (restoring) restoringSessionKeys.add(key)
+  else restoringSessionKeys.delete(key)
+}
+
+export function readTerminalSessionHealth(
+  senderId: number,
+  tabId: string
+): {
+  hasSession: boolean
+  restoring: boolean
+  alignment: 'aligned' | 'drifted' | 'unknown'
+  ready: boolean
+} {
+  const normalized = normalizeTabId(tabId)
+  if (!normalized) {
+    return { hasSession: false, restoring: false, alignment: 'unknown', ready: false }
+  }
+  const key = getSessionKey(senderId, normalized)
+  const session = sessions.get(key)
+  const state = connectionStates.get(key)
+  const hasSession = Boolean(session)
+  return {
+    hasSession,
+    restoring: restoringSessionKeys.has(key),
+    alignment: hasSession ? (state?.alignment ?? 'unknown') : 'unknown',
+    ready: Boolean(hasSession && state?.ready)
+  }
+}
 
 /** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs and raw terminal echo. */
 function debugConnEnabled(): boolean {
@@ -365,8 +411,8 @@ export function executeCommandInTerminal(
 }
 
 /**
- * User Ctrl+C: interrupt only if a waiter is in flight.
- * Does not send ^C to an idle shell and does not abort the Pi session.
+ * User Ctrl+C: write SIGINT to the PTY. Settles an in-flight waiter when one exists.
+ * Does not abort the Pi session.
  */
 export function interruptPendingTerminalCommandIfRunning(
   senderId: number,
@@ -391,6 +437,7 @@ export function interruptPendingTerminalCommands(senderId: number, tabId?: strin
   const session = sessions.get(key)
   if (!session) return false
   interruptCommandSession(key, session)
+  clearTemporarySubterminalDetached(senderId, normalizedTabId)
   const notifiers = terminalUserInterruptNotifiers.get(key)
   if (!notifiers || notifiers.size === 0) return false
   ;[...notifiers].forEach((notify) => notify())
@@ -577,7 +624,41 @@ export function closeTemporarySubterminal(
   stopSession(key)
   connectionStates.delete(key)
   sessionWebContents.delete(key)
+  restoringSessionKeys.delete(key)
   releaseTemporarySubterminalByTabId(webContents.id, normalized)
+}
+
+export async function teardownTerminalSessionGracefully(
+  senderId: number,
+  tabId: string,
+  timeoutMs = GRACEFUL_TEARDOWN_TIMEOUT_MS
+): Promise<{ ok: boolean; error?: string }> {
+  const normalized = normalizeTabId(tabId)
+  if (!normalized || !isUsableTerminalTabId(normalized)) {
+    return { ok: false, error: 'Missing or reserved terminal tab id.' }
+  }
+  const key = getSessionKey(senderId, normalized)
+  markTerminalSessionRestoring(senderId, normalized, true)
+  const session = sessions.get(key)
+  if (!session) return { ok: true }
+
+  const exitPromise = waitForSessionExit(key)
+  const deadline = Date.now() + Math.max(200, timeoutMs)
+  for (const step of listGracefulTeardownSteps(timeoutMs)) {
+    if (!sessions.has(key) || Date.now() >= deadline) break
+    try {
+      session.write(step.write)
+    } catch {
+      break
+    }
+    await Promise.race([exitPromise, sleep(step.waitMs)])
+  }
+  const remaining = Math.max(0, deadline - Date.now())
+  if (sessions.has(key) && remaining > 0) {
+    await Promise.race([exitPromise, sleep(remaining)])
+  }
+  stopSession(key)
+  return { ok: true }
 }
 
 export function readTemporarySubterminalOutput(
@@ -842,6 +923,26 @@ export function registerTerminalIpc(): void {
   )
 
   ipcMain.handle(
+    'terminal:teardown-gracefully',
+    async (event, payload?: { tabId?: string; timeoutMs?: number }) => {
+      const tabId = normalizeTabId(payload?.tabId)
+      if (!tabId) return { ok: false, error: 'Missing terminal tab id.' }
+      return teardownTerminalSessionGracefully(
+        event.sender.id,
+        tabId,
+        typeof payload?.timeoutMs === 'number' ? payload.timeoutMs : undefined
+      )
+    }
+  )
+
+  ipcMain.handle('terminal:clear-restoring', (event, payload?: { tabId?: string }) => {
+    const tabId = normalizeTabId(payload?.tabId)
+    if (!tabId) return { ok: false }
+    markTerminalSessionRestoring(event.sender.id, tabId, false)
+    return { ok: true }
+  })
+
+  ipcMain.handle(
     'terminal:set-expected-host',
     (
       event,
@@ -880,11 +981,8 @@ export function registerTerminalIpc(): void {
   )
 
   /**
-   * Verified-login write-back (SSOT write source). Called after a login
-   * automation sequence or a successful subterminal ssh. Learns the observed
-   * prompt host as an alias and marks the tab ready/aligned. With sourceTabId,
-   * confirmation first runs on the subterminal, then aliases/ready are
-   * promoted to the parent tab (subterminal ssh result write-back).
+   * Verified-login write-back (SSOT write source). Confirms only on the pane
+   * that logged in. Subterminal logins never mark the parent tab ready.
    */
   ipcMain.handle(
     'terminal:confirm-login',
@@ -909,10 +1007,13 @@ export function registerTerminalIpc(): void {
     } => {
       const tabId = normalizeTabId(payload?.tabId)
       const sourceTabId = normalizeTabId(payload?.sourceTabId)
-      if (!tabId || !isUsableTerminalTabId(tabId)) {
+      const confirmTabId = normalizeTabId(
+        resolveLoginConfirmTarget({ tabId: tabId ?? '', sourceTabId }).confirmTabId
+      )
+      if (!confirmTabId || !isUsableTerminalTabId(confirmTabId)) {
         return { ok: false, error: 'Missing or reserved terminal tab id.' }
       }
-      const key = getSessionKey(event.sender.id, tabId)
+      const key = getSessionKey(event.sender.id, confirmTabId)
       sessionWebContents.set(key, event.sender)
       const localHost = payload?.localHost?.trim() || hostname()
       const expectedTargetHost = sanitizeExpectedTargetHost(payload?.expectedTargetHost)
@@ -940,54 +1041,27 @@ export function registerTerminalIpc(): void {
         return result.ok ? anchored : undefined
       }
 
-      const isSubterminalOfParent = (parent: string, candidate: string): boolean => {
-        const marker = '::subterminal::'
-        return candidate.startsWith(`${parent}${marker}`)
-      }
-
-      if (sourceTabId && isSubterminalOfParent(tabId, sourceTabId)) {
-        const sourceOk = confirmOn(sourceTabId)
-        if (!sourceOk) {
-          return {
-            ok: false,
-            tabId,
-            error: 'Subterminal SSH did not reach the target; nothing promoted.'
-          }
-        }
-        const sourceKey = getSessionKey(event.sender.id, sourceTabId)
-        const sourceState = connectionStates.get(sourceKey)
-        const parentState = connectionStates.get(key)
-        if (sourceState && parentState) {
-          const promoted = promoteSubterminalLogin(parentState, sourceState)
-          connectionStates.set(key, promoted)
-          return {
-            ok: true,
-            tabId,
-            promptHost: promoted.promptHost,
-            learned: true,
-            alignment: promoted.alignment,
-            ready: promoted.ready,
-            aliases: promoted.aliases
-          }
-        }
-      }
-
-      const confirmed = confirmOn(tabId)
+      const confirmed = confirmOn(confirmTabId)
       if (!confirmed) {
+        const failed = connectionStates.get(key)
         return {
           ok: false,
-          tabId,
-          promptHost: connectionStates.get(key)?.promptHost,
-          alignment: connectionStates.get(key)?.alignment,
-          ready: connectionStates.get(key)?.ready,
-          aliases: connectionStates.get(key)?.aliases,
+          tabId: confirmTabId,
+          promptHost: failed?.promptHost,
+          alignment: failed?.alignment,
+          ready: failed?.ready,
+          aliases: failed?.aliases,
           error: 'Login could not be verified (terminal still shows the local prompt).'
         }
+      }
+      markTerminalSessionRestoring(event.sender.id, confirmTabId, false)
+      if (!parseTemporarySubterminalTabId(confirmTabId)) {
+        onMainTabLoginConfirmed?.(confirmTabId)
       }
       const state = connectionStates.get(key)
       return {
         ok: true,
-        tabId,
+        tabId: confirmTabId,
         promptHost: state?.promptHost,
         learned: Boolean(state?.aliases.length),
         alignment: state?.alignment,
@@ -1048,7 +1122,7 @@ export function registerTerminalIpc(): void {
   ipcMain.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return { ok: false, interrupted: false, error: 'Missing tabId' }
-    const interrupted = interruptPendingTerminalCommandIfRunning(event.sender.id, tabId)
+    const interrupted = interruptPendingTerminalCommands(event.sender.id, tabId)
     return { ok: true, interrupted }
   })
 
@@ -1081,17 +1155,14 @@ export function registerTerminalIpc(): void {
       return
     }
 
+    if (isTerminalInterruptPayload(data)) {
+      interruptPendingTerminalCommands(event.sender.id, tabId)
+      return
+    }
+
     if (isUserInputLocked(event.sender.id, tabId)) return
 
     session.write(data)
-    if (data.includes('\x03')) {
-      clearTemporarySubterminalDetached(event.sender.id, tabId)
-      const key = getSessionKey(event.sender.id, tabId)
-      const notifiers = terminalUserInterruptNotifiers.get(key)
-      if (notifiers) {
-        ;[...notifiers].forEach((notify) => notify())
-      }
-    }
   })
 
   ipcMain.on(
@@ -1249,7 +1320,9 @@ export function registerTerminalIpc(): void {
       })
     }
 
-    const promptHost = resolved?.promptHost ?? state?.promptHost
+    // Live buffer only. After SSH drop / respawn the SSOT host is stale; a
+    // missing or local-shell prompt must not look like the current remote.
+    const promptHost = resolved?.promptHost
     const gateAlignment = state
       ? resolveGateAlignment(state, output, hostname())
       : (resolved?.alignment ?? 'unknown')
@@ -1269,13 +1342,15 @@ export function registerTerminalIpc(): void {
       `aliases=${state?.aliases.join(',') || '-'}`,
       `ready=${ready ? 'yes' : 'no'}`,
       `returnJump=${returnToJumpHost ? 'yes' : 'no'}`,
+      `restoring=${tabId && key && restoringSessionKeys.has(key) ? 'yes' : 'no'}`,
       `tail=${output.slice(-120).replace(/\n/g, '\\n')}`
     )
 
     if (!tabId) {
-      return { mode: 'none', output: '', cwd: '', shell: '' }
+      return { mode: 'none', output: '', cwd: '', shell: '', restoring: false }
     }
     const session = sessions.get(key)
+    const restoring = restoringSessionKeys.has(key)
     if (!session) {
       // No live PTY: never report aligned/ready from stale SSOT or output buffer.
       // Restore/reconnect must recreate a session instead of short-circuiting.
@@ -1292,7 +1367,8 @@ export function registerTerminalIpc(): void {
         ready: false,
         jumpPromptHost: state?.jumpPromptHost,
         runtimeExpectedHost: state?.runtimeExpectedHost,
-        returnToJumpHost
+        returnToJumpHost,
+        restoring
       }
     }
 
@@ -1310,7 +1386,8 @@ export function registerTerminalIpc(): void {
       ready,
       jumpPromptHost: state?.jumpPromptHost,
       runtimeExpectedHost: state?.runtimeExpectedHost,
-      returnToJumpHost
+      returnToJumpHost,
+      restoring
     }
   })
 
@@ -1336,6 +1413,7 @@ export function registerTerminalIpc(): void {
     stopSession(key)
     connectionStates.delete(key)
     sessionWebContents.delete(key)
+    restoringSessionKeys.delete(key)
     releaseTemporarySubterminalByTabId(event.sender.id, tabId)
   })
 
@@ -1354,6 +1432,7 @@ export function stopAllTerminalSessions(): void {
   sessionWebContents.clear()
   automationEchoSuppressions.clear()
   temporarySubterminals.clear()
+  restoringSessionKeys.clear()
 }
 
 function stopSession(key: string): void {
@@ -1791,6 +1870,24 @@ function deleteIfCurrent(key: string, sessionId: number): void {
     terminalAutomationFilterStates.delete(key)
     invalidateConnectionSessionLiveness(key)
   }
+}
+
+function waitForSessionExit(key: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (!sessions.has(key)) {
+      resolve()
+      return
+    }
+    const waiters =
+      terminalExitWaiters.get(key) ?? new Set<(event: TerminalExitNotification) => void>()
+    const listener = (): void => resolve()
+    waiters.add(listener)
+    terminalExitWaiters.set(key, waiters)
+  })
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function notifyTerminalExit(key: string, event: TerminalExitNotification): void {

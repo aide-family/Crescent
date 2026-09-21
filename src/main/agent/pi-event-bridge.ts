@@ -240,31 +240,83 @@ function formatCompactionEnd(
 export function extractAssistantTextFromMessages(messages: unknown[]): string {
   let lastText = ''
   for (const message of messages) {
-    if (!message || typeof message !== 'object') continue
-    const role = (message as { role?: string }).role
-    if (role !== 'assistant') continue
-    const content = (message as { content?: unknown }).content
-    if (typeof content === 'string') {
-      const trimmed = content.trim()
-      if (trimmed) lastText = trimmed
-      continue
-    }
-    if (!Array.isArray(content)) continue
-    const parts: string[] = []
-    for (const part of content) {
-      if (
-        part &&
-        typeof part === 'object' &&
-        (part as { type?: string }).type === 'text' &&
-        typeof (part as { text?: string }).text === 'string'
-      ) {
-        const text = (part as { text: string }).text.trim()
-        if (text) parts.push(text)
-      }
-    }
-    if (parts.length > 0) lastText = parts.join('\n').trim()
+    const text = assistantTextFromMessage(message)
+    if (text) lastText = text
   }
   return lastText
+}
+
+/** Assistant prose after the last user message; skips tool-call-only turns. */
+export function extractAssistantTextFromCurrentTurn(messages: unknown[]): string {
+  let lastUserIndex = -1
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!message || typeof message !== 'object') continue
+    if ((message as { role?: string }).role === 'user') lastUserIndex = index
+  }
+  if (lastUserIndex < 0) return ''
+
+  let lastText = ''
+  for (let index = lastUserIndex + 1; index < messages.length; index += 1) {
+    const text = assistantTextFromMessage(messages[index])
+    if (text) lastText = text
+  }
+  return lastText
+}
+
+export type HostedPromptResult = { ok: true; text: string } | { ok: false; error: string }
+
+export function resolveHostedPromptResult(input: {
+  messages: unknown[]
+  collectedText: string
+  lastRetryError?: string
+  compactedThisTurn?: boolean
+  locale?: string
+}): HostedPromptResult {
+  const turnText =
+    extractAssistantTextFromCurrentTurn(input.messages).trim() || input.collectedText.trim()
+  if (turnText) return { ok: true, text: turnText }
+
+  const retryError = input.lastRetryError?.trim()
+  if (retryError) return { ok: false, error: retryError }
+
+  const locale = resolveBridgeLocale(input.locale)
+  if (input.compactedThisTurn) {
+    return {
+      ok: false,
+      error:
+        locale === 'zh'
+          ? '本轮在上下文压缩后未生成新回复，请重试。'
+          : 'This turn produced no new reply after context compaction. Please retry.'
+    }
+  }
+
+  return {
+    ok: false,
+    error: locale === 'zh' ? '本轮未生成回复。' : 'This turn produced no assistant reply.'
+  }
+}
+
+function assistantTextFromMessage(message: unknown): string {
+  if (!message || typeof message !== 'object') return ''
+  const role = (message as { role?: string }).role
+  if (role !== 'assistant') return ''
+  const content = (message as { content?: unknown }).content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const part of content) {
+    if (
+      part &&
+      typeof part === 'object' &&
+      (part as { type?: string }).type === 'text' &&
+      typeof (part as { text?: string }).text === 'string'
+    ) {
+      const text = (part as { text: string }).text.trim()
+      if (text) parts.push(text)
+    }
+  }
+  return parts.join('\n').trim()
 }
 
 function resolveBridgeLocale(locale: string | undefined): 'zh' | 'en' {

@@ -7,13 +7,18 @@ import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '@renderer/lib/design-system'
+import { fitAndSyncPty, observeTerminalHostResize } from '@renderer/lib/pipe-terminal'
 import {
   createCrescentBootstrapFilter,
   filterCrescentBootstrapOutput,
   getSubterminalWidths
 } from '@renderer/lib/terminal-text'
 import { readTerminalOutputRing } from '@renderer/lib/terminal-output-ring'
-import { applyXtermInputLock } from '@renderer/lib/xterm-input-lock'
+import {
+  applyXtermInputLock,
+  attachLockedCtrlCHandler,
+  isTerminalCtrlCData
+} from '@renderer/lib/xterm-input-lock'
 import { TerminalLockOverlay } from '@renderer/components/TerminalLockOverlay'
 import { createXtermReplayGate, hydrateXtermFromHistory } from '@renderer/lib/xterm-hydrate'
 import { attachXtermScrollFollow, writeXtermAndFollow } from '@renderer/lib/xterm-scroll-follow'
@@ -65,7 +70,7 @@ function SubterminalXtermPane({
     if (!host) return
 
     const terminal = new Terminal({
-      convertEol: true,
+      convertEol: false,
       cursorBlink: true,
       fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
       fontSize: APP_TERMINAL_TYPOGRAPHY.subterminalFontSize,
@@ -75,7 +80,7 @@ function SubterminalXtermPane({
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(host)
-    fitAddon.fit()
+    fitAndSyncPty(terminal, fitAddon, subterminal.id)
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
 
@@ -84,12 +89,21 @@ function SubterminalXtermPane({
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const inputDisposable = terminal.onData((data) => {
-      if (inputLockedRef.current) return
+      if (inputLockedRef.current && !isTerminalCtrlCData(data)) return
       if (!replayGate.shouldForwardInput()) return
       scrollFollow.resetFollow()
       terminal.scrollToBottom()
       window.api.terminal.write(data, subterminal.id)
     })
+    attachLockedCtrlCHandler(
+      terminal,
+      () => inputLockedRef.current && replayGate.shouldForwardInput(),
+      () => {
+        scrollFollow.resetFollow()
+        terminal.scrollToBottom()
+        void window.api.terminal.interrupt(subterminal.id)
+      }
+    )
 
     const history = subterminal.rawOutput
       ? filterCrescentBootstrapOutput(subterminal.rawOutput)
@@ -113,24 +127,19 @@ function SubterminalXtermPane({
       )
     })
 
-    const resizeObserver = new ResizeObserver(() => {
-      const addon = fitAddonRef.current
-      const term = terminalRef.current
-      if (!addon || !term) return
-      addon.fit()
-      const dimensions = addon.proposeDimensions()
-      if (!dimensions) return
-      window.api.terminal.resize({
-        cols: dimensions.cols,
-        rows: dimensions.rows,
-        tabId: subterminal.id
-      })
+    const resizeObserver = observeTerminalHostResize(host, terminal, fitAddon, subterminal.id, () =>
       scrollFollow.followIfEnabled()
-    })
-    resizeObserver.observe(host)
+    )
     applyXtermInputLock(terminal, inputLockedRef.current)
 
+    let fontsCancelled = false
+    void document.fonts.ready.then(() => {
+      if (fontsCancelled) return
+      fitAndSyncPty(terminal, fitAddon, subterminal.id)
+    })
+
     return () => {
+      fontsCancelled = true
       inputDisposable.dispose()
       stopData()
       stopExit()
@@ -146,7 +155,10 @@ function SubterminalXtermPane({
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={hostRef} className="absolute inset-0 overflow-hidden bg-black/40" />
+      <div
+        ref={hostRef}
+        className="subterminal-canvas absolute inset-0 overflow-hidden bg-black/40"
+      />
       {inputLocked ? (
         <TerminalLockOverlay
           commandRunning={commandRunning}

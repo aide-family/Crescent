@@ -22,7 +22,106 @@ function isComposerPadBr(element: HTMLElement): boolean {
   return element.tagName === 'BR' && element.getAttribute(COMPOSER_PAD_ATTR) === 'true'
 }
 
+function isIgnorableComposerText(node: Node): boolean {
+  if (node.nodeType !== Node.TEXT_NODE) return false
+  return (node.textContent ?? '').trim().length === 0
+}
+
+function isEmptyBlockElement(element: HTMLElement): boolean {
+  if (!isBlockElement(element)) return false
+  if (readComposerRefFromElement(element)) return false
+  let sawBreak = false
+  for (const child of Array.from(element.childNodes)) {
+    if (isIgnorableComposerText(child)) continue
+    if (child.nodeType !== Node.ELEMENT_NODE) return false
+    const nested = child as HTMLElement
+    if (readComposerRefFromElement(nested)) return false
+    if (nested.tagName === 'BR') {
+      if (sawBreak) return false
+      sawBreak = true
+      continue
+    }
+    if (isEmptyBlockElement(nested) && !sawBreak) {
+      sawBreak = true
+      continue
+    }
+    return false
+  }
+  return true
+}
+
+/** Chromium leftover after select-all delete: lone BR or empty DIV/P, no chips or text. */
+export function isComposerDomEffectivelyEmpty(root: HTMLElement): boolean {
+  const tally = tallyComposerEmptyDom(root)
+  if (tally.hasChip || tally.hasText || tally.other) return false
+  if (tally.realBr >= 1 && tally.padBr >= 1) return false
+  return tally.realBr <= 1 && tally.emptyBlocks <= 1
+}
+
+/** Canonical empty surface: only the pad BR (optional empty text). */
+export function isCanonicalComposerEmptyDom(root: HTMLElement): boolean {
+  const tally = tallyComposerEmptyDom(root)
+  return (
+    !tally.hasChip &&
+    !tally.hasText &&
+    !tally.other &&
+    tally.realBr === 0 &&
+    tally.emptyBlocks === 0 &&
+    tally.padBr === 1
+  )
+}
+
+export function ensureComposerEmptySurface(root: HTMLElement): void {
+  root.replaceChildren(createComposerPadBr())
+}
+
+function tallyComposerEmptyDom(root: HTMLElement): {
+  padBr: number
+  realBr: number
+  emptyBlocks: number
+  hasText: boolean
+  hasChip: boolean
+  other: boolean
+} {
+  const tally = {
+    padBr: 0,
+    realBr: 0,
+    emptyBlocks: 0,
+    hasText: false,
+    hasChip: false,
+    other: false
+  }
+  for (const child of Array.from(root.childNodes)) {
+    if (isIgnorableComposerText(child)) continue
+    if (child.nodeType === Node.TEXT_NODE) {
+      tally.hasText = true
+      continue
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE) {
+      tally.other = true
+      continue
+    }
+    const element = child as HTMLElement
+    if (readComposerRefFromElement(element)) {
+      tally.hasChip = true
+      continue
+    }
+    if (element.tagName === 'BR') {
+      if (isComposerPadBr(element)) tally.padBr += 1
+      else tally.realBr += 1
+      continue
+    }
+    if (isEmptyBlockElement(element)) {
+      tally.emptyBlocks += 1
+      continue
+    }
+    tally.other = true
+  }
+  return tally
+}
+
 export function serializeComposerDom(root: HTMLElement): string {
+  if (isComposerDomEffectivelyEmpty(root)) return ''
   let result = ''
 
   function walk(node: Node, isRoot = false): void {
@@ -82,6 +181,18 @@ export function getComposerDomCaret(root: HTMLElement): number {
 }
 
 export function insertComposerNewline(root: HTMLElement): void {
+  const before = serializeComposerDom(root)
+  let insertedByCommand = false
+  try {
+    insertedByCommand = Boolean(document.execCommand('insertLineBreak'))
+  } catch {
+    insertedByCommand = false
+  }
+  if (insertedByCommand && serializeComposerDom(root) !== before) {
+    scrollComposerCaretIntoView(root)
+    return
+  }
+
   const br = document.createElement('br')
   const selection = window.getSelection()
   const pad = lastComposerPadBr(root)

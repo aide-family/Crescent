@@ -250,6 +250,11 @@
   background: rgb(255 255 255 / 18%);
 }
 
+.terminal-canvas,
+.subterminal-canvas {
+  padding: 12px;
+}
+
 .terminal-canvas {
   background: var(--app-terminal);
 }
@@ -979,7 +984,6 @@
 
 .xterm {
   height: 100%;
-  padding: 12px;
 }
 
 .xterm .xterm-viewport {

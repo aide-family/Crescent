@@ -634,24 +634,15 @@ export function autoLearnUnverifiedLogin(
 }
 
 /**
- * Promote a subterminal's verified login to its parent tab: merge learned
- * aliases and mark the parent aligned/ready (subterminal ssh result write-back).
+ * Confirm login on the pane that actually logged in. A subterminal source
+ * never writes ready/aligned back onto the parent tab.
  */
-export function promoteSubterminalLogin(
-  parent: ConnectionState,
-  source: ConnectionState
-): ConnectionState {
-  return {
-    ...parent,
-    aliases: [...new Set([...parent.aliases, ...source.aliases])],
-    promptHost: source.promptHost ?? parent.promptHost,
-    runtimeExpectedHost:
-      source.runtimeExpectedHost ?? source.promptHost ?? parent.runtimeExpectedHost,
-    jumpPromptHost: source.jumpPromptHost ?? parent.jumpPromptHost,
-    alignment: 'aligned',
-    ready: true,
-    lastError: undefined
-  }
+export function resolveLoginConfirmTarget(input: { tabId: string; sourceTabId?: string }): {
+  confirmTabId: string
+} {
+  const source = input.sourceTabId?.trim()
+  if (source) return { confirmTabId: source }
+  return { confirmTabId: input.tabId.trim() }
 }
 
 /** Recovery brake: decide whether a recovery attempt may start. */

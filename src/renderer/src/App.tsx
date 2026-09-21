@@ -19,7 +19,6 @@ import {
   LanguagesIcon,
   MessageSquareIcon,
   PlugIcon,
-  PuzzleIcon,
   ServerIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
@@ -51,8 +50,6 @@ import { TerminalPane } from '@renderer/components/TerminalPane'
 import { HistoryPanel } from '@renderer/components/HistoryPanel'
 import { OnboardingModal } from '@renderer/components/OnboardingModal'
 import { SkillManager, type SkillPreviewState } from '@renderer/components/SkillManager'
-import { ExtensionManager } from '@renderer/components/ExtensionManager'
-import { ExtensionUiDialog } from '@renderer/components/ExtensionUiDialog'
 import { WikiSheet } from '@renderer/components/WikiSheet'
 import { CaptureDraftDialog } from '@renderer/components/CaptureDraftDialog'
 import { Button } from '@renderer/components/ui/button'
@@ -205,6 +202,7 @@ import {
   isPasswordEnvVarMissing,
   looksLikeCommand,
   mergeConnectionInput,
+  hasLiveTerminalSession,
   resolveRemainingConnectionCommands,
   shouldSkipReuseRelogin,
   stripStoredPassword,
@@ -254,6 +252,7 @@ import {
 import { runWithTimeout } from '@renderer/lib/with-timeout'
 import { isIpv4Literal, waitForRemotePrompt } from '@renderer/lib/prompt-host-wait'
 import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
+import { applyTerminalConvertEol, fitAndSyncPty } from '@renderer/lib/pipe-terminal'
 import {
   buildBusySupplementArtifacts,
   mergePostLoginSupplements,
@@ -321,7 +320,6 @@ import {
 import { filterWikiDocuments, upsertWikiSummary } from '@renderer/lib/wiki'
 import {
   buildConnectionSlashCommand,
-  buildExtSlashCommand,
   buildMcpSlashCommand,
   buildSkillSlashCommand,
   buildSlashCommandOptions,
@@ -330,13 +328,11 @@ import {
   buildWikiSlashCommand,
   getSlashCommandQuery,
   isConnectionSlashQuery,
-  isExtSlashQuery,
   isMcpSlashQuery,
   isStyleSlashQuery,
   isToolSlashQuery,
   isWikiSlashQuery,
   matchesConnectionSlashCommand,
-  matchesExtSlashCommand,
   matchesMcpSlashCommand,
   matchesSkillSlashCommand,
   matchesSlashCommand,
@@ -347,6 +343,7 @@ import {
   replaceSlashCommandInput,
   type SlashCommandOption
 } from '@renderer/lib/slash-commands'
+import { isComposerNewlineEnter, isComposerSubmitEnter } from '@renderer/lib/composer-newline'
 import { isImeKeyEvent } from '@renderer/lib/ime-safe-value'
 import {
   CAPTURE_BACKGROUND_TIMEOUT_MS,
@@ -360,11 +357,8 @@ import {
   type AgentSkillSearchResult,
   type AgentValidationResult,
   type AgentSkillOption,
-  type AgentExtensionOption,
-  type AgentPiPackageSearchResult,
   type AgentWikiReference,
   type CaptureKind,
-  type ExtensionUiRequest,
   type AgentConnectionIntentResult,
   type ConnectionConfig,
   type ConnectionInput,
@@ -416,7 +410,6 @@ const emptyConfig: AgentConfig = {
   openApiRetryBackoffMs: 300,
   skillRoot: '~/.crescent/skills',
   loadGlobalAgentSkills: false,
-  disabledExtensions: [],
   mcpServers: []
 }
 const emptyProvider: AgentProviderConfig = {
@@ -633,31 +626,6 @@ function App({
   )
   const [models, setModels] = useState<AgentModelOption[]>([])
   const [skills, setSkills] = useState<AgentSkillOption[]>([])
-  const [extensions, setExtensions] = useState<AgentExtensionOption[]>([])
-  const [extensionCommands, setExtensionCommands] = useState<
-    Array<{ name: string; description: string }>
-  >([])
-  const [extensionSearchQuery, setExtensionSearchQuery] = useState('')
-  const [extensionCatalogQuery, setExtensionCatalogQuery] = useState('')
-  const [extensionCatalogResults, setExtensionCatalogResults] = useState<
-    AgentPiPackageSearchResult[]
-  >([])
-  const [extensionCatalogLoading, setExtensionCatalogLoading] = useState(false)
-  const [extensionInstallingSource, setExtensionInstallingSource] = useState<string | null>(null)
-  const [extensionManageMessage, setExtensionManageMessage] = useState<SkillManageMessage | null>(
-    null
-  )
-  const [extensionDeletingPath, setExtensionDeletingPath] = useState<string | null>(null)
-  const [extensionCreating, setExtensionCreating] = useState(false)
-  const [extensionCreateOpen, setExtensionCreateOpen] = useState(false)
-  const [selectedExtensionPreview, setSelectedExtensionPreview] = useState<{
-    extension: AgentExtensionOption
-    content: string
-  } | null>(null)
-  const [extensionPreviewLoadingPath, setExtensionPreviewLoadingPath] = useState<string | null>(
-    null
-  )
-  const [extensionUiRequest, setExtensionUiRequest] = useState<ExtensionUiRequest | null>(null)
   const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
   const [skillSearchQuery, setSkillSearchQuery] = useState('')
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillSearchResult[]>([])
@@ -687,7 +655,6 @@ function App({
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [skillOpen, setSkillOpen] = useState(false)
-  const [extensionOpen, setExtensionOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
   const [mcpOpen, setMcpOpen] = useState(false)
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
@@ -1185,11 +1152,6 @@ function App({
         .map((skill) => buildSkillSlashCommand(skill, t))
         .filter((command) => matchesSkillSlashCommand(command, slashCommandQuery))
     }
-    if (isExtSlashQuery(slashCommandQuery)) {
-      return extensionCommands
-        .map((command) => buildExtSlashCommand(command, t))
-        .filter((command) => matchesExtSlashCommand(command, slashCommandQuery ?? ''))
-    }
     if (isConnectionSlashQuery(slashCommandQuery)) {
       return connections
         .map((connection) => buildConnectionSlashCommand(connection, t))
@@ -1199,16 +1161,7 @@ function App({
     return buildSlashCommandOptions(t).filter((command) =>
       matchesSlashCommand(command, slashCommandQuery)
     )
-  }, [
-    availableToolRefs,
-    connections,
-    extensionCommands,
-    mcpToolRefs,
-    skills,
-    slashCommandQuery,
-    t,
-    wikiDocuments
-  ])
+  }, [availableToolRefs, connections, mcpToolRefs, skills, slashCommandQuery, t, wikiDocuments])
   const slashMenuVisible =
     slashCommandOpen && slashCommandQuery !== undefined && slashCommandOptions.length > 0
   const selectedSlashCommandIndex = slashCommandOptions.length
@@ -1228,17 +1181,6 @@ function App({
     )
     selectedItem?.scrollIntoView({ block: 'nearest' })
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
-
-  useEffect(() => {
-    if (!isExtSlashQuery(slashCommandQuery)) return
-    void window.api.agent
-      .listExtensionCommands(sessionChatTab.id)
-      .then(setExtensionCommands)
-      .catch(() => {
-        setExtensionCommands([])
-        toast.error(catalogLoadFailedText.replace('{resource}', 'extension commands'))
-      })
-  }, [catalogLoadFailedText, sessionChatTab.id, slashCommandQuery])
 
   const filteredLocalSkills = useMemo(
     () => filterLocalSkills(skills, localSkillSearchQuery),
@@ -1625,65 +1567,6 @@ function App({
     ]
   )
 
-  /**
-   * Subterminal fallback success ≡ overall login success. When the main login
-   * run was already finalized (typically as a failure/timeout), rewrite that
-   * card to the success state so the badge, steps and title agree with the
-   * terminal reality instead of showing a contradictory "登录失败".
-   */
-  const correctLoginCardToSuccess = useCallback(
-    (chatTabId: string, connection: ConnectionConfig, targetTabId: string): void => {
-      const logId = lastLoginRunLogIdRef.current.get(chatTabId)
-      if (logId === undefined) return
-
-      const connectionTarget = formatConnectionTarget(connection)
-      const finishedSteps: AgentRunStep[] = [
-        {
-          id: `status-${crypto.randomUUID()}`,
-          kind: 'status',
-          title: t.terminal.postLoginTaskStarting
-        }
-      ]
-      const finishedRun: AgentRunViewState = {
-        logId,
-        runId: `run-${crypto.randomUUID()}`,
-        actions: [],
-        steps: finishedSteps,
-        startedAt: Date.now() - 1,
-        result: `${t.terminal.loginSuccess} ${connection.name} (${connectionTarget})`,
-        elapsedMs: 0,
-        loginMeta: {
-          connectionName: connection.name,
-          host: connection.host,
-          port: connection.port,
-          user: connection.user,
-          actionCount: buildConnectionLoginActions(connection).length
-        }
-      }
-      updateLogEntryText(chatTabId, logId, buildFinishPersistText(finishedRun))
-      lastLoginRunLogIdRef.current.delete(chatTabId)
-
-      // Consume any supplements queued during the login attempt and continue.
-      const supplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
-      const decision = resolveLoginContinuation({ ok: true, supplements })
-      if (decision.shouldContinue) {
-        pendingPostLoginSupplementsRef.current.delete(chatTabId)
-        const supplementText = supplements.join('\n')
-        const continuationInput = buildPostLoginAgentInput(supplementText, connection, t)
-        void runAgentConversationRef.current?.(
-          continuationInput,
-          targetTabId,
-          connection.id,
-          supplementText,
-          false,
-          Date.now(),
-          { chatTabId }
-        )
-      }
-    },
-    [pendingPostLoginSupplementsRef, t, updateLogEntryText]
-  )
-
   const executeConnectionAutomation = useCallback(
     async (
       connection: ConnectionConfig,
@@ -1715,6 +1598,7 @@ function App({
         promptHost: liveContext.promptHost,
         alignment: liveContext.alignment ?? liveContext.sessionAligned,
         output: liveContext.output,
+        mode: liveContext.mode,
         preferSshCommand: includeSshCommand,
         ready: liveContext.ready,
         aliases: liveContext.aliases,
@@ -1856,8 +1740,7 @@ function App({
           `promptAfterMs=${Date.now() - promptStart}`
         )
         const verified = await window.api.terminal.confirmLogin({
-          tabId: subterminal ? subterminal.parentTabId : targetTabId,
-          sourceTabId: subterminal ? targetTabId : undefined,
+          tabId: targetTabId,
           expectedTargetHost: finalTargetHost,
           jumpPromptHost: previousHost
         })
@@ -1874,14 +1757,6 @@ function App({
             chatTabId,
             t.terminal.terminalSubterminalLoginDone.replace('{name}', subterminal.name)
           )
-          // Subterminal fallback success === overall login success: settle any
-          // pending login run, or rewrite an already-finalized (failed) login
-          // card so the badge stops spinning / showing "登录失败".
-          finalizeLoginRun(chatTabId, true, undefined, {
-            targetTabId,
-            connection: resolvedConnection
-          })
-          correctLoginCardToSuccess(chatTabId, resolvedConnection, targetTabId)
         } else if ((postConnectionTasksRef.current.get(targetTabId) ?? []).length === 0) {
           appendSystemToRunOrLog(chatTabId, t.terminal.postLoginTaskStarting)
         }
@@ -1903,21 +1778,20 @@ function App({
       appendLog,
       appendStatusToActiveRunOrLog,
       appendSystemToRunOrLog,
-      correctLoginCardToSuccess,
-      finalizeLoginRun,
       t,
       updateTab
     ]
   )
 
   const executeConnectionCommands = useCallback(
-    async (connection: ConnectionConfig, targetTabId: string): Promise<void> => {
+    async (connection: ConnectionConfig, targetTabId: string): Promise<boolean> => {
       const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
       const timeoutMessage = t.terminal.connectionLoginTimeout.replace(
         '{ms}',
         String(Math.round(CONNECTION_LOGIN_TOTAL_TIMEOUT_MS / 1000))
       )
       connTrace('automation-start', `tab=${targetTabId}`, `connection=${connection.id}`)
+      const isSubterminal = Boolean(resolveSubterminalTabState(tabsRef.current, targetTabId))
       const ok = await runWithTimeout(
         executeConnectionAutomation(connection, targetTabId, true),
         CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
@@ -1926,30 +1800,43 @@ function App({
           appendLog({ kind: 'error', text: timeoutMessage }, chatTabId)
         }
       )
-      if (ok) {
-        markChatTabReady(chatTabId)
+      if (!isSubterminal) {
+        if (ok) {
+          markChatTabReady(chatTabId)
+          updateTab(targetTabId, (tab) => ({
+            ...tab,
+            terminalReady: true,
+            terminalExited: false,
+            terminalStartError: undefined
+          }))
+        } else if (ok === undefined) {
+          // Overall login timeout: settle the pending run (spinner) and the card
+          // explicitly. The watcher also picks the error entry up, but do not
+          // rely on marker coverage.
+          abortPostConnectionTasks(targetTabId, timeoutMessage)
+          updateConnectionAttempt(chatTabId, (state) =>
+            markConnectionFailed(state, { reason: timeoutMessage })
+          )
+        }
       } else if (ok === undefined) {
-        // Overall login timeout: settle the pending run (spinner) and the card
-        // explicitly. The watcher also picks the error entry up, but do not
-        // rely on marker coverage.
         abortPostConnectionTasks(targetTabId, timeoutMessage)
-        updateConnectionAttempt(chatTabId, (state) =>
-          markConnectionFailed(state, { reason: timeoutMessage })
-        )
       }
       retryInFlightRef.current.delete(chatTabId)
       if (shouldDrainPostConnectionTasks(ok === true)) drainPostConnectionTasks(targetTabId)
-      finalizeLoginRun(
-        chatTabId,
-        ok === true,
-        ok === undefined
-          ? timeoutMessage
-          : ok === false
-            ? t.terminal.postLoginTaskAborted
-            : undefined,
-        { targetTabId, connection }
-      )
+      if (!isSubterminal) {
+        finalizeLoginRun(
+          chatTabId,
+          ok === true,
+          ok === undefined
+            ? timeoutMessage
+            : ok === false
+              ? t.terminal.postLoginTaskAborted
+              : undefined,
+          { targetTabId, connection }
+        )
+      }
       connTrace('automation-end', `tab=${targetTabId}`, `ok=${ok}`)
+      return ok === true
     },
     [
       abortPostConnectionTasks,
@@ -1959,7 +1846,8 @@ function App({
       finalizeLoginRun,
       markChatTabReady,
       t,
-      updateConnectionAttempt
+      updateConnectionAttempt,
+      updateTab
     ]
   )
 
@@ -2172,14 +2060,21 @@ function App({
     }
   }, [t.app.updateSaved])
 
-  useEffect(() => {
-    localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
-    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
-  }, [paneOrder])
+  const syncActiveTerminalSize = useCallback((): void => {
+    const terminal = terminalRef.current
+    const fitAddon = fitAddonRef.current
+    if (!terminal || !fitAddon) return
+    fitAndSyncPty(terminal, fitAddon, activeTabIdRef.current)
+  }, [])
 
   useEffect(() => {
-    window.requestAnimationFrame(() => fitAddonRef.current?.fit())
-  }, [workbenchLayout])
+    localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
+    window.requestAnimationFrame(() => syncActiveTerminalSize())
+  }, [paneOrder, syncActiveTerminalSize])
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => syncActiveTerminalSize())
+  }, [workbenchLayout, syncActiveTerminalSize])
 
   useEffect(() => {
     if (isWorkbenchLayout(initialWorkbenchLayout)) {
@@ -2361,7 +2256,7 @@ function App({
           )
         )
         setSubterminalPanelHeight(nextHeight)
-        window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+        window.requestAnimationFrame(() => syncActiveTerminalSize())
         return
       }
 
@@ -2401,7 +2296,7 @@ function App({
           : ((width - event.clientX) / width) * 100
       const nextPercent = Math.max(35, Math.min(78, rawPercent))
       setTerminalPanePercent(nextPercent)
-      window.requestAnimationFrame(() => fitAddonRef.current?.fit())
+      window.requestAnimationFrame(() => syncActiveTerminalSize())
     }
     const handlePointerUp = (): void => {
       splitDragRef.current = false
@@ -2419,7 +2314,7 @@ function App({
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
     }
-  }, [paneOrder, resizeSubterminalPair])
+  }, [paneOrder, resizeSubterminalPair, syncActiveTerminalSize])
 
   const writeLine = useCallback((text: string): void => {
     terminalRef.current?.writeln(text.replace(/\n/g, '\r\n'))
@@ -2512,20 +2407,6 @@ function App({
               toast.error(catalogLoadFailedText.replace('{resource}', 'skills'))
             })
           void window.api.agent
-            .listExtensions()
-            .then(setExtensions)
-            .catch(() => {
-              setExtensions([])
-              toast.error(catalogLoadFailedText.replace('{resource}', 'extensions'))
-            })
-          void window.api.agent
-            .listExtensionCommands()
-            .then(setExtensionCommands)
-            .catch(() => {
-              setExtensionCommands([])
-              toast.error(catalogLoadFailedText.replace('{resource}', 'extension commands'))
-            })
-          void window.api.agent
             .listInstructionFiles()
             .then((files) => {
               setInstructionFiles(files)
@@ -2608,24 +2489,6 @@ function App({
   }, [appendAgentEvent, appendSystemToRunOrLog, t])
 
   useEffect(() => {
-    return window.api.agent.onExtensionUiRequest((request) => {
-      if (request.method === 'notify') {
-        if (request.notifyType === 'error') toast.error(request.message)
-        else if (request.notifyType === 'warning') toast.warning(request.message)
-        else toast.message(request.message)
-        return
-      }
-      setExtensionUiRequest(request)
-    })
-  }, [])
-
-  useEffect(() => {
-    return window.api.agent.onExtensionUiDismiss((payload) => {
-      setExtensionUiRequest((current) => (current?.id === payload.requestId ? null : current))
-    })
-  }, [])
-
-  useEffect(() => {
     return window.api.agent.onCommandApprovalRequest((request) => {
       const targetId = request.chatTabId ?? request.tabId
       const alive =
@@ -2698,10 +2561,6 @@ function App({
         setSubterminalCollapsed(false)
 
         if (alreadyReady || payload.mode !== 'ssh' || !payload.connectionId) {
-          const parentTab = tabsRef.current.find((tab) => tab.id === payload.parentTabId)
-          if (parentTab?.connectionId) {
-            markChatTabReady(resolveSessionChatTabId(tabsRef.current, payload.parentTabId))
-          }
           void window.api.agent.ackSubterminalOpened({ tabId: payload.tabId, ok: true })
           return
         }
@@ -2744,13 +2603,7 @@ function App({
             }
           )
           if (ok === true) {
-            // Subterminal SSH success writes back to the parent tab SSOT
-            // (confirm-login promotion inside executeConnectionAutomation):
-            // clear the recovery card and mark the chat ready.
-            const readyChatTabId = resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
-            markChatTabReady(readyChatTabId)
-            recoveryBudgetByTabRef.current.delete(readyChatTabId)
-            skipConnectionReconnectRef.current.delete(payload.parentTabId)
+            connTrace('subterminal-ssh-ok', `tab=${payload.tabId}`, `parent=${payload.parentTabId}`)
           }
           void window.api.agent.ackSubterminalOpened({
             tabId: payload.tabId,
@@ -2771,10 +2624,14 @@ function App({
         }
       })()
     })
-  }, [ensureSubterminal, executeConnectionAutomation, markChatTabReady, t])
+  }, [ensureSubterminal, executeConnectionAutomation, t])
 
   useEffect(() => {
     return window.api.agent.onSubagentStatus((payload) => {
+      if (payload.close) {
+        closeSubterminal(payload.parentTabId, payload.tabId)
+        return
+      }
       ensureSubterminal(payload.parentTabId, {
         id: payload.tabId,
         name: payload.name,
@@ -2782,7 +2639,7 @@ function App({
         agentStatus: payload.agentStatus
       })
     })
-  }, [ensureSubterminal])
+  }, [closeSubterminal, ensureSubterminal])
 
   useEffect(() => {
     return window.api.agent.onCommandApprovalDismiss((payload) => {
@@ -2970,6 +2827,7 @@ function App({
         if (tab.id === activeTabIdRef.current) {
           terminalSessionIdRef.current = session.sessionId
           terminalModeRef.current = session.mode
+          if (terminalRef.current) applyTerminalConvertEol(terminalRef.current, session.mode)
           terminalCwdRef.current = session.cwd
           pipePromptRef.current = formatPipePrompt(session.cwd)
         }
@@ -3106,16 +2964,6 @@ function App({
     }
   }
 
-  async function refreshExtensions(): Promise<void> {
-    try {
-      setExtensions(await window.api.agent.listExtensions())
-      setExtensionCommands(await window.api.agent.listExtensionCommands(sessionChatTab.id))
-      setExtensionManageMessage({ type: 'success', text: t.settings.extensionsRefreshed })
-    } catch (error) {
-      setExtensionManageMessage({ type: 'error', text: String(error) })
-    }
-  }
-
   async function reloadApplicationRuntime(): Promise<void> {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     updateTab(chatTabId, (tab) => applyComposerInput(tab, ''))
@@ -3140,26 +2988,8 @@ function App({
           return fallback
         }
       }
-      const [
-        nextSkills,
-        nextExtensions,
-        nextCommands,
-        nextWiki,
-        nextFiles,
-        nextConnections,
-        nextModels
-      ] = await Promise.all([
+      const [nextSkills, nextWiki, nextFiles, nextConnections, nextModels] = await Promise.all([
         loadCatalog('skills', () => window.api.agent.listSkills(), [] as AgentSkillOption[]),
-        loadCatalog(
-          'extensions',
-          () => window.api.agent.listExtensions(),
-          [] as AgentExtensionOption[]
-        ),
-        loadCatalog(
-          'extension commands',
-          () => window.api.agent.listExtensionCommands(chatTabId),
-          []
-        ),
         loadCatalog(
           'wiki',
           () => window.api.agent.listWikiDocuments(),
@@ -3174,8 +3004,6 @@ function App({
         loadCatalog('models', () => window.api.agent.getModels(), [] as AgentModelOption[])
       ])
       setSkills(nextSkills)
-      setExtensions(nextExtensions)
-      setExtensionCommands(nextCommands)
       setWikiDocuments(nextWiki)
       setInstructionFiles(nextFiles)
       setConnections(nextConnections)
@@ -3244,157 +3072,6 @@ function App({
         delete next[chatTabId]
         return next
       })
-    }
-  }
-
-  async function importExtension(): Promise<void> {
-    try {
-      const result = await window.api.agent.importExtension()
-      if (result.canceled) return
-      if (!result.ok) {
-        setExtensionManageMessage({
-          type: 'error',
-          text: result.error || t.settings.extensionCommandFailed
-        })
-        return
-      }
-      setExtensions(result.extensions ?? (await window.api.agent.listExtensions()))
-      setExtensionManageMessage({ type: 'success', text: t.settings.extensionImported })
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  async function createExtension(name: string): Promise<boolean> {
-    setExtensionCreating(true)
-    try {
-      const result = await window.api.agent.createExtension(name)
-      if (!result.ok) {
-        setExtensionManageMessage({
-          type: 'error',
-          text: result.error || t.settings.extensionCommandFailed
-        })
-        return false
-      }
-      setExtensions(result.extensions ?? (await window.api.agent.listExtensions()))
-      setExtensionManageMessage({
-        type: 'success',
-        text: `${t.settings.extensionCreated}: ${result.extension?.name ?? name}`
-      })
-      if (result.extension) {
-        void previewExtension(result.extension)
-      }
-      return true
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-      return false
-    } finally {
-      setExtensionCreating(false)
-    }
-  }
-
-  async function deleteExtension(extension: AgentExtensionOption): Promise<void> {
-    setExtensionDeletingPath(extension.path)
-    try {
-      setExtensions(await window.api.agent.deleteExtension(extension.path))
-      if (selectedExtensionPreview?.extension.path === extension.path) {
-        setSelectedExtensionPreview(null)
-      }
-      setExtensionManageMessage({
-        type: 'success',
-        text: `${t.settings.extensionDeleted}: ${extension.name}`
-      })
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setExtensionDeletingPath(null)
-    }
-  }
-
-  async function toggleExtensionEnabled(
-    extension: AgentExtensionOption,
-    enabled: boolean
-  ): Promise<void> {
-    try {
-      setExtensions(await window.api.agent.setExtensionEnabled({ id: extension.id, enabled }))
-      setConfig((current) => ({
-        ...current,
-        disabledExtensions: enabled
-          ? current.disabledExtensions.filter((id) => id !== extension.id)
-          : [...new Set([...current.disabledExtensions, extension.id])]
-      }))
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  async function previewExtension(extension: AgentExtensionOption): Promise<void> {
-    setExtensionPreviewLoadingPath(extension.path)
-    try {
-      const content = await window.api.agent.getExtensionContent(extension.path)
-      setSelectedExtensionPreview({ extension, content })
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setExtensionPreviewLoadingPath((current) => (current === extension.path ? null : current))
-    }
-  }
-
-  async function searchExtensionCatalog(): Promise<void> {
-    setExtensionCatalogLoading(true)
-    setExtensionManageMessage({ type: 'info', text: t.settings.extensionsSearching })
-    try {
-      const results = await window.api.agent.searchExtensionPackages(extensionCatalogQuery)
-      setExtensionCatalogResults(results)
-      setExtensionManageMessage(
-        results.length
-          ? { type: 'success', text: t.settings.extensionsSearchComplete }
-          : { type: 'info', text: t.settings.noExtensionCatalogResults }
-      )
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setExtensionCatalogLoading(false)
-    }
-  }
-
-  async function installExtensionPackage(result: AgentPiPackageSearchResult): Promise<void> {
-    setExtensionInstallingSource(result.source)
-    setExtensionManageMessage({
-      type: 'info',
-      text: `${t.settings.extensionInstalling}: ${result.name}`
-    })
-    try {
-      setExtensions(await window.api.agent.installExtensionPackage(result.source))
-      setExtensionManageMessage({
-        type: 'success',
-        text: `${t.settings.extensionInstalledPackage}: ${result.name}`
-      })
-    } catch (error) {
-      setExtensionManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setExtensionInstallingSource(null)
     }
   }
 
@@ -4758,7 +4435,7 @@ function App({
 
     // Recovery brake #1: read SSOT first. Live PTY already on target -> nothing to do.
     const context = await window.api.terminal.getContext(tabId)
-    if (context.mode !== 'none' && context.alignment === 'aligned') {
+    if (context.mode !== 'none' && context.alignment === 'aligned' && !context.restoring) {
       connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
       return true
     }
@@ -4793,6 +4470,7 @@ function App({
       if (tabId === activeTabIdRef.current) {
         terminalSessionIdRef.current = session.sessionId
         terminalModeRef.current = session.mode
+        if (terminalRef.current) applyTerminalConvertEol(terminalRef.current, session.mode)
         terminalCwdRef.current = session.cwd
         pipePromptRef.current = formatPipePrompt(session.cwd)
       }
@@ -4816,7 +4494,9 @@ function App({
   }
 
   async function restoreTerminalConnection(tabId: string): Promise<boolean> {
-    if (reconnectingTabsRef.current.has(tabId)) return waitForTerminalRestore(tabId)
+    if (reconnectingTabsRef.current.has(tabId)) {
+      return waitForTerminalRestore(tabId, { requireSshReady: true })
+    }
 
     const tab = tabsRef.current.find((current) => current.id === tabId)
     if (!tab?.connectionId) return false
@@ -4859,13 +4539,21 @@ function App({
     }
   }
 
-  async function waitForTerminalRestore(tabId: string): Promise<boolean> {
+  async function waitForTerminalRestore(
+    tabId: string,
+    options?: { requireSshReady?: boolean }
+  ): Promise<boolean> {
     const deadline = Date.now() + 90_000
+    const requireSshReady = options?.requireSshReady === true
 
     while (Date.now() < deadline) {
       const context = await window.api.terminal.getContext(tabId)
-      if (context.mode !== 'none') return true
-      if (!reconnectingTabsRef.current.has(tabId)) return false
+      const live = hasLiveTerminalSession(context.mode)
+      const sshReady = live && context.ready === true && !context.restoring
+      if (requireSshReady ? sshReady : live) return true
+      if (!reconnectingTabsRef.current.has(tabId)) {
+        return requireSshReady ? sshReady : live
+      }
       await sleep(500)
     }
 
@@ -5011,64 +4699,84 @@ function App({
     )
 
     if (resolution.kind === 'reuse') {
-      // Recovery brake #2: never reinit + re-knock ssh on an already connected
-      // terminal. Read the SSOT first; skip re-login when remaining commands
-      // are empty (aligned / regex / ready remote / on-target aliases).
-      const context = await window.api.terminal.getContext(targetTabId)
-      const waitingForSecret = findNewestPromptSignal(context.output)?.kind === 'waiting'
-      const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
-      const loginEnv = {
-        promptHost: context.promptHost,
-        alignment: context.alignment ?? context.sessionAligned,
-        output: context.output,
-        mode: context.mode,
-        ready: context.ready,
-        aliases: context.aliases,
-        returnToJumpHost: context.returnToJumpHost,
-        preferSshCommand: false as const
-      }
-      if (
-        context.mode !== 'none' &&
-        !waitingForSecret &&
-        shouldSkipReuseRelogin(connection, loginEnv)
-      ) {
-        connTrace(
-          'connect-reuse-skip-relogin',
-          `tab=${targetTabId}`,
-          `promptHost=${context.promptHost ?? '-'}`,
-          `aligned=${context.alignment ?? context.sessionAligned ?? '-'}`,
-          `ready=${context.ready ? 'yes' : 'no'}`
-        )
-        markChatTabReady(chatTabId)
-        finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
-        if (postConnectionTasksRef.current.get(targetTabId)?.length) {
-          drainPostConnectionTasks(targetTabId)
+      if (reconnectingTabsRef.current.has(targetTabId)) {
+        connTrace('connect-wait-restore', `tab=${targetTabId}`)
+        const restored = await waitForTerminalRestore(targetTabId, { requireSshReady: true })
+        if (restored) {
+          markChatTabReady(chatTabId)
+          finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
+          if (postConnectionTasksRef.current.get(targetTabId)?.length) {
+            drainPostConnectionTasks(targetTabId)
+          }
+          return targetTabId
         }
-      } else if (onRemoteHost || waitingForSecret) {
-        connTrace(
-          'reuse-remaining-login',
-          `tab=${targetTabId}`,
-          `connection=${connection.id}`,
-          `promptHost=${context.promptHost ?? '-'}`,
-          `waiting=${waitingForSecret}`
-        )
-        await executeConnectionCommands(connection, targetTabId)
-      } else {
-        connTrace('reuse-login', `tab=${targetTabId}`, `connection=${connection.id}`)
-        // Same SSH tab re-login: stop the old PTY, spawn a fresh one inline and
-        // run the normal login chain, awaited. The xterm lifecycle effect does
-        // NOT re-run for the same active tab, so deferring the spawn to
-        // pendingSshRef left the reconnect with no PTY, no login, no settle.
-        // Mark the tab as reconnecting BEFORE stopping: the stop fires
-        // terminal:exit, whose handler would otherwise start a SECOND
-        // restore+login chain concurrently (two pasted ssh commands, two
-        // password prompts). With the mark in place it waits for our spawn.
+      }
+      // Same-tab retry / “恢复连接”: always spawn a fresh PTY and type ssh.
+      // Skip-relogin and remaining-login must not reuse a stale promptHost.
+      if (forceFreshLogin) {
+        connTrace('reuse-force-fresh-login', `tab=${targetTabId}`, `connection=${connection.id}`)
         reconnectingTabsRef.current.add(targetTabId)
-        void window.api.terminal.stop(targetTabId)
         try {
           await spawnAndLoginConnection(connection, targetTabId)
         } finally {
           reconnectingTabsRef.current.delete(targetTabId)
+        }
+      } else {
+        // Recovery brake #2: never reinit + re-knock ssh on an already connected
+        // terminal. Read the SSOT first; skip re-login when remaining commands
+        // are empty (aligned / regex / ready remote / on-target aliases).
+        const context = await window.api.terminal.getContext(targetTabId)
+        const waitingForSecret = findNewestPromptSignal(context.output)?.kind === 'waiting'
+        const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
+        const liveSession = hasLiveTerminalSession(context.mode)
+        const loginEnv = {
+          promptHost: context.promptHost,
+          alignment: context.alignment ?? context.sessionAligned,
+          output: context.output,
+          mode: context.mode,
+          ready: context.ready,
+          aliases: context.aliases,
+          returnToJumpHost: context.returnToJumpHost,
+          preferSshCommand: false as const
+        }
+        if (liveSession && !waitingForSecret && shouldSkipReuseRelogin(connection, loginEnv)) {
+          connTrace(
+            'connect-reuse-skip-relogin',
+            `tab=${targetTabId}`,
+            `promptHost=${context.promptHost ?? '-'}`,
+            `aligned=${context.alignment ?? context.sessionAligned ?? '-'}`,
+            `ready=${context.ready ? 'yes' : 'no'}`
+          )
+          markChatTabReady(chatTabId)
+          finalizeLoginRun(chatTabId, true, undefined, { targetTabId, connection })
+          if (postConnectionTasksRef.current.get(targetTabId)?.length) {
+            drainPostConnectionTasks(targetTabId)
+          }
+        } else if (liveSession && (onRemoteHost || waitingForSecret)) {
+          connTrace(
+            'reuse-remaining-login',
+            `tab=${targetTabId}`,
+            `connection=${connection.id}`,
+            `promptHost=${context.promptHost ?? '-'}`,
+            `waiting=${waitingForSecret}`
+          )
+          await executeConnectionCommands(connection, targetTabId)
+        } else {
+          connTrace('reuse-login', `tab=${targetTabId}`, `connection=${connection.id}`)
+          // Same SSH tab re-login: stop the old PTY, spawn a fresh one inline and
+          // run the normal login chain, awaited. The xterm lifecycle effect does
+          // NOT re-run for the same active tab, so deferring the spawn to
+          // pendingSshRef left the reconnect with no PTY, no login, no settle.
+          // Mark the tab as reconnecting BEFORE stopping: the stop fires
+          // terminal:exit, whose handler would otherwise start a SECOND
+          // restore+login chain concurrently (two pasted ssh commands, two
+          // password prompts). With the mark in place it waits for our spawn.
+          reconnectingTabsRef.current.add(targetTabId)
+          try {
+            await spawnAndLoginConnection(connection, targetTabId)
+          } finally {
+            reconnectingTabsRef.current.delete(targetTabId)
+          }
         }
       }
     } else if (!forceFreshLogin && targetTab?.sessionId) {
@@ -5091,9 +4799,12 @@ function App({
     tabId: string
   ): Promise<boolean> {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
+    let ok = false
     try {
       const dimensions =
         tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
+      connTrace('teardown', `tab=${tabId}`)
+      await window.api.terminal.teardownGracefully({ tabId })
       connTrace('spawn', `tab=${tabId}`)
       let session = await runWithTimeout(
         window.api.terminal.start({
@@ -5124,7 +4835,6 @@ function App({
       // on the fallback so transient PTY failures self-heal.
       if (session.mode === 'pipe' && !ptyRetryTriedRef.current.has(tabId)) {
         ptyRetryTriedRef.current.add(tabId)
-        window.api.terminal.stop(tabId)
         session = await runWithTimeout(
           window.api.terminal.start({
             cols: dimensions?.cols ?? 80,
@@ -5149,18 +4859,20 @@ function App({
         sessionId: session.sessionId,
         terminalMode: session.mode,
         terminalCwd: session.cwd,
-        terminalReady: true,
+        terminalReady: false,
+        terminalExited: false,
         terminalStartError: undefined
       }))
       if (tabId === activeTabIdRef.current) {
         terminalSessionIdRef.current = session.sessionId
         terminalModeRef.current = session.mode
+        if (terminalRef.current) applyTerminalConvertEol(terminalRef.current, session.mode)
         terminalCwdRef.current = session.cwd
         pipePromptRef.current = formatPipePrompt(session.cwd)
       }
       connTrace('spawned', `tab=${tabId}`, `mode=${session.mode}`, `sid=${session.sessionId}`)
-      await executeConnectionCommands(connection, tabId)
-      return Boolean(tabsRef.current.find((tab) => tab.id === tabId)?.sessionId)
+      ok = await executeConnectionCommands(connection, tabId)
+      return ok
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       connTrace('spawn-failed', `tab=${tabId}`, `err=${message}`)
@@ -5175,6 +4887,8 @@ function App({
         terminalStartError: message
       }))
       return false
+    } finally {
+      if (!ok) void window.api.terminal.clearRestoring(tabId)
     }
   }
 
@@ -6621,6 +6335,44 @@ function App({
     const executionTab =
       tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? terminalTab
 
+    if (isRemoteExecutionTab(executionTab)) {
+      const liveContext = await window.api.terminal.getContext(executionTerminalId)
+      if (!hasLiveTerminalSession(liveContext.mode)) {
+        const connection = connections.find(
+          (candidate) => candidate.id === executionTab?.connectionId
+        )
+        if (connection) {
+          clearThinking()
+          updateTab(chatTabId, (current) => ({
+            ...current,
+            agentInput: '',
+            agentBusy: true,
+            agentThinking: false,
+            thinkingMessage: undefined
+          }))
+          const targetTabId = await connectToConnection(
+            connection,
+            buildPostLoginAgentInput(resolvedInput, connection, t),
+            formatVisibleInputWithReferences(
+              displayInput,
+              skillRefs,
+              pathRefs,
+              toolRefs,
+              wikiRefs,
+              t
+            ),
+            conversationContext,
+            false,
+            startedAt,
+            undefined,
+            { activeWikiIds: wikiIds, activeSkillPaths: skillPaths }
+          )
+          setActiveExecutionTerminal(chatTabId, targetTabId)
+          return
+        }
+      }
+    }
+
     // Gate: ensure local PTY exists even when the terminal pane is hidden (xterm never mounted).
     const ensureResult = await ensureLocalTerminalStarted({
       tab: executionTab ?? createTerminalTab({ id: executionTerminalId, title: 'Terminal' }),
@@ -7181,14 +6933,15 @@ function App({
         return
       }
 
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if (isComposerSubmitEnter(event)) {
         event.preventDefault()
         insertSlashCommand(slashCommandOptions[selectedSlashCommandIndex])
         return
       }
     }
 
-    if (event.key !== 'Enter' || event.shiftKey) return
+    if (isComposerNewlineEnter(event)) return
+    if (!isComposerSubmitEnter(event)) return
 
     event.preventDefault()
     event.currentTarget.closest('form')?.requestSubmit()
@@ -7222,7 +6975,6 @@ function App({
   function insertSlashCommand(command: SlashCommandOption): void {
     const shouldOpenStyleList = command.id === 'style'
     const shouldOpenSkillList = command.id === 'skill'
-    const shouldOpenExtList = command.id === 'ext'
     const shouldOpenConnectionList = command.id === 'connection'
     const shouldOpenToolList = command.id === 'tool'
     const shouldOpenMcpList = command.id === 'mcp'
@@ -7250,15 +7002,6 @@ function App({
         command.id === 'create-skill' ? 'skill' : 'sop',
         'session'
       )
-      return
-    }
-
-    if (command.id === 'create-extension') {
-      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
-      setSlashCommandIndex(0)
-      setSlashCommandOpen(false)
-      setExtensionCreateOpen(true)
-      setExtensionOpen(true)
       return
     }
 
@@ -7323,31 +7066,6 @@ function App({
       return
     }
 
-    if (command.extensionCommand) {
-      const extensionCommand = command.extensionCommand
-      updateTab(sessionChatTab.id, (tab) => applyComposerSlashReplacement(tab, ''))
-      setSlashCommandIndex(0)
-      setSlashCommandOpen(false)
-      void window.api.agent
-        .runExtensionCommand({
-          name: extensionCommand.name,
-          tabId: sessionChatTab.id
-        })
-        .then((result) => {
-          if (result.busy) {
-            toast.message(t.settings.extensionCommandBusy)
-            return
-          }
-          if (!result.ok) {
-            toast.error(result.error || t.settings.extensionCommandFailed)
-          }
-        })
-        .catch((error) => {
-          toast.error(error instanceof Error ? error.message : t.settings.extensionCommandFailed)
-        })
-      return
-    }
-
     updateTab(sessionChatTab.id, (tab) => {
       const replacement = command.skill
         ? formatComposerRefToken('skill', command.skill.id)
@@ -7362,7 +7080,6 @@ function App({
     setSlashCommandOpen(
       shouldOpenStyleList ||
         shouldOpenSkillList ||
-        shouldOpenExtList ||
         shouldOpenConnectionList ||
         shouldOpenToolList ||
         shouldOpenMcpList ||
@@ -8109,41 +7826,6 @@ function App({
     />
   )
 
-  const extensionSheet = (
-    <ExtensionManager
-      open={extensionOpen}
-      onOpenChange={(next) => {
-        setExtensionOpen(next)
-        if (!next) setExtensionCreateOpen(false)
-      }}
-      t={t}
-      extensions={extensions}
-      searchQuery={extensionSearchQuery}
-      catalogQuery={extensionCatalogQuery}
-      catalogResults={extensionCatalogResults}
-      catalogLoading={extensionCatalogLoading}
-      installingSource={extensionInstallingSource}
-      manageMessage={extensionManageMessage}
-      deletingPath={extensionDeletingPath}
-      creating={extensionCreating}
-      createOpen={extensionCreateOpen}
-      onCreateOpenChange={setExtensionCreateOpen}
-      preview={selectedExtensionPreview}
-      previewLoadingPath={extensionPreviewLoadingPath}
-      onSearchQueryChange={setExtensionSearchQuery}
-      onCatalogQueryChange={setExtensionCatalogQuery}
-      onRefresh={() => void refreshExtensions()}
-      onImport={() => void importExtension()}
-      onCreate={(name) => createExtension(name)}
-      onSearchCatalog={() => void searchExtensionCatalog()}
-      onInstallPackage={(result) => void installExtensionPackage(result)}
-      onDelete={(extension) => void deleteExtension(extension)}
-      onToggleEnabled={(extension, enabled) => void toggleExtensionEnabled(extension, enabled)}
-      onPreview={(extension) => void previewExtension(extension)}
-      onPreviewChange={setSelectedExtensionPreview}
-    />
-  )
-
   const mcpSheet = (
     <McpServersSheet
       open={mcpOpen}
@@ -8281,16 +7963,6 @@ function App({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label={t.settings.extensionsManagement}
-            title={t.settings.extensionsManagement}
-            onClick={() => setExtensionOpen(true)}
-          >
-            <PuzzleIcon aria-hidden="true" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
             aria-label={t.history.title}
             title={t.history.title}
             onClick={() => setHistorySheetOpen(true)}
@@ -8415,7 +8087,6 @@ function App({
         </div>
       </header>
       {skillSheet}
-      {extensionSheet}
       {mcpSheet}
       {historySheet}
       {wikiSheet}
@@ -8834,22 +8505,6 @@ function App({
             current ? { ...current, dontAskAgain: checked } : current
           )
         }
-      />
-      <ExtensionUiDialog
-        key={extensionUiRequest?.id ?? 'extension-ui-idle'}
-        request={extensionUiRequest}
-        t={t}
-        onResolve={(input) => {
-          const request = extensionUiRequest
-          if (!request) return
-          setExtensionUiRequest(null)
-          void window.api.agent.resolveExtensionUi({
-            requestId: request.id,
-            cancelled: input.cancelled,
-            confirmed: input.confirmed,
-            value: input.value
-          })
-        }}
       />
       <OnboardingModal
         open={onboardingOpen}

@@ -4,11 +4,10 @@ import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 
 export function TerminalLockOverlay({
-  commandRunning,
   t,
   onInterrupt
 }: {
-  commandRunning: boolean
+  commandRunning?: boolean
   t: Dictionary
   onInterrupt: () => void
 }): React.JSX.Element {
@@ -22,7 +21,6 @@ export function TerminalLockOverlay({
           type="button"
           variant="outline"
           size="xs"
-          disabled={!commandRunning}
           aria-label={t.terminal.interruptCommand}
           title={t.terminal.interruptCommand}
           onClick={onInterrupt}

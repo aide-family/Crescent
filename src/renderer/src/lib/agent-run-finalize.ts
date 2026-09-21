@@ -31,10 +31,15 @@ export function isPlaceholderDoneText(text: string | undefined, doneFallback: st
   return trimmed === 'Done.' || trimmed === doneFallback
 }
 
+export function hasAssistantMessageStep(run: AgentRunViewState | undefined): boolean {
+  return (run?.steps ?? []).some((step) => step.kind === 'message' && Boolean(step.text.trim()))
+}
+
 /**
  * If the host reports success with only a Done placeholder but the timeline
  * already recorded an API retry/failure, treat the run as failed.
  * Quota exhaustion must not be mis-labeled as a generic Done success.
+ * Stale previous-turn prose (retry/compaction, no Message step) is also a failure.
  */
 export function resolveSuccessfulAgentResult(input: {
   text: string | undefined
@@ -45,7 +50,10 @@ export function resolveSuccessfulAgentResult(input: {
     return { ok: false, error: input.run.error.trim() }
   }
   const failure = findLastRetryFailureDetail(input.run)
-  if (failure && isPlaceholderDoneText(input.text, input.doneFallback)) {
+  if (
+    failure &&
+    (isPlaceholderDoneText(input.text, input.doneFallback) || !hasAssistantMessageStep(input.run))
+  ) {
     return { ok: false, error: failure }
   }
   return { ok: true, text: input.text?.trim() || input.doneFallback }

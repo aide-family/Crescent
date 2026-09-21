@@ -5,8 +5,14 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   closeTemporarySubterminal,
   openTemporarySubterminal,
+  readTerminalSessionHealth,
   resolveParentTerminalTabId
 } from '../terminal/ipc'
+import {
+  isMainTerminalHealthyForFanout,
+  MAIN_TERMINAL_RESTORING_ERROR,
+  shouldBlockToolsWhileMainRestoring
+} from '../terminal/session-health'
 import { listConnections } from '../connections/ipc'
 import { loadPiAi, type PiSdkFacade } from './pi-sdk'
 import {
@@ -198,6 +204,8 @@ export function resolveOpenSubterminalParentTabId(executionTabId: string): strin
   return resolveParentTerminalTabId(executionTabId)
 }
 
+export { MAIN_TERMINAL_RESTORING_ERROR }
+
 export const SAME_CONNECTION_SUBTERMINAL_ERROR =
   'Do not open_subterminal for the current session SSH connection. The host restores the main terminal; retry bash on the current pane after reconnect. Use mode=ssh only with a different saved connectionId.'
 
@@ -209,12 +217,17 @@ export function shouldRefuseSameConnectionSshSubterminal(input: {
   connectionId?: string
   parentConnectionId?: string
   rerouteParentBash: boolean
+  /** Live + aligned main pane. Required for subagent same-connection SSH fan-out. */
+  mainHealthy?: boolean
 }): boolean {
-  if (!input.rerouteParentBash) return false
   if (input.mode !== 'ssh') return false
   const wanted = input.connectionId?.trim()
   const parent = input.parentConnectionId?.trim()
-  return Boolean(wanted && parent && wanted === parent)
+  if (!wanted || !parent || wanted !== parent) return false
+  // Model open_subterminal never shares the parent connectionId.
+  if (input.rerouteParentBash) return true
+  // Subagent same-connection SSH: only true parallel work on a healthy main.
+  return input.mainHealthy !== true
 }
 
 export function shouldRefuseFailedSshSubterminalRetry(input: {
@@ -292,17 +305,27 @@ export async function openAgentSubterminal(input: {
   }
 
   const rerouteParentBash = input.rerouteParentBash !== false
+  const parentTabId = resolveOpenSubterminalParentTabId(context.executionTabId)
+  const health = readTerminalSessionHealth(webContents.id, parentTabId)
+  if (shouldBlockToolsWhileMainRestoring(health)) {
+    return { ok: false, error: MAIN_TERMINAL_RESTORING_ERROR }
+  }
   const parentConnectionId =
     context.parentConnectionId?.trim() || (context.isSsh ? context.connectionId?.trim() : undefined)
+  const mainHealthy = isMainTerminalHealthyForFanout(health)
   if (
     shouldRefuseSameConnectionSshSubterminal({
       mode,
       connectionId,
       parentConnectionId,
-      rerouteParentBash
+      rerouteParentBash,
+      mainHealthy
     })
   ) {
-    return { ok: false, error: SAME_CONNECTION_SUBTERMINAL_ERROR }
+    return {
+      ok: false,
+      error: rerouteParentBash ? SAME_CONNECTION_SUBTERMINAL_ERROR : MAIN_TERMINAL_RESTORING_ERROR
+    }
   }
   if (
     shouldRefuseFailedSshSubterminalRetry({
@@ -315,7 +338,6 @@ export async function openAgentSubterminal(input: {
     return { ok: false, error: FAILED_SSH_SUBTERMINAL_RETRY_ERROR }
   }
 
-  const parentTabId = resolveOpenSubterminalParentTabId(context.executionTabId)
   const name =
     input.params.name?.trim() ||
     (mode === 'local' ? 'local-hosts' : `ssh-${(connectionId ?? 'remote').slice(0, 24)}`)

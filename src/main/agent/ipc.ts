@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs'
-import { basename, dirname, extname, resolve } from 'path'
+import { basename, extname, resolve } from 'path'
 
 import {
   BrowserWindow,
@@ -30,23 +30,6 @@ import {
   startAgentSkillInstall,
   readCatalogSkillContent
 } from './skills'
-import {
-  createAgentExtension,
-  deleteAgentExtension,
-  importAgentExtension,
-  listAgentExtensions,
-  listCachedExtensionCommands,
-  normalizeDisabledExtensions,
-  readAgentExtensionContent
-} from './extensions'
-import {
-  installPiPackage,
-  isNpmPackageSource,
-  listPiPackageExtensions,
-  readPiPackageContent,
-  removePiPackage,
-  searchPiPackageCatalog
-} from './pi-packages'
 import { generateAndSaveSop } from './generate-sop'
 import {
   commitCaptureDraft,
@@ -56,10 +39,8 @@ import {
 import {
   cancelPiAgentRun,
   compactHostedSession,
-  listHostedExtensionCommands,
   reloadCrescentRuntime,
   runPiAgent,
-  runPiExtensionCommand,
   steerPiAgentRun
 } from './pi-host'
 import {
@@ -72,7 +53,6 @@ import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { listMcpToolCatalog } from './pi-mcp-tools'
 import { normalizeAgentStyle } from '../../shared/agent-style'
 import { rejectPendingApprovalsForTab, resolveCommandApprovalDecision } from './command-approval'
-import { rejectPendingExtensionUiForTab, resolveExtensionUiDecision } from './pi-extension-ui'
 import { resolveAgentSubterminalReady } from './pi-open-subterminal'
 import { safeWebContentsSend } from '../safe-ipc-send'
 import {
@@ -106,7 +86,6 @@ import type {
   AgentRunInput,
   AgentCompactInput,
   CommandApprovalDecision,
-  ExtensionUiDecision,
   PastedAttachmentInput,
   TranscribeAudioInput,
   TranscribeAudioResult,
@@ -242,97 +221,6 @@ export function registerAgentIpc(): void {
       )
     }
   )
-
-  ipcMain.handle('agent:list-extensions', () => {
-    return listAllAgentExtensions()
-  })
-
-  ipcMain.handle('agent:search-extension-packages', (_, query?: string) => {
-    return searchPiPackageCatalog(typeof query === 'string' ? query : '')
-  })
-
-  ipcMain.handle('agent:install-extension-package', async (_, source?: string) => {
-    const cwd = resolveAgentWorkspaceCwd(readAgentConfig())
-    await installPiPackage({ source: source ?? '', cwd })
-    return listAllAgentExtensions()
-  })
-
-  ipcMain.handle('agent:list-extension-commands', (_, sessionKey?: string) => {
-    const hosted =
-      typeof sessionKey === 'string' ? listHostedExtensionCommands(sessionKey.trim()) : []
-    if (hosted.length) return hosted
-    return listCachedExtensionCommands(listAllAgentExtensions()).map((command) => ({
-      name: command.name,
-      description: command.description
-    }))
-  })
-
-  ipcMain.handle('agent:import-extension', (event) => {
-    return importAgentExtensionFromDialog(event.sender)
-  })
-
-  ipcMain.handle('agent:create-extension', (_, payload?: { name?: string }) => {
-    const result = createAgentExtension({
-      name: typeof payload?.name === 'string' ? payload.name : '',
-      disabledExtensions: readAgentConfig().disabledExtensions
-    })
-    if (!result.ok) return result
-    return { ok: true as const, extension: result.extension, extensions: listAllAgentExtensions() }
-  })
-
-  ipcMain.handle('agent:delete-extension', async (_, path: string) => {
-    const target = path ?? ''
-    if (isNpmPackageSource(target)) {
-      await removePiPackage({
-        source: target,
-        cwd: resolveAgentWorkspaceCwd(readAgentConfig())
-      })
-      return listAllAgentExtensions()
-    }
-    deleteAgentExtension(target)
-    return listAllAgentExtensions()
-  })
-
-  ipcMain.handle(
-    'agent:set-extension-enabled',
-    (_, payload: { id?: string; enabled?: boolean }) => {
-      const id = payload?.id?.trim()
-      if (!id) throw new Error('Extension id is empty.')
-      const config = readAgentConfig()
-      const disabled = new Set(normalizeDisabledExtensions(config.disabledExtensions))
-      if (payload.enabled) disabled.delete(id)
-      else disabled.add(id)
-      writeAgentConfig({ ...config, disabledExtensions: [...disabled] })
-      return listAllAgentExtensions()
-    }
-  )
-
-  ipcMain.handle('agent:get-extension-content', (_, path: string) => {
-    const target = path ?? ''
-    if (isNpmPackageSource(target)) return readPiPackageContent(target)
-    return readAgentExtensionContent(target)
-  })
-
-  ipcMain.handle(
-    'agent:run-extension-command',
-    async (event, payload: { name?: string; args?: string; tabId?: string }) => {
-      const name = payload?.name?.trim()
-      if (!name) return { ok: false, error: 'Extension command name is empty.' }
-      const sessionKey = payload?.tabId?.trim() || 'default'
-      return runPiExtensionCommand({
-        sessionKey,
-        name,
-        args: payload?.args,
-        config: readAgentConfig(),
-        webContents: event.sender,
-        tabId: payload?.tabId
-      })
-    }
-  )
-
-  ipcMain.handle('agent:resolve-extension-ui', (_, decision: ExtensionUiDecision) => {
-    return resolveExtensionUiDecision(decision)
-  })
 
   ipcMain.handle('agent:generate-sop', async (_, payload: AgentGenerateSopInput) => {
     return generateAndSaveSop(
@@ -585,7 +473,6 @@ export function registerAgentIpc(): void {
     const normalized = typeof tabId === 'string' ? tabId.trim() : ''
     if (normalized) {
       rejectPendingApprovalsForTab(normalized, 'Session was closed.')
-      rejectPendingExtensionUiForTab(normalized, 'Session was closed.')
     }
     return { ok: true }
   })
@@ -783,14 +670,6 @@ async function pickAgentPathReference(
   }
 }
 
-function listAllAgentExtensions(): ReturnType<typeof listAgentExtensions> {
-  const disabledExtensions = readAgentConfig().disabledExtensions
-  return [
-    ...listAgentExtensions({ disabledExtensions }),
-    ...listPiPackageExtensions({ disabledExtensions })
-  ]
-}
-
 async function importAgentSkillsFromDialog(
   webContents: WebContents,
   payload?: { sourcePath?: string; overwrite?: boolean }
@@ -822,39 +701,6 @@ async function importAgentSkillsFromDialog(
       skillRoot: readAgentConfig().skillRoot,
       overwrite: Boolean(payload?.overwrite)
     })
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-async function importAgentExtensionFromDialog(webContents: WebContents): Promise<{
-  ok: boolean
-  canceled?: boolean
-  error?: string
-  extensions?: ReturnType<typeof listAgentExtensions>
-}> {
-  const options: OpenDialogOptions = {
-    title: 'Import Pi extension',
-    properties: process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openFile'],
-    filters: [
-      { name: 'TypeScript', extensions: ['ts'] },
-      { name: 'All files', extensions: ['*'] }
-    ]
-  }
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const selection = browserWindow
-    ? await dialog.showOpenDialog(browserWindow, options)
-    : await dialog.showOpenDialog(options)
-
-  if (selection.canceled || !selection.filePaths[0]) {
-    return { ok: false, canceled: true }
-  }
-
-  try {
-    const selected = resolve(selection.filePaths[0])
-    const source = basename(selected) === 'index.ts' ? dirname(selected) : selected
-    importAgentExtension(source)
-    return { ok: true, extensions: listAllAgentExtensions() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

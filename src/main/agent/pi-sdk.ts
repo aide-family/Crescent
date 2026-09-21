@@ -22,7 +22,6 @@ export type PiSdkFacade = Pick<
   PiCodingAgentModule,
   | 'ModelRuntime'
   | 'SettingsManager'
-  | 'DefaultPackageManager'
   | 'DefaultResourceLoader'
   | 'SessionManager'
   | 'createAgentSession'
@@ -34,7 +33,6 @@ type PiModelRuntimeModule = Pick<PiCodingAgentModule, 'ModelRuntime'>
 type PiSdkModule = Pick<PiCodingAgentModule, 'createAgentSession'>
 type PiBashToolsModule = Pick<PiCodingAgentModule, 'createBashToolDefinition'>
 type PiSettingsModule = Pick<PiCodingAgentModule, 'SettingsManager'>
-type PiPackageManagerModule = Pick<PiCodingAgentModule, 'DefaultPackageManager'>
 type PiResourceLoaderModule = Pick<PiCodingAgentModule, 'DefaultResourceLoader'>
 type PiSessionManagerModule = Pick<PiCodingAgentModule, 'SessionManager'>
 type PiExtensionsModule = Pick<PiCodingAgentModule, 'defineTool'>
@@ -110,15 +108,11 @@ export function loadPiSdk(): Promise<PiSdkFacade> {
   if (!piSdkFacadePromise) {
     piSdkFacadePromise = (async () => {
       const start = traceStartup('pi-sdk-facade:start')
-      const [sdk, bashTools, settings, packageManager, resourceLoader, sessionManager, extensions] =
+      const [sdk, bashTools, settings, resourceLoader, sessionManager, extensions] =
         await Promise.all([
           importPiSubpath<PiSdkModule>('dist/core/sdk.js', 'pi-sdk'),
           importPiSubpath<PiBashToolsModule>('dist/core/tools/bash.js', 'pi-bash-tools'),
           importPiSubpath<PiSettingsModule>('dist/core/settings-manager.js', 'pi-settings'),
-          importPiSubpath<PiPackageManagerModule>(
-            'dist/core/package-manager.js',
-            'pi-package-manager'
-          ),
           importPiSubpath<PiResourceLoaderModule>(
             'dist/core/resource-loader.js',
             'pi-resource-loader'
@@ -133,7 +127,6 @@ export function loadPiSdk(): Promise<PiSdkFacade> {
       return {
         ModelRuntime: (await loadPiModelRuntime()).ModelRuntime,
         SettingsManager: settings.SettingsManager,
-        DefaultPackageManager: packageManager.DefaultPackageManager,
         DefaultResourceLoader: resourceLoader.DefaultResourceLoader,
         SessionManager: sessionManager.SessionManager,
         createAgentSession: sdk.createAgentSession,

@@ -6,7 +6,10 @@ import { formatPipePrompt } from '../lib/app-shell'
 import { resolveConnectionReconnectPolicy } from '../lib/connection-automation-policy'
 import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '../lib/design-system'
 import {
+  applyTerminalConvertEol,
+  fitAndSyncPty,
   handlePipeTerminalInput as applyPipeTerminalInput,
+  isUsableTerminalSize,
   observeTerminalHostResize,
   type PipeTerminalState
 } from '../lib/pipe-terminal'
@@ -16,7 +19,11 @@ import {
   parseSubterminalTabId
 } from '../lib/terminal-text'
 import { readTerminalOutputRing } from '../lib/terminal-output-ring'
-import { applyXtermInputLock } from '../lib/xterm-input-lock'
+import {
+  applyXtermInputLock,
+  attachLockedCtrlCHandler,
+  isTerminalCtrlCData
+} from '../lib/xterm-input-lock'
 import { createXtermReplayGate, hydrateXtermFromHistory } from '../lib/xterm-hydrate'
 import { attachXtermScrollFollow, writeXtermAndFollow } from '../lib/xterm-scroll-follow'
 import {
@@ -56,7 +63,7 @@ interface UseXtermLifecycleInput {
     id: string,
     status: 'active' | 'exited'
   ) => void
-  executeConnectionCommands: (connection: ConnectionConfig, targetTabId: string) => Promise<void>
+  executeConnectionCommands: (connection: ConnectionConfig, targetTabId: string) => Promise<boolean>
   abortPostConnectionTasks: (tabId: string, reason: string) => void
   appendLog: (entry: AgentLogEntryInput, tabId?: string) => number | void
   shellExitedText: string
@@ -148,7 +155,7 @@ export function useXtermLifecycle({
 
     const terminal = new Terminal({
       cursorBlink: true,
-      convertEol: true,
+      convertEol: false,
       fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
       fontSize: APP_TERMINAL_TYPOGRAPHY.fontSize,
       lineHeight: APP_TERMINAL_TYPOGRAPHY.lineHeight,
@@ -158,14 +165,17 @@ export function useXtermLifecycle({
 
     terminal.loadAddon(fitAddon)
     terminal.open(host)
-    fitAddon.fit()
+    fitAndSyncPty(terminal, fitAddon, tab.id)
+    if (tab.sessionId) {
+      applyTerminalConvertEol(terminal, tab.terminalMode)
+    }
 
     const scrollFollow = attachXtermScrollFollow(terminal)
     const replayGate = createXtermReplayGate()
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
-      if (inputLockedRef.current) return
+      if (inputLockedRef.current && !isTerminalCtrlCData(data)) return
       if (!replayGate.shouldForwardInput()) return
       scrollFollow.resetFollow()
       terminal.scrollToBottom()
@@ -176,6 +186,15 @@ export function useXtermLifecycle({
 
       window.api.terminal.write(data, activeTabIdRef.current)
     })
+    attachLockedCtrlCHandler(
+      terminal,
+      () => inputLockedRef.current && replayGate.shouldForwardInput(),
+      () => {
+        scrollFollow.resetFollow()
+        terminal.scrollToBottom()
+        window.api.terminal.interrupt(activeTabIdRef.current)
+      }
+    )
 
     const history = tab.terminalOutput
       ? filterCrescentBootstrapOutput(tab.terminalOutput)
@@ -271,7 +290,8 @@ export function useXtermLifecycle({
         return
       }
 
-      const dimensions = fitAddon.proposeDimensions()
+      const cols = isUsableTerminalSize(terminal.cols, terminal.rows) ? terminal.cols : 80
+      const rows = isUsableTerminalSize(terminal.cols, terminal.rows) ? terminal.rows : 24
       if (typeof process !== 'undefined' && process.env?.CRESCENT_DEBUG_CONN === '1') {
         console.info(
           '[conn-trace]',
@@ -279,8 +299,8 @@ export function useXtermLifecycle({
         )
       }
       let session = await window.api.terminal.start({
-        cols: dimensions?.cols ?? 80,
-        rows: dimensions?.rows ?? 24,
+        cols,
+        rows,
         tabId: tab.id
       })
 
@@ -290,14 +310,15 @@ export function useXtermLifecycle({
         ptyRetryTriedRef.current.add(tab.id)
         window.api.terminal.stop(tab.id)
         session = await window.api.terminal.start({
-          cols: dimensions?.cols ?? 80,
-          rows: dimensions?.rows ?? 24,
+          cols,
+          rows,
           tabId: tab.id
         })
       }
 
       terminalSessionIdRef.current = session.sessionId
       terminalModeRef.current = session.mode
+      applyTerminalConvertEol(terminal, session.mode)
       terminalCwdRef.current = session.cwd
       pipePromptRef.current = formatPipePrompt(session.cwd)
       updateTab(tab.id, (current) => ({
@@ -330,7 +351,7 @@ export function useXtermLifecycle({
       }))
     })
 
-    const resizeObserver = observeTerminalHostResize(host, fitAddon, tab.id, () =>
+    const resizeObserver = observeTerminalHostResize(host, terminal, fitAddon, tab.id, () =>
       scrollFollow.followIfEnabled()
     )
 
@@ -338,7 +359,14 @@ export function useXtermLifecycle({
     fitAddonRef.current = fitAddon
     applyXtermInputLock(terminal, inputLockedRef.current)
 
+    let fontsCancelled = false
+    void document.fonts.ready.then(() => {
+      if (fontsCancelled) return
+      fitAndSyncPty(terminal, fitAddon, tab.id)
+    })
+
     return () => {
+      fontsCancelled = true
       resizeObserver.disconnect()
       scrollFollow.dispose()
       terminalDataDisposable.dispose()

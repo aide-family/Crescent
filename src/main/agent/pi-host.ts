@@ -4,9 +4,9 @@ import { resolve } from 'path'
 import type { WebContents } from 'electron'
 
 import { buildLocalInstructionContext } from './instruction-files'
-import { extractAssistantTextFromMessages, mapPiSessionEventToAgentEvents } from './pi-event-bridge'
+import { mapPiSessionEventToAgentEvents, resolveHostedPromptResult } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
-import { getCrescentPiExtensionsDir, getCrescentPiSkillsDir } from './pi-paths'
+import { getCrescentPiSkillsDir } from './pi-paths'
 import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 import {
   resolvePiModel,
@@ -40,24 +40,7 @@ import {
   shouldReuseHostedSession
 } from './pi-host-policy'
 import { rejectPendingApprovalsForRun } from './command-approval'
-import {
-  computeExtensionFingerprint,
-  getExtensionLoadSnapshot,
-  listEnabledExtensionPaths,
-  rememberExtensionLoadSnapshot,
-  snapshotFromLoadedExtensions
-} from './extensions'
-import {
-  computePiPackageFingerprint,
-  createCrescentSettingsManager,
-  listEnabledPiPackageExtensionPaths
-} from './pi-packages'
-import {
-  clearExtensionUiBinding,
-  createCrescentExtensionUi,
-  rejectPendingExtensionUiForRun,
-  setExtensionUiBinding
-} from './pi-extension-ui'
+import { createCrescentSettingsManager } from './pi-packages'
 import {
   buildQuotaResetHint,
   classifyProviderError,
@@ -71,21 +54,6 @@ import type { AgentConfig, AgentEvent } from './types'
 import type { SkillPromptPart, SopWikiPromptPart } from '../../shared/agent-run-prompt'
 
 type AgentSession = Awaited<ReturnType<PiSdkFacade['createAgentSession']>>['session']
-type LoadExtensionsResult = Awaited<
-  ReturnType<PiSdkFacade['createAgentSession']>
->['extensionsResult']
-
-interface HostedExtensionCommand {
-  invocationName: string
-  description?: string
-  handler: (args: string, ctx: unknown) => Promise<void> | void
-}
-
-interface HostedExtensionRunner {
-  getCommand(name: string): HostedExtensionCommand | undefined
-  createCommandContext(): unknown
-  getRegisteredCommands(): Array<{ invocationName: string; description?: string }>
-}
 
 interface HostedSession {
   sessionKey: string
@@ -106,8 +74,6 @@ interface ActiveRun {
 const hostedSessions = new Map<string, HostedSession>()
 const activeRuns = new Map<string, ActiveRun>()
 const runIdBySessionKey = new Map<string, string>()
-/** Sessions currently running an extension command (counts as busy for reload/dispose). */
-const extensionBusyBySessionKey = new Set<string>()
 /** Manual compaction in flight (serialize against prompt / dispose). */
 const compactingBySessionKey = new Set<string>()
 /** Serialize ensure/dispose per session key. */
@@ -181,14 +147,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       }
     }
 
-    setExtensionUiBinding(sessionKey, {
-      webContents: input.webContents,
-      runId,
-      tabId: input.tabId,
-      emit
-    })
     const hosted = await ensureHostedSession(sessionKey, input.config)
-    emitExtensionLoadErrors(emit, runId, input.tabId)
     const modelRuntime = await syncCrescentProvidersToModelRuntime(input.config)
     const model = await resolvePiModel(input.config, modelRuntime)
     if (!model) {
@@ -233,6 +192,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
 
     let collectedText = ''
     let lastRetryError = ''
+    let compactedThisTurn = false
     let quotaExceeded:
       | {
           provider?: string
@@ -318,6 +278,14 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       }
 
       if (
+        event.type === 'compaction_end' &&
+        (event.reason === 'threshold' || event.reason === 'overflow') &&
+        !event.aborted
+      ) {
+        compactedThisTurn = true
+      }
+
+      if (
         event.type === 'compaction_end' ||
         event.type === 'turn_end' ||
         event.type === 'message_end'
@@ -349,11 +317,16 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       return { ok: false, error: message }
     }
 
-    const messages = hosted.session.messages as unknown[]
-    const finalText = extractAssistantTextFromMessages(messages).trim() || collectedText.trim()
+    const resolved = resolveHostedPromptResult({
+      messages: hosted.session.messages as unknown[],
+      collectedText,
+      lastRetryError,
+      compactedThisTurn,
+      locale: input.locale
+    })
 
-    if (!finalText && lastRetryError) {
-      const classified = classifyProviderError(lastRetryError)
+    if (!resolved.ok) {
+      const classified = classifyProviderError(resolved.error)
       if (classified.kind === 'quota_exceeded') {
         emit({
           type: 'error',
@@ -370,7 +343,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       }
       emit({
         type: 'error',
-        message: lastRetryError,
+        message: resolved.error,
         kind:
           classified.kind === 'rate_limit' || classified.kind === 'transient'
             ? 'transient'
@@ -380,12 +353,11 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
         runId,
         tabId: input.tabId
       })
-      return { ok: false, error: lastRetryError }
+      return { ok: false, error: resolved.error }
     }
 
-    const text = finalText || 'Done.'
-    emit({ type: 'done', message: text, runId, tabId: input.tabId })
-    return { ok: true, text }
+    emit({ type: 'done', message: resolved.text, runId, tabId: input.tabId })
+    return { ok: true, text: resolved.text }
   } catch (error) {
     const active = activeRuns.get(runId)
     if (active?.abortRequested) {
@@ -445,7 +417,6 @@ export async function cancelPiAgentRun(runId: string): Promise<boolean> {
   // Abort signal settles pending PTY waiters (interrupted); interrupt also writes ^C.
   active.abortController.abort()
   rejectPendingApprovalsForRun(runId, 'Agent run was canceled.')
-  rejectPendingExtensionUiForRun(runId, 'Agent run was canceled.')
   rejectAllSubterminalReadyWaiters('Agent run was canceled.')
   await abortChildSessionsForRun(runId)
   const hosted = hostedSessions.get(active.sessionKey)
@@ -475,48 +446,6 @@ export async function steerPiAgentRun(runId: string, text: string): Promise<bool
   }
 }
 
-export async function runPiExtensionCommand(input: {
-  sessionKey: string
-  name: string
-  args?: string
-  config: AgentConfig
-  webContents: WebContents
-  tabId?: string
-}): Promise<{ ok: boolean; busy?: boolean; error?: string }> {
-  const name = input.name.trim()
-  if (!name) return { ok: false, error: 'Extension command name is empty.' }
-  if (
-    runIdBySessionKey.has(input.sessionKey) ||
-    extensionBusyBySessionKey.has(input.sessionKey) ||
-    compactingBySessionKey.has(input.sessionKey)
-  ) {
-    return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
-  }
-
-  setExtensionUiBinding(input.sessionKey, {
-    webContents: input.webContents,
-    tabId: input.tabId
-  })
-  const hosted = await ensureHostedSession(input.sessionKey, input.config)
-  if (hosted.session.isStreaming) {
-    return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
-  }
-
-  const runner = getHostedExtensionRunner(hosted.session)
-  const command = runner?.getCommand(name)
-  if (!command || !runner) return { ok: false, error: `Unknown extension command: ${name}` }
-
-  extensionBusyBySessionKey.add(input.sessionKey)
-  try {
-    await command.handler(input.args?.trim() ?? '', runner.createCommandContext())
-    return { ok: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    extensionBusyBySessionKey.delete(input.sessionKey)
-  }
-}
-
 export interface ReloadCrescentRuntimeInput {
   sessionKey?: string
   config: AgentConfig
@@ -531,7 +460,6 @@ export interface ReloadCrescentRuntimeResult {
 
 function isHostedSessionBusy(sessionKey: string, hosted: HostedSession): boolean {
   if (runIdBySessionKey.has(sessionKey)) return true
-  if (extensionBusyBySessionKey.has(sessionKey)) return true
   if (compactingBySessionKey.has(sessionKey)) return true
   try {
     return Boolean(hosted.session.isStreaming)
@@ -641,18 +569,6 @@ export async function reloadCrescentRuntime(
   }
 }
 
-export function listHostedExtensionCommands(
-  sessionKey: string
-): Array<{ name: string; description: string }> {
-  const hosted = hostedSessions.get(sessionKey)
-  if (!hosted) return []
-  const runner = getHostedExtensionRunner(hosted.session)
-  return (runner?.getRegisteredCommands() ?? []).map((command) => ({
-    name: command.invocationName,
-    description: command.description?.trim() || command.invocationName
-  }))
-}
-
 async function ensureHostedSession(
   sessionKey: string,
   config: AgentConfig
@@ -666,17 +582,13 @@ async function ensureHostedSessionUnlocked(
 ): Promise<HostedSession> {
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
-  const extensionFingerprint = computeExtensionFingerprint({
-    disabledExtensions: config.disabledExtensions,
-    packageFingerprint: computePiPackageFingerprint()
-  })
-  const toolProfile = hostedSessionToolProfile(config.mcpServers, extensionFingerprint)
+  const toolProfile = hostedSessionToolProfile(config.mcpServers)
   if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
     return existing as HostedSession
   }
   if (existing) {
-    if (extensionBusyBySessionKey.has(sessionKey) || runIdBySessionKey.has(sessionKey)) {
-      throw new Error('Cannot recreate agent session while a run or extension command is active.')
+    if (runIdBySessionKey.has(sessionKey)) {
+      throw new Error('Cannot recreate agent session while a run is active.')
     }
     await disposeHostedSessionUnlocked(existing)
     hostedSessions.delete(sessionKey)
@@ -689,15 +601,6 @@ async function ensureHostedSessionUnlocked(
 
   const instructionContext = buildLocalInstructionContext()
   const additionalSkillPaths = collectSkillRoots(config)
-  const additionalExtensionPaths = [
-    ...listEnabledExtensionPaths({
-      disabledExtensions: config.disabledExtensions
-    }),
-    ...(await listEnabledPiPackageExtensionPaths({
-      cwd,
-      disabledExtensions: config.disabledExtensions
-    }))
-  ]
   const ptyBashTool = createPtyBashToolDefinition(pi, cwd, sessionKey)
 
   const resourceLoader = new pi.DefaultResourceLoader({
@@ -705,7 +608,6 @@ async function ensureHostedSessionUnlocked(
     agentDir,
     settingsManager,
     additionalSkillPaths,
-    additionalExtensionPaths,
     noExtensions: true,
     systemPromptOverride: (base) =>
       buildInvariantAgentPrompt({
@@ -723,7 +625,7 @@ async function ensureHostedSessionUnlocked(
   const subagentTool = await createSubagentToolDefinition(pi, sessionKey)
   const mcp = await loadMcpPiTools(pi, config.mcpServers)
 
-  const { session, extensionsResult } = await pi.createAgentSession({
+  const { session } = await pi.createAgentSession({
     cwd,
     agentDir,
     model: model ?? undefined,
@@ -739,28 +641,6 @@ async function ensureHostedSessionUnlocked(
     ],
     sessionManager: pi.SessionManager.inMemory(cwd),
     settingsManager
-  })
-
-  rememberLoadedExtensions(extensionsResult)
-
-  await session.bindExtensions({
-    uiContext: createCrescentExtensionUi(sessionKey),
-    mode: 'rpc',
-    commandContextActions: {
-      waitForIdle: () => session.waitForIdle(),
-      newSession: async () => ({ cancelled: true }),
-      fork: async () => ({ cancelled: true }),
-      navigateTree: async () => ({ cancelled: true }),
-      switchSession: async () => ({ cancelled: true }),
-      reload: () => session.reload()
-    },
-    onError: (error) => {
-      rememberLoadedExtensions({
-        extensions: extensionsResult.extensions,
-        errors: [...extensionsResult.errors, { path: error.extensionPath, error: error.error }],
-        runtime: extensionsResult.runtime
-      })
-    }
   })
 
   const hosted: HostedSession = {
@@ -779,7 +659,6 @@ async function disposeHostedSession(hosted: HostedSession): Promise<void> {
 }
 
 async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void> {
-  clearExtensionUiBinding(hosted.sessionKey)
   clearPtyBashExecContext(hosted.sessionKey)
   try {
     hosted.unsubscribe?.()
@@ -797,38 +676,6 @@ async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void
   } catch {
     // ignore dispose errors when recreating for tool profile upgrades
   }
-}
-
-function rememberLoadedExtensions(result: LoadExtensionsResult): void {
-  rememberExtensionLoadSnapshot(
-    snapshotFromLoadedExtensions({
-      extensions: result.extensions,
-      errors: result.errors,
-      extensionsDir: getCrescentPiExtensionsDir()
-    })
-  )
-}
-
-function emitExtensionLoadErrors(
-  emit: (event: AgentEvent) => void,
-  runId: string,
-  tabId?: string
-): void {
-  const errors = Object.entries(getExtensionLoadSnapshot().errorsById)
-  if (errors.length === 0) return
-  const message = errors.map(([id, error]) => `${id}: ${error}`).join('\n')
-  emit({
-    type: 'status',
-    message: `Extension load errors:\n${message}`,
-    runId,
-    tabId
-  })
-}
-
-function getHostedExtensionRunner(session: AgentSession): HostedExtensionRunner | undefined {
-  const runner = (session as unknown as { _extensionRunner?: HostedExtensionRunner })
-    ._extensionRunner
-  return runner
 }
 
 function collectSkillRoots(config: AgentConfig): string[] {

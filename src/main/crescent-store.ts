@@ -88,7 +88,6 @@ export const defaultAgentConfig: AgentConfig = {
   openApiRetryBackoffMs: 300,
   skillRoot: CRESCENT_USER_SKILLS_TILDE,
   loadGlobalAgentSkills: false,
-  disabledExtensions: [],
   mcpServers: [],
   logLevel: 'info'
 }
@@ -411,7 +410,6 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     ...openApiFields,
     skillRoot: normalizeSkillRoot(config.skillRoot),
     loadGlobalAgentSkills: normalizeLoadGlobalAgentSkills(config),
-    disabledExtensions: normalizeDisabledExtensionIds(config.disabledExtensions),
     mcpServers: normalizeMcpServers(config.mcpServers),
     logLevel: normalizeSystemLogLevel(config.logLevel)
   }
@@ -428,19 +426,6 @@ function normalizeSkillRoot(value: unknown): string {
 function normalizeLoadGlobalAgentSkills(config: Partial<AgentConfig>): boolean {
   if (typeof config.loadGlobalAgentSkills === 'boolean') return config.loadGlobalAgentSkills
   return String(config.skillRoot ?? '').trim() === GLOBAL_AGENT_SKILLS_TILDE
-}
-
-function normalizeDisabledExtensionIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-
-  return [
-    ...new Set(
-      value
-        .map((item) => String(item).trim())
-        .filter(Boolean)
-        .map((item) => item.replace(/\.ts$/i, ''))
-    )
-  ].sort()
 }
 
 function normalizeStringList(value: unknown): string[] {

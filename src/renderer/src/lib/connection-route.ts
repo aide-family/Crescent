@@ -272,13 +272,27 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       sessionTabs,
       connections,
       activeLabel,
-      message
+      message,
+      sessionAligned: ctx.sessionAligned,
+      promptHost: ctx.promptHost,
+      returnToJumpHost: ctx.returnToJumpHost
     })
     if (remotePick) return remotePick
   }
 
   // --- Layer B: inherit active terminal ---
   if (activeTab?.connectionId || activeTab?.isSsh) {
+    const reconnect = reconnectDeadBoundConnection({
+      activeTabId,
+      activeTab,
+      connections,
+      activeLabel,
+      reason: 'active-reconnect',
+      sessionAligned: ctx.sessionAligned,
+      promptHost: ctx.promptHost,
+      returnToJumpHost: ctx.returnToJumpHost
+    })
+    if (reconnect) return reconnect
     return {
       targetTabId: activeTabId,
       connectionId: activeTab.connectionId,
@@ -500,6 +514,23 @@ function resolveNamedConnection(input: {
         executeAfterLogin: true
       }
     }
+    if (
+      !isActiveLoggedInTerminal(activeTab, {
+        sessionAligned,
+        promptHost: input.promptHost,
+        returnToJumpHost: input.returnToJumpHost
+      })
+    ) {
+      return {
+        targetTabId: activeTabId,
+        connectionId: mentioned.id,
+        connection: mentioned,
+        action: 'connect',
+        label: mentioned.name || activeLabel,
+        reason: `${prefix}-reconnect`,
+        executeAfterLogin: true
+      }
+    }
     return {
       targetTabId: activeTabId,
       connectionId: mentioned.id,
@@ -514,6 +545,17 @@ function resolveNamedConnection(input: {
     (tab) => tab.connectionId === mentioned.id || tab.connectionName === mentioned.name
   )
   if (peer) {
+    if (!isActiveLoggedInTerminal(peer)) {
+      return {
+        targetTabId: peer.id,
+        connectionId: mentioned.id,
+        connection: mentioned,
+        action: 'connect',
+        label: mentioned.name || formatTabLabel(peer),
+        reason: soft ? 'soft-reconnect' : 'mention-reconnect',
+        executeAfterLogin: true
+      }
+    }
     return {
       targetTabId: peer.id,
       connectionId: mentioned.id,
@@ -535,6 +577,40 @@ function resolveNamedConnection(input: {
   }
 }
 
+function reconnectDeadBoundConnection(input: {
+  activeTabId: string
+  activeTab?: AgentTerminalTab
+  connections: ConnectionConfig[]
+  activeLabel: string
+  reason: string
+  sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
+  returnToJumpHost?: boolean
+}): ConnectionRouteResult | undefined {
+  const { activeTab, connections } = input
+  if (!activeTab?.connectionId) return undefined
+  if (
+    isActiveLoggedInTerminal(activeTab, {
+      sessionAligned: input.sessionAligned,
+      promptHost: input.promptHost,
+      returnToJumpHost: input.returnToJumpHost
+    })
+  ) {
+    return undefined
+  }
+  const connection = connections.find((candidate) => candidate.id === activeTab.connectionId)
+  if (!connection) return undefined
+  return {
+    targetTabId: input.activeTabId,
+    connectionId: connection.id,
+    connection,
+    action: 'connect',
+    label: connection.name || input.activeLabel,
+    reason: input.reason,
+    executeAfterLogin: true
+  }
+}
+
 function resolveRemoteOpsWithoutName(input: {
   activeTabId: string
   activeTab?: AgentTerminalTab
@@ -542,23 +618,40 @@ function resolveRemoteOpsWithoutName(input: {
   connections: ConnectionConfig[]
   activeLabel: string
   message: string
+  sessionAligned?: 'aligned' | 'drifted' | 'unknown'
+  promptHost?: string
+  returnToJumpHost?: boolean
 }): ConnectionRouteResult | undefined {
   const { activeTabId, activeTab, sessionTabs, connections, activeLabel, message } = input
+  const loginOptions = {
+    sessionAligned: input.sessionAligned,
+    promptHost: input.promptHost,
+    returnToJumpHost: input.returnToJumpHost
+  }
 
-  // Already on a connected tab — reuse (do not ask how to log in).
-  if (activeTab?.connectionId || activeTab?.isSsh) {
+  if (isActiveLoggedInTerminal(activeTab, loginOptions)) {
     return {
       targetTabId: activeTabId,
-      connectionId: activeTab.connectionId,
-      connection: connections.find((c) => c.id === activeTab.connectionId),
+      connectionId: activeTab?.connectionId,
+      connection: connections.find((c) => c.id === activeTab?.connectionId),
       action: 'reuse',
       label: activeLabel,
       reason: 'remote-active-connected'
     }
   }
 
+  const reconnect = reconnectDeadBoundConnection({
+    activeTabId,
+    activeTab,
+    connections,
+    activeLabel,
+    reason: 'active-reconnect',
+    ...loginOptions
+  })
+  if (reconnect) return reconnect
+
   // Session already has a connected peer tab — switch there.
-  const sessionConnected = sessionTabs.find((tab) => Boolean(tab.connectionId) || tab.isSsh)
+  const sessionConnected = sessionTabs.find((tab) => isActiveLoggedInTerminal(tab))
   if (sessionConnected?.connectionId) {
     const connection = connections.find((c) => c.id === sessionConnected.connectionId)
     return {

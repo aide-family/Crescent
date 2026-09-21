@@ -6,10 +6,16 @@ import {
   executeCommandInTemporaryTerminal,
   executeCommandInTerminalWithPermissionRequest,
   interruptAndAwaitPendingTerminalCommands,
+  readTerminalSessionHealth,
+  registerMainTabLoginConfirmedHandler,
   resolveParentTerminalTabId,
   type TerminalCommandExecutionResult
 } from '../terminal/ipc'
 import { registerPtyExecutionTabChecker } from '../terminal/input-lock'
+import {
+  MAIN_TERMINAL_RESTORING_ERROR,
+  shouldBlockToolsWhileMainRestoring
+} from '../terminal/session-health'
 import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
 import type { PiSdkFacade } from './pi-sdk'
@@ -100,6 +106,33 @@ export function shouldRestoreParentAfterMissingSession(input: {
   return { restore: true, parentTabId }
 }
 
+export function rewriteMissingSessionErrorForMainRestore(input: {
+  error?: string
+  executionTabId: string
+  hasSession: boolean
+  restoring: boolean
+}): string | undefined {
+  if (!isMissingTerminalSessionError(input.error)) return input.error
+  if (
+    shouldBlockToolsWhileMainRestoring({
+      hasSession: input.hasSession,
+      restoring: input.restoring
+    })
+  ) {
+    return MAIN_TERMINAL_RESTORING_ERROR
+  }
+  return input.error
+}
+
+export function shouldRestoreParentBashTab(input: {
+  fromSubagent?: boolean
+  executionTabId: string
+  parentTabId: string
+}): boolean {
+  if (input.fromSubagent) return false
+  return resolveParentTerminalTabId(input.executionTabId) === input.parentTabId.trim()
+}
+
 /** Pure helper for tests: whether a normalized fingerprint is blocked. */
 export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<string>): boolean {
   return Boolean(fingerprint && failed.has(fingerprint))
@@ -115,6 +148,31 @@ registerPtyExecutionTabChecker((tabId) => {
   }
   return false
 })
+
+export function restorePtyBashExecutionToParentTab(parentTabId: string): void {
+  const parent = parentTabId.trim()
+  if (!parent) return
+  for (const [sessionKey, context] of execContextBySessionKey.entries()) {
+    if (
+      !shouldRestoreParentBashTab({
+        fromSubagent: context.fromSubagent,
+        executionTabId: context.executionTabId,
+        parentTabId: parent
+      })
+    ) {
+      continue
+    }
+    context.executionTabId = parent
+    context.subterminalName = undefined
+    if (context.parentConnectionId) {
+      context.isSsh = true
+      context.connectionId = context.parentConnectionId
+    }
+    execContextBySessionKey.set(sessionKey, context)
+  }
+}
+
+registerMainTabLoginConfirmedHandler(restorePtyBashExecutionToParentTab)
 
 export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecContext): void {
   context.failedFingerprints = getFailedCommandFingerprints(context.runId)
@@ -352,6 +410,20 @@ async function executeReviewedPtyCommand(input: {
       })
       targetTabId = restore.parentTabId
       result = await runOnTab(targetTabId)
+    }
+
+    if (!result.ok && isMissingTerminalSessionError(result.error)) {
+      const parentTabId = resolveParentTerminalTabId(targetTabId)
+      const health = readTerminalSessionHealth(context.webContents.id, parentTabId)
+      result = {
+        ...result,
+        error: rewriteMissingSessionErrorForMainRestore({
+          error: result.error,
+          executionTabId: targetTabId,
+          hasSession: health.hasSession,
+          restoring: health.restoring
+        })
+      }
     }
 
     if (!result.ok && fingerprint) {

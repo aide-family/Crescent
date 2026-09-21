@@ -39,7 +39,7 @@ export type PromptSignal =
 
 /**
  * Newest prompt signal in a PTY buffer, scanning lines from bottom to top:
- * - a local-style prompt (`➜ ~`, bare `$`/`%`, `~ $`) -> 'local'
+ * - a local-style prompt (`➜ ~`, bare `$`/`%`, `~ $`, lone `~`) -> 'local'
  * - a hostname prompt (`user@host:…`) -> { host }
  * - no prompt signal -> undefined
  *
@@ -86,7 +86,8 @@ function isLocalPromptLine(line: string): boolean {
   if (/^❯\s+\S+\s*$/.test(line)) return true
   if (/^[➜❯]\s*$/.test(line)) return true
   if (/^[%$]\s*$/.test(line)) return true
-  if (/^~\s+[%$]\s*$/.test(line)) return true
+  // Home-dir-only PS1 after SSH drop (`~`, `~ %`, `~#`). A lone `#` is still remote root.
+  if (/^~\s*[%$#]?\s*$/.test(line)) return true
   // Stock bash/zsh: `bash-5.2$`, `zsh%`, short path without user@host.
   // Do not treat a bare `#` as local — remote root shells use that PS1.
   if (/^(?:bash|zsh|sh)[-/\d.]*\s*[%$#]\s*$/i.test(line)) return true
@@ -168,13 +169,7 @@ export function isLocalShellPromptVisible(output: string): boolean {
   for (const line of recent) {
     const trimmed = stripAnsi(line).trim()
     if (!trimmed) continue
-    // oh-my-zsh / powerlevel10k arrows, bare `$`/`%` and `~ $` style prompts.
-    // Same whole-line rule as findNewestPromptSignal: a line like
-    // `➜  ~ ssh …` is a command echo, not the local prompt itself.
-    if (/^➜\s+\S+\s*$/.test(trimmed)) return true
-    if (/^❯\s+\S+\s*$/.test(trimmed)) return true
-    if (/^[%$]\s*$/.test(trimmed)) return true
-    if (/^~\s+[%$]\s*$/.test(trimmed)) return true
+    if (isLocalPromptLine(trimmed)) return true
   }
 
   return false

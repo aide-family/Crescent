@@ -5,10 +5,18 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   closeTemporarySubterminal,
   listTemporarySubterminalNames,
-  MAX_TEMPORARY_SUBTERMINALS
+  MAX_TEMPORARY_SUBTERMINALS,
+  readTerminalSessionHealth
 } from '../terminal/ipc'
+import {
+  MAIN_TERMINAL_RESTORING_ERROR,
+  shouldBlockToolsWhileMainRestoring
+} from '../terminal/session-health'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
-import { extractAssistantTextFromMessages, mapPiSessionEventToAgentEvents } from './pi-event-bridge'
+import {
+  extractAssistantTextFromCurrentTurn,
+  mapPiSessionEventToAgentEvents
+} from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { createCrescentSettingsManager } from './pi-packages'
 import {
@@ -49,6 +57,9 @@ export const SUBAGENT_DISCIPLINE = [
   '- No remaining docked panes (max 3)',
   '',
   'If multi-agent: you MUST call the subagent tool. The host binds each child to its own docked subterminal; parent bash stays on the current pane.',
+  'The main task always finishes on the main terminal pane. Children are only auxiliary gather, or work that would block the main pane.',
+  'The host closes each child pane when that child finishes. Do not keep using a closed child pane; continue on the main pane.',
+  'Never spawn a child to replace a dead or reconnecting main SSH session. Wait for the host to restore the main pane, then retry bash there.',
   'Never fake multi-agent with concurrent bash on one pane.',
   'Never spawn child agents via open_subterminal alone — that tool is extra panes for THIS agent (local hosts / extra SSH).',
   '',
@@ -245,6 +256,7 @@ export function emitSubagentPaneStatus(input: {
   name: string
   agentName: string
   agentStatus: 'running' | 'done' | 'error'
+  close?: boolean
 }): void {
   if (!input.webContents || input.webContents.isDestroyed()) return
   safeWebContentsSend(input.webContents, 'agent:subagent-status', {
@@ -252,7 +264,8 @@ export function emitSubagentPaneStatus(input: {
     tabId: input.tabId,
     name: input.name,
     agentName: input.agentName,
-    agentStatus: input.agentStatus
+    agentStatus: input.agentStatus,
+    close: input.close === true
   })
 }
 
@@ -289,6 +302,8 @@ export async function createSubagentToolDefinition(
     promptGuidelines: [
       'Before acting, decide solo vs multi-agent. If multi-agent, call subagent — never open_subterminal merely to fan out agents.',
       'Each child already has its own docked subterminal; parent bash stays on the current pane.',
+      'Finish the main task on the main pane. Children are auxiliary; the host closes their panes when they finish.',
+      'Never spawn a child to replace a dead main SSH session — wait for host restore, then retry bash on the main pane.',
       'Call subagent with tasks[] only for independent read-only workstreams; keep worker sequential.',
       'Never run concurrent bash on the same terminal pane.'
     ],
@@ -339,6 +354,10 @@ async function runSubagentTool(input: {
   }
 
   const parentTabId = resolveOpenSubterminalParentTabId(parent.executionTabId)
+  const health = readTerminalSessionHealth(parent.webContents.id, parentTabId)
+  if (shouldBlockToolsWhileMainRestoring(health)) {
+    return { ok: false, results: [], error: MAIN_TERMINAL_RESTORING_ERROR }
+  }
   const existingNames = listTemporarySubterminalNames(parent.webContents, parentTabId)
   const allocated = allocateSubagentPaneNames({
     agents: parsed.tasks.map((task) => task.agent),
@@ -463,13 +482,15 @@ async function runChildSubagent(input: {
       error: result.error
     }
   } finally {
+    closeTemporarySubterminal(parent.webContents, opened.tabId)
     emitSubagentPaneStatus({
       webContents: parent.webContents,
       parentTabId,
       tabId: opened.tabId,
       name: opened.name || input.paneName,
       agentName: profile.name,
-      agentStatus: childStatus
+      agentStatus: childStatus,
+      close: true
     })
     clearPtyBashExecContext(childKey)
   }
@@ -559,7 +580,7 @@ async function runChildPiSession(input: {
   try {
     await session.prompt(input.task)
     if (input.signal?.aborted) return { ok: false, error: 'Agent run was canceled.' }
-    const text = extractAssistantTextFromMessages(session.messages as unknown[]).trim()
+    const text = extractAssistantTextFromCurrentTurn(session.messages as unknown[]).trim()
     if (!text) return { ok: false, error: 'Child agent returned no text.' }
     return { ok: true, text: text.slice(0, MAX_CHILD_RESULT_CHARS) }
   } catch (error) {
