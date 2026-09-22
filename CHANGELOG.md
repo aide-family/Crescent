@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.0.11 (2026-09-22)
+
+### Agent
+
+- Compact older model context while keeping the chat timeline.
+- Subagents can take delegated tasks in their own docked subterminals.
+- Model providers can be enabled or disabled; only enabled providers are used for model selection.
+- The agent can write text to the clipboard.
+
+### Terminal / SSH
+
+- Reconnect an active terminal after a disconnect.
+- Mark connections as favorites and reorder the connection list.
+- A cluster host regex treats matching terminal hostnames as already logged in.
+
+### Desktop
+
+- The main window opens sized to the current screen work area.
+- Workbench layout is remembered across sessions.
+- Composer thinking state and agent log chrome follow the updated design tokens.
+
+### Chores
+
+- Removed deprecated extension management from agent configuration and IPC.
+
 ## v1.0.10 (2026-08-22)
 
 ### Terminal / SSH

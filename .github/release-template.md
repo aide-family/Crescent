@@ -18,8 +18,10 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
-- Optional root password on saved connections, encrypted at rest and autofilled when privilege prompts appear.
-- Scroll-follow for agent logs and terminal output: views stay pinned to the bottom while you read, and resume following when you scroll back down.
+- Subagents can take delegated tasks in their own docked subterminals.
+- Compact older model context while keeping the chat timeline.
+- Connections support favorites, manual reorder, a cluster host regex, and reconnect after a disconnect.
+- Model providers can be enabled or disabled, and the workbench layout is remembered.
 
 ## Install Notes
 
