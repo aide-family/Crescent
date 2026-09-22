@@ -1,8 +1,12 @@
-import { ArrowUpCircleIcon, CheckIcon, Loader2Icon } from 'lucide-react'
+import { ArrowUpCircleIcon, BookTextIcon, CheckIcon, Loader2Icon } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
-import { CRESCENT_GITHUB_URL, crescentReleaseTagUrl } from '../../../shared/app-links'
+import {
+  CRESCENT_DOCS_URL,
+  CRESCENT_GITHUB_URL,
+  crescentReleaseTagUrl
+} from '../../../shared/app-links'
 import type { AppUpdateStatusEvent } from '../../../shared/update-types'
 
 function GitHubMark({ className }: { className?: string }): React.JSX.Element {
@@ -105,6 +109,19 @@ export function AppFooter({
           }}
         >
           <GitHubMark className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="app-footer-action"
+          aria-label={t.app.docs}
+          title={t.app.docs}
+          onClick={() => {
+            void window.api.app.openExternal(CRESCENT_DOCS_URL)
+          }}
+        >
+          <BookTextIcon className="size-3.5" aria-hidden="true" />
         </Button>
       </span>
     </footer>

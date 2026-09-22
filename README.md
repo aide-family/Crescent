@@ -2,6 +2,8 @@
 
 English | [简体中文](./README.zh-CN.md)
 
+Documentation: <https://aide-family.github.io/Crescent/>
+
 An open-source operations workbench that brings AI into the real terminal.
 
 Crescent is a desktop AI command workbench built with Electron, React, and TypeScript. It helps operations engineers, backend developers, and platform teams bring local terminals, SSH connections, AI agents, command review, Skills, and reusable operational knowledge into one focused workspace.

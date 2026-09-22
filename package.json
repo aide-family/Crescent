@@ -37,6 +37,8 @@
     "build:linux": "npm run build && electron-builder --linux",
     "icons": "node scripts/generate-icons.cjs",
     "smoke:packaging": "node scripts/smoke-packaging.cjs",
+    "docs:dev": "npm --prefix website run dev",
+    "docs:build": "npm --prefix website run build",
     "prebuild:win": "npm run icons",
     "prebuild:linux": "npm run icons"
   },

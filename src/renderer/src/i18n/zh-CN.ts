@@ -30,6 +30,7 @@ const zhCN = {
     versionLabel: '版本 {version}',
     openRelease: '查看 v{version} 发布说明',
     github: 'GitHub',
+    docs: '文档',
     updateAvailable: '发现新版本 {version}',
     downloadInstaller: '下载 {version} 安装包到下载目录',
     updateDownloading: '正在下载安装包… {percent}%',

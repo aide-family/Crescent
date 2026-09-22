@@ -2,6 +2,8 @@
 
 [English](./README.md) | 简体中文
 
+文档：<https://aide-family.github.io/Crescent/>
+
 把 AI 真正放进终端里的开源运维工作台。
 
 Crescent 是一个基于 Electron + React + TypeScript 构建的桌面端 AI 命令工作台，帮助运维、后端和平台工程师把本地终端、SSH 连接、AI Agent、命令审核、Skills 和知识库沉淀整合到一个界面里。

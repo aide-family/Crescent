@@ -30,6 +30,7 @@ const en = {
     versionLabel: 'Version {version}',
     openRelease: 'Open v{version} release notes',
     github: 'GitHub',
+    docs: 'Docs',
     updateAvailable: 'Update {version} is available',
     downloadInstaller: 'Download {version} installer to Downloads',
     updateDownloading: 'Downloading installer… {percent}%',

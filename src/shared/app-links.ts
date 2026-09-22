@@ -1,5 +1,7 @@
 export const CRESCENT_GITHUB_URL = 'https://github.com/aide-family/Crescent'
 
+export const CRESCENT_DOCS_URL = 'https://aide-family.github.io/Crescent/'
+
 export const CRESCENT_GITHUB_RELEASES_URL = 'https://github.com/aide-family/Crescent/releases'
 
 export const CRESCENT_GITHUB_RELEASE_DOWNLOAD =
