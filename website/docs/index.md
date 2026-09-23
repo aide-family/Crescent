@@ -23,3 +23,5 @@ features:
   - title: Skills 与知识库
     details: 从 Skill 目录加载可复用流程，把排障记录整理成 SOP。后续任务可以检索这些经验，而不是每次从头开始。
 ---
+
+仓库说明见 [README.zh-CN.md](https://github.com/aide-family/Crescent/blob/main/README.zh-CN.md)。英文文档在导航里切换。

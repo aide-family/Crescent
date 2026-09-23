@@ -14,4 +14,4 @@ That means:
 - Pre-deployment checks
 - Narrowing a failure from the previous command’s output
 
-For another machine, select it under [SSH connections](/en/guide/ssh) first, then continue the Agent run on that connection.
+For another machine, select it under [SSH connections](/en/guide/ssh) first, then continue the Agent run on that connection. A parallel line of checks uses [Subterminals and subagents](/en/guide/subagents) instead of sharing the main pane’s PTY.

@@ -14,7 +14,14 @@ export default defineConfig({
   test: {
     environment: 'node',
     exclude: localTests
-      ? ['node_modules/**', 'dist/**', 'out/**']
-      : ['node_modules/**', 'dist/**', 'out/**', '**/*.test.ts', '**/*.test.tsx', '**/__tests__/**']
+      ? ['**/node_modules/**', 'dist/**', 'out/**']
+      : [
+          '**/node_modules/**',
+          'dist/**',
+          'out/**',
+          '**/*.test.ts',
+          '**/*.test.tsx',
+          '**/__tests__/**'
+        ]
   }
 })

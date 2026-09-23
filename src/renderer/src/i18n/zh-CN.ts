@@ -238,9 +238,9 @@ const zhCN = {
     password: '密码',
     passwordEnvVar: '密码环境变量',
     passwordEnvVarDescription:
-      '密码为空时，会从进程环境或用户配置读取该变量（macOS/Linux：~/.zprofile / ~/.zshrc；Windows：用户/系统环境变量）；只保存变量名。打包版不会继承你在终端里临时 export 的值。',
+      '密码为空时，开发版和安装版都从同一处读取该变量（macOS/Linux：~/.zprofile / ~/.zshrc；Windows：用户/系统环境变量），不使用终端里临时 export 的值。只保存变量名。',
     passwordEnvVarMissing:
-      '未读取到密码环境变量。打包版应用不会继承终端临时变量：macOS/Linux 请写进 ~/.zprofile 或 ~/.zshrc；Windows 请在「环境变量」里添加用户变量后重新打开 Crescent',
+      '未读取到密码环境变量。开发版和安装版都不使用终端临时变量：macOS/Linux 请写进 ~/.zprofile 或 ~/.zshrc；Windows 请在「环境变量」里添加用户变量后重新打开 Crescent',
     passwordEnvVarPlaceholder: '例如 CRESCENT_SSH_PASSWORD…',
     passwordPlaceholder: '可选；留空则不自动输入密码…',
     rootPassword: 'Root 密码',

@@ -1,15 +1,6 @@
 # Install
 
-For day-to-day use, download a build from [GitHub Releases](https://github.com/aide-family/Crescent/releases).
-
-| Platform            | Recommended asset          |
-| ------------------- | -------------------------- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg`     |
-| macOS Intel         | `crescent-*-x64.dmg`       |
-| Windows             | `crescent-*-x64-setup.exe` |
-| Linux               | `.AppImage` or `.deb`      |
-
-Use `SHA256SUMS.txt` from the same release to verify the download when you can.
+<LatestDownloads locale="en" />
 
 ## macOS: “is damaged and can’t be opened”
 

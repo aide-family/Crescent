@@ -2,6 +2,7 @@ import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
 const repo = 'https://github.com/aide-family/Crescent'
+const base = '/Crescent/'
 
 const zhSearch = {
   translations: {
@@ -25,7 +26,8 @@ export default withMermaid(
   defineConfig({
     title: 'Crescent',
     description: '把 AI 放进真实终端的开源运维工作台',
-    base: '/Crescent/',
+    base,
+    head: [['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }]],
     lastUpdated: true,
     cleanUrls: true,
     ignoreDeadLinks: false,
@@ -39,8 +41,7 @@ export default withMermaid(
           nav: [
             { text: '指南', link: '/guide/why' },
             { text: '架构', link: '/architecture/' },
-            { text: '开发', link: '/develop/' },
-            { text: 'GitHub', link: repo }
+            { text: '开发', link: '/develop/' }
           ],
           sidebar: [
             {
@@ -49,11 +50,14 @@ export default withMermaid(
                 { text: '为什么需要 Crescent', link: '/guide/why' },
                 { text: '安装', link: '/guide/install' },
                 { text: '快速开始', link: '/guide/quick-start' },
+                { text: '工作台', link: '/guide/workbench' },
                 { text: '终端与 Agent', link: '/guide/terminal' },
+                { text: '子终端与子代理', link: '/guide/subagents' },
                 { text: '命令审核', link: '/guide/command-review' },
                 { text: 'SSH 连接', link: '/guide/ssh' },
                 { text: 'Skills 与知识库', link: '/guide/skills' },
-                { text: 'Agent 工具', link: '/guide/tools' }
+                { text: 'Agent 工具', link: '/guide/tools' },
+                { text: '会话历史', link: '/guide/history' }
               ]
             },
             {
@@ -89,8 +93,7 @@ export default withMermaid(
           nav: [
             { text: 'Guide', link: '/en/guide/why' },
             { text: 'Architecture', link: '/en/architecture/' },
-            { text: 'Develop', link: '/en/develop/' },
-            { text: 'GitHub', link: repo }
+            { text: 'Develop', link: '/en/develop/' }
           ],
           sidebar: [
             {
@@ -99,11 +102,14 @@ export default withMermaid(
                 { text: 'Why Crescent', link: '/en/guide/why' },
                 { text: 'Install', link: '/en/guide/install' },
                 { text: 'Quick start', link: '/en/guide/quick-start' },
+                { text: 'Workbench', link: '/en/guide/workbench' },
                 { text: 'Terminal and Agent', link: '/en/guide/terminal' },
+                { text: 'Subterminals and subagents', link: '/en/guide/subagents' },
                 { text: 'Command review', link: '/en/guide/command-review' },
                 { text: 'SSH connections', link: '/en/guide/ssh' },
                 { text: 'Skills and knowledge', link: '/en/guide/skills' },
-                { text: 'Agent tools', link: '/en/guide/tools' }
+                { text: 'Agent tools', link: '/en/guide/tools' },
+                { text: 'Session history', link: '/en/guide/history' }
               ]
             },
             {

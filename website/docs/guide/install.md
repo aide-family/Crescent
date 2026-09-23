@@ -1,15 +1,6 @@
 # 安装
 
-普通使用从 [GitHub Releases](https://github.com/aide-family/Crescent/releases) 下载对应平台的安装包。
-
-| 平台                | 推荐资产                   |
-| ------------------- | -------------------------- |
-| macOS Apple Silicon | `crescent-*-arm64.dmg`     |
-| macOS Intel         | `crescent-*-x64.dmg`       |
-| Windows             | `crescent-*-x64-setup.exe` |
-| Linux               | `.AppImage` 或 `.deb`      |
-
-同一 Release 里的 `SHA256SUMS.txt` 可以用来校验下载文件。
+<LatestDownloads locale="zh" />
 
 ## macOS：「已损坏，无法打开」
 

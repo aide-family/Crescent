@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-Documentation: <https://aide-family.github.io/Crescent/>
+Documentation: <https://aide-family.github.io/Crescent/en/> ([install](https://aide-family.github.io/Crescent/en/guide/install), [quick start](https://aide-family.github.io/Crescent/en/guide/quick-start), [command review](https://aide-family.github.io/Crescent/en/guide/command-review))
 
 An open-source operations workbench that brings AI into the real terminal.
 
@@ -104,6 +104,8 @@ flowchart TD
 The core idea is simple: the Agent should not reason away from the worksite. It should gather evidence through the terminal, tools, and knowledge base before making decisions.
 
 ## Quick Start
+
+See the docs for [install](https://aide-family.github.io/Crescent/en/guide/install), [quick start](https://aide-family.github.io/Crescent/en/guide/quick-start), and [command review](https://aide-family.github.io/Crescent/en/guide/command-review).
 
 ### Install from GitHub Releases (recommended for end users)
 

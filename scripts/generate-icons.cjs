@@ -5,6 +5,7 @@
  * Source of truth:
  *   build/icons/crescent-logo.png  → build/icon.png + resources/icon.png + .icns/.ico
  *                                   → renderer favicon / ProductLogo mark
+ *                                   → website/docs/public/favicon.ico
  *
  * Usage:
  *   npm run icons
@@ -20,6 +21,7 @@ const outBuildPng = path.join(root, 'build/icon.png')
 const outResourcesPng = path.join(root, 'resources/icon.png')
 const outIcns = path.join(root, 'build/icon.icns')
 const outIco = path.join(root, 'build/icon.ico')
+const outDocsFavicon = path.join(root, 'website/docs/public/favicon.ico')
 const outMarkPng = path.join(root, 'src/renderer/src/assets/crescent-mark.png')
 const outLogoPng = path.join(root, 'src/renderer/src/assets/crescent-logo.png')
 
@@ -186,7 +188,10 @@ async function main() {
       png: await sharp(appBuffer).resize(size, size).withMetadata({ density: 72 }).png().toBuffer()
     })
   }
-  fs.writeFileSync(outIco, createIcoFromPngs(icoEntries))
+  const icoBuffer = createIcoFromPngs(icoEntries)
+  fs.writeFileSync(outIco, icoBuffer)
+  fs.mkdirSync(path.dirname(outDocsFavicon), { recursive: true })
+  fs.writeFileSync(outDocsFavicon, icoBuffer)
 
   const markBuffer = await renderTransparentMark(sharp, logoMaster, 256)
   const logoBuffer = await renderTransparentMark(sharp, logoMaster, 512)
@@ -208,6 +213,7 @@ async function main() {
   console.log(`  ${path.relative(root, outResourcesPng)}`)
   if (fs.existsSync(outIcns)) console.log(`  ${path.relative(root, outIcns)}`)
   console.log(`  ${path.relative(root, outIco)}`)
+  console.log(`  ${path.relative(root, outDocsFavicon)}`)
   console.log(`  ${path.relative(root, outMarkPng)}`)
   console.log(`  ${path.relative(root, outLogoPng)}`)
   console.log(`  ${path.relative(root, previewDir)}/icon-{16..1024}.png`)

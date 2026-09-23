@@ -252,9 +252,9 @@ const en = {
     password: 'Password',
     passwordEnvVar: 'Password environment variable',
     passwordEnvVarDescription:
-      'When password is empty, login reads this variable from the process environment or user shell profile (~/.zprofile / ~/.zshrc on macOS/Linux; User/Machine env on Windows). Only the variable name is stored.',
+      'When password is empty, dev and installed builds both read this variable from the same place (~/.zprofile / ~/.zshrc on macOS/Linux; User/Machine env on Windows). Temporary terminal exports are ignored. Only the variable name is stored.',
     passwordEnvVarMissing:
-      'Could not read the password environment variable. Packaged apps do not inherit terminal exports — on macOS/Linux define it in ~/.zprofile or ~/.zshrc; on Windows set a User environment variable, then relaunch Crescent',
+      'Could not read the password environment variable. Dev and installed builds ignore temporary terminal exports — on macOS/Linux define it in ~/.zprofile or ~/.zshrc; on Windows set a User environment variable, then relaunch Crescent',
     passwordEnvVarPlaceholder: 'e.g. CRESCENT_SSH_PASSWORD…',
     passwordPlaceholder: 'Optional; leave empty to skip automatic password input…',
     rootPassword: 'Root password',

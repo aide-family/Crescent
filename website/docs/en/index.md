@@ -23,3 +23,5 @@ features:
   - title: Skills and knowledge
     details: Load reusable Skills and turn troubleshooting notes into SOPs that later runs can retrieve.
 ---
+
+The repository overview is in [README.md](https://github.com/aide-family/Crescent/blob/main/README.md). Switch the nav language for 简体中文.

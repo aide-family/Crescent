@@ -1,6 +1,8 @@
 # Run from source and contribute
 
-Run these commands from the repository root.
+The repository overview is [README.md](https://github.com/aide-family/Crescent/blob/main/README.md). Run the commands below from the repository root.
+
+OpenAPI and MCP from earlier versions are no longer part of the Agent loop. If those settings are still visible, they exist only so old configuration can migrate. The model cannot call them as current tools.
 
 ## Install dependencies and start
 

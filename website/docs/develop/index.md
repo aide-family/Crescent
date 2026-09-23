@@ -1,6 +1,8 @@
 # 从源码运行与贡献
 
-以下命令在仓库根目录执行。
+产品说明的仓库原文是 [README.zh-CN.md](https://github.com/aide-family/Crescent/blob/main/README.zh-CN.md)。下面的命令在仓库根目录执行。
+
+早期版本的 OpenAPI 与 MCP 已从 Agent 循环中移除。设置里若仍能看到相关项，只用于旧配置迁移，模型不能再把它们当作当前工具。
 
 ## 安装依赖并启动
 

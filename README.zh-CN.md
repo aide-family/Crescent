@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-文档：<https://aide-family.github.io/Crescent/>
+文档：<https://aide-family.github.io/Crescent/>（[安装](https://aide-family.github.io/Crescent/guide/install)、[快速开始](https://aide-family.github.io/Crescent/guide/quick-start)、[命令审核](https://aide-family.github.io/Crescent/guide/command-review)）
 
 把 AI 真正放进终端里的开源运维工作台。
 
@@ -104,6 +104,8 @@ flowchart TD
 这个设计的核心是：Agent 不脱离现场做判断，而是通过终端、工具和知识库不断补充证据。
 
 ## 快速上手
+
+文档站里有对应说明：[安装](https://aide-family.github.io/Crescent/guide/install)、[快速开始](https://aide-family.github.io/Crescent/guide/quick-start)、[命令审核](https://aide-family.github.io/Crescent/guide/command-review)。
 
 ### 从 GitHub Release 安装（推荐普通用户）
 

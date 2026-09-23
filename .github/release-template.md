@@ -18,6 +18,7 @@ Thank you for trying Crescent. This release includes desktop packages for macOS,
 
 ## Highlights
 
+- Packaged and dev builds read password environment variables from the shell profile or user environment, not from a temporary terminal export.
 - Subagents can take delegated tasks in their own docked subterminals.
 - Compact older model context while keeping the chat timeline.
 - Connections support favorites, manual reorder, a cluster host regex, and reconnect after a disconnect.
