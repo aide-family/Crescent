@@ -27,3 +27,5 @@ The Agent inspects the current terminal, runs one useful command, reads the outp
 5. Keep checking, apply a fix, or write the conclusion.
 
 Inspections, pre-deployment checks, and troubleshooting fit this pace. The goal is not one unattended script.
+
+How the steps connect is in [Main workflow](/en/architecture/#workflow). How that loop runs in the terminal is in [Terminal and Agent](/en/guide/terminal#flow).

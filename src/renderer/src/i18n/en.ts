@@ -1,3 +1,5 @@
+import { sessionOutlineMessages } from '../../../shared/session-outline'
+
 const en = {
   app: {
     aiNotReady: 'AI not ready',
@@ -665,6 +667,10 @@ const en = {
     compactBusy: 'Wait for the current agent run to finish',
     compactNoSession: 'No live session to compact',
     compactFailed: 'Context compaction failed',
+    outlineRecorded: sessionOutlineMessages.en.recorded,
+    outlineInterruptedRecorded: sessionOutlineMessages.en.interruptedRecorded,
+    compactDeferred: sessionOutlineMessages.en.deferred,
+    compactAfterTurn: sessionOutlineMessages.en.afterTurn,
     sessionLabel: 'Session',
     slashConnection: 'Connect to SSH',
     slashConnectionDescription: 'Choose a saved SSH connection and connect',

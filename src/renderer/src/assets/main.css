@@ -284,6 +284,36 @@
   background: var(--primary);
 }
 
+.app-row-resizer {
+  position: relative;
+  height: 8px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  touch-action: none;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+
+.app-row-resizer::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--border);
+  transition:
+    background-color 160ms ease,
+    height 160ms ease;
+}
+
+.app-row-resizer:hover::before,
+.app-row-resizer:focus-visible::before {
+  height: 2px;
+  background: var(--primary);
+}
+
 .app-input-dock {
   border-top: 1px solid var(--border);
   background: var(--app-panel);

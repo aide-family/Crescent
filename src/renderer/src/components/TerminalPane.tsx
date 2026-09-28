@@ -229,7 +229,7 @@ export function TerminalPane({
                 ) : null}
               </div>
             ) : null}
-            <div className="relative min-h-0 flex-1">
+            <div className="relative min-h-0 flex-1 overflow-hidden">
               <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
               {agentBusy && executionTerminalId === activeTabId ? (
                 <TerminalLockOverlay
@@ -241,12 +241,31 @@ export function TerminalPane({
             </div>
           </div>
         )}
+        {activeTab.subTerminals.length > 0 && !subterminalCollapsed ? (
+          <div
+            className="app-row-resizer shrink-0"
+            role="separator"
+            tabIndex={0}
+            aria-orientation="horizontal"
+            aria-label={t.terminal.resizeSubterminalHeight}
+            title={t.terminal.resizeSubterminalHeight}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              subterminalHeightResizeRef.current = {
+                startY: event.clientY,
+                startHeight: subterminalPanelHeight
+              }
+              document.body.style.cursor = 'row-resize'
+              document.body.style.userSelect = 'none'
+            }}
+          />
+        ) : null}
         <SubterminalPanel
           activeTab={activeTab}
           collapsed={subterminalCollapsed}
           panelHeight={subterminalPanelHeight}
           resizeRef={subterminalResizeRef}
-          heightResizeRef={subterminalHeightResizeRef}
           t={t}
           executionTerminalId={executionTerminalId}
           agentBusy={agentBusy}

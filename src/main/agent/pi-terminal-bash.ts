@@ -25,6 +25,16 @@ export interface PtyBashExecContext {
   webContents: WebContents
   /** Visible terminal pane (main or subterminal tab id). */
   executionTabId: string
+  /**
+   * Main pane for this parent run. Set once and never overwritten when bash
+   * is briefly routed to a local subterminal.
+   */
+  mainTabId?: string
+  /**
+   * Parent open_subterminal(mode=local) armed the next bash for the client
+   * machine. Cleared after that command, returning execution to mainTabId.
+   */
+  pendingLocalBashRestore?: boolean
   chatTabId?: string
   runId: string
   userInput: string
@@ -138,6 +148,34 @@ export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<
   return Boolean(fingerprint && failed.has(fingerprint))
 }
 
+/** Parent bash moves to a subterminal only for the next client-machine command. */
+export function shouldRerouteParentBashToSubterminal(input: {
+  mode: 'local' | 'ssh'
+  rerouteParentBash: boolean
+}): boolean {
+  return input.rerouteParentBash && input.mode === 'local'
+}
+
+/** After that one local command, parent bash returns to the main pane. */
+export function shouldReturnBashToMainAfterLocalDetour(input: {
+  fromSubagent?: boolean
+  pendingLocalBashRestore?: boolean
+}): boolean {
+  return !input.fromSubagent && input.pendingLocalBashRestore === true
+}
+
+/** Pure helper for tests: tab id after a local one-shot detour finishes. */
+export function nextExecutionTabAfterLocalBash(input: {
+  fromSubagent?: boolean
+  pendingLocalBashRestore?: boolean
+  executionTabId: string
+  mainTabId?: string
+}): string {
+  if (!shouldReturnBashToMainAfterLocalDetour(input)) return input.executionTabId
+  const mainTabId = input.mainTabId?.trim()
+  return mainTabId || input.executionTabId
+}
+
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
 
 registerPtyExecutionTabChecker((tabId) => {
@@ -179,6 +217,9 @@ export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecCo
   if (!context.parentConnectionId?.trim()) {
     context.parentConnectionId = context.isSsh ? context.connectionId?.trim() : undefined
   }
+  if (!context.mainTabId?.trim()) {
+    context.mainTabId = context.executionTabId.trim()
+  }
   execContextBySessionKey.set(sessionKey, context)
 }
 
@@ -205,6 +246,36 @@ export function updatePtyBashExecutionTabId(
   return true
 }
 
+/** Send parent bash back to the main pane and clear a local one-shot detour. */
+export function restoreParentBashToMainTab(sessionKey: string): boolean {
+  const existing = execContextBySessionKey.get(sessionKey)
+  if (!existing || existing.fromSubagent) return false
+  const mainTabId = existing.mainTabId?.trim()
+  if (!mainTabId) return false
+  existing.executionTabId = mainTabId
+  existing.pendingLocalBashRestore = false
+  existing.subterminalName = undefined
+  if (existing.parentConnectionId) {
+    existing.isSsh = true
+    existing.connectionId = existing.parentConnectionId
+  } else {
+    existing.isSsh = false
+    existing.connectionId = undefined
+  }
+  execContextBySessionKey.set(sessionKey, existing)
+  return true
+}
+
+export function armParentLocalBashDetour(sessionKey: string, executionTabId: string): boolean {
+  const existing = execContextBySessionKey.get(sessionKey)
+  if (!existing || existing.fromSubagent) return false
+  const armed = updatePtyBashExecutionTabId(sessionKey, executionTabId, { isSsh: false })
+  if (!armed) return false
+  existing.pendingLocalBashRestore = true
+  execContextBySessionKey.set(sessionKey, existing)
+  return true
+}
+
 export function bindPtyBashExecContextClone(input: {
   fromSessionKey: string
   toSessionKey: string
@@ -220,6 +291,7 @@ export function bindPtyBashExecContextClone(input: {
     executionTabId,
     subterminalName: undefined,
     fromSubagent: Boolean(input.fromSubagent),
+    pendingLocalBashRestore: false,
     // Child panes keep an independent failure set so siblings/parent are not blocked.
     failedFingerprints: new Set()
   })
@@ -320,6 +392,37 @@ export function createPtyBashToolDefinition(
 }
 
 async function executeReviewedPtyCommand(input: {
+  sessionKey: string
+  context: PtyBashExecContext
+  command: string
+  timeoutMs?: number
+  signal?: AbortSignal
+}): Promise<TerminalCommandExecutionResult> {
+  const returnToMain = shouldReturnBashToMainAfterLocalDetour({
+    fromSubagent: input.context.fromSubagent,
+    pendingLocalBashRestore: input.context.pendingLocalBashRestore
+  })
+  try {
+    const result = await reviewAndExecutePtyCommand(input)
+    if (!returnToMain) return result
+    const note =
+      'Bash has returned to the main terminal. Continue the user task there. Do not finish it in a subterminal.'
+    if (result.ok) {
+      return {
+        ...result,
+        output: [result.output, note].filter(Boolean).join('\n\n')
+      }
+    }
+    return {
+      ...result,
+      error: [result.error, note].filter(Boolean).join('\n\n')
+    }
+  } finally {
+    if (returnToMain) restoreParentBashToMainTab(input.sessionKey)
+  }
+}
+
+async function reviewAndExecutePtyCommand(input: {
   sessionKey: string
   context: PtyBashExecContext
   command: string

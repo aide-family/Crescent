@@ -32,7 +32,8 @@ export const SUBAGENT_PROFILES: Record<SubagentProfileName, SubagentProfile> = {
       'You are Crescent scout: fast local recon.',
       'Find relevant files, entry points, data flow, and risks.',
       'Do not edit files. Prefer read and read-only bash.',
-      'Return a concise structured brief the parent agent can act on.'
+      'Return a concise structured brief the parent agent can act on.',
+      'Report facts only. Do not take over the user task; the parent continues on the main terminal.'
     ].join(' ')
   },
   researcher: {
@@ -42,7 +43,8 @@ export const SUBAGENT_PROFILES: Record<SubagentProfileName, SubagentProfile> = {
     systemPrompt: [
       'You are Crescent researcher: gather facts from the workspace, docs, and command output.',
       'Cite sources (paths, commands). Do not edit files.',
-      'Return a short research brief with findings and remaining unknowns.'
+      'Return a short research brief with findings and remaining unknowns.',
+      'Report facts only. Do not take over the user task; the parent continues on the main terminal.'
     ].join(' ')
   },
   worker: {
@@ -62,7 +64,8 @@ export const SUBAGENT_PROFILES: Record<SubagentProfileName, SubagentProfile> = {
     systemPrompt: [
       'You are Crescent reviewer: review against the task or plan.',
       'Check correctness, tests, edge cases, and unnecessary complexity.',
-      'Do not implement large changes. Return findings first, then optional small-fix suggestions.'
+      'Do not implement large changes. Return findings first, then optional small-fix suggestions.',
+      'Report facts only. Do not take over the user task; the parent continues on the main terminal.'
     ].join(' ')
   },
   oracle: {
@@ -72,7 +75,8 @@ export const SUBAGENT_PROFILES: Record<SubagentProfileName, SubagentProfile> = {
     systemPrompt: [
       'You are Crescent oracle: a second opinion before acting.',
       'Challenge assumptions. Do not edit files.',
-      'Return what might be missing, risks, and a recommended next step.'
+      'Return what might be missing, risks, and a recommended next step.',
+      'Report facts only. Do not take over the user task; the parent continues on the main terminal.'
     ].join(' ')
   },
   delegate: {

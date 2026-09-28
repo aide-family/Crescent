@@ -50,7 +50,8 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'open_subterminal',
     method: 'post',
     path: 'pi://crescent/open_subterminal',
-    description: 'Open a docked local or SSH subterminal and route subsequent bash commands there.',
+    description:
+      'Open a docked local or SSH subterminal. Parent bash stays on the main pane. mode=local borrows only the next client-machine command, then bash returns to the main pane.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,
@@ -62,7 +63,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     method: 'post',
     path: 'pi://crescent/subagent',
     description:
-      'Decide solo vs multi-agent, then delegate. Each child runs in its own docked subterminal. Parent bash stays on the current pane.',
+      'Gather auxiliary information with a read-only child in its own docked subterminal. Parent bash stays on the main pane. worker and delegate are rejected.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,

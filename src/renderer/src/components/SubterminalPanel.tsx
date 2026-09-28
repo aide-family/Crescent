@@ -175,7 +175,6 @@ export function SubterminalPanel({
   collapsed,
   panelHeight,
   resizeRef,
-  heightResizeRef,
   t,
   executionTerminalId,
   agentBusy,
@@ -190,7 +189,6 @@ export function SubterminalPanel({
   collapsed: boolean
   panelHeight: number
   resizeRef: MutableRefObject<SubterminalResizeState | null>
-  heightResizeRef: MutableRefObject<SubterminalHeightResizeState | null>
   t: Dictionary
   executionTerminalId?: string
   agentBusy?: boolean
@@ -226,31 +224,16 @@ export function SubterminalPanel({
 
   return (
     <div
-      className="shrink-0 border-t border-white/8 bg-[var(--app-terminal-rail)]"
+      className={
+        collapsed
+          ? 'shrink-0 border-t border-white/8 bg-[var(--app-terminal-rail)]'
+          : 'flex min-h-0 shrink-0 flex-col bg-[var(--app-terminal-rail)]'
+      }
       style={{
         height: collapsed ? undefined : panelHeight
       }}
     >
-      {!collapsed && (
-        <div
-          className="h-1 cursor-row-resize bg-transparent outline-none hover:bg-primary/50 focus-visible:bg-primary/50"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label={t.terminal.resizeSubterminalHeight}
-          title={t.terminal.resizeSubterminalHeight}
-          onPointerDown={(event) => {
-            event.preventDefault()
-            event.currentTarget.setPointerCapture(event.pointerId)
-            heightResizeRef.current = {
-              startY: event.clientY,
-              startHeight: panelHeight
-            }
-            document.body.style.cursor = 'row-resize'
-            document.body.style.userSelect = 'none'
-          }}
-        />
-      )}
-      <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
         <div className="min-w-0 truncate text-xs font-medium">
           {t.terminal.temporarySubterminal}{' '}
           <span className="tabular-nums text-muted-foreground">
@@ -301,7 +284,7 @@ export function SubterminalPanel({
         </div>
       </div>
       {!collapsed && (
-        <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
+        <div className="min-h-0 flex-1 overflow-auto p-2">
           <div className="flex h-full min-w-full gap-0">
             {activeTab.subTerminals.map((subterminal, index) => {
               const widths = getSubterminalWidths(activeTab.subTerminals)

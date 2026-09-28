@@ -20,6 +20,8 @@ export interface SkillPromptPart {
 export interface BuildPromptTextInput {
   input: string
   conversationContext?: string
+  /** Durable conclusions and changes. Injected even when the hot session already has messages. */
+  sessionOutline?: string
   terminalContext?: string
   locale?: string
   activeWikiDocs?: SopWikiPromptPart[]
@@ -101,7 +103,7 @@ export function conversationContextForPrompt(
 
 /**
  * Assemble the user-facing prompt for a Pi agent run.
- * Order: language → working style → conversation → terminal → SOP → skills → user input.
+ * Order: language → working style → conversation → session outline → terminal → SOP → skills → user input.
  */
 export function buildPromptText(input: BuildPromptTextInput): string {
   const parts: string[] = []
@@ -110,6 +112,9 @@ export function buildPromptText(input: BuildPromptTextInput): string {
   parts.push(`${buildAgentStyleContract(input.agentStyle ?? DEFAULT_AGENT_STYLE)}\n`)
   if (input.conversationContext?.trim()) {
     parts.push(`# Recent conversation\n${input.conversationContext.trim()}\n`)
+  }
+  if (input.sessionOutline?.trim()) {
+    parts.push(`${input.sessionOutline.trim()}\n`)
   }
   if (input.terminalContext?.trim()) {
     parts.push(`# Current terminal context\n${input.terminalContext.trim()}\n`)

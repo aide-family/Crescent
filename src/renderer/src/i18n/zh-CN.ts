@@ -1,3 +1,5 @@
+import { sessionOutlineMessages } from '../../../shared/session-outline'
+
 const zhCN = {
   app: {
     aiNotReady: 'AI 未就绪',
@@ -618,6 +620,10 @@ const zhCN = {
     compactBusy: '请等当前 Agent 运行结束',
     compactNoSession: '没有可压缩的会话',
     compactFailed: '上下文压缩失败',
+    outlineRecorded: sessionOutlineMessages.zh.recorded,
+    outlineInterruptedRecorded: sessionOutlineMessages.zh.interruptedRecorded,
+    compactDeferred: sessionOutlineMessages.zh.deferred,
+    compactAfterTurn: sessionOutlineMessages.zh.afterTurn,
     sessionLabel: '会话',
     slashConnection: '连接 SSH',
     slashConnectionDescription: '选择已保存的 SSH 连接并登录',

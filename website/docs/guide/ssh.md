@@ -13,6 +13,21 @@ Agent 以当前选中的连接为现场。换一台机器后再提问，后续�
 
 需要并行查看另一台主机时，使用 [子终端与子代理](/guide/subagents) 里的 `open_subterminal`，把专用本地或 SSH 终端停靠出来。
 
+## 流程 {#flow}
+
+```mermaid
+flowchart TD
+  pick["选择本地或已保存连接"] --> open["Main 打开 PTY 或 SSH"]
+  open --> login["登录动作逐行送入"]
+  login --> site["Agent 以当前会话为现场"]
+  other["另一台主机"] --> sub["open_subterminal"]
+  sub --> otherId["另一条已保存的 connectionId"]
+```
+
+选中一条连接后，Main 打开本地 PTY 或 SSH 会话。连接上如果写了登录动作，会按行送进终端。之后的 Agent 命令落在这个会话上。
+
+要同时看另一台主机时，不要对当前这条连接再开一个子终端。`open_subterminal` 的 `mode=ssh` 必须带另一条已经保存的 `connectionId`。
+
 ## 登录动作
 
 自定义连接可以附上登录动作。SSH 启动后，Crescent 按行把这些输入送进终端，一行一条，按你写的顺序执行。适合登录后还要 `sudo -i`、切换目录或进入跳板机内层主机的情况。密码放在环境变量里，不要写进动作文本。

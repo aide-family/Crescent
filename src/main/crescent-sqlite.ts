@@ -17,6 +17,11 @@ import type {
 import type { CrescentMemoryFile } from './crescent-store'
 import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
 import { isAgentStyle, type AgentStyle } from '../shared/agent-style'
+import {
+  emptyOutlineDocument,
+  normalizeOutlineDocument,
+  type SessionOutlineDocument
+} from '../shared/session-outline'
 
 let database: DatabaseSync | undefined
 
@@ -123,6 +128,12 @@ export function initializeCrescentDatabase(): void {
       path_summary TEXT NOT NULL,
       lesson TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_outlines (
+      tab_id TEXT PRIMARY KEY,
+      entries_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
@@ -950,6 +961,40 @@ export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] 
     `
     )
     .all(normalizedTabId) as unknown as StoredAgentLogEntry[]
+}
+
+export function readSessionOutline(tabId: string): SessionOutlineDocument {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return emptyOutlineDocument()
+
+  const row = getDatabase()
+    .prepare('SELECT entries_json AS entriesJson FROM session_outlines WHERE tab_id = ?')
+    .get(normalizedTabId) as { entriesJson?: string } | undefined
+  if (!row?.entriesJson) return emptyOutlineDocument()
+
+  try {
+    return normalizeOutlineDocument(JSON.parse(row.entriesJson) as unknown)
+  } catch {
+    return emptyOutlineDocument()
+  }
+}
+
+export function writeSessionOutline(tabId: string, document: SessionOutlineDocument): void {
+  const normalizedTabId = tabId.trim()
+  if (!normalizedTabId) return
+
+  const updatedAt = new Date().toISOString()
+  getDatabase()
+    .prepare(
+      `
+      INSERT INTO session_outlines (tab_id, entries_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(tab_id) DO UPDATE SET
+        entries_json = excluded.entries_json,
+        updated_at = excluded.updated_at
+    `
+    )
+    .run(normalizedTabId, JSON.stringify(normalizeOutlineDocument(document)), updatedAt)
 }
 
 export function readCommandWhitelistFromDb(): string[] {
