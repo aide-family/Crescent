@@ -30,8 +30,7 @@ import {
   bindPtyBashExecContextClone,
   clearPtyBashExecContext,
   createPtyBashToolDefinition,
-  getPtyBashExecContext,
-  restoreParentBashToMainTab
+  getPtyBashExecContext
 } from './pi-terminal-bash'
 import { openAgentSubterminal, resolveOpenSubterminalParentTabId } from './pi-open-subterminal'
 import {
@@ -57,24 +56,17 @@ export const SUBAGENT_DISCIPLINE = [
   '- Short Q&A, small edit, or a single bash/read',
   '- No remaining docked panes (max 3)',
   '',
-  'If multi-agent: you MUST call the subagent tool. The host binds each child to its own docked subterminal. Parent bash stays on the main pane and keeps working.',
-  'The main terminal keeps executing the user task. Children only gather auxiliary information.',
-  'Never stop the main pane and finish the task only in a subterminal or child agent.',
-  'The main task always finishes on the main terminal pane. The host closes each child pane when that child finishes. Do not keep using a closed child pane; continue on the main pane.',
+  'If multi-agent: you MUST call the subagent tool. The host binds each child to its own docked subterminal; parent bash stays on the current pane.',
+  'The main task always finishes on the main terminal pane. Children are only auxiliary gather, or work that would block the main pane.',
+  'The host closes each child pane when that child finishes. Do not keep using a closed child pane; continue on the main pane.',
   'Never spawn a child to replace a dead or reconnecting main SSH session. Wait for the host to restore the main pane, then retry bash there.',
   'Never fake multi-agent with concurrent bash on one pane.',
-  'Never spawn child agents via open_subterminal alone — that tool is extra panes for THIS agent (local hosts / extra SSH) and does not take over the main task.',
+  'Never spawn child agents via open_subterminal alone — that tool is extra panes for THIS agent (local hosts / extra SSH).',
   '',
   'Parallel tasks[] only for independent read-only work (scout, reviewer, oracle, researcher).',
-  'worker and delegate are rejected. Do not hand implementation or verification to a child.',
+  'Run worker / delegate sequentially — do not parallelize writers.',
   'Children must not spawn further subagents.'
 ].join('\n')
-
-export const SUBAGENT_WRITER_REJECTED_ERROR =
-  'worker and delegate cannot take over the user task. Subagents only gather auxiliary information (scout, researcher, reviewer, oracle). Finish changes and verification with bash on the main terminal.'
-
-export const SUBAGENT_CONTINUE_ON_MAIN =
-  'These findings are auxiliary only. Continue and finish the user task with bash on the main terminal. Do not stop the main pane and finish the task in a subterminal.'
 
 const MAX_CHILD_RESULT_CHARS = 8_000
 
@@ -212,26 +204,23 @@ export function formatSubagentToolResultText(result: {
     }))
   }
   const text = JSON.stringify(compact, null, 2)
-  const body =
-    text.length <= MAX_CHILD_RESULT_CHARS
-      ? text
-      : JSON.stringify(
-          {
-            ok: result.ok,
-            truncated: true,
-            error: result.error ? truncateText(result.error, 200) : 'Result truncated for size.',
-            results: compact.results.map((child) => ({
-              agent: child.agent,
-              pane: child.pane,
-              ok: child.ok,
-              text: child.text ? truncateText(child.text, 200) : undefined,
-              error: child.error ? truncateText(child.error, 120) : undefined
-            }))
-          },
-          null,
-          2
-        ).slice(0, MAX_CHILD_RESULT_CHARS)
-  return `${body}\n\n${SUBAGENT_CONTINUE_ON_MAIN}`
+  if (text.length <= MAX_CHILD_RESULT_CHARS) return text
+  return JSON.stringify(
+    {
+      ok: result.ok,
+      truncated: true,
+      error: result.error ? truncateText(result.error, 200) : 'Result truncated for size.',
+      results: compact.results.map((child) => ({
+        agent: child.agent,
+        pane: child.pane,
+        ok: child.ok,
+        text: child.text ? truncateText(child.text, 200) : undefined,
+        error: child.error ? truncateText(child.error, 120) : undefined
+      }))
+    },
+    null,
+    2
+  ).slice(0, MAX_CHILD_RESULT_CHARS)
 }
 
 function truncateText(value: string, max: number): string {
@@ -244,11 +233,6 @@ export function tasksIncludeWriters(tasks: SubagentTask[]): boolean {
     const profile = resolveSubagentProfile(task.agent)
     return profile ? profileHasWriters(profile) : false
   })
-}
-
-/** Writers would move the user task off the main pane. */
-export function shouldRejectSubagentWriters(tasks: SubagentTask[]): boolean {
-  return tasksIncludeWriters(tasks)
 }
 
 export async function abortChildSessionsForRun(runId: string): Promise<void> {
@@ -309,20 +293,18 @@ export async function createSubagentToolDefinition(
     name: 'subagent',
     label: 'Subagent',
     description: [
-      'Decide solo vs multi-agent first. Multi-agent MUST use this tool: each child gets its own docked subterminal and only gathers auxiliary information. Parent bash stays on the main pane and keeps working.',
+      'Decide solo vs multi-agent first. Multi-agent MUST use this tool: each child gets its own docked subterminal. Parent bash stays on the current pane.',
       'Single: { agent, task }. Parallel: { tasks: [{ agent, task }, ...] } (max 3 panes).',
-      'Agents: scout, researcher, reviewer, oracle. worker and delegate are rejected.',
-      'Use parallel only for independent read-only work. Do not spawn agents via open_subterminal, and do not finish the user task in a child pane.'
+      `Agents: ${SUBAGENT_PROFILE_NAMES.join(', ')}.`,
+      'Use parallel only for independent read-only work. Run worker sequentially. Do not spawn agents via open_subterminal.'
     ].join(' '),
-    promptSnippet:
-      'subagent — gather auxiliary information in a docked subterminal; the main pane keeps the task',
+    promptSnippet: 'subagent — run a focused child agent in a dedicated docked subterminal',
     promptGuidelines: [
       'Before acting, decide solo vs multi-agent. If multi-agent, call subagent — never open_subterminal merely to fan out agents.',
-      'Each child already has its own docked subterminal. Parent bash stays on the main pane and continues the user task.',
-      'Children only gather auxiliary information. Finish the main task on the main pane. The host closes child panes when they finish.',
-      'Never stop the main pane and let a subterminal or child handle the problem.',
+      'Each child already has its own docked subterminal; parent bash stays on the current pane.',
+      'Finish the main task on the main pane. Children are auxiliary; the host closes their panes when they finish.',
       'Never spawn a child to replace a dead main SSH session — wait for host restore, then retry bash on the main pane.',
-      'Call subagent with tasks[] only for independent read-only work (scout, researcher, reviewer, oracle). worker and delegate are rejected.',
+      'Call subagent with tasks[] only for independent read-only workstreams; keep worker sequential.',
       'Never run concurrent bash on the same terminal pane.'
     ],
     parameters,
@@ -353,11 +335,14 @@ async function runSubagentTool(input: {
   const parsed = parseSubagentToolParams(input.params)
   if (!parsed.ok) return { ok: false, results: [], error: parsed.error }
 
-  if (shouldRejectSubagentWriters(parsed.tasks)) {
-    return { ok: false, results: [], error: SUBAGENT_WRITER_REJECTED_ERROR }
+  if (parsed.tasks.length > 1 && tasksIncludeWriters(parsed.tasks)) {
+    return {
+      ok: false,
+      results: [],
+      error:
+        'Parallel tasks[] cannot include writer agents (worker / delegate). Run them sequentially, or use read-only agents only.'
+    }
   }
-
-  restoreParentBashToMainTab(input.parentSessionKey)
 
   const parent = getPtyBashExecContext(input.parentSessionKey)
   if (!parent?.webContents || parent.webContents.isDestroyed()) {
@@ -389,7 +374,7 @@ async function runSubagentTool(input: {
       signal: input.signal
     })
 
-  // Read-only profiles may fan out. Writer profiles are rejected before this point.
+  // Read-only profiles may fan out; writers are already rejected above when parallel.
   const results =
     parsed.tasks.length === 1
       ? [await runOne(parsed.tasks[0], 0)]

@@ -16,22 +16,21 @@ import {
 import { listConnections } from '../connections/ipc'
 import { loadPiAi, type PiSdkFacade } from './pi-sdk'
 import {
-  armParentLocalBashDetour,
   getFailedSshSubterminalConnectionIds,
   getPtyBashExecContext,
   recordFailedSshSubterminalConnection,
-  shouldRerouteParentBashToSubterminal
+  updatePtyBashExecutionTabId
 } from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
-  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用下一条 bash 执行（如 sudo tee -a /etc/hosts）。这条命令结束后 bash 回到主终端。',
+  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
   '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。主机负责恢复主终端；在当前 pane 用 bash。',
-  '- mode=ssh 只打开另一台已保存连接的窗格（不同 connectionId），不把父 bash 搬走。主终端继续当前任务；其他主机上的信息用只读 subagent 去取。',
+  '- mode=ssh 只用于登录另一台已保存连接（不同 connectionId）；不要用子终端逃避当前连接的重连。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
-  '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。同一会话的主排查留在主终端，用一条 bash 合并只读命令。禁止把主任务搬进子终端，禁止对同一 executionTabId 并发写入。',
-  '- open_subterminal 只给当前智能体加窗格，不能用来拉起子智能体；多 agent 必须调用 subagent，且子代理只收集旁路信息。'
+  '- 同一终端禁止并行 bash / 并行键入：一个 pane 同时只能有一条 agent 命令。多路排查必须 open_subterminal 开新子终端后再 bash，禁止对同一 executionTabId 并发写入。',
+  '- open_subterminal 只给当前智能体加窗格，不能用来拉起子智能体；多 agent 必须调用 subagent。'
 ].join('\n')
 
 /** Local panes: soft-succeed on UI ack timeout so bash can still target the pane. */
@@ -305,7 +304,7 @@ export async function openAgentSubterminal(input: {
     return { ok: false, error: 'Agent run was canceled.' }
   }
 
-  const requestedReroute = input.rerouteParentBash !== false
+  const rerouteParentBash = input.rerouteParentBash !== false
   const parentTabId = resolveOpenSubterminalParentTabId(context.executionTabId)
   const health = readTerminalSessionHealth(webContents.id, parentTabId)
   if (shouldBlockToolsWhileMainRestoring(health)) {
@@ -319,13 +318,13 @@ export async function openAgentSubterminal(input: {
       mode,
       connectionId,
       parentConnectionId,
-      rerouteParentBash: requestedReroute,
+      rerouteParentBash,
       mainHealthy
     })
   ) {
     return {
       ok: false,
-      error: requestedReroute ? SAME_CONNECTION_SUBTERMINAL_ERROR : MAIN_TERMINAL_RESTORING_ERROR
+      error: rerouteParentBash ? SAME_CONNECTION_SUBTERMINAL_ERROR : MAIN_TERMINAL_RESTORING_ERROR
     }
   }
   if (
@@ -333,7 +332,7 @@ export async function openAgentSubterminal(input: {
       mode,
       connectionId,
       failedConnectionIds: getFailedSshSubterminalConnectionIds(context.runId),
-      rerouteParentBash: requestedReroute
+      rerouteParentBash
     })
   ) {
     return { ok: false, error: FAILED_SSH_SUBTERMINAL_RETRY_ERROR }
@@ -343,7 +342,9 @@ export async function openAgentSubterminal(input: {
     input.params.name?.trim() ||
     (mode === 'local' ? 'local-hosts' : `ssh-${(connectionId ?? 'remote').slice(0, 24)}`)
 
-  const opened = openTemporarySubterminal(webContents, parentTabId, name)
+  const opened = openTemporarySubterminal(webContents, parentTabId, name, {
+    owner: input.agentName?.trim() || 'agent'
+  })
   if (!opened.ok || !opened.tabId) {
     return {
       ok: false,
@@ -384,7 +385,7 @@ export async function openAgentSubterminal(input: {
   if (!ready.ok) {
     closeTemporarySubterminal(webContents, opened.tabId)
     const canceled = ready.error === 'Agent run was canceled.'
-    if (mode === 'ssh' && connectionId && requestedReroute && !canceled) {
+    if (mode === 'ssh' && connectionId && rerouteParentBash && !canceled) {
       recordFailedSshSubterminalConnection(context.runId, connectionId)
     }
     return {
@@ -397,30 +398,27 @@ export async function openAgentSubterminal(input: {
     }
   }
 
-  const rerouteParentBash = shouldRerouteParentBashToSubterminal({
-    mode,
-    rerouteParentBash: requestedReroute
-  })
   if (rerouteParentBash) {
-    armParentLocalBashDetour(input.sessionKey, opened.tabId)
+    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
+      isSsh: mode === 'ssh',
+      connectionId: mode === 'ssh' ? connectionId : undefined
+    })
   }
 
   const hintParts: string[] = []
   if (rerouteParentBash) {
     hintParts.push(
-      `The next parent bash runs in subterminal "${payload.name}" (${opened.tabId}) for client-machine work only, then returns to the main pane.`
+      `Subsequent bash commands now run in subterminal "${payload.name}" (${opened.tabId}).`
     )
   } else {
     hintParts.push(
-      `Subterminal "${payload.name}" (${opened.tabId}) is ready. Parent bash stays on the main pane. Keep the user's task there.`
+      `Subterminal "${payload.name}" (${opened.tabId}) is ready; parent bash stays on the current pane.`
     )
   }
   hintParts.push(
-    mode === 'local' && rerouteParentBash
-      ? 'Use that next bash for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts). Do not leave the main pane idle afterward.'
-      : mode === 'local'
-        ? 'This pane is auxiliary. Parent bash stays on the main pane.'
-        : 'Do not move the primary task here. Gather information on this other host with a read-only subagent (scout, researcher, reviewer, oracle).'
+    mode === 'local'
+      ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts).'
+      : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands.'
   )
   if (ready.error) hintParts.push(ready.error)
 
@@ -450,20 +448,17 @@ export async function createOpenSubterminalToolDefinition(
     name: 'open_subterminal',
     label: 'Open subterminal',
     description: [
-      'Open a docked subterminal. Parent bash stays on the main pane.',
-      'Use mode=local for one client-machine command (/etc/hosts, local files) when the current pane is remote SSH. That next bash runs there, then returns to the main pane.',
-      'Use mode=ssh with a different saved connectionId to dock another host. It does not move parent bash. Gather extra information with a read-only subagent.',
-      'Never move the user task off the main terminal, and never issue concurrent bash on the same pane.',
-      'Do not only analyze — call this tool then execute on the main pane.'
+      'Open a docked subterminal and route subsequent bash there.',
+      'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
+      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the host restores the main terminal).',
+      'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
+      'Do not only analyze — call this tool then execute.'
     ].join(' '),
-    promptSnippet:
-      'open_subterminal — dock a local or SSH pane without taking over the main terminal',
+    promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
-      'Keep parent bash on the main pane. The main terminal continues the user task.',
-      'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) then one bash. Bash returns to the main pane after that command.',
-      'Use mode=ssh only with a different saved connectionId. It does not route parent bash. Use a read-only subagent to gather information there.',
-      'Never stop the main pane and finish the task only in a subterminal.',
-      'Never run concurrent bash on the same terminal.'
+      'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
+      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the host restores the main terminal.',
+      'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
     parameters,
     executionMode: 'sequential',

@@ -1,3 +1,8 @@
+import type {
+  PlanApprovalRequest,
+  PlanApprovalDecision,
+  PlanProgress
+} from '../shared/execution-plan'
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
@@ -20,6 +25,11 @@ import type {
   AgentPathReference,
   PastedAttachmentInput,
   AgentRunInput,
+  AgentHandoffSessionInput,
+  AgentHandoffStatus,
+  AgentGenerateHandoffInput,
+  AgentGenerateHandoffResult,
+  AgentCancelHandoffInput,
   AgentCompactInput,
   AgentCompactResult,
   AgentSkillInstallEvent,
@@ -51,6 +61,8 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
+  WikiDirectoryInfo,
+  WikiDirectorySelectionResult,
   WikiSaveInput
 } from '../shared/agent-types'
 import type {
@@ -58,6 +70,13 @@ import type {
   AppUpdateStatusEvent,
   AppUpdateVersionResult
 } from '../shared/update-types'
+import type {
+  WhaleModelsSnapshot,
+  WhaleMonitorConfigInput,
+  WhaleMonitorSettings,
+  WhaleMonitorSnapshot,
+  WhaleUsageSnapshot
+} from '../shared/whale-monitor'
 
 // Custom APIs for renderer
 const api = {
@@ -127,9 +146,12 @@ const api = {
     write: (data: string, tabId?: string): void => {
       ipcRenderer.send('terminal:write', { data, tabId })
     },
-    pasteCommand: (command: string, execute = false, tabId?: string): void => {
-      ipcRenderer.send('terminal:paste-command', { command, execute, tabId })
-    },
+    pasteCommand: (
+      command: string,
+      execute = false,
+      tabId?: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('terminal:paste-command', { command, execute, tabId }),
     getContext: (
       tabId?: string
     ): Promise<{
@@ -148,6 +170,15 @@ const api = {
       runtimeExpectedHost?: string
       returnToJumpHost?: boolean
       restoring?: boolean
+      paneRole?: 'main' | 'subterminal'
+      paneId?: string
+      owner?: string
+      executionMode?: 'local' | 'ssh'
+      connectionId?: string
+      connectionName?: string
+      expectedTarget?: string
+      observedHost?: string
+      connectionPhase?: import('../shared/connection-state').ConnectionPhase
     }> => ipcRenderer.invoke('terminal:get-context', { tabId }),
     resize: (dimensions: { cols: number; rows: number; tabId?: string }): void => {
       ipcRenderer.send('terminal:resize', dimensions)
@@ -169,6 +200,8 @@ const api = {
       tabId: string
       host?: string | null
       clusterHostRegex?: string | null
+      connectionId?: string
+      connectionName?: string
     }): Promise<{ ok: boolean; host?: string; error?: string }> =>
       ipcRenderer.invoke('terminal:set-expected-host', options),
     patchClusterHostRegex: (options: {
@@ -328,6 +361,12 @@ const api = {
       ipcRenderer.invoke('agent:list-instruction-files'),
     listWikiDocuments: (): Promise<WikiDocumentSummary[]> =>
       ipcRenderer.invoke('agent:list-wiki-documents'),
+    getWikiDirectory: (): Promise<WikiDirectoryInfo> =>
+      ipcRenderer.invoke('agent:get-wiki-directory'),
+    chooseWikiDirectory: (): Promise<WikiDirectorySelectionResult> =>
+      ipcRenderer.invoke('agent:choose-wiki-directory'),
+    resetWikiDirectory: (): Promise<WikiDirectoryInfo> =>
+      ipcRenderer.invoke('agent:reset-wiki-directory'),
     getWikiDocument: (id: string): Promise<WikiDocument | undefined> =>
       ipcRenderer.invoke('agent:get-wiki-document', id),
     saveWikiDocument: (input: WikiSaveInput): Promise<WikiDocument> =>
@@ -395,6 +434,12 @@ const api = {
       ipcRenderer.invoke('agent:generate-sop', input),
     reloadRuntime: (input?: AgentReloadRuntimeInput): Promise<AgentReloadRuntimeResult> =>
       ipcRenderer.invoke('agent:reload-runtime', input ?? {}),
+    handoffStatus: (input: AgentHandoffSessionInput): Promise<AgentHandoffStatus> =>
+      ipcRenderer.invoke('agent:handoff-status', input),
+    generateHandoff: (input: AgentGenerateHandoffInput): Promise<AgentGenerateHandoffResult> =>
+      ipcRenderer.invoke('agent:generate-handoff', input),
+    cancelHandoff: (input: AgentCancelHandoffInput): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:cancel-handoff', input),
     compact: (input: AgentCompactInput): Promise<AgentCompactResult> =>
       ipcRenderer.invoke('agent:compact', input),
     generateCaptureDraft: (
@@ -412,6 +457,20 @@ const api = {
       ipcRenderer.invoke('agent:reject-approvals-for-tab', tabId),
     supplement: (input: { runId: string; input: string }): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:supplement', input),
+    resolvePlanApproval: (input: PlanApprovalDecision): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('agent:resolve-plan-approval', input),
+    onPlanApprovalRequest: (callback: (request: PlanApprovalRequest) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, request: PlanApprovalRequest): void =>
+        callback(request)
+      ipcRenderer.on('agent:plan-approval-request', listener)
+      return () => ipcRenderer.removeListener('agent:plan-approval-request', listener)
+    },
+    onPlanProgress: (callback: (progress: PlanProgress) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, progress: PlanProgress): void =>
+        callback(progress)
+      ipcRenderer.on('agent:plan-progress', listener)
+      return () => ipcRenderer.removeListener('agent:plan-progress', listener)
+    },
     resolveCommandApproval: (input: CommandApprovalDecision): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('agent:resolve-command-approval', input),
     ackSubterminalOpened: (payload: {
@@ -624,6 +683,24 @@ const api = {
         callback(event)
       ipcRenderer.on('update:status', listener)
       return () => ipcRenderer.removeListener('update:status', listener)
+    }
+  },
+  whaleMonitor: {
+    getSnapshot: (): Promise<WhaleMonitorSnapshot> =>
+      ipcRenderer.invoke('whale-monitor:get-snapshot'),
+    saveSettings: (input: WhaleMonitorConfigInput): Promise<WhaleMonitorSettings> =>
+      ipcRenderer.invoke('whale-monitor:save-settings', input),
+    refreshUsage: (range: { startDate: string; endDate: string }): Promise<WhaleUsageSnapshot> =>
+      ipcRenderer.invoke('whale-monitor:refresh-usage', range),
+    refreshModels: (): Promise<WhaleModelsSnapshot> =>
+      ipcRenderer.invoke('whale-monitor:refresh-models'),
+    setPosition: (position: { x: number; y: number }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('whale-monitor:set-position', position),
+    onSnapshot: (callback: (snapshot: WhaleMonitorSnapshot) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, snapshot: WhaleMonitorSnapshot): void =>
+        callback(snapshot)
+      ipcRenderer.on('whale-monitor:snapshot', listener)
+      return () => ipcRenderer.removeListener('whale-monitor:snapshot', listener)
     }
   }
 }

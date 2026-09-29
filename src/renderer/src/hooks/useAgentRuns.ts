@@ -627,6 +627,7 @@ export function useAgentRuns({
                 name: 'bash',
                 command: event.command || steps[openIndex].command,
                 tabId: event.tabId?.trim() || steps[openIndex].tabId,
+                executionTarget: event.executionTarget ?? steps[openIndex].executionTarget,
                 argsText: undefined
               }
               return { ...run, steps }
@@ -638,7 +639,8 @@ export function useAgentRuns({
               name: 'bash',
               phase: 'started',
               command: event.command,
-              tabId: event.tabId?.trim() || undefined
+              tabId: event.tabId?.trim() || undefined,
+              executionTarget: event.executionTarget
             })
             return { ...run, steps }
           }
@@ -662,6 +664,7 @@ export function useAgentRuns({
                 timedOut: Boolean(event.result?.timedOut),
                 command: existing.command || event.command,
                 tabId: event.tabId?.trim() || existing.tabId,
+                executionTarget: event.executionTarget ?? existing.executionTarget,
                 argsText: undefined
               }
               return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
@@ -681,6 +684,7 @@ export function useAgentRuns({
               timedOut: Boolean(event.result?.timedOut) || Boolean(existing.timedOut),
               command: existing.command || event.command,
               tabId: event.tabId?.trim() || existing.tabId,
+              executionTarget: event.executionTarget ?? existing.executionTarget,
               argsText: undefined
             }
             return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
@@ -696,7 +700,8 @@ export function useAgentRuns({
             isError: event.result ? !event.result.ok : false,
             interrupted: Boolean(event.result?.interrupted),
             timedOut: Boolean(event.result?.timedOut),
-            tabId: event.tabId?.trim() || undefined
+            tabId: event.tabId?.trim() || undefined,
+            executionTarget: event.executionTarget
           })
           return { ...run, steps: coalesceAdjacentPtyToolSteps(steps) }
         })

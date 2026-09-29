@@ -54,6 +54,7 @@ export function AgentLogList({
   onOpenModelSettings,
   onSaveAsSop,
   onInterruptCommand,
+  onFocusTerminal,
   fallbackExecutionTabId,
   captureReadyLogs = [],
   hiddenCaptureReadyLogIds = [],
@@ -91,6 +92,7 @@ export function AgentLogList({
   onOpenModelSettings?: () => void
   onSaveAsSop?: (entry: AgentLogEntry) => void
   onInterruptCommand?: (tabId: string) => void
+  onFocusTerminal?: (tabId: string) => void
   fallbackExecutionTabId?: string
   captureReadyLogs?: Array<{ logId: number; kind: CaptureKind }>
   hiddenCaptureReadyLogIds?: number[]
@@ -261,6 +263,7 @@ export function AgentLogList({
                       onOpenModelSettings={onOpenModelSettings}
                       onSaveAsSop={onSaveAsSop ? () => onSaveAsSop(entry) : undefined}
                       onInterruptCommand={onInterruptCommand}
+                      onFocusTerminal={onFocusTerminal}
                       fallbackExecutionTabId={fallbackExecutionTabId}
                     />
                   </div>

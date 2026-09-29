@@ -1,3 +1,5 @@
+import { normalizeExecutionMode } from '../../shared/execution-plan'
+import { ChangePlanReview } from '@renderer/components/ChangePlanReview'
 import {
   FormEvent,
   KeyboardEvent,
@@ -25,9 +27,10 @@ import { toast, Toaster } from 'sonner'
 import { deferAfterFirstPaint } from '@renderer/lib/defer-after-paint'
 import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 
+import { HandoffDialog } from '@renderer/components/HandoffDialog'
+import { useHandoff } from '@renderer/hooks/useHandoff'
 import { AgentPanel } from '@renderer/components/AgentPanel'
 import { type ComposerInputHandle } from '@renderer/components/ComposerEditor'
-import { AppFooter } from '@renderer/components/AppFooter'
 import {
   CloseTabsConfirmModal,
   type CloseTabsConfirmRequest,
@@ -42,6 +45,8 @@ import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { McpServersSheet } from '@renderer/components/McpServersSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
+import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
+import { ThemeSwitcher } from '@renderer/components/ThemeSwitcher'
 import {
   type SkillInstallLogStatus,
   type SkillManageMessage
@@ -51,6 +56,7 @@ import { HistoryPanel } from '@renderer/components/HistoryPanel'
 import { OnboardingModal } from '@renderer/components/OnboardingModal'
 import { SkillManager, type SkillPreviewState } from '@renderer/components/SkillManager'
 import { WikiSheet } from '@renderer/components/WikiSheet'
+import { WhaleMonitor } from '@renderer/components/WhaleMonitor'
 import { CaptureDraftDialog } from '@renderer/components/CaptureDraftDialog'
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -191,8 +197,13 @@ import {
   type CaptureLogEntry
 } from '@renderer/lib/sop-summary'
 import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
+import {
+  ConnectionLoginQueue,
+  ConnectionLoginQueueTimeout,
+  clusterLoginQueueKey
+} from '@renderer/lib/connection-login-queue'
 import { isAgentProviderEnabled, selectEnabledAgentProvider } from '../../shared/agent-providers'
-import { findNewestPromptSignal } from '../../shared/terminal-prompt-host'
+import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
 import {
   buildConnectionCommands,
   buildConnectionLoginActions,
@@ -299,6 +310,7 @@ import {
 import { decideRootPasswordAutofill } from '@renderer/lib/root-password-autofill'
 import {
   createTerminalTab,
+  toStoredSessionTabs,
   getNextTerminalTitle,
   getSessionChatTab,
   getSessionDisplayTitle,
@@ -365,6 +377,7 @@ import {
   type LocalInstructionDocument,
   type StoredAgentRun,
   type StoredSessionHistoryItem,
+  type WikiDirectoryInfo,
   type WikiDocument,
   type WikiDocumentSummary
 } from '../../shared/agent-types'
@@ -391,7 +404,6 @@ import {
 } from '@renderer/lib/onboarding'
 import { parseCaptureIntent } from '../../shared/capture-intent'
 import { mergeCaptureTraces } from '../../shared/capture-transcript'
-import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -454,6 +466,8 @@ const emptyLocalTab = createTerminalTab({ title: 'Terminal' })
 const CONNECTION_SPAWN_TIMEOUT_MS = 10_000
 /** Hard timeout for the whole login automation (spawn + actions + password wait). */
 const CONNECTION_LOGIN_TOTAL_TIMEOUT_MS = 90_000
+/** Fresh shells can take several seconds to source user startup files. */
+const CONNECTION_SHELL_READY_TIMEOUT_MS = 15_000
 
 /** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs in the renderer too. */
 function connTrace(...parts: unknown[]): void {
@@ -571,6 +585,7 @@ function App({
   const ptyRetryTriedRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
+  const clusterLoginQueueRef = useRef(new ConnectionLoginQueue())
   const skipConnectionReconnectRef = useRef(new Set<string>())
   const skipStoredPasswordTabsRef = useRef(new Set<string>())
   const restoreTerminalSessionRef = useRef<((tabId: string) => Promise<boolean>) | null>(null)
@@ -654,6 +669,7 @@ function App({
   const [instructionContent, setInstructionContent] = useState('')
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [whaleEnabled, setWhaleEnabled] = useState(true)
   const [skillOpen, setSkillOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
   const [mcpOpen, setMcpOpen] = useState(false)
@@ -704,10 +720,10 @@ function App({
     })
   }
   const [sessionUsageBaselineByTabId, setSessionUsageBaselineByTabId] = useState<
-    Record<string, { input: number; output: number }>
+    Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
   >({})
   const [liveSessionUsageByTabId, setLiveSessionUsageByTabId] = useState<
-    Record<string, { input: number; output: number }>
+    Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
   >({})
   const [liveContextUsageByTabId, setLiveContextUsageByTabId] = useState<
     Record<string, { tokens: number | null; contextWindow: number; percent: number | null }>
@@ -715,11 +731,9 @@ function App({
   const [contextCompactingByTabId, setContextCompactingByTabId] = useState<Record<string, boolean>>(
     {}
   )
-  const liveRunUsageRef = useRef(new Map<string, { input: number; output: number }>())
-  const [appVersion, setAppVersion] = useState('')
-  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
-    state: 'idle'
-  })
+  const liveRunUsageRef = useRef(
+    new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  )
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
   const [historyTitleDraft, setHistoryTitleDraft] = useState('')
@@ -728,6 +742,8 @@ function App({
   const [wikiLoading, setWikiLoading] = useState(false)
   const [wikiDocumentLoadingId, setWikiDocumentLoadingId] = useState<string | null>(null)
   const [wikiDocuments, setWikiDocuments] = useState<WikiDocumentSummary[]>([])
+  const [wikiDirectory, setWikiDirectory] = useState<WikiDirectoryInfo | null>(null)
+  const [wikiDirectoryChanging, setWikiDirectoryChanging] = useState(false)
   const [selectedWikiDocument, setSelectedWikiDocument] = useState<WikiDocument | null>(null)
   const [wikiSearchQuery, setWikiSearchQuery] = useState('')
   const [wikiEditing, setWikiEditing] = useState(false)
@@ -834,6 +850,16 @@ function App({
     localTerminalTitle: t.connections.localTerminal,
     providerId: config.providerId
   })
+  const handoff = useHandoff({
+    tabId: sessionChatTab.id,
+    tabIds: tabs.map((tab) => tab.id),
+    busy: sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id]),
+    contextVersion: sessionChatTab.agentLog.length,
+    locale,
+    t,
+    createDraft: createHandoffConversation
+  })
+
   const sessionAgentStyle = resolveSessionAgentStyle(sessionChatTab, config)
   const sessionTokenUsage = addSessionTokenUsage(
     sessionUsageBaselineByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE,
@@ -1206,12 +1232,18 @@ function App({
     if (open) void refreshSessionHistory()
   }
 
-  const refreshWikiDocuments = useCallback(async (): Promise<void> => {
+  const refreshWikiDocuments = useCallback(async (): Promise<boolean> => {
     const startedAt = Date.now()
     setWikiLoading(true)
+    let succeeded = false
     try {
-      const documents = await window.api.agent.listWikiDocuments()
+      const [documents, directory] = await Promise.all([
+        window.api.agent.listWikiDocuments(),
+        window.api.agent.getWikiDirectory()
+      ])
       setWikiDocuments(documents)
+      setWikiDirectory(directory)
+      succeeded = true
       setSelectedWikiDocument((current) =>
         current && documents.some((document) => document.id === current.id) ? current : null
       )
@@ -1227,7 +1259,46 @@ function App({
       }
       setWikiLoading(false)
     }
+    return succeeded
   }, [])
+
+  async function chooseWikiDirectory(): Promise<void> {
+    setWikiDirectoryChanging(true)
+    try {
+      const result = await window.api.agent.chooseWikiDirectory()
+      if (!result.ok) return
+      setWikiDirectory(result.directory)
+      setSelectedWikiDocument(null)
+      setWikiEditing(false)
+      if (!(await refreshWikiDocuments())) return
+      setWikiMessage({
+        type: 'success',
+        text: `${t.wiki.directoryChanged}: ${result.directory.path}`
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWikiMessage({ type: 'error', text: `${t.wiki.directoryChangeFailed}: ${message}` })
+    } finally {
+      setWikiDirectoryChanging(false)
+    }
+  }
+
+  async function resetWikiDirectory(): Promise<void> {
+    setWikiDirectoryChanging(true)
+    try {
+      const directory = await window.api.agent.resetWikiDirectory()
+      setWikiDirectory(directory)
+      setSelectedWikiDocument(null)
+      setWikiEditing(false)
+      if (!(await refreshWikiDocuments())) return
+      setWikiMessage({ type: 'success', text: `${t.wiki.directoryChanged}: ${directory.path}` })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setWikiMessage({ type: 'error', text: `${t.wiki.directoryChangeFailed}: ${message}` })
+    } finally {
+      setWikiDirectoryChanging(false)
+    }
+  }
 
   function setWikiSheetOpen(open: boolean): void {
     setWikiOpen(open)
@@ -1567,7 +1638,7 @@ function App({
     ]
   )
 
-  const executeConnectionAutomation = useCallback(
+  const executeConnectionAutomationNow = useCallback(
     async (
       connection: ConnectionConfig,
       targetTabId: string,
@@ -1674,12 +1745,31 @@ function App({
 
       automatedLoginTabsRef.current.add(targetTabId)
       passwordPromptBuffersRef.current.set(targetTabId, '')
-      void window.api.terminal.setExpectedHost({
-        tabId: targetTabId,
-        host: resolvedConnection.host,
-        clusterHostRegex: resolvedConnection.clusterHostRegex
-      })
       try {
+        // Bind the selected host before sending SSH. Match the 1.0.11 flow:
+        // validating a saved-connection identity here must not silently stop
+        // the login before the SSH command reaches the terminal.
+        const targetBinding = await window.api.terminal.setExpectedHost({
+          tabId: targetTabId,
+          host: resolvedConnection.host,
+          clusterHostRegex: resolvedConnection.clusterHostRegex
+        })
+        connTrace(
+          'expected-host-bind',
+          `tab=${targetTabId}`,
+          `ok=${targetBinding.ok}`,
+          `error=${targetBinding.error ?? '-'}`
+        )
+        if (!targetBinding.ok) {
+          const message = targetBinding.error ?? t.terminal.postLoginTaskAborted
+          appendLog({ kind: 'error', text: message }, chatTabId)
+          updateConnectionAttempt(chatTabId, (state) =>
+            markConnectionFailed(state, { reason: message })
+          )
+          abortPostConnectionTasks(targetTabId, message)
+          return false
+        }
+
         const storedPassword = loginConnection.password || loginConnection.resolvedPassword
         const firstSecret = includeSshNow ? commands[1] : commands[0]
         const hasLeadingAutoPassword = Boolean(storedPassword && firstSecret === storedPassword)
@@ -1706,8 +1796,39 @@ function App({
           // Failed auth/host/login must not auto-retry the same SSH connection on exit.
           skipConnectionReconnectRef.current.add(targetTabId)
           abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
-          void window.api.terminal.setExpectedHost({ tabId: targetTabId, host: null })
           return false
+        }
+        const hasClusterHopAction = commands.some(
+          (command, index) => (!includeSshNow || index > 0) && /^\s*sww\s+\S+/i.test(command)
+        )
+        if (hasClusterHopAction) {
+          // `sww` reports “Switched to context” before it finishes opening the
+          // cluster shell. Do not confirm the earlier jump-host prompt during
+          // that gap; wait for a different remote prompt from the cluster.
+          const hopContext = await window.api.terminal.getContext(targetTabId)
+          const jumpPromptHost =
+            hopContext.jumpPromptHost ??
+            (hopContext.promptHost !== 'local-shell' ? hopContext.promptHost : undefined)
+          if (jumpPromptHost) {
+            const clusterPrompt = await waitForPromptHostOrTimeout(targetTabId, 30_000, {
+              previousHost: jumpPromptHost,
+              acceptAnyRemoteHost: true,
+              clusterHostRegex: loginConnection.clusterHostRegex
+            })
+            connTrace(
+              'cluster-login-stage',
+              `tab=${targetTabId}`,
+              `promptSignal=${clusterPrompt}`,
+              `jump=${jumpPromptHost}`
+            )
+            if (clusterPrompt !== 'host') {
+              const message = `Cluster login action did not leave jump host ${jumpPromptHost}.`
+              appendLog({ kind: 'error', text: message }, chatTabId)
+              skipConnectionReconnectRef.current.add(targetTabId)
+              abortPostConnectionTasks(targetTabId, message)
+              return false
+            }
+          }
         }
         // Wait for the remote prompt to settle, then write the verified login
         // back to the SSOT (learns the observed prompt host as an alias). The
@@ -1717,15 +1838,37 @@ function App({
         // Multi-hop login: the final `ssh <host>` action is the true target.
         // Wait for that host's prompt (not the jump box's) before confirming,
         // otherwise confirm-login anchors the wrong runtime environment.
-        const fullCommands = buildConnectionCommands(loginConnection)
-        const finalTargetHost = resolveFinalSshTarget(fullCommands, connection.host)
         const lastAction = commands.length > 0 ? commands[commands.length - 1] : undefined
         const lastActionIsSsh = Boolean(lastAction && isSshCommandLine(lastAction))
         const preConfirm = await window.api.terminal.getContext(targetTabId)
+        const fullCommands = buildConnectionCommands(loginConnection)
+        const jumpPromptHost = preConfirm.jumpPromptHost ?? liveContext.jumpPromptHost
+        // A configured login action may intentionally hop from the SSH jump
+        // host into the selected cluster (for example `sww bjcdc` lands on a
+        // cluster node). Anchor confirmation to that resulting remote prompt;
+        // otherwise the jump host is confirmed first and the next prompt is
+        // misclassified as drift, causing the terminal to exit and reconnect.
+        const loginActionTargetHost =
+          !lastActionIsSsh &&
+          lastAction &&
+          preConfirm.promptHost &&
+          preConfirm.promptHost !== 'local-shell' &&
+          (!jumpPromptHost || !isPromptHostAligned(preConfirm.promptHost, jumpPromptHost))
+            ? preConfirm.promptHost
+            : undefined
+        const finalTargetHost =
+          loginActionTargetHost ?? resolveFinalSshTarget(fullCommands, connection.host)
         const previousHost =
           lastActionIsSsh && preConfirm.promptHost && preConfirm.promptHost !== 'local-shell'
             ? preConfirm.promptHost
             : undefined
+        connTrace(
+          'login-target',
+          `tab=${targetTabId}`,
+          `target=${finalTargetHost ?? '-'}`,
+          `source=${loginActionTargetHost ? 'login-action' : 'ssh-command'}`,
+          `jump=${jumpPromptHost ?? '-'}`
+        )
         appendSystemToRunOrLog(chatTabId, t.terminal.loginConfirming)
         const loginSignal = await waitForPromptHostOrTimeout(targetTabId, 20_000, {
           expectedHost: finalTargetHost,
@@ -1739,12 +1882,16 @@ function App({
           `promptSignal=${loginSignal}`,
           `promptAfterMs=${Date.now() - promptStart}`
         )
+        if (loginSignal !== 'host') {
+          abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
+          return false
+        }
         const verified = await window.api.terminal.confirmLogin({
           tabId: targetTabId,
           expectedTargetHost: finalTargetHost,
           jumpPromptHost: previousHost
         })
-        if (verified && !verified.ok && loginSignal === 'local') {
+        if (!verified.ok) {
           skipConnectionReconnectRef.current.add(targetTabId)
           abortPostConnectionTasks(
             targetTabId,
@@ -1766,7 +1913,6 @@ function App({
         skipConnectionReconnectRef.current.add(targetTabId)
         appendLog({ kind: 'error', text: message }, chatTabId)
         abortPostConnectionTasks(targetTabId, `${t.terminal.postLoginTaskAborted}\n${message}`)
-        void window.api.terminal.setExpectedHost({ tabId: targetTabId, host: null })
         return false
       } finally {
         automatedLoginTabsRef.current.delete(targetTabId)
@@ -1779,8 +1925,47 @@ function App({
       appendStatusToActiveRunOrLog,
       appendSystemToRunOrLog,
       t,
+      updateConnectionAttempt,
       updateTab
     ]
+  )
+
+  const executeConnectionAutomation = useCallback(
+    async (
+      connection: ConnectionConfig,
+      targetTabId: string,
+      includeSshCommand: boolean
+    ): Promise<boolean> => {
+      const key = clusterLoginQueueKey(connection)
+      if (!key) return executeConnectionAutomationNow(connection, targetTabId, includeSshCommand)
+      const queue = clusterLoginQueueRef.current
+      const chatTabId = resolveSessionChatTabId(tabsRef.current, targetTabId)
+      if (queue.hasPending(key)) {
+        appendLog({ kind: 'status', text: t.terminal.connectionLoginQueued }, chatTabId)
+      }
+      try {
+        return await queue.run(
+          key,
+          async () => {
+            // Closing a queued card must cancel it, not connect in a removed tab.
+            const context = await window.api.terminal.getContext(targetTabId)
+            if (context.mode === 'none') return false
+            return executeConnectionAutomationNow(connection, targetTabId, includeSshCommand)
+          },
+          30_000
+        )
+      } catch (error) {
+        const message =
+          error instanceof ConnectionLoginQueueTimeout
+            ? t.terminal.connectionLoginQueueTimeout
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        appendLog({ kind: 'error', text: message }, chatTabId)
+        return false
+      }
+    },
+    [appendLog, executeConnectionAutomationNow, t]
   )
 
   const executeConnectionCommands = useCallback(
@@ -1809,6 +1994,10 @@ function App({
             terminalExited: false,
             terminalStartError: undefined
           }))
+        } else if (ok === false) {
+          updateConnectionAttempt(chatTabId, (state) =>
+            markConnectionFailed(state, { reason: t.terminal.postLoginTaskAborted })
+          )
         } else if (ok === undefined) {
           // Overall login timeout: settle the pending run (spinner) and the card
           // explicitly. The watcher also picks the error entry up, but do not
@@ -2041,12 +2230,7 @@ function App({
   }, [selectSessionTab])
 
   useEffect(() => {
-    let cancelled = false
-    void window.api.update.getVersion().then((result) => {
-      if (!cancelled) setAppVersion(result.version)
-    })
     const unsubscribe = window.api.update.onStatus((event) => {
-      setAppUpdateStatus(event)
       if (event.state === 'downloaded' && event.installerPath) {
         toast.success(t.app.updateSaved)
       }
@@ -2055,7 +2239,6 @@ function App({
       void window.api.update.check()
     }
     return () => {
-      cancelled = true
       unsubscribe()
     }
   }, [t.app.updateSaved])
@@ -2066,6 +2249,11 @@ function App({
     if (!terminal || !fitAddon) return
     fitAndSyncPty(terminal, fitAddon, activeTabIdRef.current)
   }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(syncActiveTerminalSize, 40)
+    return () => window.clearTimeout(timer)
+  }, [terminalPanePercent, subterminalPanelHeight, syncActiveTerminalSize])
 
   useEffect(() => {
     localStorage.setItem(PANE_ORDER_STORAGE_KEY, paneOrder)
@@ -2299,20 +2487,29 @@ function App({
       window.requestAnimationFrame(() => syncActiveTerminalSize())
     }
     const handlePointerUp = (): void => {
+      const resized = Boolean(
+        splitDragRef.current || subterminalResizeRef.current || subterminalHeightResizeRef.current
+      )
       splitDragRef.current = false
       subterminalResizeRef.current = null
       subterminalHeightResizeRef.current = null
       wikiSheetResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      if (resized) window.requestAnimationFrame(() => syncActiveTerminalSize())
     }
 
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerUp)
+    window.addEventListener('blur', handlePointerUp)
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerUp)
+      window.removeEventListener('blur', handlePointerUp)
+      handlePointerUp()
     }
   }, [paneOrder, resizeSubterminalPair, syncActiveTerminalSize])
 
@@ -2450,9 +2647,18 @@ function App({
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
       if (event.type === 'usage') {
-        const hasTokenDelta = event.input > 0 || event.output > 0
+        const hasTokenDelta =
+          event.input > 0 ||
+          event.output > 0 ||
+          (event.cacheRead ?? 0) > 0 ||
+          (event.cacheWrite ?? 0) > 0
         if (hasTokenDelta || event.contextWindow == null) {
-          const usage = { input: event.input, output: event.output }
+          const usage = {
+            input: event.input,
+            output: event.output,
+            cacheRead: event.cacheRead ?? 0,
+            cacheWrite: event.cacheWrite ?? 0
+          }
           if (event.runId) liveRunUsageRef.current.set(event.runId, usage)
           setLiveSessionUsageByTabId((current) => ({ ...current, [chatTabId]: usage }))
         }
@@ -3414,6 +3620,58 @@ function App({
     return nextConfig
   }
 
+  async function toggleWhaleMonitor(): Promise<void> {
+    try {
+      const current = await window.api.whaleMonitor.getSnapshot()
+      const enabled = !current.settings.enabled
+      await window.api.whaleMonitor.saveSettings({ ...current.settings, enabled })
+      setWhaleEnabled(enabled)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function selectWhaleModel(modelId: string): Promise<void> {
+    const provider =
+      config.providers.find(
+        (candidate) => candidate.id === activeProviderId && candidate.enabled
+      ) ??
+      config.providers.find(
+        (candidate) => candidate.id === config.providerId && candidate.enabled
+      ) ??
+      config.providers.find((candidate) => candidate.enabled)
+    if (!provider) {
+      toast.error(
+        locale === 'en'
+          ? 'Configure an enabled model provider first.'
+          : '请先配置并启用一个模型供应商。'
+      )
+      return
+    }
+    const models = provider.models.some((model) => model.id === modelId)
+      ? provider.models
+      : [...provider.models, { id: modelId, name: modelId, reasoning: false }]
+    try {
+      const nextConfig = await saveAgentConfig({
+        ...config,
+        providerId: provider.id,
+        model: modelId,
+        providers: config.providers.map((candidate) =>
+          candidate.id === provider.id ? { ...candidate, models } : candidate
+        )
+      })
+      updateTab(sessionChatTab.id, (tab) => ({
+        ...tab,
+        providerId: provider.id,
+        model: modelId
+      }))
+      void validateConfig(nextConfig)
+      toast.success(locale === 'en' ? `Selected ${modelId}` : `已选择模型 ${modelId}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   async function openHistorySession(item: StoredSessionHistoryItem): Promise<void> {
     const detail = await window.api.storage.getSessionHistory(item.tabId)
     if (!detail) return
@@ -3450,6 +3708,7 @@ function App({
       terminalCwd: detail.terminalCwd,
       terminalMode: detail.terminalMode ?? 'pty',
       agentStyle: detail.agentStyle,
+      executionMode: normalizeExecutionMode(detail.executionMode),
       terminalReady: false,
       terminalOutput: '',
       agentLog: restoredLogs
@@ -4212,7 +4471,9 @@ function App({
       .saveAgentRun({
         ...run,
         inputTokens: run.inputTokens ?? live?.input,
-        outputTokens: run.outputTokens ?? live?.output
+        outputTokens: run.outputTokens ?? live?.output,
+        cacheReadTokens: run.cacheReadTokens ?? live?.cacheRead,
+        cacheWriteTokens: run.cacheWriteTokens ?? live?.cacheWrite
       })
       .then(async () => {
         if (run.status === 'running') return
@@ -4449,7 +4710,9 @@ function App({
     reconnectingTabsRef.current.add(tabId)
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     appendSystemToRunOrLog(chatTabId, t.terminal.terminalReconnecting)
-    void window.api.terminal.setExpectedHost({ tabId, host: null })
+    if (!tabsRef.current.find((current) => current.id === tabId)?.connectionId) {
+      void window.api.terminal.setExpectedHost({ tabId, host: null })
+    }
 
     try {
       const dimensions =
@@ -4616,6 +4879,7 @@ function App({
         providerId: currentTab.providerId ?? config.providerId,
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
+        executionMode: normalizeExecutionMode(currentTab.executionMode),
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -5089,6 +5353,37 @@ function App({
       agentStyle: config.agentStyle,
       isSsh: false
     })
+    activateNewSession(nextTab, previousChatTabId)
+  }
+
+  async function createHandoffConversation(
+    sourceId: string,
+    goal: string,
+    draft: string
+  ): Promise<void> {
+    if (!tabsRef.current.some((tab) => tab.id === sourceId)) throw new Error('Source closed')
+    const nextTab = createTerminalTab({
+      title: `${t.handoff.prefix}${goal.trim().replace(/\s+/g, ' ').slice(0, 48)}`,
+      providerId: config.providerId,
+      agentStyle: config.agentStyle,
+      isSsh: false,
+      agentInput: draft
+    })
+    // Existing storage contract saves tab metadata; composer text stays in memory.
+    // Do not dismiss the editor or switch tabs until creation has been acknowledged.
+    const saved = await window.api.storage.saveTabs(
+      toStoredSessionTabs([...tabsRef.current, nextTab])
+    )
+    if (!saved?.ok) throw new Error('Could not save conversation')
+    if (!tabsRef.current.some((tab) => tab.id === sourceId)) {
+      await window.api.storage.saveTabs(toStoredSessionTabs(tabsRef.current))
+      throw new Error('Source closed')
+    }
+    activateNewSession(nextTab)
+    requestAnimationFrame(() => agentInputRef.current?.focus())
+  }
+
+  function activateNewSession(nextTab: AgentTerminalTab, previousChatTabId?: string): void {
     // Clear slash residue (e.g. "/") from the previous session before switching away.
     const nextTabs = [
       ...tabsRef.current.map((tab) =>
@@ -5119,30 +5414,6 @@ function App({
     })
   }
 
-  function openConnectionTerminal(connection: ConnectionConfig): void {
-    if (isLocalConnection(connection)) {
-      openLocalTerminal()
-      return
-    }
-
-    const nextTab = createTerminalTab({
-      title: getNextTerminalTitle(connection.name, tabsRef.current),
-      providerId: config.providerId,
-      agentStyle: config.agentStyle,
-      connectionId: connection.id,
-      connectionName: connection.name,
-      isSsh: true
-    })
-
-    pendingSshRef.current.set(nextTab.id, connection)
-    setTabs((current) => {
-      const next = [...current, nextTab]
-      tabsRef.current = next
-      return next
-    })
-    activateTerminalTab(nextTab.id)
-  }
-
   function openConnectionInCurrentSession(connection: ConnectionConfig): void {
     if (isLocalConnection(connection)) {
       const currentTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
@@ -5161,6 +5432,7 @@ function App({
         providerId: currentTab.providerId ?? config.providerId,
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
+        executionMode: normalizeExecutionMode(currentTab.executionMode),
         isSsh: false
       })
       setTabs((current) => {
@@ -5180,6 +5452,39 @@ function App({
     }
 
     void connectToConnection(connection)
+  }
+
+  function openConnectionTerminal(connection: ConnectionConfig): void {
+    if (isLocalConnection(connection)) {
+      openLocalTerminal()
+      return
+    }
+
+    // The terminal lifecycle owns PTY startup and consumes pendingSshRef.
+    // A connection-manager modal can be opened from the chat-only layout, where
+    // TerminalPane is otherwise unmounted and the queued login never starts.
+    setWorkbenchLayout('split')
+    setTerminalPage('terminal')
+
+    const nextTab = createTerminalTab({
+      title: getNextTerminalTitle(connection.name, tabsRef.current),
+      providerId: config.providerId,
+      agentStyle: config.agentStyle,
+      connectionId: connection.id,
+      connectionName: connection.name,
+      isSsh: true
+    })
+
+    // Queue the connection before mounting xterm. The xterm lifecycle consumes
+    // this only after terminal.start() has created the PTY, which is the
+    // ordering used by the 1.0.11 connection flow.
+    pendingSshRef.current.set(nextTab.id, connection)
+    setTabs((current) => {
+      const next = [...current, nextTab]
+      tabsRef.current = next
+      return next
+    })
+    activateTerminalTab(nextTab.id)
   }
 
   async function openLocalSubterminal(): Promise<void> {
@@ -5328,16 +5633,13 @@ function App({
         return
       }
 
-      if (connectionModalOpen) {
-        openConnectionTerminal(connection)
-        setConnectionModalOpen(false)
-        releaseBusy()
-        return
-      }
-
-      setWorkbenchLayout((current) => revealChatFromTerminalLayout(current))
-      setTerminalPage('terminal')
-      void connectToConnection(connection).finally(releaseBusy)
+      // A connection-card click means “open a terminal for this connection”.
+      // Keep each login isolated in its own tab and release the UI guard as
+      // soon as that tab is queued; SSH/authentication must not lock out other
+      // clusters while it waits for a prompt or recovery.
+      openConnectionTerminal(connection)
+      if (connectionModalOpen) setConnectionModalOpen(false)
+      releaseBusy()
     } catch {
       releaseBusy()
     }
@@ -5432,11 +5734,10 @@ function App({
         }
 
         if (connectAfterSave && savedConnection) {
-          // Busy flag already held; open terminal without re-entering the guard.
           if (isLocalConnection(savedConnection)) {
             openLocalTerminal()
           } else {
-            openConnectionTerminal(savedConnection)
+            await openConnectionTerminal(savedConnection)
           }
           setConnectionModalOpen(false)
           resetConnectionForm()
@@ -6676,6 +6977,7 @@ function App({
         terminalContext,
         locale,
         agentStyle: normalizeAgentStyle(sessionAgentStyle),
+        executionMode: normalizeExecutionMode(chatTab?.executionMode),
         activeWikiIds: options.activeWikiIds ?? chatTab?.activeWikiIds ?? [],
         activeSkillPaths:
           options.activeSkillPaths ??
@@ -7884,7 +8186,11 @@ function App({
       wikiDeletingId={wikiDeletingId}
       wikiMessage={wikiMessage}
       wikiPreviewWidth={wikiPreviewWidth}
+      wikiDirectory={wikiDirectory}
+      wikiDirectoryChanging={wikiDirectoryChanging}
       onRefresh={() => void refreshWikiDocuments()}
+      onChooseDirectory={() => void chooseWikiDirectory()}
+      onResetDirectory={() => void resetWikiDirectory()}
       onSearchQueryChange={setWikiSearchQuery}
       onOpenDocument={(document) => void openWikiDocument(document)}
       onStartEdit={() => {
@@ -8007,6 +8313,33 @@ function App({
               {localeOptions.find((option) => option.value === locale)?.shortLabel}
             </span>
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              whaleEnabled
+                ? locale === 'en'
+                  ? 'Hide whale pet'
+                  : '隐藏桌宠'
+                : locale === 'en'
+                  ? 'Show whale pet'
+                  : '显示桌宠'
+            }
+            title={
+              whaleEnabled
+                ? locale === 'en'
+                  ? 'Hide whale pet'
+                  : '隐藏桌宠'
+                : locale === 'en'
+                  ? 'Show whale pet'
+                  : '显示桌宠'
+            }
+            onClick={() => void toggleWhaleMonitor()}
+          >
+            <WhalePetPortrait />
+          </Button>
+          <ThemeSwitcher t={t} />
           <SettingsSheet
             open={sheetOpen}
             onOpenChange={(open) => {
@@ -8174,6 +8507,8 @@ function App({
             onCloseSubterminal={closeSubterminal}
             onCloseAllSubterminals={closeAllSubterminals}
             onOpenLocalSubterminal={() => void openLocalSubterminal()}
+            onResizeSubterminalHeight={setSubterminalPanelHeight}
+            onResizeSubterminalPair={resizeSubterminalPair}
             onInterruptCommand={interruptAgentCommand}
             commandRunning={Boolean(runningCommandTabId)}
             agentBusy={sessionChatTab.agentBusy}
@@ -8195,12 +8530,42 @@ function App({
             aria-label="Resize terminal and chat panes"
             onPointerDown={(event) => {
               event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
               splitDragRef.current = true
               document.body.style.cursor = 'col-resize'
               document.body.style.userSelect = 'none'
             }}
+            onKeyDown={(event) => {
+              const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+              if (!direction) return
+              event.preventDefault()
+              setTerminalPanePercent((current) =>
+                Math.max(
+                  35,
+                  Math.min(
+                    78,
+                    current + (paneOrder === 'terminal-chat' ? direction : -direction) * 2
+                  )
+                )
+              )
+              window.requestAnimationFrame(() => syncActiveTerminalSize())
+            }}
           />
         )}
+        <ChangePlanReview tabId={sessionChatTab.id} t={t} />
+        <HandoffDialog
+          key={sessionChatTab.id}
+          editor={handoff.editor}
+          title={getSessionDisplayTitle(sessionChatTab, tabs)}
+          cwd={handoff.status?.cwd}
+          model={config.model}
+          t={t}
+          onGoal={handoff.setGoal}
+          onDraft={handoff.setDraft}
+          onGenerate={() => void handoff.generate()}
+          onClose={handoff.close}
+          onConfirm={() => void handoff.confirm()}
+        />
         {workbenchLayout !== 'terminal' && (
           <AgentPanel
             sessionChatTab={sessionChatTab}
@@ -8225,6 +8590,10 @@ function App({
             aiState={aiState}
             aiStatusText={aiStatusText}
             modelValidationError={modelValidationError}
+            executionMode={normalizeExecutionMode(sessionChatTab.executionMode)}
+            onExecutionModeChange={(mode) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, executionMode: mode }))
+            }
             agentStyle={sessionAgentStyle}
             onAgentStyleChange={applyConversationStyle}
             thinkingCollapsedByDefault={
@@ -8244,11 +8613,15 @@ function App({
             onExportTrace={(entry) => void exportLogEntryTrace(entry)}
             onExportSessionTrace={() => void exportSessionTrace()}
             onCompactContext={() => void compactCurrentSession()}
+            onHandoff={handoff.open}
+            handoffDisabledReason={handoff.disabledReason}
             compactDisabled={
               sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id])
             }
             sessionInputTokens={sessionTokenUsage.input}
             sessionOutputTokens={sessionTokenUsage.output}
+            sessionCacheReadTokens={sessionTokenUsage.cacheRead}
+            sessionCacheWriteTokens={sessionTokenUsage.cacheWrite}
             contextPercent={sessionContextUsage?.percent}
             contextPending={sessionContextUsage != null && sessionContextUsage.tokens == null}
             onOpsFeedback={(entry, rating) => void submitOpsFeedbackForEntry(entry, rating)}
@@ -8399,6 +8772,28 @@ function App({
               selectSessionTab(tabId)
               setActiveExecutionTerminal(resolveSessionChatTabId(tabsRef.current, tabId), tabId)
             }}
+            onFocusTerminal={(tabId) => {
+              const subterminal = resolveSubterminalTabState(tabsRef.current, tabId)
+              if (subterminal) {
+                selectSessionTab(subterminal.parentTabId)
+                setSubterminalCollapsed(false)
+                if (workbenchLayout === 'chat') persistAndSetWorkbenchLayout('split')
+                window.setTimeout(() => {
+                  document
+                    .querySelector<HTMLElement>(`[data-subterminal-id="${CSS.escape(tabId)}"]`)
+                    ?.querySelector<HTMLElement>('.xterm-helper-textarea')
+                    ?.focus()
+                }, 0)
+                return
+              }
+              selectSessionTab(tabId)
+              if (workbenchLayout === 'chat') persistAndSetWorkbenchLayout('split')
+              window.setTimeout(() => {
+                document
+                  .querySelector<HTMLElement>('.terminal-canvas .xterm-helper-textarea')
+                  ?.focus()
+              }, 0)
+            }}
             onModelChange={applyConversationModel}
             onSubmit={(event) => void submitAgent(event)}
             onInsertSlashCommand={insertSlashCommand}
@@ -8524,29 +8919,12 @@ function App({
         }}
         onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
       />
-      <AppFooter
-        version={appVersion}
-        updateStatus={appUpdateStatus}
-        t={t}
-        onDownloadUpdate={() => {
-          if (appUpdateStatus.state === 'downloading') return
-          setAppUpdateStatus({
-            state: 'downloading',
-            percent: 0,
-            bytesPerSecond: 0,
-            transferred: 0,
-            total: 0
-          })
-          void window.api.update.downloadInstaller().then((result) => {
-            if (!result.ok) {
-              toast.error(result.error || t.settings.updateDownloadFailed)
-              setAppUpdateStatus({
-                state: 'error',
-                message: result.error || t.settings.updateDownloadFailed
-              })
-            }
-          })
-        }}
+      <WhaleMonitor
+        locale={locale}
+        agentBusy={sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id])}
+        selectedModel={activeTabModelId}
+        onEnabledChange={setWhaleEnabled}
+        onSelectModel={selectWhaleModel}
       />
     </main>
   )
@@ -8629,12 +9007,32 @@ async function runConnectionCommandSequence(
   // Paste into a shell that is still sourcing startup files can drop the
   // command: zsh's line editor discards input typed before the first prompt
   // (the PTY still echoes it, which is why the terminal shows the line). Wait
-  // for the shell to be interactive before pasting, then proceed regardless on
-  // timeout so a slow/headless prompt never blocks the login forever.
-  const shellInteractive = await waitForShellInteractive(tabId)
+  // for an actual prompt and never dispatch if startup has not completed.
+  const shellInteractive = await waitForShellInteractive(tabId, CONNECTION_SHELL_READY_TIMEOUT_MS)
   connTrace('login-stage', `tab=${tabId}`, `shellInteractive=${shellInteractive}`)
+  if (!shellInteractive) {
+    const message = t.terminal.connectionShellReadyTimeout.replace(
+      '{ms}',
+      String(Math.round(CONNECTION_SHELL_READY_TIMEOUT_MS / 1000))
+    )
+    appendLog({ kind: 'error', text: message }, logTabId)
+    return false
+  }
 
-  window.api.terminal.pasteCommand(sshCommand, true, tabId)
+  const pasteResult = await window.api.terminal.pasteCommand(sshCommand, true, tabId)
+  connTrace(
+    'ssh-command-dispatch',
+    `tab=${tabId}`,
+    `ok=${pasteResult.ok}`,
+    `error=${pasteResult.error ?? '-'}`
+  )
+  if (!pasteResult.ok) {
+    appendLog(
+      { kind: 'error', text: pasteResult.error || t.terminal.postLoginTaskAborted },
+      logTabId
+    )
+    return false
+  }
 
   if (loginActions.length === 0) return true
 

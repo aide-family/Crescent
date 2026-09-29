@@ -8,23 +8,6 @@ That means:
 - The next step is based on that output, not on a guessed environment.
 - For another host or another context, `open_subterminal` docks a dedicated pane instead of mixing every command into one session.
 
-## Flow {#flow}
-
-```mermaid
-flowchart TD
-  goal["Understand the goal"] --> site["Read the current terminal"]
-  site --> command["Run one command"]
-  command --> review["Command review"]
-  review --> output["Read the real output"]
-  output --> more["Keep checking"]
-  output --> fix["Apply a fix"]
-  output --> summary["Write the conclusion"]
-  site --> sub["Another context"]
-  sub --> dock["open_subterminal"]
-```
-
-A command passes [command review](/en/guide/command-review#flow) before it reaches the terminal. Another host or a separate line of checks should not share the main pane’s PTY. Use [Subterminals and subagents](/en/guide/subagents#flow).
-
 ## Tasks that fit
 
 - Local checks of disk, memory, and services

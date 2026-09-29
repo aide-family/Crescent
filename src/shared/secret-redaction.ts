@@ -40,17 +40,38 @@ export function redactSensitiveData<T>(value: T): T {
 export function redactSensitiveText(text: string): string {
   if (!text) return text
 
-  return text
-    .replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*/gi, `Bearer ${REDACTED}`)
-    .replace(/\bsk-[A-Za-z0-9]{8,}\b/g, REDACTED)
-    .replace(
-      /("?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|client[_-]?secret|password|token)"?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)/gi,
-      `$1"${REDACTED}"`
-    )
-    .replace(
-      /(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=]\s*[^\s,;]+/gi,
-      `$1: ${REDACTED}`
-    )
+  return (
+    text
+      // Also redact incomplete pasted private keys, before any output is truncated.
+      .replace(
+        /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g,
+        REDACTED
+      )
+      .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, REDACTED)
+      .replace(
+        /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b/g,
+        REDACTED
+      )
+      .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:]+:)[^\s@/]+@/gi, `$1${REDACTED}@`)
+      .replace(
+        /(?<![\w.-])((?:["']?[\w.-]{0,80}(?:password|passwd|secret|token|api[_-]?key)[\w.-]{0,40}["']?)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi,
+        `$1"${REDACTED}"`
+      )
+      .replace(
+        /((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=]\s*)[^\r\n]+/gi,
+        `$1${REDACTED}`
+      )
+      .replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*/gi, `Bearer ${REDACTED}`)
+      .replace(/\bsk-[A-Za-z0-9]{8,}\b/g, REDACTED)
+      .replace(
+        /("?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|client[_-]?secret|password|token)"?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)/gi,
+        `$1"${REDACTED}"`
+      )
+      .replace(
+        /(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=]\s*[^\s,;]+/gi,
+        `$1: ${REDACTED}`
+      )
+  )
 }
 
 export function redactSensitiveHeaders(

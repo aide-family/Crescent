@@ -1,0 +1,13 @@
+Third-party animation media notice
+
+The WebM animation clips under ../whale-motions/ are reused from:
+https://github.com/luweiyabo/dsh-whale-pet
+
+That project identifies most bundled animation media as originating from:
+https://github.com/PC2005-cloud/dsh-pet
+
+The media assets are not covered by the code's MIT license. The upstream
+terms permit use in open-source projects, prohibit commercial use, and ask
+derivative projects to include the original project URL when presenting or
+redistributing the work. Keep this notice with the clips and check the
+upstream terms before redistributing them.

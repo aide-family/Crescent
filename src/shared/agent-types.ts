@@ -1,3 +1,4 @@
+import type { ExecutionMode } from './execution-plan'
 import type { AgentStyle } from './agent-style'
 import type { SystemLogLevel } from './log-levels'
 
@@ -204,6 +205,17 @@ export interface WikiSaveInput {
   id?: string
 }
 
+export interface WikiDirectoryInfo {
+  path: string
+  isDefault: boolean
+}
+
+export interface WikiDirectorySelectionResult {
+  ok: boolean
+  canceled?: boolean
+  directory: WikiDirectoryInfo
+}
+
 export interface OperationRecord {
   id: string
   createdAt: string
@@ -257,6 +269,7 @@ export interface AgentRunInput {
   activeSkillPaths?: string[]
   /** Run-scoped working style snapshot so a mid-run config change cannot mix styles. */
   agentStyle?: AgentStyle
+  executionMode?: ExecutionMode
 }
 
 export interface AgentGenerateSopInput {
@@ -400,8 +413,20 @@ export interface TerminalCommandResult {
   environmentDrift?: boolean
   observedHost?: string
   expectedHost?: string
+  code?: 'SSH_TARGET_UNAVAILABLE'
+  connectionPhase?: import('./connection-state').ConnectionPhase
+  recoveryAction?: 'reconnect-or-select-target' | 'wait-for-target-prompt'
   subterminalName?: string
   subterminalTabId?: string
+}
+
+export interface TerminalExecutionTarget {
+  paneRole: 'main' | 'subterminal'
+  paneId: string
+  owner?: string
+  executionMode: 'local' | 'ssh'
+  connectionName?: string
+  expectedTarget?: string
 }
 
 export interface TerminalCommandExecutor {
@@ -606,6 +631,7 @@ export type AgentEvent =
       phase: 'started' | 'finished'
       command: string
       result?: TerminalCommandResult
+      executionTarget?: TerminalExecutionTarget
       elapsedMs?: number
     } & AgentEventMeta)
   | ({ type: 'command-review'; command: string; audit: CommandAuditResult } & AgentEventMeta)
@@ -614,6 +640,8 @@ export type AgentEvent =
       type: 'usage'
       input: number
       output: number
+      cacheRead?: number
+      cacheWrite?: number
       /** Absolute context-window fill; null immediately after compaction. */
       contextTokens?: number | null
       contextWindow?: number
@@ -687,6 +715,7 @@ export interface StoredSessionTab {
   terminalCwd?: string
   terminalMode?: 'pty' | 'pipe'
   agentStyle?: AgentStyle
+  executionMode?: ExecutionMode
 }
 
 export interface StoredAgentLogEntry {
@@ -711,11 +740,15 @@ export interface StoredAgentRun {
   trace?: AgentRunTrace
   inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
 }
 
 export interface SessionTokenUsage {
   input: number
   output: number
+  cacheRead: number
+  cacheWrite: number
 }
 
 export interface SessionContextUsage {
@@ -729,6 +762,52 @@ export interface AgentCompactInput {
   tabId?: string
   instructions?: string
   locale?: string
+}
+
+export interface AgentHandoffSessionInput {
+  sessionKey: string
+  tabId: string
+}
+
+export interface AgentGenerateHandoffInput extends AgentHandoffSessionInput {
+  requestId: string
+  expectedRevision?: string
+  goal: string
+  locale?: string
+}
+
+export interface AgentCancelHandoffInput extends AgentHandoffSessionInput {
+  requestId: string
+}
+
+export type AgentHandoffError =
+  | 'invalid'
+  | 'no_session'
+  | 'empty'
+  | 'busy'
+  | 'canceled'
+  | 'timeout'
+  | 'unavailable'
+  | 'quota'
+  | 'rate_limit'
+  | 'provider'
+  | 'output'
+  | 'stale'
+  | 'throttled'
+
+export interface AgentGenerateHandoffResult {
+  ok: boolean
+  draft?: string
+  revision?: string
+  truncated?: boolean
+  error?: AgentHandoffError
+}
+
+export interface AgentHandoffStatus {
+  available: boolean
+  error?: AgentHandoffError
+  cwd?: string
+  revision?: string
 }
 
 export interface AgentCompactResult {

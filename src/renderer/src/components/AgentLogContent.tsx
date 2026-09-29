@@ -67,6 +67,7 @@ export function AgentLogContent({
   onOpenModelSettings,
   onSaveAsSop,
   onInterruptCommand,
+  onFocusTerminal,
   fallbackExecutionTabId,
   thinkingCollapsedByDefault
 }: {
@@ -91,6 +92,7 @@ export function AgentLogContent({
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
   onInterruptCommand?: (tabId: string) => void
+  onFocusTerminal?: (tabId: string) => void
   fallbackExecutionTabId?: string
   thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
@@ -179,6 +181,7 @@ export function AgentLogContent({
           onOpenModelSettings={onOpenModelSettings}
           onSaveAsSop={onSaveAsSop}
           onInterruptCommand={onInterruptCommand}
+          onFocusTerminal={onFocusTerminal}
           fallbackExecutionTabId={fallbackExecutionTabId}
           thinkingCollapsedByDefault={thinkingCollapsedByDefault}
         />

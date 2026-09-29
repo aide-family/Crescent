@@ -99,3 +99,82 @@
   --app-cyan: #13c2c2;
   --app-shadow: 0 16px 40px rgb(0 0 0 / 28%);
 }
+
+.dark[data-crescent-theme='night-shift'] {
+  --background: #0e110d;
+  --foreground: #e9eee1;
+  --card: #141912;
+  --card-foreground: #e9eee1;
+  --popover: #171d14;
+  --popover-foreground: #e9eee1;
+  --primary: #b8e454;
+  --primary-foreground: #17200b;
+  --secondary: #1d2519;
+  --secondary-foreground: #dfe8d3;
+  --muted: #171d15;
+  --muted-foreground: #9ba891;
+  --accent: color-mix(in oklch, var(--primary) 13%, var(--background));
+  --accent-foreground: #e9eee1;
+  --border: rgb(175 196 143 / 14%);
+  --input: rgb(175 196 143 / 18%);
+  --ring: #b8e454;
+  --app-chrome: #11160f;
+  --app-panel: #121810;
+  --app-panel-strong: #192116;
+  --app-markdown-accent: #b8e454;
+  --app-copper: #b8e454;
+  --app-cyan: #b8e454;
+}
+
+.dark[data-crescent-theme='route-survey'] {
+  --background: #091419;
+  --foreground: #e3eff0;
+  --card: #101d22;
+  --card-foreground: #e3eff0;
+  --popover: #132228;
+  --popover-foreground: #e3eff0;
+  --primary: #34c8c4;
+  --primary-foreground: #062021;
+  --secondary: #17282d;
+  --secondary-foreground: #d7e8e9;
+  --muted: #132126;
+  --muted-foreground: #91aaad;
+  --accent: color-mix(in oklch, var(--primary) 14%, var(--background));
+  --accent-foreground: #e3eff0;
+  --border: rgb(128 183 186 / 15%);
+  --input: rgb(128 183 186 / 19%);
+  --ring: #34c8c4;
+  --app-chrome: #0a171c;
+  --app-panel: #0d1b20;
+  --app-panel-strong: #122329;
+  --app-markdown-accent: #34c8c4;
+  --app-copper: #34c8c4;
+  --app-cyan: #34c8c4;
+}
+
+.dark[data-crescent-theme='ink-signal'] {
+  --background: #101113;
+  --foreground: #efefed;
+  --card: #171819;
+  --card-foreground: #efefed;
+  --popover: #1a1b1d;
+  --popover-foreground: #efefed;
+  --primary: #ff5c56;
+  --primary-foreground: #260c0b;
+  --secondary: #222426;
+  --secondary-foreground: #e5e5e2;
+  --muted: #1b1d1f;
+  --muted-foreground: #a0a3a5;
+  --accent: color-mix(in oklch, var(--primary) 12%, var(--background));
+  --accent-foreground: #efefed;
+  --destructive: #ff7770;
+  --border: rgb(205 210 214 / 15%);
+  --input: rgb(205 210 214 / 19%);
+  --ring: #ff5c56;
+  --app-chrome: #111315;
+  --app-panel: #141618;
+  --app-panel-strong: #1a1c1e;
+  --app-markdown-accent: #ff5c56;
+  --app-copper: #ff5c56;
+  --app-cyan: #77c9bd;
+}

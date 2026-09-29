@@ -9,6 +9,7 @@ import {
 } from '@renderer/components/SubterminalPanel'
 import { TerminalTabBar, type TerminalTabMenuState } from '@renderer/components/TerminalTabBar'
 import { TerminalLockOverlay } from '@renderer/components/TerminalLockOverlay'
+import { TerminalIdentity } from '@renderer/components/TerminalIdentity'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { resolveTerminalDisconnectStrip, type AgentTerminalTab } from '@renderer/lib/terminal-tabs'
@@ -52,6 +53,8 @@ export function TerminalPane({
   onCloseSubterminal,
   onCloseAllSubterminals,
   onOpenLocalSubterminal,
+  onResizeSubterminalHeight,
+  onResizeSubterminalPair,
   onInterruptCommand,
   commandRunning = false,
   agentBusy = false,
@@ -103,6 +106,14 @@ export function TerminalPane({
   onCloseSubterminal: (parentTabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (parentTabId: string) => void
   onOpenLocalSubterminal?: () => void
+  onResizeSubterminalHeight: (height: number) => void
+  onResizeSubterminalPair: (
+    tabId: string,
+    leftId: string,
+    rightId: string,
+    left: number,
+    right: number
+  ) => void
   onInterruptCommand?: (tabId: string) => void
   commandRunning?: boolean
   agentBusy?: boolean
@@ -178,6 +189,9 @@ export function TerminalPane({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex h-7 shrink-0 items-center border-b border-white/8 bg-[var(--app-terminal-rail)] px-2">
+              <TerminalIdentity tabId={activeTabId} t={t} />
+            </div>
             {strip.visible ? (
               <div className="flex shrink-0 items-center gap-2 border-b border-border/70 border-l-2 border-l-primary bg-card px-3 py-1.5 text-xs">
                 {strip.mode === 'connecting' ? (
@@ -229,7 +243,7 @@ export function TerminalPane({
                 ) : null}
               </div>
             ) : null}
-            <div className="relative min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 flex-1">
               <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
               {agentBusy && executionTerminalId === activeTabId ? (
                 <TerminalLockOverlay
@@ -241,31 +255,13 @@ export function TerminalPane({
             </div>
           </div>
         )}
-        {activeTab.subTerminals.length > 0 && !subterminalCollapsed ? (
-          <div
-            className="app-row-resizer shrink-0"
-            role="separator"
-            tabIndex={0}
-            aria-orientation="horizontal"
-            aria-label={t.terminal.resizeSubterminalHeight}
-            title={t.terminal.resizeSubterminalHeight}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.currentTarget.setPointerCapture(event.pointerId)
-              subterminalHeightResizeRef.current = {
-                startY: event.clientY,
-                startHeight: subterminalPanelHeight
-              }
-              document.body.style.cursor = 'row-resize'
-              document.body.style.userSelect = 'none'
-            }}
-          />
-        ) : null}
         <SubterminalPanel
           activeTab={activeTab}
           collapsed={subterminalCollapsed}
           panelHeight={subterminalPanelHeight}
+          layoutWidthPercent={fillWidth ? 100 : widthPercent}
           resizeRef={subterminalResizeRef}
+          heightResizeRef={subterminalHeightResizeRef}
           t={t}
           executionTerminalId={executionTerminalId}
           agentBusy={agentBusy}
@@ -275,6 +271,8 @@ export function TerminalPane({
           onCloseSubterminal={onCloseSubterminal}
           onCloseAllSubterminals={onCloseAllSubterminals}
           onOpenLocalSubterminal={onOpenLocalSubterminal}
+          onResizeHeight={onResizeSubterminalHeight}
+          onResizePair={onResizeSubterminalPair}
         />
       </div>
     </div>
