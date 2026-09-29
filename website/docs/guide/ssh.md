@@ -15,14 +15,7 @@ Agent 以当前选中的连接为现场。换一台机器后再提问，后续�
 
 ## 流程 {#flow}
 
-```mermaid
-flowchart TD
-  pick["选择本地或已保存连接"] --> open["Main 打开 PTY 或 SSH"]
-  open --> login["登录动作逐行送入"]
-  login --> site["Agent 以当前会话为现场"]
-  other["另一台主机"] --> sub["open_subterminal"]
-  sub --> otherId["另一条已保存的 connectionId"]
-```
+<ArchitectureDiagram name="ssh-zh" />
 
 选中一条连接后，Main 打开本地 PTY 或 SSH 会话。连接上如果写了登录动作，会按行送进终端。之后的 Agent 命令落在这个会话上。
 

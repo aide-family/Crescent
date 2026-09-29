@@ -12,20 +12,7 @@ Agent 只使用一组小而可审核的工具：
 
 ## 流程 {#flow}
 
-```mermaid
-flowchart TD
-  tool["Agent 工具"] --> files["read / write / edit"]
-  tool --> bash["bash"]
-  tool --> subterm["open_subterminal"]
-  tool --> subagent["subagent"]
-  tool --> capture["create-skill / create-sop"]
-  files --> workspace["Agent 工作区"]
-  bash --> review["命令审核"]
-  review --> terminal["可见终端"]
-  subterm --> pane["停靠窗格"]
-  subagent --> pane
-  capture --> dialog["确认对话框"]
-```
+<ArchitectureDiagram name="tools-zh" />
 
 文件工具只进入 Agent 工作区。`bash` 先经过 [命令审核](/guide/command-review#flow)，再写入可见终端。`open_subterminal` 和 `subagent` 各自占用一个停靠窗格，说明见 [子终端与子代理](/guide/subagents#flow)。沉淀工具只打开确认对话框，确认后才写入，见 [Skills 与知识库](/guide/skills#flow)。
 

@@ -12,20 +12,7 @@ The Agent runs a small, reviewable tool set:
 
 ## Flow {#flow}
 
-```mermaid
-flowchart TD
-  tool["Agent tool"] --> files["read / write / edit"]
-  tool --> bash["bash"]
-  tool --> subterm["open_subterminal"]
-  tool --> subagent["subagent"]
-  tool --> capture["create-skill / create-sop"]
-  files --> workspace["Agent workspace"]
-  bash --> review["Command review"]
-  review --> terminal["Visible terminal"]
-  subterm --> pane["Docked pane"]
-  subagent --> pane
-  capture --> dialog["Confirm dialog"]
-```
+<ArchitectureDiagram name="tools-en" />
 
 File tools stay inside the Agent workspace. `bash` goes through [command review](/en/guide/command-review#flow) before it is written into the visible terminal. `open_subterminal` and `subagent` each take a docked pane. See [Subterminals and subagents](/en/guide/subagents#flow). Capture tools only open a confirm dialog, and nothing is written until you confirm. See [Skills and knowledge](/en/guide/skills#flow).
 

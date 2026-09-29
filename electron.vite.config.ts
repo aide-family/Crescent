@@ -22,7 +22,11 @@ const piPackages = [
 ]
 
 const RENDERER_ASSET_LIMIT_BYTES = 1024 * 1024
-const LAZY_RENDERER_ASSET_NAMES = [/^assets\/mermaid(?:[.-]|$)/]
+const LAZY_RENDERER_ASSET_NAMES = [
+  /^assets\/mermaid(?:[.-]|$)/,
+  /^assets\/xyflow(?:[.-]|$)/,
+  /^assets\/architecture(?:[.-]|$)/
+]
 
 function posixId(id: string): string {
   return id.replaceAll('\\', '/')
@@ -50,14 +54,25 @@ function rendererManualChunks(id: string): string | undefined {
     }
     if (pkg === 'lucide-react') return 'lucide-vendor'
     if (pkg === 'radix-ui' || pkg.startsWith('@radix-ui/')) return 'radix-vendor'
+    if (pkg === 'recharts') return 'recharts-vendor'
+    if (pkg === '@xyflow/react' || pkg === '@xyflow/system') return 'xyflow-vendor'
     if (pkg === 'd3' || pkg.startsWith('d3-')) return 'd3'
-    // Keep mermaid/katex/cytoscape lazy splits. Packing them undoes diagram code-splitting.
+    // Keep mermaid/katex/cytoscape/xyflow lazy splits. Packing them undoes diagram code-splitting.
     return undefined
   }
 
   const normalized = posixId(id)
   if (normalized.includes('/src/renderer/src/App.tsx')) return 'app-shell'
   if (normalized.includes('/src/renderer/src/i18n/')) return 'i18n'
+  // ChartBlock / ArchitectureBlock load on demand so heavy diagram libs stay out of renderer-ui.
+  if (
+    normalized.includes('/src/renderer/src/components/ChartBlock') ||
+    normalized.includes('/src/renderer/src/components/ui/chart') ||
+    normalized.includes('/src/renderer/src/components/ArchitectureBlock') ||
+    normalized.includes('/src/renderer/src/components/architecture/')
+  ) {
+    return undefined
+  }
   if (normalized.includes('/src/renderer/src/components/')) return 'renderer-ui'
   return undefined
 }

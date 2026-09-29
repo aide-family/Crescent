@@ -14,15 +14,7 @@ Skills describe a stable way of working. The knowledge base keeps the conclusion
 
 ## Flow {#flow}
 
-```mermaid
-flowchart TD
-  call["create-skill or create-sop"] --> request["Request a draft only"]
-  request --> draft["Draft from the session in the background"]
-  draft --> pending["Nothing is written before confirm"]
-  pending --> confirm{"Operator confirms"}
-  confirm -->|"Confirm"| write["Write the Skill directory or wiki"]
-  confirm -->|"Cancel"| stop["Write nothing"]
-```
+<ArchitectureDiagram name="skills-en" />
 
 `create-skill` and `create-sop` do not write files themselves. The host drafts from this session in the background. After the confirm dialog, Main writes the Skill into its directory or the SOP into the knowledge base. Cancelling leaves nothing behind.
 

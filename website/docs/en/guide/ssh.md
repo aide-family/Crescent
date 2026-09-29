@@ -15,14 +15,7 @@ To inspect another host in parallel, use `open_subterminal` from [Subterminals a
 
 ## Flow {#flow}
 
-```mermaid
-flowchart TD
-  pick["Select local or a saved connection"] --> open["Main opens a PTY or SSH"]
-  open --> login["Login actions typed line by line"]
-  login --> site["Agent uses this session as the worksite"]
-  other["Another host"] --> sub["open_subterminal"]
-  sub --> otherId["A different saved connectionId"]
-```
+<ArchitectureDiagram name="ssh-en" />
 
 After you select a connection, Main opens a local PTY or an SSH session. Login actions on that connection are typed in one line at a time. Later Agent commands run in that session.
 

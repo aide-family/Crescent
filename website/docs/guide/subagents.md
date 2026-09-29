@@ -4,17 +4,7 @@
 
 ## 流程 {#flow}
 
-```mermaid
-flowchart TD
-  need["需要另一上下文"] --> kind{"哪条路径"}
-  kind -->|"只加窗格"| open["open_subterminal"]
-  open --> local["mode=local"]
-  open --> ssh["mode=ssh 且另一条 connectionId"]
-  kind -->|"旁路采集"| sub["subagent"]
-  sub --> pane["独占停靠终端"]
-  pane --> readers["只读角色可并行，最多 3 个"]
-  sub --> limit["不能再派生子代理或沉淀"]
-```
+<ArchitectureDiagram name="subagents-zh" />
 
 `open_subterminal` 只给当前 Agent 多开一个窗格。`mode=local` 让下一条 `bash` 在本机执行，然后回到主终端。`mode=ssh` 停靠另一台已保存的主机，不搬走父 `bash`。`subagent` 在自己的停靠终端里收集旁路信息。只读角色可以并行，最多 3 个面板。主机会拒绝 `worker` 和 `delegate`。子代理不能再调用 `subagent`、`open_subterminal`、`create-skill` 或 `create-sop`。
 

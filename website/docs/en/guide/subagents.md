@@ -4,17 +4,7 @@ The main terminal keeps working on the current task. Subterminals only gather ot
 
 ## Flow {#flow}
 
-```mermaid
-flowchart TD
-  need["Need another context"] --> kind{"Which path"}
-  kind -->|"Extra pane only"| open["open_subterminal"]
-  open --> local["mode=local"]
-  open --> ssh["mode=ssh with another connectionId"]
-  kind -->|"Auxiliary gather"| sub["subagent"]
-  sub --> pane["Exclusive docked terminal"]
-  pane --> readers["Read-only profiles in parallel, at most 3"]
-  sub --> limit["Cannot spawn a child or capture"]
-```
+<ArchitectureDiagram name="subagents-en" />
 
 `open_subterminal` only adds a pane for the current Agent. `mode=local` runs the next `bash` on this machine, then `bash` returns to the main pane. `mode=ssh` docks a different saved host and does not move parent `bash`. `subagent` gathers auxiliary information in its own docked terminal. Read-only profiles can run in parallel, up to 3 panes. The host rejects `worker` and `delegate`. A child cannot call `subagent`, `open_subterminal`, `create-skill`, or `create-sop`.
 

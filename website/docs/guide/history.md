@@ -4,15 +4,7 @@
 
 ## 流程 {#flow}
 
-```mermaid
-flowchart TD
-  open["打开历史会话"] --> chat["恢复对话"]
-  chat --> linked{"关联了 SSH"}
-  linked -->|"否"| done["只恢复对话"]
-  linked -->|"是"| exists{"连接仍在"}
-  exists -->|"是"| reconnect["按当前保存的配置重连"]
-  exists -->|"否"| manual["不能自动重连"]
-```
+<ArchitectureDiagram name="history-zh" />
 
 如果那次会话关联了 SSH 连接，Crescent 会重新打开终端，并按**当前保存的连接配置**登录，而不是沿用当时已经过期的密码或临时环境。关联的连接如果已经被删掉，就不能自动重连，需要先在 [SSH 连接](/guide/ssh) 里补回那台主机。
 

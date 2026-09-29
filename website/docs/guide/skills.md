@@ -14,15 +14,7 @@ Skill 描述稳定的做法，知识库留下某次现场的结论和步骤。�
 
 ## 流程 {#flow}
 
-```mermaid
-flowchart TD
-  call["create-skill 或 create-sop"] --> request["只发出草稿请求"]
-  request --> draft["后台根据会话生成"]
-  draft --> pending["确认前不落盘"]
-  pending --> confirm{"操作者确认"}
-  confirm -->|"确认"| write["写入 Skill 目录或 wiki"]
-  confirm -->|"取消"| stop["不写入"]
-```
+<ArchitectureDiagram name="skills-zh" />
 
 `create-skill` 和 `create-sop` 都不直接写文件。宿主根据这次会话在后台生成草稿，确认对话框通过之后，Main 才把 Skill 写入目录，或把 SOP 写入知识库。取消则什么都不留下。
 
