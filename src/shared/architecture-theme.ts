@@ -44,3 +44,8 @@ export const ARCH_COL_GAP = 88
 export const ARCH_ROW_GAP = 40
 /** Outward stub from node border midpoints before the routed edge continues. */
 export const ARCH_PORT_GAP = 24
+
+/** Series palette for ```chart``` blocks — same hue order as architecture kind borders. */
+export const CHART_SERIES_COLORS: readonly string[] = ARCHITECTURE_KIND_ORDER.map(
+  (kind) => ARCHITECTURE_KIND_TONE[kind].border
+)

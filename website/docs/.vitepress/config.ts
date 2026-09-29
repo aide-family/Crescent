@@ -42,6 +42,19 @@ export default withMermaid(
         alias: {
           '@shared': sharedRoot
         }
+      },
+      // String form skips loadTsconfigJsonForFile. Shared sources otherwise pick up the
+      // Electron app tsconfig.node.json which extends @electron-toolkit/tsconfig (not
+      // installed under website/).
+      esbuild: {
+        tsconfigRaw: JSON.stringify({
+          compilerOptions: {
+            target: 'ESNext',
+            module: 'ESNext',
+            experimentalDecorators: false,
+            useDefineForClassFields: true
+          }
+        })
       }
     },
     locales: {

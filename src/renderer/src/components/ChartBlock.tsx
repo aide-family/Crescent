@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import { CheckIcon, CopyIcon, Loader2Icon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { CheckIcon, CopyIcon, DownloadIcon, Loader2Icon, Maximize2Icon, XIcon } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { toast } from 'sonner'
 import {
   Area,
   AreaChart,
@@ -19,10 +21,29 @@ import {
   XAxis
 } from 'recharts'
 
+import {
+  ARCHITECTURE_CANVAS,
+  ARCHITECTURE_GRID,
+  CHART_SERIES_COLORS
+} from '../../../shared/architecture-theme'
 import { parseChartSpec, type ChartSpec } from '../../../shared/chart-spec'
 import type { Dictionary } from '@renderer/i18n'
+import { serializeChartSvgFromHost } from '@renderer/lib/chart-export'
 import { resolveMermaidBlockUiState } from '@renderer/lib/markdown-fence'
+import {
+  exportFeedback,
+  notifyOperationError,
+  saveTextFile
+} from '@renderer/lib/operation-feedback'
+import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import { Button } from '@renderer/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import {
   ChartContainer,
   ChartLegend,
@@ -32,18 +53,14 @@ import {
   type ChartConfig
 } from '@renderer/components/ui/chart'
 
-const CHART_COLORS = [
-  'var(--chart-1)',
-  'var(--chart-2)',
-  'var(--chart-3)',
-  'var(--chart-4)'
-] as const
+const TICK_FILL = 'rgba(238,242,247,0.72)'
 
 const panelStyle = {
   '--background': 'var(--app-markdown-surface-raised)',
   '--foreground': 'var(--app-markdown-text)',
   '--muted-foreground': 'var(--app-markdown-muted)',
-  '--border': 'var(--app-markdown-border)'
+  '--border': 'var(--app-markdown-border)',
+  '--app-diagram-canvas': ARCHITECTURE_CANVAS
 } as CSSProperties
 
 export function ChartBlock({
@@ -62,6 +79,10 @@ export function ChartBlock({
   copied: boolean
 }): React.JSX.Element {
   const [showSource, setShowSource] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const inlineChartHostRef = useRef<HTMLDivElement | null>(null)
+  const expandedChartHostRef = useRef<HTMLDivElement | null>(null)
   const reduceMotion = usePrefersReducedMotion()
   const spec = closed ? parseChartSpec(code) : null
   const uiState = resolveMermaidBlockUiState({
@@ -71,28 +92,107 @@ export function ChartBlock({
     hasError: closed && spec === null
   })
 
-  const body =
+  const closeExpanded = useCallback((): void => {
+    setExpanded(false)
+  }, [])
+
+  const expandedOverlayRef = useAppModalA11y(expanded, {
+    onEscape: closeExpanded,
+    panelRef
+  })
+
+  function captureExportSvg(): { svg: string; width: number; height: number } {
+    const host =
+      (expanded ? expandedChartHostRef.current : null) ??
+      inlineChartHostRef.current ??
+      expandedChartHostRef.current
+    if (!host) {
+      throw new Error('Chart is not ready to export.')
+    }
+    const serialized = serializeChartSvgFromHost(host)
+    if (!serialized) {
+      throw new Error('Chart SVG was not found.')
+    }
+    return serialized
+  }
+
+  async function exportSvg(): Promise<void> {
+    if (!spec) return
+    const feedback = exportFeedback(t)
+    try {
+      const { svg } = captureExportSvg()
+      await saveTextFile(
+        svg.startsWith('<?xml') ? svg : `<?xml version="1.0" encoding="UTF-8"?>\n${svg}`,
+        buildChartFilename('svg'),
+        'image/svg+xml;charset=utf-8',
+        feedback,
+        [{ name: 'SVG image', extensions: ['svg'] }]
+      )
+    } catch (error) {
+      notifyOperationError(feedback.failed, error)
+    }
+  }
+
+  async function exportPng(): Promise<void> {
+    if (!spec) return
+    const feedback = exportFeedback(t)
+    try {
+      const { svg, width, height } = captureExportSvg()
+      const result = await window.api.agent.saveSvgAsPng({
+        svg,
+        defaultPath: buildChartFilename('png'),
+        width,
+        height
+      })
+      if (result.canceled) {
+        toast.info(feedback.canceled ?? feedback.failed)
+        return
+      }
+      if (!result.ok) throw new Error(result.error || 'Failed to write PNG file.')
+      toast.success(feedback.success)
+    } catch (error) {
+      notifyOperationError(feedback.failed, error)
+    }
+  }
+
+  const exportMenu =
     uiState === 'ready' && spec ? (
-      <div className="flex min-w-0 flex-col gap-2 p-3">
-        {spec.title || spec.unit ? (
-          <div className="flex min-w-0 items-baseline justify-between gap-3">
-            {spec.title ? (
-              <span className="min-w-0 truncate text-xs font-medium text-[var(--app-markdown-text)]">
-                {spec.title}
-              </span>
-            ) : (
-              <span />
-            )}
-            {spec.unit ? (
-              <span className="shrink-0 text-[11px] text-[var(--app-markdown-muted)]">
-                {spec.unit}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        <ResultChart spec={spec} reduceMotion={reduceMotion} />
-        {showSource ? <ChartSource code={code} /> : null}
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="select-none"
+            aria-label={t.common.exportDiagram}
+            title={t.common.exportDiagram}
+          >
+            <DownloadIcon aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuGroup>
+            <DropdownMenuItem onSelect={() => void exportSvg()}>
+              {t.common.exportSvg}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void exportPng()}>
+              {t.common.exportPng}
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : null
+
+  const chartBody =
+    uiState === 'ready' && spec ? (
+      <ChartPanelBody
+        hostRef={inlineChartHostRef}
+        spec={spec}
+        code={code}
+        showSource={showSource}
+        reduceMotion={reduceMotion}
+        tall={false}
+      />
     ) : uiState === 'generating' ? (
       <div className="flex flex-col gap-2 p-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -118,21 +218,38 @@ export function ChartBlock({
     )
 
   return (
-    <div className="app-mermaid-panel min-w-0 rounded-lg border" style={panelStyle}>
-      <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b pr-1 pl-3">
+    <div
+      className="app-mermaid-panel app-architecture-panel min-w-0 rounded-lg border"
+      style={panelStyle}
+    >
+      <div className="app-code-panel-header app-sticky-nested relative z-20 flex min-w-0 items-center justify-between gap-2 border-b bg-[var(--app-terminal-rail)] pr-1 pl-3">
         <span className="app-code-panel-lang min-w-0 truncate">chart</span>
-        <div className="flex shrink-0 items-center gap-1">
-          {uiState === 'ready' ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="h-6 px-2 text-[11px]"
-              aria-pressed={showSource}
-              onClick={() => setShowSource((current) => !current)}
-            >
-              {t.common.chartSourceToggle}
-            </Button>
+        <div className="relative z-20 flex shrink-0 items-center gap-1">
+          {uiState === 'ready' && spec ? (
+            <>
+              {exportMenu}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                className="select-none"
+                aria-label={t.common.enlarge}
+                title={t.common.enlarge}
+                onClick={() => setExpanded(true)}
+              >
+                <Maximize2Icon aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="h-6 px-2 text-[11px]"
+                aria-pressed={showSource}
+                onClick={() => setShowSource((current) => !current)}
+              >
+                {t.common.chartSourceToggle}
+              </Button>
+            </>
           ) : null}
           <Button
             type="button"
@@ -148,27 +265,131 @@ export function ChartBlock({
           </Button>
         </div>
       </div>
-      {body}
+      {chartBody}
+      {expanded && spec
+        ? createPortal(
+            <div
+              ref={expandedOverlayRef}
+              className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain"
+              style={panelStyle}
+            >
+              <div
+                ref={panelRef}
+                className="flex min-h-0 flex-1 flex-col"
+                role="dialog"
+                aria-modal="true"
+                aria-label={spec.title || 'chart'}
+              >
+                <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+                    chart{spec.title ? ` · ${spec.title}` : ''}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {exportMenu}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t.common.close}
+                      title={t.common.close}
+                      onClick={closeExpanded}
+                    >
+                      <XIcon aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto p-4">
+                  <ChartPanelBody
+                    hostRef={expandedChartHostRef}
+                    spec={spec}
+                    code={code}
+                    showSource={false}
+                    reduceMotion={reduceMotion}
+                    tall
+                  />
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  )
+}
+
+function ChartPanelBody({
+  hostRef,
+  spec,
+  code,
+  showSource,
+  reduceMotion,
+  tall
+}: {
+  hostRef: React.RefObject<HTMLDivElement | null>
+  spec: ChartSpec
+  code: string
+  showSource: boolean
+  reduceMotion: boolean
+  tall: boolean
+}): React.JSX.Element {
+  return (
+    <div className={`flex min-w-0 flex-col gap-2 ${tall ? 'h-full' : 'p-3'}`}>
+      {spec.title || spec.unit ? (
+        <div className="flex min-w-0 items-baseline justify-between gap-3">
+          {spec.title ? (
+            <span className="min-w-0 truncate text-xs font-medium text-[var(--app-markdown-text)]">
+              {spec.title}
+            </span>
+          ) : (
+            <span />
+          )}
+          {spec.unit ? (
+            <span className="shrink-0 text-[11px] text-[var(--app-markdown-muted)]">
+              {spec.unit}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      <div
+        ref={hostRef}
+        className={`overflow-hidden rounded-md border border-[var(--app-markdown-border)] ${
+          tall ? 'min-h-[60vh] flex-1' : ''
+        }`}
+        style={{ background: ARCHITECTURE_CANVAS }}
+      >
+        <div className={tall ? 'flex h-full min-h-[60vh] items-center p-4' : 'p-2'}>
+          <ResultChart spec={spec} reduceMotion={reduceMotion} tall={tall} />
+        </div>
+      </div>
+      {showSource ? <ChartSource code={code} /> : null}
     </div>
   )
 }
 
 function ResultChart({
   spec,
-  reduceMotion
+  reduceMotion,
+  tall = false
 }: {
   spec: ChartSpec
   reduceMotion: boolean
+  tall?: boolean
 }): React.JSX.Element {
   const rows = useMemo(() => toChartRows(spec), [spec])
   const config = useMemo(() => toChartConfig(spec), [spec])
   const sliceRows = useMemo(() => toSliceRows(spec), [spec])
   const sliceConfig = useMemo(() => toSliceConfig(spec), [spec])
   const multiple = spec.series.length > 1
+  const squareClass = tall
+    ? 'mx-auto aspect-square max-h-[min(70vh,520px)] w-full'
+    : 'mx-auto aspect-square max-h-[250px]'
+  const cartesianClass = tall
+    ? 'aspect-auto h-[min(70vh,480px)] w-full'
+    : 'aspect-auto h-[200px] w-full'
 
   if (spec.type === 'pie') {
     return (
-      <ChartContainer config={sliceConfig} className="mx-auto aspect-square max-h-[250px]">
+      <ChartContainer config={sliceConfig} className={squareClass}>
         <PieChart>
           <ChartTooltip
             cursor={false}
@@ -182,7 +403,7 @@ function ResultChart({
 
   if (spec.type === 'radial') {
     return (
-      <ChartContainer config={sliceConfig} className="mx-auto aspect-square max-h-[250px]">
+      <ChartContainer config={sliceConfig} className={squareClass}>
         <RadialBarChart data={sliceRows} innerRadius={30} outerRadius={110}>
           <ChartTooltip
             cursor={false}
@@ -196,11 +417,11 @@ function ResultChart({
 
   if (spec.type === 'radar') {
     return (
-      <ChartContainer config={config} className="mx-auto aspect-square max-h-[250px]">
+      <ChartContainer config={config} className={squareClass}>
         <RadarChart data={rows}>
           <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-          <PolarGrid />
-          <PolarAngleAxis dataKey="category" />
+          <PolarGrid stroke={ARCHITECTURE_GRID} />
+          <PolarAngleAxis dataKey="category" tick={{ fill: TICK_FILL, fontSize: 11 }} />
           {multiple ? <ChartLegend content={<ChartLegendContent />} /> : null}
           {spec.series.map((_, index) => {
             const key = seriesKey(index)
@@ -227,18 +448,20 @@ function ResultChart({
       tickMargin={spec.type === 'bar' ? 10 : 8}
       interval={spec.categories.length <= 8 ? 0 : 'preserveStartEnd'}
       tickFormatter={formatCategoryTick}
+      tick={{ fill: TICK_FILL, fontSize: 11 }}
     />
   )
   const tooltip = (
     <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel={!multiple} />} />
   )
   const legend = multiple ? <ChartLegend content={<ChartLegendContent />} /> : null
+  const grid = <CartesianGrid vertical={false} stroke={ARCHITECTURE_GRID} />
 
   if (spec.type === 'area') {
     return (
-      <ChartContainer config={config} className="aspect-auto h-[200px] w-full">
+      <ChartContainer config={config} className={cartesianClass}>
         <AreaChart accessibilityLayer data={rows} margin={chartMargin}>
-          <CartesianGrid vertical={false} />
+          {grid}
           {categoryAxis}
           {tooltip}
           {legend}
@@ -264,9 +487,9 @@ function ResultChart({
 
   if (spec.type === 'line') {
     return (
-      <ChartContainer config={config} className="aspect-auto h-[200px] w-full">
+      <ChartContainer config={config} className={cartesianClass}>
         <LineChart accessibilityLayer data={rows} margin={chartMargin}>
-          <CartesianGrid vertical={false} />
+          {grid}
           {categoryAxis}
           {tooltip}
           {legend}
@@ -290,9 +513,9 @@ function ResultChart({
   }
 
   return (
-    <ChartContainer config={config} className="aspect-auto h-[200px] w-full">
+    <ChartContainer config={config} className={cartesianClass}>
       <BarChart accessibilityLayer data={rows}>
-        <CartesianGrid vertical={false} />
+        {grid}
         {categoryAxis}
         {tooltip}
         {legend}
@@ -372,7 +595,7 @@ function toSliceConfig(spec: ChartSpec): ChartConfig {
 }
 
 function chartColor(index: number): string {
-  return CHART_COLORS[index % CHART_COLORS.length] ?? CHART_COLORS[0]
+  return CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length] ?? CHART_SERIES_COLORS[0]!
 }
 
 function seriesKey(index: number): string {
@@ -381,6 +604,11 @@ function seriesKey(index: number): string {
 
 function formatCategoryTick(value: string): string {
   return value.length > 12 ? `${value.slice(0, 11)}…` : value
+}
+
+function buildChartFilename(extension: 'svg' | 'png'): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  return `crescent-chart-${stamp}.${extension}`
 }
 
 function usePrefersReducedMotion(): boolean {
