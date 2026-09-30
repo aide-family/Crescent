@@ -62,7 +62,9 @@ export function parseAgentSessionTrace(value: unknown): AgentSessionTrace | unde
     record.usage && typeof record.usage === 'object'
       ? {
           input: readUsageCount((record.usage as { input?: unknown }).input),
-          output: readUsageCount((record.usage as { output?: unknown }).output)
+          output: readUsageCount((record.usage as { output?: unknown }).output),
+          cacheRead: readUsageCount((record.usage as { cacheRead?: unknown }).cacheRead),
+          cacheWrite: readUsageCount((record.usage as { cacheWrite?: unknown }).cacheWrite)
         }
       : { ...EMPTY_SESSION_TOKEN_USAGE }
 
@@ -96,7 +98,9 @@ function sumStoredRunUsage(runs: StoredAgentRun[]): SessionTokenUsage {
   return runs.reduce(
     (total, run) => ({
       input: total.input + (run.inputTokens ?? 0),
-      output: total.output + (run.outputTokens ?? 0)
+      output: total.output + (run.outputTokens ?? 0),
+      cacheRead: total.cacheRead + (run.cacheReadTokens ?? 0),
+      cacheWrite: total.cacheWrite + (run.cacheWriteTokens ?? 0)
     }),
     { ...EMPTY_SESSION_TOKEN_USAGE }
   )

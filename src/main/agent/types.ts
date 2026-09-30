@@ -80,5 +80,7 @@ export type {
   ToolCatalogEntry,
   WikiDocument,
   WikiDocumentSummary,
+  WikiDirectoryInfo,
+  WikiDirectorySelectionResult,
   WikiSaveInput
 } from '../../shared/agent-types'

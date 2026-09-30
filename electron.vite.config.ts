@@ -24,6 +24,7 @@ const piPackages = [
 const RENDERER_ASSET_LIMIT_BYTES = 1024 * 1024
 const LAZY_RENDERER_ASSET_NAMES = [
   /^assets\/mermaid(?:[.-]|$)/,
+  /^assets\/.*\.webm$/,
   /^assets\/xyflow(?:[.-]|$)/,
   /^assets\/architecture(?:[.-]|$)/
 ]

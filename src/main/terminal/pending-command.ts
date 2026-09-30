@@ -40,6 +40,7 @@ export interface CreatePendingCommandControllerInput {
   continuationPromptTimeoutMs?: number
   secretPromptTimeoutMs?: number
   interruptSession: () => void
+  onTimeout?: () => void
   display?: (message: string) => void
   hasUnterminatedSecretPrompt?: (buffer: string) => boolean
   hasShellContinuationPrompt?: (buffer: string) => boolean
@@ -129,6 +130,7 @@ export function createPendingCommandController(
   const interruptForTimeout = (message: string, display?: string): void => {
     if (settled) return
     timeoutTriggered = true
+    input.onTimeout?.()
     if (display) input.display?.(display)
     input.interruptSession()
     interruptGraceTimeout = timers.setTimeout(() => {
@@ -248,11 +250,10 @@ export function createPendingCommandController(
       command: input.command,
       mode: input.mode,
       cwd: input.cwd,
-      exitCode: event.exitCode,
       output: input.extractPartialCommandOutput(buffer, input.startMarker),
       error: timeoutTriggered
-        ? `${buildTimeoutCommandError(input.timeoutMs)} Exit code: ${event.exitCode}.`
-        : `Terminal session exited while the command was running. Exit code: ${event.exitCode}.`,
+        ? `${buildTimeoutCommandError(input.timeoutMs)} Terminal exit code: ${event.exitCode}.`
+        : `Terminal session exited before the command completion marker (terminal exit code ${event.exitCode}).`,
       timedOut: timeoutTriggered || undefined,
       terminalExited: true
     })

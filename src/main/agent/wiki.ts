@@ -3,18 +3,23 @@ import { basename, join, resolve } from 'path'
 
 import type { WikiDocument, WikiDocumentSummary, WikiSaveInput } from './types'
 import { getCrescentWikiDir } from '../crescent-paths'
+import { readWikiDirectory } from '../crescent-store'
 
-const WIKI_DIR = getCrescentWikiDir()
 const LEGACY_PROJECT_WIKI_DIR = resolve(process.cwd(), 'wiki')
 const MAX_WIKI_CONTEXT_CHARS = 12_000
 
+export function getActiveWikiDirectory(): string {
+  return readWikiDirectory() ?? getCrescentWikiDir()
+}
+
 export async function listWikiDocuments(): Promise<WikiDocumentSummary[]> {
-  await ensureWikiDir()
-  const entries = await fs.readdir(WIKI_DIR, { withFileTypes: true })
+  const wikiDir = getActiveWikiDirectory()
+  await ensureWikiDir(wikiDir)
+  const entries = await fs.readdir(wikiDir, { withFileTypes: true })
   const documents = await Promise.all(
     entries
       .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
-      .map((entry) => readWikiDocumentByFilename(entry.name))
+      .map((entry) => readWikiDocumentByFilename(entry.name, wikiDir))
   )
 
   return documents
@@ -33,32 +38,34 @@ export async function getWikiDocument(id: string): Promise<WikiDocument | undefi
   const filename = idToFilename(id)
   if (!filename) return undefined
 
-  return readWikiDocumentByFilename(filename)
+  return readWikiDocumentByFilename(filename, getActiveWikiDirectory())
 }
 
 export async function saveWikiDocument(input: WikiSaveInput): Promise<WikiDocument> {
-  await ensureWikiDir()
+  const wikiDir = getActiveWikiDirectory()
+  await ensureWikiDir(wikiDir)
   const title = input.title.trim() || 'Untitled SOP'
   const id = input.id?.trim() || createWikiId(title)
   const filename = idToFilename(id) || `${createWikiId(title)}.md`
-  const path = join(WIKI_DIR, filename)
+  const path = join(wikiDir, filename)
   const content = normalizeWikiContent(title, input.content)
 
   await fs.writeFile(path, content, 'utf-8')
 
-  const document = await readWikiDocumentByFilename(filename)
+  const document = await readWikiDocumentByFilename(filename, wikiDir)
   if (!document) throw new Error(`Failed to save wiki document: ${filename}`)
 
   return document
 }
 
 export async function deleteWikiDocument(id: string): Promise<{ ok: boolean }> {
-  await ensureWikiDir()
+  const wikiDir = getActiveWikiDirectory()
+  await ensureWikiDir(wikiDir)
   const filename = idToFilename(id)
   if (!filename) return { ok: false }
 
   try {
-    await fs.unlink(join(WIKI_DIR, filename))
+    await fs.unlink(join(wikiDir, filename))
     return { ok: true }
   } catch (error) {
     if (isErrorWithCode(error) && error.code === 'ENOENT') return { ok: false }
@@ -71,8 +78,9 @@ export async function searchWikiDocuments(
   limit = 5,
   maxChars = MAX_WIKI_CONTEXT_CHARS
 ): Promise<WikiDocument[]> {
+  const wikiDir = getActiveWikiDirectory()
   const documents = await Promise.all(
-    (await listWikiDocuments()).map((summary) => getWikiDocument(summary.id))
+    (await listWikiDocuments()).map((summary) => readWikiDocumentByFilename(summary.id, wikiDir))
   )
   const terms = tokenizeQuery(query)
 
@@ -100,11 +108,14 @@ export function formatWikiContext(documents: WikiDocument[]): string {
     .join('\n\n---\n\n')
 }
 
-async function readWikiDocumentByFilename(filename: string): Promise<WikiDocument | undefined> {
+async function readWikiDocumentByFilename(
+  filename: string,
+  wikiDir: string
+): Promise<WikiDocument | undefined> {
   const safeFilename = idToFilename(filename)
   if (!safeFilename) return undefined
 
-  const path = join(WIKI_DIR, safeFilename)
+  const path = join(wikiDir, safeFilename)
 
   try {
     const [stat, content] = await Promise.all([fs.stat(path), fs.readFile(path, 'utf-8')])
@@ -124,13 +135,13 @@ async function readWikiDocumentByFilename(filename: string): Promise<WikiDocumen
   }
 }
 
-async function ensureWikiDir(): Promise<void> {
-  await fs.mkdir(WIKI_DIR, { recursive: true })
-  await migrateLegacyProjectWikiDir()
+async function ensureWikiDir(wikiDir: string): Promise<void> {
+  await fs.mkdir(wikiDir, { recursive: true })
+  if (wikiDir === getCrescentWikiDir()) await migrateLegacyProjectWikiDir(wikiDir)
 }
 
-async function migrateLegacyProjectWikiDir(): Promise<void> {
-  if (LEGACY_PROJECT_WIKI_DIR === WIKI_DIR) return
+async function migrateLegacyProjectWikiDir(wikiDir: string): Promise<void> {
+  if (LEGACY_PROJECT_WIKI_DIR === wikiDir) return
 
   let entries
   try {
@@ -147,7 +158,7 @@ async function migrateLegacyProjectWikiDir(): Promise<void> {
         const filename = idToFilename(entry.name)
         if (!filename) return
 
-        const targetPath = join(WIKI_DIR, filename)
+        const targetPath = join(wikiDir, filename)
         try {
           await fs.copyFile(
             join(LEGACY_PROJECT_WIKI_DIR, entry.name),

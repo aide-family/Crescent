@@ -1,5 +1,7 @@
+import { normalizeExecutionMode, type ExecutionMode } from '../../../shared/execution-plan'
 import type {
   AgentConfig,
+  TerminalExecutionTarget,
   AgentModelOption,
   AgentPathReference,
   AgentSkillOption,
@@ -104,9 +106,18 @@ export type AgentRunStep =
       isError?: boolean
       interrupted?: boolean
       timedOut?: boolean
+      executionId?: string
+      lifecycle?:
+        | 'blocked-before-dispatch'
+        | 'completed'
+        | 'interrupted'
+        | 'timed-out'
+        | 'completion-unknown'
+      dispatchPending?: boolean
       toolCallId?: string
       /** Terminal pane where this PTY command is running. */
       tabId?: string
+      executionTarget?: TerminalExecutionTarget
       seq?: number
     }
   | {
@@ -162,6 +173,7 @@ export interface AgentTerminalTab {
   model?: string
   /** Per-session working style; unset falls back to config.agentStyle. */
   agentStyle?: AgentStyle
+  executionMode?: ExecutionMode
   connectionId?: string
   connectionName?: string
   isSsh: boolean
@@ -302,6 +314,7 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     providerId: input?.providerId,
     model: input?.model,
     agentStyle: input?.agentStyle,
+    executionMode: normalizeExecutionMode(input?.executionMode),
     connectionId: input?.connectionId,
     connectionName: input?.connectionName,
     isSsh: input?.isSsh ?? false,
@@ -407,6 +420,7 @@ export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[
     isSsh: tab.isSsh,
     terminalCwd: tab.terminalCwd,
     terminalMode: tab.terminalMode,
+    executionMode: normalizeExecutionMode(tab.executionMode),
     agentStyle: tab.agentStyle
   }))
 }

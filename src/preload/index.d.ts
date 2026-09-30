@@ -1,3 +1,8 @@
+import type {
+  PlanApprovalRequest,
+  PlanApprovalDecision,
+  PlanProgress
+} from '../shared/execution-plan'
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   AgentCommandInput,
@@ -19,6 +24,11 @@ import type {
   AgentPathReference,
   PastedAttachmentInput,
   AgentRunInput,
+  AgentHandoffSessionInput,
+  AgentHandoffStatus,
+  AgentGenerateHandoffInput,
+  AgentGenerateHandoffResult,
+  AgentCancelHandoffInput,
   AgentCompactInput,
   AgentCompactResult,
   AgentSkillInstallEvent,
@@ -50,6 +60,8 @@ import type {
   StoredSessionTab,
   WikiDocument,
   WikiDocumentSummary,
+  WikiDirectoryInfo,
+  WikiDirectorySelectionResult,
   WikiSaveInput
 } from '../shared/agent-types'
 import type {
@@ -57,6 +69,13 @@ import type {
   AppUpdateStatusEvent,
   AppUpdateVersionResult
 } from '../shared/update-types'
+import type {
+  WhaleModelsSnapshot,
+  WhaleMonitorConfigInput,
+  WhaleMonitorSettings,
+  WhaleMonitorSnapshot,
+  WhaleUsageSnapshot
+} from '../shared/whale-monitor'
 
 interface TerminalAgentApi {
   app: {
@@ -98,7 +117,11 @@ interface TerminalAgentApi {
       cwd: string
     }>
     write: (data: string, tabId?: string) => void
-    pasteCommand: (command: string, execute?: boolean, tabId?: string) => void
+    pasteCommand: (
+      command: string,
+      execute?: boolean,
+      tabId?: string
+    ) => Promise<{ ok: boolean; error?: string }>
     getContext: (tabId?: string) => Promise<{
       mode: 'pty' | 'pipe' | 'none'
       pid?: number
@@ -115,6 +138,21 @@ interface TerminalAgentApi {
       runtimeExpectedHost?: string
       returnToJumpHost?: boolean
       restoring?: boolean
+      paneRole?: 'main' | 'subterminal'
+      paneId?: string
+      owner?: string
+      executionMode?: 'local' | 'ssh'
+      connectionId?: string
+      connectionName?: string
+      expectedTarget?: string
+      observedHost?: string
+      connectionPhase?: import('../shared/connection-state').ConnectionPhase
+      connectionOrigin?: import('../shared/connection-state').ConnectionOrigin
+      monitorPolicy?: import('../shared/connection-state').MonitorPolicy
+      targetScope?: 'host' | 'cluster'
+      sshHopChain?: string[]
+      manualSshActive?: boolean
+      clusterHostRegex?: string
     }>
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
@@ -128,6 +166,8 @@ interface TerminalAgentApi {
       tabId: string
       host?: string | null
       clusterHostRegex?: string | null
+      connectionId?: string
+      connectionName?: string
     }) => Promise<{ ok: boolean; host?: string; error?: string }>
     patchClusterHostRegex: (options: {
       tabId: string
@@ -187,6 +227,9 @@ interface TerminalAgentApi {
         driftKey?: string
       }) => void
     ) => () => void
+    onConnectionOrigin: (
+      callback: (event: { tabId: string; connectionOrigin: 'manual-shell' }) => void
+    ) => () => void
   }
   agent: {
     getConfig: () => Promise<AgentConfig>
@@ -221,6 +264,9 @@ interface TerminalAgentApi {
     }) => Promise<string>
     listInstructionFiles: () => Promise<LocalInstructionDocument[]>
     listWikiDocuments: () => Promise<WikiDocumentSummary[]>
+    getWikiDirectory: () => Promise<WikiDirectoryInfo>
+    chooseWikiDirectory: () => Promise<WikiDirectorySelectionResult>
+    resetWikiDirectory: () => Promise<WikiDirectoryInfo>
     getWikiDocument: (id: string) => Promise<WikiDocument | undefined>
     saveWikiDocument: (input: WikiSaveInput) => Promise<WikiDocument>
     deleteWikiDocument: (id: string) => Promise<{ ok: boolean }>
@@ -265,6 +311,9 @@ interface TerminalAgentApi {
     ) => Promise<AgentConnectionIntentResult>
     generateSop: (input: AgentGenerateSopInput) => Promise<AgentGenerateSopResult>
     reloadRuntime: (input?: AgentReloadRuntimeInput) => Promise<AgentReloadRuntimeResult>
+    handoffStatus: (input: AgentHandoffSessionInput) => Promise<AgentHandoffStatus>
+    generateHandoff: (input: AgentGenerateHandoffInput) => Promise<AgentGenerateHandoffResult>
+    cancelHandoff: (input: AgentCancelHandoffInput) => Promise<{ ok: boolean }>
     compact: (input: AgentCompactInput) => Promise<AgentCompactResult>
     generateCaptureDraft: (
       input: AgentGenerateCaptureDraftInput
@@ -276,6 +325,9 @@ interface TerminalAgentApi {
     cancel: (runId: string) => Promise<{ ok: boolean }>
     rejectApprovalsForTab: (tabId: string) => Promise<{ ok: boolean }>
     supplement: (input: { runId: string; input: string }) => Promise<{ ok: boolean }>
+    resolvePlanApproval: (input: PlanApprovalDecision) => Promise<{ ok: boolean }>
+    onPlanApprovalRequest: (callback: (request: PlanApprovalRequest) => void) => () => void
+    onPlanProgress: (callback: (progress: PlanProgress) => void) => () => void
     resolveCommandApproval: (input: CommandApprovalDecision) => Promise<{ ok: boolean }>
     ackSubterminalOpened: (payload: {
       tabId: string
@@ -373,6 +425,14 @@ interface TerminalAgentApi {
     downloadInstaller: () => Promise<AppUpdateActionResult>
     install: () => Promise<AppUpdateActionResult>
     onStatus: (callback: (event: AppUpdateStatusEvent) => void) => () => void
+  }
+  whaleMonitor: {
+    getSnapshot: () => Promise<WhaleMonitorSnapshot>
+    saveSettings: (input: WhaleMonitorConfigInput) => Promise<WhaleMonitorSettings>
+    refreshUsage: (range: { startDate: string; endDate: string }) => Promise<WhaleUsageSnapshot>
+    refreshModels: () => Promise<WhaleModelsSnapshot>
+    setPosition: (position: { x: number; y: number }) => Promise<{ ok: boolean }>
+    onSnapshot: (callback: (snapshot: WhaleMonitorSnapshot) => void) => () => void
   }
 }
 

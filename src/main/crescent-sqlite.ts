@@ -1,3 +1,4 @@
+import { normalizeExecutionMode } from '../shared/execution-plan'
 import { existsSync, mkdirSync } from 'fs'
 import type { DatabaseSync } from 'node:sqlite'
 
@@ -17,11 +18,6 @@ import type {
 import type { CrescentMemoryFile } from './crescent-store'
 import { parseAgentRunTrace, serializeAgentRunTrace } from '../shared/agent-run-trace'
 import { isAgentStyle, type AgentStyle } from '../shared/agent-style'
-import {
-  emptyOutlineDocument,
-  normalizeOutlineDocument,
-  type SessionOutlineDocument
-} from '../shared/session-outline'
 
 let database: DatabaseSync | undefined
 
@@ -44,6 +40,7 @@ interface SessionHistoryRow {
   lastMessageAt?: string | null
   runCount?: number
   agentStyle?: string | null
+  executionMode?: string | null
 }
 
 export function initializeCrescentDatabase(): void {
@@ -131,12 +128,6 @@ export function initializeCrescentDatabase(): void {
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS session_outlines (
-      tab_id TEXT PRIMARY KEY,
-      entries_json TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
     CREATE TABLE IF NOT EXISTS app_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -156,12 +147,15 @@ export function initializeCrescentDatabase(): void {
   ensureColumn(db, 'session_tabs', 'summary', 'TEXT')
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'session_tabs', 'agent_style', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'execution_mode', 'TEXT')
   ensureColumn(db, 'agent_logs', 'run_id', 'TEXT')
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
   ensureColumn(db, 'agent_runs', 'trace_json', 'TEXT')
   ensureColumn(db, 'agent_runs', 'input_tokens', 'INTEGER')
   ensureColumn(db, 'agent_runs', 'output_tokens', 'INTEGER')
+  ensureColumn(db, 'agent_runs', 'cache_read_tokens', 'INTEGER')
+  ensureColumn(db, 'agent_runs', 'cache_write_tokens', 'INTEGER')
   ensureColumn(db, 'ops_history_records', 'connection_id', "TEXT NOT NULL DEFAULT ''")
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ops_history_connection_updated_at
@@ -174,8 +168,8 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
   const now = new Date().toISOString()
   const statement = db.prepare(`
     INSERT INTO session_tabs (
-      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, execution_mode, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id) DO UPDATE SET
       title = CASE
         WHEN session_tabs.title_locked = 1 THEN session_tabs.title
@@ -187,6 +181,7 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       terminal_cwd = excluded.terminal_cwd,
       terminal_mode = excluded.terminal_mode,
       agent_style = excluded.agent_style,
+      execution_mode = excluded.execution_mode,
       updated_at = excluded.updated_at
   `)
 
@@ -200,6 +195,7 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       tab.terminalCwd ?? null,
       tab.terminalMode ?? null,
       tab.agentStyle ?? null,
+      normalizeExecutionMode(tab.executionMode),
       now
     )
   }
@@ -283,7 +279,9 @@ const AGENT_RUN_SELECT_COLUMNS = `
   elapsed_ms AS elapsedMs,
   trace_json AS traceJson,
   input_tokens AS inputTokens,
-  output_tokens AS outputTokens
+  output_tokens AS outputTokens,
+  cache_read_tokens AS cacheReadTokens,
+  cache_write_tokens AS cacheWriteTokens
 `
 
 interface AgentRunRow {
@@ -299,6 +297,8 @@ interface AgentRunRow {
   traceJson?: string | null
   inputTokens?: number | null
   outputTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
 }
 
 export function saveAgentRun(run: StoredAgentRun): void {
@@ -308,13 +308,15 @@ export function saveAgentRun(run: StoredAgentRun): void {
   const traceJson = run.trace ? serializeAgentRunTrace(run.trace) : null
   const inputTokens = optionalTokenCount(run.inputTokens)
   const outputTokens = optionalTokenCount(run.outputTokens)
+  const cacheReadTokens = optionalTokenCount(run.cacheReadTokens)
+  const cacheWriteTokens = optionalTokenCount(run.cacheWriteTokens)
 
   db.prepare(
     `
     INSERT INTO agent_runs (
       run_id, tab_id, input, status, connection_id, output, error,
-      started_at, elapsed_ms, trace_json, input_tokens, output_tokens, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      started_at, elapsed_ms, trace_json, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       status = excluded.status,
       connection_id = excluded.connection_id,
@@ -325,6 +327,8 @@ export function saveAgentRun(run: StoredAgentRun): void {
       trace_json = COALESCE(excluded.trace_json, agent_runs.trace_json),
       input_tokens = COALESCE(excluded.input_tokens, agent_runs.input_tokens),
       output_tokens = COALESCE(excluded.output_tokens, agent_runs.output_tokens),
+      cache_read_tokens = COALESCE(excluded.cache_read_tokens, agent_runs.cache_read_tokens),
+      cache_write_tokens = COALESCE(excluded.cache_write_tokens, agent_runs.cache_write_tokens),
       updated_at = excluded.updated_at
   `
   ).run(
@@ -340,6 +344,8 @@ export function saveAgentRun(run: StoredAgentRun): void {
     traceJson,
     inputTokens,
     outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     now,
     now
   )
@@ -402,23 +408,34 @@ export function listAllAgentRunsForTab(tabId: string): StoredAgentRun[] {
 
 export function getSessionTokenUsage(tabId: string): SessionTokenUsage {
   const normalizedTabId = tabId.trim()
-  if (!normalizedTabId) return { input: 0, output: 0 }
+  if (!normalizedTabId) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
   const row = getDatabase()
     .prepare(
       `
       SELECT
         COALESCE(SUM(COALESCE(input_tokens, 0)), 0) AS input,
-        COALESCE(SUM(COALESCE(output_tokens, 0)), 0) AS output
+        COALESCE(SUM(COALESCE(output_tokens, 0)), 0) AS output,
+        COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0) AS cacheRead,
+        COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cacheWrite
       FROM agent_runs
       WHERE tab_id = ?
     `
     )
-    .get(normalizedTabId) as { input?: number | null; output?: number | null } | undefined
+    .get(normalizedTabId) as
+    | {
+        input?: number | null
+        output?: number | null
+        cacheRead?: number | null
+        cacheWrite?: number | null
+      }
+    | undefined
 
   return {
     input: readSqlCount(row?.input),
-    output: readSqlCount(row?.output)
+    output: readSqlCount(row?.output),
+    cacheRead: readSqlCount(row?.cacheRead),
+    cacheWrite: readSqlCount(row?.cacheWrite)
   }
 }
 
@@ -444,7 +461,9 @@ function mapStoredAgentRun(row: AgentRunRow): StoredAgentRun {
     elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : undefined,
     trace: parseAgentRunTrace(row.traceJson ?? undefined),
     inputTokens: typeof row.inputTokens === 'number' ? row.inputTokens : undefined,
-    outputTokens: typeof row.outputTokens === 'number' ? row.outputTokens : undefined
+    outputTokens: typeof row.outputTokens === 'number' ? row.outputTokens : undefined,
+    cacheReadTokens: typeof row.cacheReadTokens === 'number' ? row.cacheReadTokens : undefined,
+    cacheWriteTokens: typeof row.cacheWriteTokens === 'number' ? row.cacheWriteTokens : undefined
   }
 }
 
@@ -685,6 +704,7 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
         tab.terminal_cwd AS terminalCwd,
         tab.terminal_mode AS terminalMode,
         tab.agent_style AS agentStyle,
+        tab.execution_mode AS executionMode,
         tab.updated_at AS updatedAt,
         tab.summary AS summary,
         tab.title_locked AS titleLocked,
@@ -728,6 +748,7 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
     terminalCwd: row.terminalCwd ?? undefined,
     terminalMode: row.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(row.agentStyle),
+    executionMode: normalizeExecutionMode(row.executionMode),
     updatedAt: row.updatedAt,
     summary: row.summary ?? undefined,
     lastMessage: row.lastMessage ?? undefined,
@@ -749,6 +770,7 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         terminal_cwd AS terminalCwd,
         terminal_mode AS terminalMode,
         agent_style AS agentStyle,
+        execution_mode AS executionMode,
         summary,
         title_locked AS titleLocked,
         updated_at AS updatedAt
@@ -788,6 +810,7 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     terminalCwd: tab.terminalCwd ?? undefined,
     terminalMode: tab.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(tab.agentStyle),
+    executionMode: normalizeExecutionMode(tab.executionMode),
     updatedAt: tab.updatedAt,
     summary: tab.summary ?? undefined,
     lastMessage: historyItem?.lastMessage,
@@ -961,40 +984,6 @@ export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] 
     `
     )
     .all(normalizedTabId) as unknown as StoredAgentLogEntry[]
-}
-
-export function readSessionOutline(tabId: string): SessionOutlineDocument {
-  const normalizedTabId = tabId.trim()
-  if (!normalizedTabId) return emptyOutlineDocument()
-
-  const row = getDatabase()
-    .prepare('SELECT entries_json AS entriesJson FROM session_outlines WHERE tab_id = ?')
-    .get(normalizedTabId) as { entriesJson?: string } | undefined
-  if (!row?.entriesJson) return emptyOutlineDocument()
-
-  try {
-    return normalizeOutlineDocument(JSON.parse(row.entriesJson) as unknown)
-  } catch {
-    return emptyOutlineDocument()
-  }
-}
-
-export function writeSessionOutline(tabId: string, document: SessionOutlineDocument): void {
-  const normalizedTabId = tabId.trim()
-  if (!normalizedTabId) return
-
-  const updatedAt = new Date().toISOString()
-  getDatabase()
-    .prepare(
-      `
-      INSERT INTO session_outlines (tab_id, entries_json, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(tab_id) DO UPDATE SET
-        entries_json = excluded.entries_json,
-        updated_at = excluded.updated_at
-    `
-    )
-    .run(normalizedTabId, JSON.stringify(normalizeOutlineDocument(document)), updatedAt)
 }
 
 export function readCommandWhitelistFromDb(): string[] {

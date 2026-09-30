@@ -76,6 +76,7 @@ export function AgentRunTimeline({
   onOpenModelSettings,
   onSaveAsSop,
   onInterruptCommand,
+  onFocusTerminal,
   fallbackExecutionTabId,
   thinkingCollapsedByDefault = true
 }: {
@@ -98,6 +99,7 @@ export function AgentRunTimeline({
   onOpenModelSettings?: () => void
   onSaveAsSop?: () => void
   onInterruptCommand?: (tabId: string) => void
+  onFocusTerminal?: (tabId: string) => void
   fallbackExecutionTabId?: string
   thinkingCollapsedByDefault?: boolean
 }): React.JSX.Element {
@@ -197,6 +199,7 @@ export function AgentRunTimeline({
                   t={t}
                   hideCommand={hideCommand}
                   onInterruptCommand={onInterruptCommand}
+                  onFocusTerminal={onFocusTerminal}
                   fallbackExecutionTabId={fallbackExecutionTabId}
                 />
               )
@@ -615,12 +618,14 @@ function ToolCallRow({
   t,
   hideCommand = false,
   onInterruptCommand,
+  onFocusTerminal,
   fallbackExecutionTabId
 }: {
   step: Extract<AgentRunStep, { kind: 'tool' }>
   t: Dictionary
   hideCommand?: boolean
   onInterruptCommand?: (tabId: string) => void
+  onFocusTerminal?: (tabId: string) => void
   fallbackExecutionTabId?: string
 }): React.JSX.Element {
   const running = step.phase === 'started'
@@ -635,15 +640,34 @@ function ToolCallRow({
   const observationLong = Boolean(showObservation && observation && observation.length > 240)
   const isPtyCommand = step.name === 'bash' || step.name === 'terminal'
   const toolLabel = isPtyCommand ? t.input.toolCommandLabel : step.name
+  const executionTarget = step.executionTarget
+  const executionLabel = executionTarget
+    ? [
+        executionTarget.paneRole === 'subterminal'
+          ? t.terminal.subterminal
+          : t.terminal.mainTerminal,
+        executionTarget.executionMode === 'ssh' ? 'SSH' : t.terminal.targetLocal,
+        executionTarget.connectionName,
+        executionTarget.expectedTarget
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : undefined
   const statusLabel = running
-    ? t.input.toolRunning
-    : step.interrupted
-      ? t.input.toolInterrupted
-      : step.timedOut
-        ? t.input.toolTimedOut
-        : step.isError
-          ? t.input.toolFailed
-          : t.input.toolFinished
+    ? step.dispatchPending
+      ? t.input.toolReviewing
+      : t.input.toolRunning
+    : step.lifecycle === 'blocked-before-dispatch'
+      ? t.input.toolBlocked
+      : step.lifecycle === 'completion-unknown'
+        ? t.input.toolCompletionUnknown
+        : step.interrupted
+          ? t.input.toolInterrupted
+          : step.timedOut
+            ? t.input.toolTimedOut
+            : step.isError
+              ? t.input.toolFailed
+              : t.input.toolFinished
   const warnFinish = Boolean(step.interrupted || step.timedOut)
 
   return (
@@ -671,7 +695,17 @@ function ToolCallRow({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="text-xs font-medium text-foreground/80">{toolLabel}</span>
             <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
-            {running && isPtyCommand && onInterruptCommand ? (
+            {executionLabel && (
+              <button
+                type="button"
+                className="max-w-full truncate text-[11px] text-primary underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-primary"
+                title={executionLabel}
+                onClick={() => onFocusTerminal?.(executionTarget!.paneId)}
+              >
+                {executionLabel}
+              </button>
+            )}
+            {running && !step.dispatchPending && isPtyCommand && onInterruptCommand ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1846,12 +1880,21 @@ function coalesceVisiblePtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
     ) {
       const left = (prev.command || prev.argsText || '').trim()
       const right = (step.command || step.argsText || '').trim()
-      if (left && right && left === right) {
+      if (
+        left &&
+        right &&
+        left === right &&
+        (!prev.executionId || !step.executionId || prev.executionId === step.executionId) &&
+        (!prev.toolCallId || !step.toolCallId || prev.toolCallId === step.toolCallId)
+      ) {
         const merged: Extract<AgentRunStep, { kind: 'tool' }> = {
           ...prev,
           name: 'bash',
           phase: step.phase === 'finished' || prev.phase === 'finished' ? 'finished' : prev.phase,
           command: prev.command || step.command,
+          executionId: prev.executionId || step.executionId,
+          lifecycle: prev.lifecycle || step.lifecycle,
+          dispatchPending: Boolean(prev.dispatchPending && step.dispatchPending),
           resultText: prev.resultText || step.resultText,
           isError: Boolean(prev.isError) || Boolean(step.isError),
           toolCallId: prev.toolCallId || step.toolCallId,

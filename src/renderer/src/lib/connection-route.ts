@@ -1,4 +1,5 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
+import { connectionInstructionText } from '../../../shared/agent-local-intent'
 import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
 import {
   findDirectlyMentionedConnection,
@@ -55,6 +56,7 @@ export interface ConnectionRouteContext {
   expectedHost?: string
   /** Fall-back to jump box after a deeper runtime target. */
   returnToJumpHost?: boolean
+  monitorPolicy?: import('../../../shared/connection-state').MonitorPolicy
 }
 
 /**
@@ -101,8 +103,20 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
+  // A multi-hop card has no safe generic recovery path once its final hop
+  // cannot be identified. Ask the operator to select the target explicitly.
+  if (ctx.monitorPolicy === 'special' && ctx.sessionAligned === 'drifted') {
+    return {
+      targetTabId: activeTabId,
+      action: 'clarify',
+      label: activeLabel,
+      reason: 'special-ssh-hop-unknown',
+      clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
+    }
+  }
+
   // --- Layer A: explicit signals ---
-  const atMention = resolveAtMention(message, connections, sessionTabs)
+  const atMention = resolveAtMention(connectionInstructionText(message), connections, sessionTabs)
   if (atMention?.kind === 'tab') {
     return {
       targetTabId: atMention.tab.id,
@@ -123,7 +137,10 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   // connection wins over the current tab's binding; otherwise reconnect the
   // current tab's configured SSH. Do not dump every saved connection as a
   // picker, and never retry a different host than the one the user named.
-  if (isExplicitReconnectRequest(message)) {
+  if (
+    isExplicitConnectionRequest(message) &&
+    isExplicitReconnectRequest(connectionInstructionText(message))
+  ) {
     const connection =
       (mentioned && connections.find((candidate) => candidate.id === mentioned.id)) ||
       (activeTab?.connectionId &&
@@ -237,7 +254,9 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   }
 
   // --- Layer C: soft keyword mismatch (only when active is not a ready login) ---
-  const softMatches = findSoftConnectionMatches(message, connections)
+  const softMatches = isExplicitConnectionRequest(message)
+    ? findSoftConnectionMatches(connectionInstructionText(message), connections)
+    : []
   if (softMatches.length > 1) {
     return {
       targetTabId: activeTabId,
@@ -265,7 +284,7 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   // Unnamed remote work: reuse an already-open session. Opening a new SSH
   // login requires identified login intent (named connection above, or an
   // explicit login request below) — never lastUsed / unique-host guessing.
-  if (looksLikeRemoteOpsIntent(message) || isExplicitConnectionRequest(message)) {
+  if (isExplicitConnectionRequest(message)) {
     const remotePick = resolveRemoteOpsWithoutName({
       activeTabId,
       activeTab,
@@ -758,9 +777,8 @@ export function needsConnectionDiscovery(
   message: string,
   connections: ConnectionConfig[]
 ): boolean {
-  if (connections.length === 0) return false
-  if (looksLikeRemoteOpsIntent(message)) return true
-  return findSoftConnectionMatches(message, connections).length > 0
+  if (connections.length === 0 || !isExplicitConnectionRequest(message)) return false
+  return findSoftConnectionMatches(connectionInstructionText(message), connections).length > 0
 }
 
 /**

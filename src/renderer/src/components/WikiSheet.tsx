@@ -2,9 +2,11 @@ import { useMemo, useState, type CSSProperties } from 'react'
 import {
   Code2Icon,
   EyeIcon,
+  FolderOpenIcon,
   Loader2Icon,
   PencilIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   SaveIcon,
   Trash2Icon,
   XIcon
@@ -28,7 +30,11 @@ import { Textarea } from '@renderer/components/ui/textarea'
 import type { Dictionary } from '@renderer/i18n'
 import { formatHistoryTime } from '@renderer/lib/agent-log'
 import { parseWikiHeadings } from '@renderer/lib/wiki'
-import type { WikiDocument, WikiDocumentSummary } from '../../../shared/agent-types'
+import type {
+  WikiDirectoryInfo,
+  WikiDocument,
+  WikiDocumentSummary
+} from '../../../shared/agent-types'
 
 const WIKI_HEADING_PREFIX = 'wiki-preview'
 
@@ -48,7 +54,11 @@ export interface WikiSheetProps {
   wikiDeletingId: string | null
   wikiMessage: SkillManageMessage | null
   wikiPreviewWidth: number
+  wikiDirectory: WikiDirectoryInfo | null
+  wikiDirectoryChanging: boolean
   onRefresh: () => void
+  onChooseDirectory: () => void
+  onResetDirectory: () => void
   onSearchQueryChange: (query: string) => void
   onOpenDocument: (document: WikiDocumentSummary) => void
   onStartEdit: () => void
@@ -75,7 +85,11 @@ export function WikiSheet({
   wikiDeletingId,
   wikiMessage,
   wikiPreviewWidth,
+  wikiDirectory,
+  wikiDirectoryChanging,
   onRefresh,
+  onChooseDirectory,
+  onResetDirectory,
   onSearchQueryChange,
   onOpenDocument,
   onStartEdit,
@@ -111,22 +125,54 @@ export function WikiSheet({
           <div className="min-w-0">
             <SheetTitle>{t.wiki.title}</SheetTitle>
             <SheetDescription>{t.wiki.description}</SheetDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            onClick={onRefresh}
-            disabled={wikiLoading}
-            aria-label={t.wiki.refresh}
-            title={t.wiki.refresh}
-          >
-            {wikiLoading ? (
-              <Loader2Icon className="animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCwIcon aria-hidden="true" />
+            {wikiDirectory && (
+              <div className="mt-1 truncate text-xs text-muted-foreground" title={wikiDirectory.path}>
+                {t.wiki.directoryLabel}: <code>{wikiDirectory.path}</code>
+              </div>
             )}
-          </Button>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onChooseDirectory}
+              disabled={wikiDirectoryChanging}
+              aria-label={t.wiki.chooseDirectory}
+              title={t.wiki.chooseDirectory}
+            >
+              <FolderOpenIcon aria-hidden="true" />
+              {t.wiki.chooseDirectory}
+            </Button>
+            {wikiDirectory && !wikiDirectory.isDefault && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={onResetDirectory}
+                disabled={wikiDirectoryChanging}
+                aria-label={t.wiki.resetDirectory}
+                title={t.wiki.resetDirectory}
+              >
+                <RotateCcwIcon aria-hidden="true" />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={onRefresh}
+              disabled={wikiLoading}
+              aria-label={t.wiki.refresh}
+              title={t.wiki.refresh}
+            >
+              {wikiLoading ? (
+                <Loader2Icon className="animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCwIcon aria-hidden="true" />
+              )}
+            </Button>
+          </div>
         </SheetHeader>
 
         <div

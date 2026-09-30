@@ -10,7 +10,11 @@ import type {
   AgentWikiReference,
   ConnectionConfig
 } from '../../../shared/agent-types'
-import { hasExplicitLocalWorkIntent } from '../../../shared/agent-local-intent'
+import {
+  connectionInstructionText,
+  hasExplicitLocalWorkIntent,
+  hasExplicitSshConnectionIntent
+} from '../../../shared/agent-local-intent'
 
 /** Cold-start UI log injection only (hot Pi sessions skip this path). */
 export const COLD_START_ASSISTANT_MAX_CHARS = 4_000
@@ -57,11 +61,7 @@ export function isPasswordChangedReconnectRequest(value: string): boolean {
 }
 
 export function isExplicitConnectionRequest(value: string): boolean {
-  return (
-    isExplicitReconnectRequest(value) ||
-    /^\/connection(?::|\s|$)|(^|\s)(ssh|login|connect)\b/i.test(value) ||
-    /(?:^|\s)(?:连接|登录|登陆|登入|进入|切换)(?:\s|到|至|$|[A-Za-z0-9\u4e00-\u9fff])/u.test(value)
-  )
+  return hasExplicitSshConnectionIntent(value)
 }
 
 export function isExplicitNonTerminalAgentRequest(
@@ -109,9 +109,9 @@ export function findDirectlyMentionedConnection(
   input: string,
   connections: ConnectionConfig[]
 ): ConnectionConfig | undefined {
-  if (hasExplicitLocalWorkIntent(input)) return undefined
+  if (hasExplicitLocalWorkIntent(input) || !isExplicitConnectionRequest(input)) return undefined
 
-  const searchable = connectionMentionSearchText(input)
+  const searchable = connectionMentionSearchText(connectionInstructionText(input))
   const allowHostOrUserMatch = isExplicitConnectionRequest(input)
   const matches = connections.filter((connection) => {
     const nameTokens = getConnectionNameMentionTokens(connection)

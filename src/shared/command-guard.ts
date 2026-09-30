@@ -187,10 +187,26 @@ const DOCKER_READ = new Set([
   'port'
 ])
 const DOCKER_COMPOSE_READ = new Set(['ps', 'logs', 'config'])
-const SYSTEMCTL_WRITE = new Set(['restart', 'stop', 'start', 'enable', 'disable'])
+const SYSTEMCTL_WRITE = new Set(['restart', 'reload', 'stop', 'start', 'enable', 'disable'])
 const SYSTEMCTL_READ = new Set(['status', 'is-active', 'list-units', 'show', 'list-timers'])
-const SIMPLE_WRITE = new Set(['rm', 'mv', 'dd', 'kill', 'reboot', 'chmod', 'chown', 'tee', 'sudo'])
+const SIMPLE_WRITE = new Set([
+  'rm',
+  'mv',
+  'cp',
+  'install',
+  'mkdir',
+  'touch',
+  'dd',
+  'kill',
+  'reboot',
+  'chmod',
+  'chown',
+  'tee'
+])
 const SIMPLE_READ = new Set([
+  'cmp',
+  'sha256sum',
+  'shasum',
   'cat',
   'ls',
   'echo',
@@ -248,25 +264,6 @@ const KUBECTL_EXEC_FLAGS_WITH_VALUE = new Set([
   '--context'
 ])
 const DOCKER_EXEC_FLAGS_WITH_VALUE = new Set(['-e', '--env', '-u', '--user', '-w', '--workdir'])
-const SSH_FLAGS_WITH_VALUE = new Set([
-  '-p',
-  '-i',
-  '-J',
-  '-l',
-  '-o',
-  '-F',
-  '-E',
-  '-L',
-  '-R',
-  '-D',
-  '-W',
-  '-w',
-  '-b',
-  '-c',
-  '-I',
-  '-S',
-  '-s'
-])
 const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
 interface SimpleCommandRisk {
@@ -329,11 +326,20 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
     return { level: 'high', verb: '>' }
   }
 
+  if (['env', 'nohup', 'time'].includes(commandBasename(command.argv[0] ?? '')))
+    return { level: 'gray', verb: 'environment/wrapper' }
   let argv = stripWrappers(command.argv)
   if (argv[0] === '!') argv = argv.slice(1)
   const argv0 = commandBasename(argv[0] ?? '')
   if (!argv0) return { level: 'gray', verb: 'change' }
 
+  if (SHELL_NAMES.has(argv0)) {
+    if (argv.length !== 3 || argv[1] !== '-c') return { level: 'gray', verb: argv0 }
+    return classifyPeeledInner(argv)
+  }
+  if (argv0 === 'sudo') return classifyReadonlySudo(argv)
+  if (/[$`]/.test(command.raw) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(command.raw))
+    return { level: 'gray', verb: argv0 }
   if (SIMPLE_WRITE.has(argv0)) return { level: 'high', verb: argv0 }
 
   if (argv0 === 'kubectl') {
@@ -344,6 +350,14 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
       return classifyPeeledInner(inner)
     }
     if (verb && KUBECTL_WRITE.has(verb)) return { level: 'high', verb: `kubectl ${verb}` }
+    if (
+      verb === 'config' &&
+      !argv.some((arg) => ['current-context', 'get-contexts', 'view'].includes(arg))
+    )
+      return { level: 'gray', verb: 'kubectl config' }
+    if (verb === 'auth' && !argv.includes('can-i')) return { level: 'gray', verb: 'kubectl auth' }
+    if (argv.some((arg) => /^(secrets?|--raw)(=|$)/i.test(arg)))
+      return { level: 'gray', verb: 'kubectl sensitive query' }
     if (verb && KUBECTL_READ.has(verb)) return { level: 'low', verb: `kubectl ${verb}` }
     return { level: 'gray', verb: 'kubectl' }
   }
@@ -363,6 +377,8 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
       return { level: 'gray', verb: 'docker compose' }
     }
     if (parsed.verb === 'exec') {
+      if (argv.some((arg) => /^(-e|--env|--privileged)(=|$)/.test(arg)))
+        return { level: 'gray', verb: 'docker exec environment' }
       const inner = extractDockerExecInner(argv)
       if (!inner) return { level: 'gray', verb: 'docker exec' }
       return classifyPeeledInner(inner)
@@ -375,6 +391,8 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
   if (argv0 === 'systemctl') {
     const verb = firstKnownVerb(argv, SYSTEMCTL_WRITE, SYSTEMCTL_READ)
     if (verb && SYSTEMCTL_WRITE.has(verb)) return { level: 'high', verb: `systemctl ${verb}` }
+    if (argv.includes('--root') || argv.some((arg) => arg.startsWith('--root=')))
+      return { level: 'gray', verb: 'systemctl root' }
     if (verb && SYSTEMCTL_READ.has(verb)) return { level: 'low', verb: `systemctl ${verb}` }
     return { level: 'gray', verb: 'systemctl' }
   }
@@ -386,10 +404,11 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
   if ((argv0 === 'jq' && argv.includes('--in-place')) || (argv0 === 'yq' && hasYqInPlace(argv))) {
     return { level: 'high', verb: argv0 }
   }
-  if (argv0 === 'yq') return { level: 'low', verb: 'yq' }
+  if (argv0 === 'yq') return { level: 'gray', verb: 'yq' }
   if (argv0 === 'curl') {
     return isReadonlyCurl(argv) ? { level: 'low', verb: 'curl' } : { level: 'gray', verb: 'curl' }
   }
+  if (hasUnsafeInspectionArguments(argv0, argv)) return { level: 'gray', verb: argv0 }
   if (SIMPLE_READ.has(argv0)) return { level: 'low', verb: argv0 }
   return { level: 'gray', verb: argv0 }
 }
@@ -615,40 +634,141 @@ function extractDockerExecInner(argv: string[]): string[] | null {
 
 function extractSshRemoteCommand(argv: string[]): string[] | null {
   let i = 1
-  while (i < argv.length) {
-    const token = argv[i] ?? ''
-    if (!token.startsWith('-')) break
-
-    const eq = token.indexOf('=')
-    if (eq > 0) {
-      i += 1
+  while (i < argv.length && argv[i].startsWith('-')) {
+    const token = argv[i++]
+    if (['-T', '-n', '-q', '-4', '-6'].includes(token)) continue
+    if (['-p', '-l', '-i'].includes(token)) {
+      if (!argv[i] || argv[i].startsWith('-')) return null
+      i++
       continue
     }
-    const lower = token.toLowerCase()
-    if (SSH_FLAGS_WITH_VALUE.has(lower)) {
-      i += 2
+    if (token === '-o' || token.startsWith('-o')) {
+      const option = token === '-o' ? argv[i++] : token.slice(2)
+      if (
+        !option ||
+        !/^(BatchMode=yes|ConnectTimeout=\d+|StrictHostKeyChecking=yes|IdentitiesOnly=yes)$/i.test(
+          option
+        )
+      )
+        return null
       continue
     }
-    i += 1
+    // Forwards, local commands, alternate config and interactive flags are not queries.
+    return null
   }
-
-  if (i >= argv.length) return null
-
-  i += 1
-  if (i >= argv.length) return null
-
+  const host = argv[i++]
+  if (!host || !/^[\w.@:[\]-]+$/.test(host) || i >= argv.length) return null
   return argv.slice(i)
 }
 
-function firstKnownVerb(argv: string[], write: Set<string>, read: Set<string>): string | undefined {
-  for (let i = 1; i < argv.length; i++) {
-    const token = argv[i] ?? ''
-    if (token === '--') break
-    if (token.startsWith('-')) continue
-    const lower = token.toLowerCase()
-    if (write.has(lower) || read.has(lower)) return lower
+function classifyReadonlySudo(argv: string[]): SimpleCommandRisk {
+  let i = 1
+  if (argv[i] === '-n' || argv[i] === '--non-interactive') i++
+  if (argv[i] === '--') i++
+  const inner = argv.slice(i)
+  const name = commandBasename(inner[0] ?? '')
+  // Deliberately narrow: no shell, arbitrary file reader, env override, pager or script.
+  if (
+    !['systemctl', 'kubectl', 'docker', 'ss', 'df', 'free', 'stat', 'id', 'uname'].includes(name)
+  ) {
+    return { level: 'high', verb: 'sudo' }
   }
-  return undefined
+  if (
+    inner.some((arg) =>
+      /secret|token|credential|shadow|kubeconfig|exec|config|inspect|logs/i.test(arg)
+    )
+  ) {
+    return { level: 'high', verb: 'sudo sensitive/indirect command' }
+  }
+  if (name === 'systemctl' && !inner.includes('--no-pager'))
+    return { level: 'high', verb: 'sudo pager' }
+  const risk = classifySimpleCommand({ argv: inner, redirects: [], raw: inner.join(' ') })
+  return risk.level === 'low' ? risk : { level: 'high', verb: 'sudo ' + risk.verb }
+}
+
+function hasUnsafeInspectionArguments(name: string, argv: string[]): boolean {
+  const args = argv.slice(1)
+  if (
+    args.some((arg) =>
+      /(?:^|\/)(?:shadow|gshadow|id_rsa|id_ed25519|credentials|\.env)(?:$|[./])/.test(arg)
+    )
+  )
+    return true
+  if (['env', 'printenv', 'awk', 'sed', 'yq'].includes(name)) return true
+  if (name === 'find' && args.some((arg) => ['-fprint', '-fprintf', '-fls'].includes(arg)))
+    return true
+  if (name === 'sort' && args.some((arg) => /^(-o|--output|--compress-program)/.test(arg)))
+    return true
+  if (name === 'uniq' && args.filter((arg) => !arg.startsWith('-')).length > 1) return true
+  if (name === 'ss' && args.some((arg) => ['-K', '--kill'].includes(arg))) return true
+  if (name === 'shasum' && args.some((arg) => ['-c', '--check'].includes(arg))) return true
+  if (
+    name === 'jq' &&
+    args.some((arg) => /^(-L|--argfile|--rawfile|--slurpfile|--from-file|-f)/.test(arg))
+  )
+    return true
+  if (name === 'date' && args.some((arg) => /^(-s|--set)/.test(arg))) return true
+  if (name === 'hostname' && args.some((arg) => !arg.startsWith('-'))) return true
+  if (name === 'hostnamectl' && args.some((arg) => arg.startsWith('set-'))) return true
+  if (
+    name === 'ip' &&
+    args.some((arg) => /^(add|del|delete|replace|change|set|flush|exec|netns|batch)$/.test(arg))
+  )
+    return true
+  if (
+    name === 'journalctl' &&
+    args.some((arg) => /vacuum|rotate|flush|sync|setup-keys|update-catalog/.test(arg))
+  )
+    return true
+  return false
+}
+
+function firstKnownVerb(argv: string[], write: Set<string>, read: Set<string>): string | undefined {
+  const valued = new Set([
+    '-n',
+    '--namespace',
+    '--context',
+    '--kubeconfig',
+    '--server',
+    '-s',
+    '--as',
+    '--as-group',
+    '--request-timeout',
+    '--field-selector',
+    '--selector',
+    '-l',
+    '--type',
+    '-t',
+    '--state',
+    '--property',
+    '-p',
+    '--host',
+    '-H',
+    '--machine',
+    '-M'
+  ])
+  let i = 1
+  while (i < argv.length && argv[i].startsWith('-')) {
+    const flag = argv[i++]
+    if (valued.has(flag)) i++
+    else if (
+      !flag.includes('=') &&
+      ![
+        '--no-pager',
+        '--no-legend',
+        '--plain',
+        '--all',
+        '-a',
+        '--user',
+        '--system',
+        '--quiet',
+        '-q'
+      ].includes(flag)
+    )
+      return undefined
+  }
+  const verb = argv[i]
+  return write.has(verb) || read.has(verb) ? verb : undefined
 }
 
 function dockerSubcommand(argv: string[]): { compose: boolean; verb: string } {
@@ -682,7 +802,13 @@ function isSysctlWrite(argv: string[]): boolean {
   return argv
     .slice(1)
     .some(
-      (arg) => arg === '-w' || arg === '--write' || (/^[^=-]+=/.test(arg) && !arg.startsWith('-'))
+      (arg) =>
+        arg === '-w' ||
+        arg === '--write' ||
+        arg === '-p' ||
+        arg === '--system' ||
+        arg.startsWith('--load') ||
+        (/^[^=-]+=/.test(arg) && !arg.startsWith('-'))
     )
 }
 
@@ -701,16 +827,9 @@ function hasYqInPlace(argv: string[]): boolean {
   return argv.includes('-i') || argv.includes('--inplace') || argv.includes('--in-place')
 }
 
-function isReadonlyCurl(argv: string[]): boolean {
-  return argv
-    .slice(1)
-    .some(
-      (arg) =>
-        arg === '--silent' ||
-        arg === '--max-time' ||
-        arg.startsWith('--max-time=') ||
-        (arg.startsWith('-') && !arg.startsWith('--') && arg.includes('s'))
-    )
+function isReadonlyCurl(_argv: string[]): boolean {
+  // HTTP GET endpoints can mutate state; transport flags cannot prove read-only semantics.
+  return false
 }
 
 /**

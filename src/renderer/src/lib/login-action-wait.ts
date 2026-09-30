@@ -131,10 +131,16 @@ function lastExtractedHost(output: string): string | undefined {
 /** `sw` / SSH landings that print a banner+MOTD and never a parseable PS1. */
 function isBannerSettledLanding(output: string): boolean {
   if (findNewestPromptSignal(output, LOGIN_PROMPT_SCAN_LINES)?.kind === 'waiting') return false
+  const clusterHopPending = /正在连接到集群/.test(output)
+  const clusterLandingBanner =
+    /Authorized users only\.\s*All activities may be monitored and reported\./i.test(output)
+  // `sw` prints the selected context before it opens the cluster session. That
+  // message alone is not a settled login: wait for the new host prompt or the
+  // cluster's own login banner so the jump-host prompt cannot be mistaken for
+  // the final target.
+  if (clusterHopPending && !clusterLandingBanner) return false
   return (
-    /✔\s*Switched to context/i.test(output) ||
-    />>> 切换到集群/.test(output) ||
-    /Authorized only\.\s*All activity will be monitored/i.test(output)
+    /✔\s*Switched to context/i.test(output) || />>> 切换到集群/.test(output) || clusterLandingBanner
   )
 }
 
@@ -176,14 +182,18 @@ export function resolveLoginActionConsumed(
     }
     if (newest) return newest
     if (isBannerSettledLanding(suffix)) {
-      const host = lastExtractedHost(suffix) ?? lastExtractedHost(output)
+      const clusterHopPending = /正在连接到集群/.test(suffix)
+      const host =
+        lastExtractedHost(suffix) ?? (!clusterHopPending ? lastExtractedHost(output) : undefined)
       if (host) return { kind: 'host', host }
     }
     if (options.acceptQuietGrowth) {
       if (findNewestPromptSignal(suffix, LOGIN_PROMPT_SCAN_LINES)?.kind === 'waiting') {
         return undefined
       }
-      const host = lastExtractedHost(suffix) ?? lastExtractedHost(output)
+      const clusterHopPending = /正在连接到集群/.test(suffix)
+      const host =
+        lastExtractedHost(suffix) ?? (!clusterHopPending ? lastExtractedHost(output) : undefined)
       if (host) return { kind: 'host', host }
     }
     return undefined
