@@ -147,6 +147,12 @@ interface TerminalAgentApi {
       expectedTarget?: string
       observedHost?: string
       connectionPhase?: import('../shared/connection-state').ConnectionPhase
+      connectionOrigin?: import('../shared/connection-state').ConnectionOrigin
+      monitorPolicy?: import('../shared/connection-state').MonitorPolicy
+      targetScope?: 'host' | 'cluster'
+      sshHopChain?: string[]
+      manualSshActive?: boolean
+      clusterHostRegex?: string
     }>
     resize: (dimensions: { cols: number; rows: number; tabId?: string }) => void
     stop: (tabId?: string) => void
@@ -220,6 +226,9 @@ interface TerminalAgentApi {
         expectedHost: string
         driftKey?: string
       }) => void
+    ) => () => void
+    onConnectionOrigin: (
+      callback: (event: { tabId: string; connectionOrigin: 'manual-shell' }) => void
     ) => () => void
   }
   agent: {

@@ -1752,6 +1752,7 @@ function App({
         const targetBinding = await window.api.terminal.setExpectedHost({
           tabId: targetTabId,
           host: resolvedConnection.host,
+          connectionId: resolvedConnection.id,
           clusterHostRegex: resolvedConnection.clusterHostRegex
         })
         connTrace(
@@ -2051,6 +2052,17 @@ function App({
   useEffect(() => {
     stopAgentRunRef.current = stopAgentRun
   })
+
+  useEffect(() => {
+    return window.api.terminal.onConnectionOrigin(({ tabId }) => {
+      updateTab(tabId, (current) => ({
+        ...current,
+        connectionId: undefined,
+        connectionName: undefined,
+        isSsh: false
+      }))
+    })
+  }, [updateTab])
 
   useEffect(() => {
     return window.api.terminal.onEnvironmentDrift((event) => {
@@ -2646,6 +2658,9 @@ function App({
     const unsubscribe = window.api.agent.onEvent((event) => {
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
+      const visibleRunId =
+        activeRunIdRef.current.get(chatTabId) ?? activeAgentRunRef.current.get(chatTabId)?.runId
+      if (event.runId && visibleRunId && event.runId !== visibleRunId) return
       if (event.type === 'usage') {
         const hasTokenDelta =
           event.input > 0 ||
@@ -5888,7 +5903,7 @@ function App({
     const terminalTabId = activeTabIdRef.current
     const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
     const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
-    const terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
+    let terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
     const rawInput = (overrideInput ?? tab?.agentInput ?? '').trim()
     const displayInput = stripComposerRefTokens(rawInput).trim()
     if (!displayInput && !hasComposerRefTokens(rawInput)) return
@@ -6023,6 +6038,20 @@ function App({
     setThinking(t.input.thinkingAnalyzingRequest)
 
     const terminalContext = await window.api.terminal.getContext(terminalTabId)
+    if (terminalContext.connectionOrigin === 'manual-shell' && terminalTab?.connectionId) {
+      updateTab(terminalTabId, (current) => ({
+        ...current,
+        connectionId: undefined,
+        connectionName: undefined,
+        isSsh: false
+      }))
+      terminalTab = {
+        ...terminalTab,
+        connectionId: undefined,
+        connectionName: undefined,
+        isSsh: false
+      }
+    }
     connTrace(
       'getContext',
       `tab=${terminalTabId}`,
@@ -6083,7 +6112,8 @@ function App({
       promptHost: terminalContext.promptHost,
       aliases: terminalContext.aliases,
       expectedHost: terminalContext.expectedHost,
-      returnToJumpHost: terminalContext.returnToJumpHost
+      returnToJumpHost: terminalContext.returnToJumpHost,
+      monitorPolicy: terminalContext.monitorPolicy
     })
     connTrace(
       'route',

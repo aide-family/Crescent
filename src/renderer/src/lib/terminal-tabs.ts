@@ -106,6 +106,14 @@ export type AgentRunStep =
       isError?: boolean
       interrupted?: boolean
       timedOut?: boolean
+      executionId?: string
+      lifecycle?:
+        | 'blocked-before-dispatch'
+        | 'completed'
+        | 'interrupted'
+        | 'timed-out'
+        | 'completion-unknown'
+      dispatchPending?: boolean
       toolCallId?: string
       /** Terminal pane where this PTY command is running. */
       tabId?: string

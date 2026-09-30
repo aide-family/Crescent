@@ -1,6 +1,6 @@
 import { CopyIcon, RefreshCwIcon, Settings2Icon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import whaleSprite from '@renderer/assets/whale-sprite.png'
+import whaleIdlePoster from '@renderer/assets/whale-idle-poster.png'
 import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import type { WhaleMonitorConfigInput, WhaleMonitorSnapshot } from '../../../shared/whale-monitor'
 
@@ -94,7 +94,7 @@ function WhaleAvatar({
         <img
           aria-hidden="true"
           draggable={false}
-          src={whaleSprite}
+          src={whaleIdlePoster}
           className={`whale-pet-sprite absolute inset-0 h-full w-full object-contain drop-shadow-xl ${videoReady && !videoFailed ? 'opacity-0' : ''}`}
         />
         {motion.src && !videoFailed && (
@@ -107,7 +107,7 @@ function WhaleAvatar({
             playsInline
             preload="auto"
             src={motion.src}
-            className="whale-pet-sprite absolute inset-0 h-full w-full object-contain drop-shadow-xl"
+            className={`whale-pet-sprite absolute inset-0 h-full w-full object-contain drop-shadow-xl ${videoReady ? 'opacity-100' : 'opacity-0'}`}
             onCanPlay={() => setVideoState({ token: motion.token, ready: true, failed: false })}
             onEnded={() => onMotionEnded(motion.token)}
             onError={() => {
@@ -529,10 +529,10 @@ export function WhaleMonitor({
     >
       {detailsOpen ? (
         <section
-          className={`whale-widget-panel ${panelOpensAbove ? 'whale-widget-panel-above' : 'whale-widget-panel-below'} ${panelAlignsRight ? 'right-0' : 'left-0'} w-[min(370px,calc(100vw-24px))] overflow-x-hidden rounded-xl border border-border bg-card/95 text-card-foreground shadow-2xl backdrop-blur-xl`}
-          style={{ maxHeight: panelMaxHeight, overflowY: 'auto' }}
+          className={`whale-widget-panel ${panelOpensAbove ? 'whale-widget-panel-above' : 'whale-widget-panel-below'} ${panelAlignsRight ? 'right-0' : 'left-0'} flex w-[min(370px,calc(100vw-24px))] flex-col overflow-hidden rounded-xl border border-border bg-card/95 text-card-foreground shadow-2xl backdrop-blur-xl`}
+          style={{ maxHeight: panelMaxHeight }}
         >
-          <header className="flex items-center justify-between border-b border-border px-3 py-2">
+          <header className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
             <div>
               <div className="flex items-center gap-1.5 text-sm font-semibold">
                 <WhalePetPortrait className="size-5" />
@@ -558,7 +558,7 @@ export function WhaleMonitor({
             </div>
           </header>
           {settingsOpen ? (
-            <div className="max-h-[min(70vh,560px)] space-y-3 overflow-auto p-3">
+            <div className="min-h-0 space-y-3 overflow-x-hidden overflow-y-auto p-3">
               <label className="block space-y-1 text-xs">
                 <span>{en ? 'Total budget' : '总额度'}</span>
                 <input
@@ -636,7 +636,7 @@ export function WhaleMonitor({
               </button>
             </div>
           ) : (
-            <div className="max-h-[min(70vh,560px)] space-y-3 overflow-auto p-3">
+            <div className="min-h-0 space-y-3 overflow-x-hidden overflow-y-auto p-3">
               <div className="flex items-end justify-between gap-2">
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground">

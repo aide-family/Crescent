@@ -2,6 +2,7 @@ import { isStaticallyReadonly } from '../../shared/command-guard'
 import type { ExecutionMode } from '../../shared/execution-plan'
 import { planBlocksBash, clearPlansForRun } from './change-plan'
 import type { WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 
 import { normalizeCommand } from '../../shared/command-guard'
 import { applyBatchOutputFormatting, planReadonlyBatch } from '../../shared/readonly-batch'
@@ -291,13 +292,11 @@ export function createPtyBashToolDefinition(
         if (!context) {
           const message =
             'No active Crescent terminal context for bash. Select a terminal pane and retry.'
-          options.onData(Buffer.from(`${message}\n`))
-          return { exitCode: 1 }
+          throw new Error(message)
         }
 
         if (context.webContents.isDestroyed()) {
-          options.onData(Buffer.from('Terminal webContents destroyed.\n'))
-          return { exitCode: 1 }
+          throw new Error('Terminal webContents destroyed; command was not sent.')
         }
 
         const combinedSignal = combineAbortSignals(options.signal, context.signal)
@@ -329,8 +328,21 @@ export function createPtyBashToolDefinition(
             : [result.output, result.error].filter(Boolean).join('\n')
         if (output) options.onData(Buffer.from(output.endsWith('\n') ? output : `${output}\n`))
 
-        if (combinedSignal?.aborted) return { exitCode: null }
-        return { exitCode: result.exitCode ?? (result.ok ? 0 : 1) }
+        if (combinedSignal?.aborted) throw new Error('Command interrupted.')
+        if (!result.dispatched || result.interrupted || result.timedOut || result.terminalExited) {
+          throw new Error(
+            result.error ||
+              (result.dispatched
+                ? 'Command completion could not be confirmed; verify the terminal before continuing.'
+                : 'Command was blocked before terminal dispatch.')
+          )
+        }
+        if (result.exitCode === undefined) {
+          throw new Error(
+            'Command completion could not be confirmed; verify the terminal before continuing.'
+          )
+        }
+        return { exitCode: result.exitCode }
       }
     }
   })
@@ -358,6 +370,22 @@ export async function executeReviewedPtyCommand(input: {
   const fingerprint = normalizeCommand(executableCommand)
   const failed = context.failedFingerprints ?? getFailedCommandFingerprints(context.runId)
   const zh = Boolean(context.locale?.toLowerCase().startsWith('zh'))
+  const executionId = randomUUID()
+  const blocked = (error: string): TerminalCommandExecutionResult => {
+    const result = { ok: false, command: executableCommand, output: '', error }
+    context.emit({
+      type: 'command',
+      phase: 'finished',
+      executionId,
+      lifecycle: 'blocked-before-dispatch',
+      command: executableCommand,
+      result,
+      runId: context.runId,
+      tabId: executionTabId,
+      fromSubagent
+    })
+    return result
+  }
 
   if (shouldBlockFailedRetry(fingerprint, failed)) {
     const message = zh
@@ -370,12 +398,7 @@ export async function executeReviewedPtyCommand(input: {
       tabId: executionTabId,
       fromSubagent
     })
-    return {
-      ok: false,
-      command: executableCommand,
-      output: '',
-      error: message
-    }
+    return blocked(message)
   }
 
   if (
@@ -383,35 +406,51 @@ export async function executeReviewedPtyCommand(input: {
     !input.planGuard &&
     (planBlocksBash(context.runId) || !isStaticallyReadonly(executableCommand))
   ) {
-    return {
-      ok: false,
-      command: executableCommand,
-      output: '',
-      error:
-        'Planned execution permits read-only investigation only. Submit a new exact change plan for approval; no out-of-plan command was executed.'
-    }
+    return blocked(
+      'Planned execution permits read-only investigation only. Submit a new exact change plan for approval; no out-of-plan command was executed.'
+    )
   }
 
   const executeWithProgress = async (): Promise<TerminalCommandExecutionResult> => {
-    if (input.signal?.aborted)
-      return { ok: false, command: executableCommand, output: '', interrupted: true }
-    input.planGuard?.()
+    if (input.signal?.aborted) {
+      const result = { ok: false, command: executableCommand, output: '', interrupted: true }
+      context.emit({
+        type: 'command',
+        phase: 'finished',
+        executionId,
+        lifecycle: 'interrupted',
+        command: executableCommand,
+        result,
+        runId: context.runId,
+        tabId: executionTabId,
+        fromSubagent
+      })
+      return result
+    }
+    try {
+      input.planGuard?.()
+    } catch (cause) {
+      return blocked(cause instanceof Error ? cause.message : String(cause))
+    }
     const startedAt = Date.now()
     const batchPlan = planReadonlyBatch(executableCommand)
     const ptyCommand =
       !input.planGuard && batchPlan.inject ? batchPlan.ptyCommand : executableCommand
 
-    context.emit({
-      type: 'command',
-      phase: 'started',
-      command: executableCommand,
-      runId: context.runId,
-      tabId: executionTabId,
-      executionTarget: context.subterminalName
-        ? undefined
-        : readTerminalExecutionTarget(context.webContents.id, executionTabId),
-      fromSubagent
-    })
+    const onDispatched = (): void => {
+      context.emit({
+        type: 'command',
+        phase: 'started',
+        executionId,
+        command: executableCommand,
+        runId: context.runId,
+        tabId: executionTabId,
+        executionTarget: context.subterminalName
+          ? undefined
+          : readTerminalExecutionTarget(context.webContents.id, executionTabId),
+        fromSubagent
+      })
+    }
 
     const runOnTab = async (tabId: string): Promise<TerminalCommandExecutionResult> =>
       context.subterminalName
@@ -423,7 +462,8 @@ export async function executeReviewedPtyCommand(input: {
             timeoutMs,
             'wait',
             input.signal,
-            Boolean(context.isSsh)
+            Boolean(context.isSsh),
+            onDispatched
           )
         : executeCommandInTerminalWithPermissionRequest(
             context.webContents,
@@ -434,7 +474,8 @@ export async function executeReviewedPtyCommand(input: {
             Boolean(
               context.isSsh ||
               (tabId === context.executionTabId ? false : context.parentConnectionId)
-            )
+            ),
+            onDispatched
           )
 
     let targetTabId = executionTabId
@@ -478,7 +519,12 @@ export async function executeReviewedPtyCommand(input: {
 
     // EnvGuard did not inject this command. A later verified prompt must not
     // leave the command blocked as if it had failed on the remote host.
-    if (!result.ok && result.code !== 'SSH_TARGET_UNAVAILABLE' && fingerprint) {
+    if (
+      result.dispatched &&
+      !result.ok &&
+      result.code !== 'SSH_TARGET_UNAVAILABLE' &&
+      fingerprint
+    ) {
       failed.add(fingerprint)
     }
 
@@ -492,13 +538,29 @@ export async function executeReviewedPtyCommand(input: {
     context.emit({
       type: 'command',
       phase: 'finished',
+      executionId,
+      lifecycle: !formattedResult.dispatched
+        ? 'blocked-before-dispatch'
+        : formattedResult.interrupted
+          ? 'interrupted'
+          : formattedResult.timedOut
+            ? 'timed-out'
+            : formattedResult.terminalExited || formattedResult.exitCode === undefined
+              ? 'completion-unknown'
+              : 'completed',
       command: executableCommand,
       result: {
         ok: formattedResult.ok,
         command: executableCommand,
         mode: formattedResult.mode,
         cwd: formattedResult.cwd,
-        exitCode: formattedResult.exitCode,
+        exitCode:
+          formattedResult.dispatched &&
+          !formattedResult.interrupted &&
+          !formattedResult.timedOut &&
+          !formattedResult.terminalExited
+            ? formattedResult.exitCode
+            : undefined,
         output: input.planGuard
           ? '[Plan output withheld; checked by host.]'
           : formattedResult.output,
@@ -593,17 +655,14 @@ export async function executeReviewedPtyCommand(input: {
       tabId: executionTabId,
       fromSubagent
     })
-    return {
-      ok: false,
-      command: executableCommand,
-      output: '',
-      error: [
+    return blocked(
+      [
         'Command execution was rejected by the user. Continue from this result and do not assume the command ran.',
         rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
       ]
         .filter(Boolean)
         .join('\n')
-    }
+    )
   }
 
   context.emit({

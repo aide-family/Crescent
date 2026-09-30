@@ -22,6 +22,8 @@ export function runtimeAnchorHost(state: ConnectionState): string | undefined {
 
 export type TerminalAlignment = 'unknown' | 'aligned' | 'drifted'
 export type TerminalMode = 'none' | 'pty' | 'pipe'
+export type ConnectionOrigin = 'connection-card' | 'manual-shell' | 'special-ssh'
+export type MonitorPolicy = 'managed' | 'manual' | 'special'
 
 export interface RecoveryBudget {
   /** Drift key (expected|observed) this budget applies to. */
@@ -32,6 +34,11 @@ export interface RecoveryBudget {
 
 export interface ConnectionState {
   mode: TerminalMode
+  connectionOrigin?: ConnectionOrigin
+  monitorPolicy?: MonitorPolicy
+  targetScope?: 'host' | 'cluster'
+  sshHopChain?: string[]
+  manualSshActive?: boolean
   owner?: string
   connectionId?: string
   connectionName?: string
@@ -94,6 +101,11 @@ export interface RecoveryStateLike {
 export function createConnectionState(mode: TerminalMode = 'none'): ConnectionState {
   return {
     mode,
+    connectionOrigin: 'manual-shell',
+    monitorPolicy: 'manual',
+    targetScope: 'host',
+    sshHopChain: [],
+    manualSshActive: false,
     aliases: [],
     alignment: 'unknown',
     ready: false
@@ -104,7 +116,13 @@ export function createConnectionState(mode: TerminalMode = 'none'): ConnectionSt
 export function setConnectionExpectedHost(
   state: ConnectionState,
   host: string | null | undefined,
-  options?: { clusterHostRegex?: string | null; connectionId?: string; connectionName?: string }
+  options?: {
+    clusterHostRegex?: string | null
+    connectionId?: string
+    connectionName?: string
+    connectionOrigin?: ConnectionOrigin
+    sshHopChain?: string[]
+  }
 ): ConnectionState {
   const expected = normalizeHostToken(host ?? '')
   const clusterHostRegex = normalizeClusterHostRegex(
@@ -119,6 +137,12 @@ export function setConnectionExpectedHost(
       runtimeExpectedHost: undefined,
       jumpPromptHost: undefined,
       clusterHostRegex: undefined,
+      connectionOrigin: 'manual-shell',
+      monitorPolicy: 'manual',
+      targetScope: 'host',
+      sshHopChain: [],
+      manualSshActive: false,
+      aliases: [],
       alignment: 'unknown',
       ready: false,
       connectionFault: undefined,
@@ -133,6 +157,16 @@ export function setConnectionExpectedHost(
     runtimeExpectedHost: undefined,
     jumpPromptHost: undefined,
     clusterHostRegex,
+    connectionOrigin: options?.connectionOrigin ?? 'manual-shell',
+    monitorPolicy:
+      options?.connectionOrigin === 'special-ssh'
+        ? 'special'
+        : options?.connectionOrigin === 'connection-card'
+          ? 'managed'
+          : 'manual',
+    targetScope: clusterHostRegex ? 'cluster' : 'host',
+    sshHopChain: options?.sshHopChain ?? [],
+    manualSshActive: false,
     alignment: 'unknown',
     ready: false,
     connectionFault: undefined,
@@ -147,7 +181,8 @@ export function patchConnectionClusterHostRegex(
 ): ConnectionState {
   return {
     ...state,
-    clusterHostRegex: normalizeClusterHostRegex(clusterHostRegex)
+    clusterHostRegex: normalizeClusterHostRegex(clusterHostRegex),
+    targetScope: normalizeClusterHostRegex(clusterHostRegex) ? 'cluster' : 'host'
   }
 }
 
@@ -161,6 +196,7 @@ export type ClusterHostPatternValidation =
   | { ok: false; error: string; reason: ClusterHostPatternReason }
 
 const GLOB_META = /[*?]/
+const HOST_GLOB = /^[A-Za-z0-9.*?_-]+$/
 const REGEX_ESCAPE = /[\\^$+{}[\]().|]/
 const REDOS_NESTED_QUANTIFIER = /(?:\+|\*|\}|\{)\s*(?:\+|\*|\{)/
 const REDOS_STACKED_WILDCARDS = /(?:\.\*){3,}/
@@ -182,8 +218,8 @@ function tryCompileRegex(source: string): boolean {
 export function globToAnchoredRegexSource(glob: string): string {
   let compiled = ''
   for (const char of glob) {
-    if (char === '*') compiled += '.*'
-    else if (char === '?') compiled += '.'
+    if (char === '*') compiled += '[^.]*'
+    else if (char === '?') compiled += '[^.]'
     else if (char === '.' || REGEX_ESCAPE.test(char)) compiled += `\\${char}`
     else compiled += char
   }
@@ -208,6 +244,13 @@ export function compileClusterHostPattern(
     }
   }
 
+  // Host globs such as web*.cluster.example are valid JS regexes with a
+  // different meaning. Recognize host-shaped globs before trying regex mode.
+  if (GLOB_META.test(trimmed) && HOST_GLOB.test(trimmed)) {
+    const regex = globToAnchoredRegexSource(trimmed)
+    return { ok: true, value: trimmed, regex }
+  }
+
   if (tryCompileRegex(trimmed)) {
     if (looksLikeRedos(trimmed)) {
       return {
@@ -216,7 +259,7 @@ export function compileClusterHostPattern(
         error: 'Cluster host regex looks too complex; simplify the pattern.'
       }
     }
-    return { ok: true, value: trimmed, regex: trimmed }
+    return { ok: true, value: trimmed, regex: `^(?:${trimmed})$` }
   }
 
   if (GLOB_META.test(trimmed)) {

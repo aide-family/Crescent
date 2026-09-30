@@ -10,7 +10,12 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import { listConnections } from '../connections/ipc'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
-import { normalizeHostToken, isPromptHostAligned } from '../../shared/terminal-prompt-host'
+import {
+  normalizeHostToken,
+  isPromptHostAligned,
+  isLocalMachinePromptHost,
+  findNewestPromptSignal
+} from '../../shared/terminal-prompt-host'
 import {
   classifyPipeCommand,
   applyConfirmedLoginAnchor,
@@ -28,7 +33,11 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
-import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
+import {
+  extractSshDestinationHost,
+  isSshCommandLine,
+  sanitizeExpectedTargetHost
+} from '../../shared/ssh-destination'
 import { isIpv4Literal } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import type { TerminalExecutionTarget } from '../../shared/agent-types'
@@ -91,6 +100,8 @@ export interface TerminalCommandExecutionResult {
   driftKey?: string
   subterminalName?: string
   subterminalTabId?: string
+  /** True only after the command wrapper was handed to the terminal. */
+  dispatched?: boolean
 }
 
 export interface TemporarySubterminalOpenOptions {
@@ -155,6 +166,48 @@ const degradedRecoveryOutput = new Map<string, string>()
  * through this map.
  */
 const connectionStates = new Map<string, ConnectionState>()
+const manualInputLines = new Map<string, string>()
+
+/** User keyboard input is the authority for a manually initiated SSH hop. */
+function noteManualTerminalInput(
+  key: string,
+  data: string,
+  webContents: WebContents,
+  tabId: string
+): void {
+  if (data.includes('\x1b')) {
+    manualInputLines.delete(key)
+    return
+  }
+  let line = manualInputLines.get(key) ?? ''
+  for (const char of data) {
+    if (char === '\x7f' || char === '\b') {
+      line = line.slice(0, -1)
+    } else if (char === '\r' || char === '\n') {
+      if (
+        isSshCommandLine(line.trim()) &&
+        !hasUnterminatedSecretPrompt(terminalOutputBuffers.get(key) ?? '')
+      ) {
+        const state = getConnectionState(key)
+        const manual = setConnectionExpectedHost(state, null)
+        setConnectionState(key, {
+          ...manual,
+          connectionOrigin: 'manual-shell',
+          monitorPolicy: 'manual',
+          manualSshActive: true
+        })
+        sendIfAlive(webContents, tabId, key, 'terminal:connection-origin', {
+          tabId,
+          connectionOrigin: 'manual-shell'
+        })
+      }
+      line = ''
+    } else if (char >= ' ' && line.length < 4096) {
+      line += char
+    }
+  }
+  manualInputLines.set(key, line)
+}
 /** Owning renderer for drift notifications (kept across soft restarts). */
 const sessionWebContents = new Map<string, WebContents>()
 /** Raw echo lines of automation-pasted commands, suppressed from display by default. */
@@ -277,7 +330,13 @@ function getConnectionState(key: string, mode: ConnectionState['mode'] = 'none')
 function setSessionExpectedHost(
   key: string,
   host: string | null | undefined,
-  options?: { clusterHostRegex?: string | null; connectionId?: string; connectionName?: string }
+  options?: {
+    clusterHostRegex?: string | null
+    connectionId?: string
+    connectionName?: string
+    connectionOrigin?: ConnectionState['connectionOrigin']
+    sshHopChain?: string[]
+  }
 ): void {
   const state = getConnectionState(key)
   setConnectionState(key, setConnectionExpectedHost(state, host, options))
@@ -299,7 +358,8 @@ export function executeCommandInTerminal(
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   tabId?: string,
   signal?: AbortSignal,
-  requiredSsh = false
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
   const normalizedTabId = normalizeTabId(tabId)
   const normalizedCommand = command.trim()
@@ -324,6 +384,7 @@ export function executeCommandInTerminal(
   const boundTarget = connectionStates.get(key)
   if (
     requiredSsh &&
+    boundTarget?.monitorPolicy !== 'manual' &&
     !boundTarget?.expectedHost &&
     (session || !parseTemporarySubterminalTabId(normalizedTabId))
   ) {
@@ -503,7 +564,9 @@ export function executeCommandInTerminal(
     session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
   }
 
-  return pending.promise
+  onDispatched?.()
+
+  return pending.promise.then((result) => ({ ...result, dispatched: true }))
 }
 
 function unavailableSshTarget(
@@ -561,9 +624,12 @@ export function readTerminalExecutionTarget(
     paneRole: parseTemporarySubterminalTabId(tabId) ? 'subterminal' : 'main',
     paneId: tabId,
     owner: state?.owner ?? 'user',
-    executionMode: state?.expectedHost ? 'ssh' : 'local',
+    executionMode: state?.expectedHost || state?.manualSshActive ? 'ssh' : 'local',
     connectionName: state?.connectionName,
-    expectedTarget: (state ? runtimeAnchorHost(state) : undefined) ?? state?.expectedHost
+    expectedTarget:
+      (state ? runtimeAnchorHost(state) : undefined) ??
+      state?.expectedHost ??
+      (state?.manualSshActive ? state.promptHost : undefined)
   }
 }
 
@@ -630,7 +696,8 @@ export async function executeCommandInTerminalWithPermissionRequest(
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   tabId?: string,
   signal?: AbortSignal,
-  requiredSsh = false
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
   let result = await executeCommandInTerminal(
     webContents.id,
@@ -638,7 +705,8 @@ export async function executeCommandInTerminalWithPermissionRequest(
     timeoutMs,
     tabId,
     signal,
-    requiredSsh
+    requiredSsh,
+    onDispatched
   )
 
   if (isLocalFilePermissionFailure(result)) {
@@ -656,7 +724,8 @@ export async function executeCommandInTemporaryTerminal(
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   mode: 'wait' | 'detach' = 'wait',
   signal?: AbortSignal,
-  requiredSsh = false
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
   const parent = normalizeTabId(parentTabId)
   const normalizedCommand = command.trim()
@@ -714,7 +783,8 @@ export async function executeCommandInTemporaryTerminal(
       timeoutMs,
       entry.tabId,
       signal,
-      requiredSsh
+      requiredSsh,
+      onDispatched
     )
 
     if (isLocalFilePermissionFailure(result)) {
@@ -1147,10 +1217,25 @@ export function registerTerminalIpc(): void {
           error: 'SSH connection identity does not match a saved connection.'
         }
       }
-      setSessionExpectedHost(key, host || null, {
+      const actionHops = (savedConnection?.actions ?? [])
+        .map(extractSshDestinationHost)
+        .filter((hop): hop is string => Boolean(hop))
+      const proxyJump = (savedConnection?.sshOptions ?? []).flatMap((option) => {
+        const match = option.match(/(?:^-J\s*|ProxyJump=)([^\s]+)/i)
+        return match ? match[1].split(',').map((hop) => hop.replace(/^.*@/, '')) : []
+      })
+      const sshHopChain = [...proxyJump, host, ...actionHops].filter(Boolean)
+      const connectionOrigin = savedConnection
+        ? sshHopChain.length > 1
+          ? 'special-ssh'
+          : 'connection-card'
+        : 'manual-shell'
+      setSessionExpectedHost(key, savedConnection ? host : null, {
         clusterHostRegex: host ? (savedConnection?.clusterHostRegex ?? clusterHostRegex) : null,
         connectionId: savedConnection?.id,
-        connectionName: savedConnection?.name
+        connectionName: savedConnection?.name,
+        connectionOrigin,
+        sshHopChain
       })
       return { ok: true as const, host: host || undefined }
     }
@@ -1225,6 +1310,25 @@ export function registerTerminalIpc(): void {
           localHost
         }).promptHost
         const expectedFinalHost = expectedTargetHost || state.expectedHost
+        const onKnownIntermediateHop = Boolean(
+          promptHost &&
+          state.sshHopChain?.slice(0, -1).some((hop) => isPromptHostAligned(promptHost, hop))
+        )
+        if (
+          state.monitorPolicy === 'special' &&
+          expectedFinalHost &&
+          promptHost &&
+          !isPromptHostAligned(promptHost, expectedFinalHost) &&
+          (onKnownIntermediateHop || !matchesClusterHostRegex(promptHost, state.clusterHostRegex))
+        ) {
+          setConnectionState(targetKey, {
+            ...state,
+            promptHost,
+            alignment: 'unknown',
+            ready: false
+          })
+          return undefined
+        }
         if (
           promptHost &&
           jumpPromptHost &&
@@ -1385,6 +1489,7 @@ export function registerTerminalIpc(): void {
 
     if (isUserInputLocked(event.sender.id, tabId)) return
 
+    noteManualTerminalInput(getSessionKey(event.sender.id, tabId), data, event.sender, tabId)
     session.write(data)
   })
 
@@ -1511,6 +1616,11 @@ export function registerTerminalIpc(): void {
     // Live buffer only. After SSH drop / respawn the SSOT host is stale; a
     // missing or local-shell prompt must not look like the current remote.
     const promptHost = resolved?.promptHost
+    const manualSshActive = Boolean(
+      state?.manualSshActive &&
+      promptHost !== 'local-shell' &&
+      !(promptHost && isLocalMachinePromptHost(promptHost, hostname()))
+    )
     const gateAlignment = state
       ? resolveGateAlignment(state, output, hostname())
       : (resolved?.alignment ?? 'unknown')
@@ -1546,12 +1656,18 @@ export function registerTerminalIpc(): void {
         : ('main' as const),
       paneId: tabId,
       owner: state?.owner ?? 'user',
-      executionMode: state?.expectedHost ? ('ssh' as const) : ('local' as const),
+      executionMode: state?.expectedHost || manualSshActive ? ('ssh' as const) : ('local' as const),
       connectionId: state?.connectionId,
       connectionName: state?.connectionName,
       expectedTarget: (state ? runtimeAnchorHost(state) : undefined) ?? state?.expectedHost,
       observedHost: promptHost,
-      connectionPhase: phase
+      connectionPhase: phase,
+      connectionOrigin: state?.connectionOrigin ?? 'manual-shell',
+      monitorPolicy: state?.monitorPolicy ?? 'manual',
+      targetScope: state?.targetScope ?? 'host',
+      sshHopChain: state?.sshHopChain ?? [],
+      manualSshActive,
+      clusterHostRegex: state?.clusterHostRegex
     }
     if (!session) {
       // No live PTY: never report aligned/ready from stale SSOT or output buffer.
@@ -1701,7 +1817,7 @@ function detectEnvironmentDriftForSession(
   const driftKey = `${anchorHost}|${observedHost}`
 
   const webContents = sessionWebContents.get(key)
-  if (webContents && !webContents.isDestroyed()) {
+  if (state.monitorPolicy === 'managed' && webContents && !webContents.isDestroyed()) {
     sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
       tabId,
       observedHost,
@@ -2211,6 +2327,15 @@ function appendTerminalContext(key: string, data: string): void {
   const output = next.slice(-MAX_CONTEXT_BUFFER)
   terminalOutputBuffers.set(key, output)
   const state = connectionStates.get(key)
+  if (state?.manualSshActive && !state.expectedHost) {
+    const signal = findNewestPromptSignal(data)
+    if (
+      signal?.kind === 'local' ||
+      (signal?.kind === 'host' && isLocalMachinePromptHost(signal.host, hostname()))
+    ) {
+      setConnectionState(key, { ...state, manualSshActive: false })
+    }
+  }
   if (!state?.expectedHost) return
   if (!state.ready && state.connectionFault !== 'degraded') return
   const sshClosed =

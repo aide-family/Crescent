@@ -418,6 +418,16 @@ export interface TerminalCommandResult {
   recoveryAction?: 'reconnect-or-select-target' | 'wait-for-target-prompt'
   subterminalName?: string
   subterminalTabId?: string
+  dispatched?: boolean
+}
+
+export interface TerminalExecutionTarget {
+  paneRole: 'main' | 'subterminal'
+  paneId: string
+  owner?: string
+  executionMode: 'local' | 'ssh'
+  connectionName?: string
+  expectedTarget?: string
 }
 
 export interface TerminalExecutionTarget {
@@ -629,6 +639,13 @@ export type AgentEvent =
   | ({
       type: 'command'
       phase: 'started' | 'finished'
+      executionId?: string
+      lifecycle?:
+        | 'blocked-before-dispatch'
+        | 'completed'
+        | 'interrupted'
+        | 'timed-out'
+        | 'completion-unknown'
       command: string
       result?: TerminalCommandResult
       executionTarget?: TerminalExecutionTarget

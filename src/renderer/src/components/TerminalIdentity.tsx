@@ -44,7 +44,11 @@ export function TerminalIdentity({
   const phase = identity.connectionPhase
   const warning = ssh && phase !== 'ssh-ready'
   const observed = identity.observedHost
-  const target = identity.expectedTarget
+  const target =
+    identity.targetScope === 'cluster'
+      ? identity.clusterHostRegex || identity.expectedTarget
+      : identity.expectedTarget
+  const manualSsh = identity.connectionOrigin === 'manual-shell' && identity.manualSshActive
   const owner =
     identity.owner === 'user'
       ? t.terminal.ownerUser
@@ -62,7 +66,9 @@ export function TerminalIdentity({
             ? t.terminal.targetDegraded
             : undefined
   const location = ssh
-    ? [identity.connectionName, target].filter(Boolean).join(' / ') || t.terminal.targetUnknown
+    ? manualSsh
+      ? observed || t.terminal.targetUnknown
+      : [identity.connectionName, target].filter(Boolean).join(' / ') || t.terminal.targetUnknown
     : t.terminal.targetLocal
   const observedLabel =
     observed === 'local-shell'
@@ -73,10 +79,11 @@ export function TerminalIdentity({
   const full = [
     identity.paneRole === 'subterminal' ? t.terminal.subterminal : t.terminal.mainTerminal,
     owner,
-    ssh ? 'SSH' : t.terminal.targetLocal,
+    manualSsh ? t.terminal.manualSsh : ssh ? 'SSH' : t.terminal.targetLocal,
     location,
     status,
-    warning && observedLabel ? `${t.terminal.targetUnknown}: ${observedLabel}` : undefined
+    warning && observedLabel ? `${t.terminal.targetUnknown}: ${observedLabel}` : undefined,
+    identity.monitorPolicy === 'special' ? identity.sshHopChain?.join(' → ') : undefined
   ]
     .filter(Boolean)
     .join(' · ')
@@ -100,12 +107,16 @@ export function TerminalIdentity({
         </span>
       )}
       {owner && <span className="max-w-28 shrink-0 truncate">{owner}</span>}
-      <span className="shrink-0">{ssh ? 'SSH' : t.terminal.targetLocal}</span>
+      <span className="shrink-0">
+        {manualSsh ? t.terminal.manualSsh : ssh ? 'SSH' : t.terminal.targetLocal}
+      </span>
       {ssh && identity.connectionName && (
         <span className="min-w-0 truncate">{identity.connectionName}</span>
       )}
       {ssh && (
-        <span className="max-w-[45%] shrink-0 truncate font-medium">{target || location}</span>
+        <span className="max-w-[45%] shrink-0 truncate font-medium">
+          {manualSsh ? observed || location : target || location}
+        </span>
       )}
       {status && <span className="shrink-0 font-medium">{status}</span>}
       {warning && observedLabel && <span className="min-w-0 truncate">{observedLabel}</span>}

@@ -654,14 +654,20 @@ function ToolCallRow({
         .join(' · ')
     : undefined
   const statusLabel = running
-    ? t.input.toolRunning
-    : step.interrupted
-      ? t.input.toolInterrupted
-      : step.timedOut
-        ? t.input.toolTimedOut
-        : step.isError
-          ? t.input.toolFailed
-          : t.input.toolFinished
+    ? step.dispatchPending
+      ? t.input.toolReviewing
+      : t.input.toolRunning
+    : step.lifecycle === 'blocked-before-dispatch'
+      ? t.input.toolBlocked
+      : step.lifecycle === 'completion-unknown'
+        ? t.input.toolCompletionUnknown
+        : step.interrupted
+          ? t.input.toolInterrupted
+          : step.timedOut
+            ? t.input.toolTimedOut
+            : step.isError
+              ? t.input.toolFailed
+              : t.input.toolFinished
   const warnFinish = Boolean(step.interrupted || step.timedOut)
 
   return (
@@ -699,7 +705,7 @@ function ToolCallRow({
                 {executionLabel}
               </button>
             )}
-            {running && isPtyCommand && onInterruptCommand ? (
+            {running && !step.dispatchPending && isPtyCommand && onInterruptCommand ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1874,12 +1880,21 @@ function coalesceVisiblePtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
     ) {
       const left = (prev.command || prev.argsText || '').trim()
       const right = (step.command || step.argsText || '').trim()
-      if (left && right && left === right) {
+      if (
+        left &&
+        right &&
+        left === right &&
+        (!prev.executionId || !step.executionId || prev.executionId === step.executionId) &&
+        (!prev.toolCallId || !step.toolCallId || prev.toolCallId === step.toolCallId)
+      ) {
         const merged: Extract<AgentRunStep, { kind: 'tool' }> = {
           ...prev,
           name: 'bash',
           phase: step.phase === 'finished' || prev.phase === 'finished' ? 'finished' : prev.phase,
           command: prev.command || step.command,
+          executionId: prev.executionId || step.executionId,
+          lifecycle: prev.lifecycle || step.lifecycle,
+          dispatchPending: Boolean(prev.dispatchPending && step.dispatchPending),
           resultText: prev.resultText || step.resultText,
           isError: Boolean(prev.isError) || Boolean(step.isError),
           toolCallId: prev.toolCallId || step.toolCallId,

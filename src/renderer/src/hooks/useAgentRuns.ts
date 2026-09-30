@@ -556,6 +556,7 @@ export function useAgentRuns({
                   toolCallId: event.toolCallId || openStep.toolCallId,
                   command: command || openStep.command,
                   tabId: event.tabId?.trim() || openStep.tabId,
+                  dispatchPending: openStep.dispatchPending,
                   // Prefer plain command over JSON args for display.
                   argsText: command || openStep.command ? undefined : argsOrResult || undefined
                 }
@@ -567,6 +568,7 @@ export function useAgentRuns({
               kind: 'tool',
               name: toolName,
               phase: 'started',
+              dispatchPending: isPty,
               argsText: isPty && command ? undefined : argsOrResult || undefined,
               command: command || undefined,
               toolCallId: event.toolCallId,
@@ -583,6 +585,7 @@ export function useAgentRuns({
                 ...existing,
                 name: existing.name === 'terminal' ? 'bash' : existing.name,
                 phase: 'finished',
+                dispatchPending: false,
                 // Prefer PTY command observation when already present; otherwise use tool result.
                 resultText: existing.resultText || argsOrResult || undefined,
                 isError: Boolean(event.isError) || Boolean(existing.isError),
@@ -600,6 +603,7 @@ export function useAgentRuns({
             kind: 'tool',
             name: toolName,
             phase: 'finished',
+            dispatchPending: false,
             resultText: argsOrResult || undefined,
             isError: Boolean(event.isError),
             command: command || undefined,
@@ -617,14 +621,21 @@ export function useAgentRuns({
           if (event.phase === 'started') {
             // Merge into the open bash tool step so bash + terminal are not duplicated.
             const openIndex = (() => {
-              const bash = findOpenToolStepIndex(steps, 'bash')
-              if (bash >= 0) return bash
-              return findOpenToolStepIndex(steps, 'terminal')
+              return steps.findLastIndex(
+                (step) =>
+                  step.kind === 'tool' &&
+                  step.phase === 'started' &&
+                  (step.name === 'bash' || step.name === 'terminal') &&
+                  !step.executionId &&
+                  step.command?.trim() === event.command.trim()
+              )
             })()
             if (openIndex >= 0 && steps[openIndex].kind === 'tool') {
               steps[openIndex] = {
                 ...steps[openIndex],
                 name: 'bash',
+                executionId: event.executionId,
+                dispatchPending: false,
                 command: event.command || steps[openIndex].command,
                 tabId: event.tabId?.trim() || steps[openIndex].tabId,
                 executionTarget: event.executionTarget ?? steps[openIndex].executionTarget,
@@ -638,6 +649,8 @@ export function useAgentRuns({
               kind: 'tool',
               name: 'bash',
               phase: 'started',
+              executionId: event.executionId,
+              dispatchPending: false,
               command: event.command,
               tabId: event.tabId?.trim() || undefined,
               executionTarget: event.executionTarget
@@ -647,9 +660,21 @@ export function useAgentRuns({
 
           const observation = formatCommandObservation(event, t)
           const openIndex = (() => {
-            const bash = findOpenToolStepIndex(steps, 'bash')
-            if (bash >= 0) return bash
-            return findOpenToolStepIndex(steps, 'terminal')
+            const exact = steps.findIndex(
+              (step) =>
+                step.kind === 'tool' &&
+                step.executionId === event.executionId &&
+                Boolean(event.executionId)
+            )
+            if (exact >= 0) return exact
+            return steps.findLastIndex(
+              (step) =>
+                step.kind === 'tool' &&
+                step.phase === 'started' &&
+                (step.name === 'bash' || step.name === 'terminal') &&
+                !step.executionId &&
+                step.command?.trim() === event.command.trim()
+            )
           })()
           if (openIndex >= 0) {
             const existing = steps[openIndex]
@@ -658,6 +683,9 @@ export function useAgentRuns({
                 ...existing,
                 name: 'bash',
                 phase: 'finished',
+                executionId: event.executionId,
+                lifecycle: event.lifecycle,
+                dispatchPending: false,
                 resultText: observation || undefined,
                 isError: event.result ? !event.result.ok : false,
                 interrupted: Boolean(event.result?.interrupted),
@@ -672,12 +700,21 @@ export function useAgentRuns({
           }
 
           // Prefer updating a just-finished PTY row with the same command over adding another.
-          const finishedSame = findFinishedPtyToolStepIndex(steps, event.command)
+          const finishedSame = steps.findLastIndex(
+            (step) =>
+              step.kind === 'tool' &&
+              step.phase === 'finished' &&
+              !step.executionId &&
+              step.command?.trim() === event.command.trim()
+          )
           if (finishedSame >= 0 && steps[finishedSame].kind === 'tool') {
             const existing = steps[finishedSame]
             steps[finishedSame] = {
               ...existing,
               name: 'bash',
+              executionId: event.executionId,
+              lifecycle: event.lifecycle,
+              dispatchPending: false,
               resultText: existing.resultText || observation || undefined,
               isError: event.result ? !event.result.ok : Boolean(existing.isError),
               interrupted: Boolean(event.result?.interrupted) || Boolean(existing.interrupted),
@@ -695,6 +732,9 @@ export function useAgentRuns({
             kind: 'tool',
             name: 'bash',
             phase: 'finished',
+            executionId: event.executionId,
+            lifecycle: event.lifecycle,
+            dispatchPending: false,
             command: event.command,
             resultText: observation || undefined,
             isError: event.result ? !event.result.ok : false,
@@ -772,16 +812,6 @@ function stampMissingStepSeq(steps: AgentRunStep[]): AgentRunStep[] {
   return changed ? next : steps
 }
 
-function findOpenToolStepIndex(steps: AgentRunStep[], name: string, toolCallId?: string): number {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index]
-    if (step.kind !== 'tool' || step.phase !== 'started') continue
-    if (toolCallId && step.toolCallId && step.toolCallId !== toolCallId) continue
-    if (step.name === name) return index
-  }
-  return -1
-}
-
 function isClassifyingStatusStep(step: AgentRunStep, t: Dictionary): boolean {
   if (step.kind !== 'status') return false
   return (
@@ -807,20 +837,7 @@ function findOpenPtyToolStepIndex(
       continue
     }
     if (step.name !== 'bash' && step.name !== 'terminal') continue
-    if (step.phase === 'started') return index
-    if (command && step.command === command) return index
-  }
-  return -1
-}
-
-function findFinishedPtyToolStepIndex(steps: AgentRunStep[], command?: string): number {
-  const trimmed = command?.trim()
-  if (!trimmed) return -1
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index]
-    if (step.kind !== 'tool' || step.phase !== 'finished') continue
-    if (step.name !== 'bash' && step.name !== 'terminal') continue
-    if (step.command?.trim() === trimmed) return index
+    if (step.phase === 'started' && (!command || step.command === command)) return index
   }
   return -1
 }
@@ -835,6 +852,8 @@ function coalesceAdjacentPtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
       prev?.kind === 'tool' &&
       isPtyToolName(step.name) &&
       isPtyToolName(prev.name) &&
+      (!prev.executionId || !step.executionId || prev.executionId === step.executionId) &&
+      (!prev.toolCallId || !step.toolCallId || prev.toolCallId === step.toolCallId) &&
       normalizeToolCommand(prev) === normalizeToolCommand(step) &&
       normalizeToolCommand(step)
     ) {
@@ -849,6 +868,9 @@ function coalesceAdjacentPtyToolSteps(steps: AgentRunStep[]): AgentRunStep[] {
               ? 'started'
               : 'finished',
         command: prev.command || step.command,
+        executionId: prev.executionId || step.executionId,
+        lifecycle: prev.lifecycle || step.lifecycle,
+        dispatchPending: Boolean(prev.dispatchPending && step.dispatchPending),
         toolCallId: prev.toolCallId || step.toolCallId,
         resultText: prev.resultText || step.resultText,
         isError: Boolean(prev.isError) || Boolean(step.isError),

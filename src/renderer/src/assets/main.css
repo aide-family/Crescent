@@ -1002,17 +1002,33 @@
   margin-left: -120px;
   transform-origin: 50% 92%;
   pointer-events: none;
+  overflow: hidden;
 }
 
 .whale-pet-sprite {
   transform-origin: 50% 92%;
-  animation: whale-pet-bob 3.4s ease-in-out infinite;
+  transition: opacity 160ms ease-in-out;
   filter: drop-shadow(0 6px 10px rgba(27, 74, 158, 0.28));
   pointer-events: none;
 }
 
+.whale-pet-motion {
+  animation: whale-pet-bob 3.4s ease-in-out infinite;
+}
+
 .whale-pet-busy {
   animation: whale-pet-busy-motion 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .whale-pet-motion,
+  .whale-pet-busy {
+    animation: none;
+  }
+
+  .whale-pet-sprite {
+    transition: none;
+  }
 }
 
 .whale-pet-ground {

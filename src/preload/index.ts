@@ -179,6 +179,12 @@ const api = {
       expectedTarget?: string
       observedHost?: string
       connectionPhase?: import('../shared/connection-state').ConnectionPhase
+      connectionOrigin?: import('../shared/connection-state').ConnectionOrigin
+      monitorPolicy?: import('../shared/connection-state').MonitorPolicy
+      targetScope?: 'host' | 'cluster'
+      sshHopChain?: string[]
+      manualSshActive?: boolean
+      clusterHostRegex?: string
     }> => ipcRenderer.invoke('terminal:get-context', { tabId }),
     resize: (dimensions: { cols: number; rows: number; tabId?: string }): void => {
       ipcRenderer.send('terminal:resize', dimensions)
@@ -316,6 +322,16 @@ const api = {
 
       ipcRenderer.on('terminal:environment-drift', listener)
       return () => ipcRenderer.removeListener('terminal:environment-drift', listener)
+    },
+    onConnectionOrigin: (
+      callback: (event: { tabId: string; connectionOrigin: 'manual-shell' }) => void
+    ): (() => void) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        event: { tabId: string; connectionOrigin: 'manual-shell' }
+      ): void => callback(event)
+      ipcRenderer.on('terminal:connection-origin', listener)
+      return () => ipcRenderer.removeListener('terminal:connection-origin', listener)
     }
   },
   agent: {
