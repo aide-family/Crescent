@@ -14,6 +14,14 @@ Typical cases that need a person: deleting files, restarting services, privilege
 
 Review happens before the command reaches the terminal. You still see the final command and its output in the visible session.
 
+## Flow {#flow}
+
+The order is fixed. A mutating write is marked high risk first, and the allowlist cannot override that. Other commands are checked against the allowlist and the static read-only rules. Only commands that match neither go to the review model.
+
+<ArchitectureDiagram name="command-review-en" />
+
+A low-risk command goes straight into the visible terminal. A high-risk command is written only after you approve it on the review card. A rejection, a timeout, or a closed session leaves the command unrun.
+
 ## Risk levels
 
 | Level | What usually happens |

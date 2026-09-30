@@ -1,16 +1,10 @@
-import { appMermaidThemeVariables } from '@renderer/lib/design-system'
+import {
+  MERMAID_RENDER_CONFIG,
+  appMermaidThemeCss,
+  appMermaidThemeVariables
+} from '../../../shared/mermaid-theme'
 
-export const MERMAID_RENDER_CONFIG = {
-  startOnLoad: false,
-  securityLevel: 'strict',
-  htmlLabels: false,
-  flowchart: {
-    htmlLabels: false
-  },
-  theme: 'base',
-  themeVariables: appMermaidThemeVariables,
-  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
-} as const
+export { MERMAID_RENDER_CONFIG, appMermaidThemeCss, appMermaidThemeVariables }
 
 type MermaidApi = typeof import('mermaid').default
 

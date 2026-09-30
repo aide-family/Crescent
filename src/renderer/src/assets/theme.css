@@ -61,6 +61,10 @@
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 12px 32px rgb(18 24 31 / 12%);
+  --chart-1: #94a3b8;
+  --chart-2: #38bdf8;
+  --chart-3: #f59e0b;
+  --chart-4: #34d399;
 }
 
 .dark {
@@ -98,6 +102,10 @@
   --app-copper: #13c2c2;
   --app-cyan: #13c2c2;
   --app-shadow: 0 16px 40px rgb(0 0 0 / 28%);
+  --chart-1: #94a3b8;
+  --chart-2: #38bdf8;
+  --chart-3: #f59e0b;
+  --chart-4: #34d399;
 }
 
 .dark[data-crescent-theme='night-shift'] {

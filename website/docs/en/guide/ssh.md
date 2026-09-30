@@ -13,6 +13,14 @@ The Agent treats the selected connection as the worksite. After you change hosts
 
 To inspect another host in parallel, use `open_subterminal` from [Subterminals and subagents](/en/guide/subagents) and dock a dedicated local or SSH terminal.
 
+## Flow {#flow}
+
+<ArchitectureDiagram name="ssh-en" />
+
+After you select a connection, Main opens a local PTY or an SSH session. Login actions on that connection are typed in one line at a time. Later Agent commands run in that session.
+
+To watch another host at the same time, do not open a subterminal for the connection you are already on. `open_subterminal` with `mode=ssh` must use a different saved `connectionId`.
+
 ## Login actions
 
 A custom connection can include login actions. After SSH starts, Crescent types those lines into the terminal, one line at a time, in the order you wrote. Use this for `sudo -i`, a directory change, or a second hop inside a bastion. Keep passwords in environment variables, not in the action text.

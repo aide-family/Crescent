@@ -1,8 +1,11 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
+import { fileURLToPath, URL } from 'node:url'
+import { MERMAID_RENDER_CONFIG } from '../../../src/shared/mermaid-theme'
 
 const repo = 'https://github.com/aide-family/Crescent'
 const base = '/Crescent/'
+const sharedRoot = fileURLToPath(new URL('../../../src/shared', import.meta.url))
 
 const zhSearch = {
   translations: {
@@ -31,7 +34,29 @@ export default withMermaid(
     lastUpdated: true,
     cleanUrls: true,
     ignoreDeadLinks: false,
-    mermaid: {},
+    mermaid: {
+      ...MERMAID_RENDER_CONFIG
+    },
+    vite: {
+      resolve: {
+        alias: {
+          '@shared': sharedRoot
+        }
+      },
+      // String form skips loadTsconfigJsonForFile. Shared sources otherwise pick up the
+      // Electron app tsconfig.node.json which extends @electron-toolkit/tsconfig (not
+      // installed under website/).
+      esbuild: {
+        tsconfigRaw: JSON.stringify({
+          compilerOptions: {
+            target: 'ESNext',
+            module: 'ESNext',
+            experimentalDecorators: false,
+            useDefineForClassFields: true
+          }
+        })
+      }
+    },
     locales: {
       root: {
         label: '简体中文',

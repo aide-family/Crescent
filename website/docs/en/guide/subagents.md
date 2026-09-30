@@ -1,32 +1,36 @@
 # Subterminals and subagents
 
-The main terminal stays the worksite of the current session. For another machine, local files, or a separate line of checks, do not mix those commands into the same pane.
+The main terminal keeps working on the current task. Subterminals only gather other information. Do not leave the main pane idle and finish the task in a subterminal.
+
+## Flow {#flow}
+
+<ArchitectureDiagram name="subagents-en" />
+
+`open_subterminal` only adds a pane for the current Agent. `mode=local` runs the next `bash` on this machine, then `bash` returns to the main pane. `mode=ssh` docks a different saved host and does not move parent `bash`. `subagent` gathers auxiliary information in its own docked terminal. Read-only profiles can run in parallel, up to 3 panes. The host rejects `worker` and `delegate`. A child cannot call `subagent`, `open_subterminal`, `create-skill`, or `create-sop`.
 
 ## Docked subterminal
 
-`open_subterminal` opens a docked subterminal. Later `bash` calls can run there.
+`open_subterminal` opens a docked subterminal. Parent `bash` stays on the main pane.
 
-- `mode=local`: use this for work on the client machine, such as local files, while the current pane is a remote SSH session.
-- `mode=ssh`: pass a different saved `connectionId`. Do not open another subterminal for the SSH session you are already on. The main terminal stays on that connection.
+- `mode=local`: while the current pane is remote SSH, the next `bash` can edit client-machine files such as `/etc/hosts`. After that command, `bash` returns to the main pane.
+- `mode=ssh`: pass a different saved `connectionId`. This does not move parent `bash`. Do not open another subterminal for the SSH session you are already on.
 
-Do not run concurrent `bash` on one pane. Each parallel stream gets its own subterminal.
+Do not run concurrent `bash` on one pane. Same-session investigation stays on the main pane.
 
 ## Subagents
 
-`subagent` hands a bounded task to a child agent. Each child gets its own docked terminal. The parent’s `bash` stays on the current pane.
+`subagent` gathers auxiliary information. Each child gets its own docked terminal. The parent’s `bash` stays on the main pane and continues the user task.
 
 - One task: `{ agent, task }`
 - Parallel tasks: `{ tasks: [{ agent, task }, ...] }`, at most 3 panes
 
-Use parallel tasks only for independent read-only work. Profiles that can change files run one after another. A child cannot spawn another child, and it cannot replace a dead main SSH session. Wait for the host to restore that session, then retry `bash` on the main pane.
+Use parallel tasks only for independent read-only work. `worker` and `delegate` are rejected. A child cannot spawn another child, and it cannot replace a dead main SSH session. Wait for the host to restore that session, then retry `bash` on the main pane.
 
 | Profile | Tools | Role |
 | --- | --- | --- |
 | `scout` | `read`, read-only `bash` | Fast recon of files, entry points, data flow, and risks. Does not edit |
 | `researcher` | `read`, read-only `bash` | Gather facts from the workspace, docs, and command output, and cite sources |
-| `worker` | `read`, `bash`, `edit`, `write` | Implement the delegated change and say how it was verified |
 | `reviewer` | `read`, read-only `bash` | Check correctness, edge cases, and extra complexity against the task. Does not make large edits |
 | `oracle` | `read`, read-only `bash` | A second opinion before acting: gaps, risks, and a recommended next step |
-| `delegate` | `read`, `bash`, `edit`, `write` | Finish one bounded task in this pane and return the result to the parent |
 
-Finish the main task on the main pane. Crescent closes a child pane when that child finishes.
+`worker` and `delegate` are rejected. Changes and verification stay on the main pane. Crescent closes a child pane when that child finishes.

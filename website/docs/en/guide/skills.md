@@ -12,6 +12,12 @@ The local knowledge base keeps operational notes you want to reuse. A troublesho
 
 Skills describe a stable way of working. The knowledge base keeps the conclusion and steps from a specific incident. Both stay on the machine and are offered to the Agent when a task starts.
 
+## Flow {#flow}
+
+<ArchitectureDiagram name="skills-en" />
+
+`create-skill` and `create-sop` do not write files themselves. The host drafts from this session in the background. After the confirm dialog, Main writes the Skill into its directory or the SOP into the knowledge base. Cancelling leaves nothing behind.
+
 ## Capture this session
 
 Do not let the model write `SKILL.md` or a wiki file with `bash`, `write`, or `edit`. It should call a capture tool. Crescent drafts the text in the background, and nothing is written until you confirm.

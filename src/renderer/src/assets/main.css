@@ -850,6 +850,45 @@
   border-radius: 0.5rem;
 }
 
+.app-arch-canvas {
+  background: var(--app-diagram-canvas, #0b0e14);
+  z-index: 0;
+}
+
+.app-architecture-panel > .app-code-panel-header {
+  z-index: 20;
+  isolation: isolate;
+}
+
+.app-arch-canvas .react-flow__attribution {
+  display: none;
+}
+
+.app-arch-canvas .react-flow__controls-button {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--app-markdown-border);
+  fill: var(--app-markdown-muted);
+}
+
+.app-arch-canvas .react-flow__controls-button:hover {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+}
+
+@keyframes app-arch-edge-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+.app-arch-canvas .app-arch-edge-flow {
+  stroke-dasharray: 5 9;
+  animation: app-arch-edge-flow 1.5s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -871,6 +910,13 @@
   .app-composer-thinking::before {
     display: none;
     animation: none;
+  }
+
+  .app-mermaid-panel .edgePaths path.edge-pattern-solid,
+  .app-mermaid-expanded .edgePaths path.edge-pattern-solid,
+  .app-arch-canvas .app-arch-edge-flow {
+    animation: none !important;
+    stroke-dasharray: 0 !important;
   }
 }
 

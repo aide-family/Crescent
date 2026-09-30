@@ -43,6 +43,46 @@ export const APP_UI_THEME = {
     note: '#302719',
     noteText: '#f0bd75',
     noteBorder: 'rgba(240,189,117,0.26)'
+  },
+  diagram: {
+    canvas: '#0b0e14',
+    cluster: '#12161f',
+    clusterBorder: 'rgba(245,158,11,0.45)',
+    text: '#eef2f7',
+    muted: '#8b96a8',
+    grid: 'rgba(148,163,184,0.07)',
+    kinds: {
+      client: { fill: 'rgba(148,163,184,0.12)', border: '#94a3b8', glow: 'rgba(148,163,184,0.28)' },
+      frontend: { fill: 'rgba(56,189,248,0.12)', border: '#38bdf8', glow: 'rgba(56,189,248,0.32)' },
+      ingress: { fill: 'rgba(245,158,11,0.12)', border: '#f59e0b', glow: 'rgba(245,158,11,0.32)' },
+      service: { fill: 'rgba(52,211,153,0.12)', border: '#34d399', glow: 'rgba(52,211,153,0.32)' },
+      data: { fill: 'rgba(167,139,250,0.12)', border: '#a78bfa', glow: 'rgba(167,139,250,0.32)' },
+      auth: { fill: 'rgba(244,114,182,0.12)', border: '#f472b6', glow: 'rgba(244,114,182,0.32)' },
+      external: {
+        fill: 'rgba(148,163,184,0.10)',
+        border: '#64748b',
+        glow: 'rgba(100,116,139,0.28)'
+      },
+      queue: { fill: 'rgba(217,119,6,0.12)', border: '#d97706', glow: 'rgba(217,119,6,0.32)' },
+      decision: {
+        fill: 'rgba(240,189,117,0.12)',
+        border: '#f0bd75',
+        glow: 'rgba(240,189,117,0.28)'
+      }
+    },
+    // Mermaid flowchart shape colors (not architecture :::class rules)
+    service: 'rgba(52,211,153,0.18)',
+    serviceBorder: '#34d399',
+    data: 'rgba(167,139,250,0.18)',
+    dataBorder: '#a78bfa',
+    ingress: 'rgba(245,158,11,0.18)',
+    ingressBorder: '#f59e0b',
+    client: 'rgba(148,163,184,0.16)',
+    clientBorder: '#94a3b8',
+    external: 'rgba(100,116,139,0.16)',
+    externalBorder: '#64748b',
+    decision: 'rgba(240,189,117,0.16)',
+    decisionBorder: '#f0bd75'
   }
 } as const
 
@@ -69,39 +109,7 @@ export const appTerminalTheme = {
   brightWhite: APP_UI_THEME.terminal.brightWhite
 } as const
 
-export const appMermaidThemeVariables = {
-  darkMode: true,
-  background: APP_UI_THEME.terminal.background,
-  mainBkg: APP_UI_THEME.chart.surface,
-  secondBkg: APP_UI_THEME.chart.surfaceRaised,
-  tertiaryColor: APP_UI_THEME.chart.surfaceMuted,
-  primaryColor: APP_UI_THEME.chart.surface,
-  primaryTextColor: APP_UI_THEME.chart.text,
-  primaryBorderColor: APP_UI_THEME.chart.borderAccent,
-  secondaryColor: APP_UI_THEME.chart.surfaceRaised,
-  secondaryTextColor: APP_UI_THEME.chart.text,
-  secondaryBorderColor: APP_UI_THEME.chart.borderSubtle,
-  tertiaryTextColor: APP_UI_THEME.chart.text,
-  tertiaryBorderColor: 'rgba(203,213,225,0.16)',
-  lineColor: APP_UI_THEME.chart.line,
-  textColor: APP_UI_THEME.chart.text,
-  edgeLabelBackground: APP_UI_THEME.chart.surface,
-  clusterBkg: APP_UI_THEME.terminal.black,
-  clusterBorder: 'rgba(19,194,194,0.22)',
-  noteBkgColor: APP_UI_THEME.chart.note,
-  noteTextColor: APP_UI_THEME.chart.noteText,
-  noteBorderColor: APP_UI_THEME.chart.noteBorder,
-  actorBkg: APP_UI_THEME.chart.surface,
-  actorTextColor: APP_UI_THEME.chart.text,
-  actorBorder: 'rgba(19,194,194,0.24)',
-  signalColor: APP_UI_THEME.chart.text,
-  signalTextColor: APP_UI_THEME.chart.text,
-  labelTextColor: APP_UI_THEME.chart.text,
-  loopTextColor: APP_UI_THEME.chart.text,
-  activationBkgColor: APP_UI_THEME.chart.surfaceRaised,
-  activationBorderColor: 'rgba(19,194,194,0.22)',
-  sequenceNumberColor: APP_UI_THEME.terminal.background
-} as const
+export { appMermaidThemeVariables } from '../../../shared/mermaid-theme'
 
 export const appMarkdownTheme = {
   canvas: APP_UI_THEME.terminal.background,

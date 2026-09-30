@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -23,16 +25,18 @@ import { Button } from '@renderer/components/ui/button'
 import { useAppModalA11y } from '@renderer/hooks/useAppModalA11y'
 import { Separator } from '@renderer/components/ui/separator'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@renderer/components/ui/select'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import type { Dictionary } from '@renderer/i18n'
 import { appMermaidThemeVariables } from '@renderer/lib/design-system'
 import { buildMarkdownHeadingId } from '@renderer/lib/markdown-heading'
 import { resolveMermaidBlockUiState, scanMarkdownFence } from '@renderer/lib/markdown-fence'
+import { isArchitectureCodeLanguage } from '../../../shared/architecture-spec'
+import { isChartCodeLanguage } from '../../../shared/chart-spec'
 import { isMermaidCodeLanguage } from '@renderer/lib/mermaid-language'
 import { loadMermaid } from '@renderer/lib/mermaid-runtime'
 import {
@@ -55,6 +59,13 @@ const MERMAID_ZOOM_EPSILON = 0.001
 const MERMAID_RENDER_DEBOUNCE_MS = 100
 
 const mermaidSvgCache = new LruMap<string, string>(32)
+
+const ChartBlock = lazy(() =>
+  import('./ChartBlock').then((module) => ({ default: module.ChartBlock }))
+)
+const ArchitectureBlock = lazy(() =>
+  import('./ArchitectureBlock').then((module) => ({ default: module.ArchitectureBlock }))
+)
 
 async function downloadSvg(value: string, filename: string, t: Dictionary): Promise<void> {
   await saveTextFile(
@@ -445,6 +456,34 @@ function renderMarkdownBlocks(
   return nodes
 }
 
+function ChartLoading({ t }: { t: Dictionary }): React.JSX.Element {
+  return (
+    <div className="app-mermaid-panel min-w-0 rounded-lg border">
+      <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center gap-2 border-b pr-1 pl-3">
+        <span className="app-code-panel-lang min-w-0 truncate">chart</span>
+      </div>
+      <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+        <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+        {t.common.chartGenerating}
+      </div>
+    </div>
+  )
+}
+
+function ArchitectureLoading({ t }: { t: Dictionary }): React.JSX.Element {
+  return (
+    <div className="app-mermaid-panel min-w-0 rounded-lg border">
+      <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center gap-2 border-b pr-1 pl-3">
+        <span className="app-code-panel-lang min-w-0 truncate">architecture</span>
+      </div>
+      <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+        <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+        {t.common.architectureGenerating}
+      </div>
+    </div>
+  )
+}
+
 function MarkdownCodeBlock({
   code,
   language,
@@ -482,6 +521,36 @@ function MarkdownCodeBlock({
         onCopy={copyCode}
         copied={copied}
       />
+    )
+  }
+
+  if (isChartCodeLanguage(normalizedLanguage)) {
+    return (
+      <Suspense fallback={<ChartLoading t={t} />}>
+        <ChartBlock
+          code={code}
+          closed={closed}
+          streaming={streaming}
+          t={t}
+          onCopy={() => void copyCode()}
+          copied={copied}
+        />
+      </Suspense>
+    )
+  }
+
+  if (isArchitectureCodeLanguage(normalizedLanguage)) {
+    return (
+      <Suspense fallback={<ArchitectureLoading t={t} />}>
+        <ArchitectureBlock
+          code={code}
+          closed={closed}
+          streaming={streaming}
+          t={t}
+          onCopy={() => void copyCode()}
+          copied={copied}
+        />
+      </Suspense>
     )
   }
 
@@ -547,7 +616,6 @@ function MermaidBlock({
   const [expanded, setExpanded] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [panning, setPanning] = useState(false)
-  const [exportSelectKey, setExportSelectKey] = useState(0)
   const [diagramSize, setDiagramSize] = useState({ width: 1, height: 1 })
   const expandedPanelRef = useRef<HTMLDivElement | null>(null)
 
@@ -792,12 +860,6 @@ function MermaidBlock({
     }
   }
 
-  function handleMermaidExportFormat(format: string): void {
-    if (format === 'svg') void exportSvg()
-    if (format === 'png') void exportPng()
-    setExportSelectKey((current) => current + 1)
-  }
-
   const zoomPercent = Math.round(zoom * 100)
   const expandedCanvasStyle = {
     width: expanded ? `max(100%, ${Math.max(1, diagramSize.width * zoom)}px)` : undefined,
@@ -812,7 +874,7 @@ function MermaidBlock({
   const body =
     uiState === 'ready' && svg ? (
       <div
-        className="min-w-0 overflow-auto bg-[var(--app-terminal)] p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
+        className="min-w-0 overflow-auto p-3 text-foreground [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:rounded [&_svg]:bg-[var(--app-diagram-canvas)]"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
     ) : uiState === 'generating' ? (
@@ -844,31 +906,44 @@ function MermaidBlock({
     )
 
   return (
-    <div className="app-mermaid-panel min-w-0 rounded-lg border">
+    <div
+      className="app-mermaid-panel min-w-0 rounded-lg border"
+      style={{ '--app-diagram-canvas': appMermaidThemeVariables.background } as CSSProperties}
+    >
       <div className="app-code-panel-header app-sticky-nested flex min-w-0 items-center justify-between gap-2 border-b pr-1 pl-3">
         <span className="app-code-panel-lang min-w-0 truncate">mermaid</span>
         <div className="flex shrink-0 items-center gap-1">
           {svg ? (
             <>
-              <Select key={`export-${exportSelectKey}`} onValueChange={handleMermaidExportFormat}>
-                <SelectTrigger
-                  className="h-6 w-[4.5rem] border-0 bg-transparent px-1.5 text-[11px] shadow-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-transparent dark:hover:bg-accent/50"
-                  aria-label={t.common.exportDiagram}
-                  title={t.common.exportDiagram}
-                >
-                  <DownloadIcon className="size-3.5" aria-hidden="true" />
-                  <SelectValue placeholder={t.common.exportDiagram} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-                  <SelectItem value="png">{t.common.exportPng}</SelectItem>
-                </SelectContent>
-              </Select>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="select-none"
+                    aria-label={t.common.exportDiagram}
+                    title={t.common.exportDiagram}
+                  >
+                    <DownloadIcon aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem onSelect={() => void exportSvg()}>
+                      {t.common.exportSvg}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void exportPng()}>
+                      {t.common.exportPng}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                className="h-6 w-6"
+                className="select-none"
                 aria-label={t.common.enlarge}
                 title={t.common.enlarge}
                 onClick={() => setExpanded(true)}
@@ -897,6 +972,9 @@ function MermaidBlock({
             <div
               ref={expandedOverlayRef}
               className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain"
+              style={
+                { '--app-diagram-canvas': appMermaidThemeVariables.background } as CSSProperties
+              }
               role="dialog"
               aria-modal="true"
               aria-label={t.common.enlarge}
@@ -927,23 +1005,30 @@ function MermaidBlock({
                   >
                     <ZoomInIcon aria-hidden="true" />
                   </Button>
-                  <Select
-                    key={`expanded-export-${exportSelectKey}`}
-                    onValueChange={handleMermaidExportFormat}
-                  >
-                    <SelectTrigger
-                      className="h-8 w-28 border-0 bg-transparent shadow-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-transparent dark:hover:bg-accent/50"
-                      aria-label={t.common.exportDiagram}
-                      title={t.common.exportDiagram}
-                    >
-                      <DownloadIcon className="size-3.5" aria-hidden="true" />
-                      <SelectValue placeholder={t.common.exportDiagram} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="svg">{t.common.exportSvg}</SelectItem>
-                      <SelectItem value="png">{t.common.exportPng}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="select-none"
+                        aria-label={t.common.exportDiagram}
+                        title={t.common.exportDiagram}
+                      >
+                        <DownloadIcon aria-hidden="true" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem onSelect={() => void exportSvg()}>
+                          {t.common.exportSvg}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void exportPng()}>
+                          {t.common.exportPng}
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     type="button"
                     variant="outline"
@@ -975,7 +1060,7 @@ function MermaidBlock({
               </div>
               <div
                 ref={expandedScrollRef}
-                className={`min-h-0 flex-1 touch-none overflow-auto bg-[var(--app-terminal)] select-none ${
+                className={`min-h-0 flex-1 touch-none overflow-auto bg-[var(--app-diagram-canvas)] select-none ${
                   panning ? 'cursor-grabbing' : 'cursor-grab'
                 }`}
                 onPointerDown={handleExpandedPointerDown}
@@ -986,7 +1071,7 @@ function MermaidBlock({
                 <div className="relative" style={expandedCanvasStyle}>
                   <div
                     ref={expandedContentRef}
-                    className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[var(--app-terminal)]"
+                    className="absolute top-1/2 left-1/2 origin-center [&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:rounded [&_svg]:bg-[var(--app-diagram-canvas)]"
                     style={expandedContentStyle}
                     dangerouslySetInnerHTML={{ __html: svg }}
                   />
