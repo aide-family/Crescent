@@ -1,14 +1,31 @@
+import { createChangePlanTool } from './pi-change-plan'
+import { normalizeExecutionMode, type ExecutionMode } from '../../shared/execution-plan'
 import { homedir } from 'os'
+import { createHash } from 'node:crypto'
+import { writeSystemLog } from '../logging'
+import { buildHandoffContext, handoffSystemPrompt } from './handoff-context'
+import { redactSensitiveText } from '../../shared/secret-redaction'
+import {
+  HANDOFF_DRAFT_MAX,
+  HANDOFF_TIMEOUT_MS,
+  HANDOFF_RETRY_DELAY_MS,
+  validHandoffInput,
+  validHandoffSession,
+  validHandoffRequestId
+} from '../../shared/handoff'
+import type {
+  AgentGenerateHandoffInput,
+  AgentGenerateHandoffResult,
+  AgentHandoffSessionInput,
+  AgentCancelHandoffInput,
+  AgentHandoffStatus
+} from '../../shared/agent-types'
 import { resolve } from 'path'
 
 import type { WebContents } from 'electron'
 
 import { buildLocalInstructionContext } from './instruction-files'
-import {
-  extractAssistantTextFromCurrentTurn,
-  mapPiSessionEventToAgentEvents,
-  resolveHostedPromptResult
-} from './pi-event-bridge'
+import { mapPiSessionEventToAgentEvents, resolveHostedPromptResult } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { getCrescentPiSkillsDir } from './pi-paths'
 import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
@@ -46,29 +63,11 @@ import {
 import { rejectPendingApprovalsForRun } from './command-approval'
 import { createCrescentSettingsManager } from './pi-packages'
 import {
-  createCompactionDeferralExtension,
-  createCompactionGate,
-  type CompactionGate
-} from './pi-compaction-deferral'
-import { recordTurnOutline } from './session-outline'
-import { readSessionOutline } from '../crescent-sqlite'
-import {
   buildQuotaResetHint,
   classifyProviderError,
   isQuotaExhaustedError
 } from '../../shared/provider-error'
 import { buildPromptText, conversationContextForPrompt } from '../../shared/agent-run-prompt'
-import {
-  buildOutlineCompactionInstructions,
-  deferredCompactionStatus,
-  formatSessionOutline,
-  isDeferredThresholdCancel,
-  outlineRecordedStatus,
-  postTurnCompactionStatus,
-  resolveOutlineLocale,
-  shouldCompactAfterTurn,
-  type SessionOutlineStatus
-} from '../../shared/session-outline'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
 import { normalizeAgentStyle, type AgentStyle } from '../../shared/agent-style'
 import { diffSessionTokenUsage, snapshotSessionTokenUsage } from '../../shared/session-token-usage'
@@ -82,7 +81,9 @@ interface HostedSession {
   session: AgentSession
   cwd: string
   toolProfile: string
-  compactionGate: CompactionGate
+  immediateTools: string[]
+  ownerId?: number
+  handoffLastStarted?: number
   unsubscribe?: () => void
   closeMcp?: () => Promise<void>
 }
@@ -100,6 +101,10 @@ const runIdBySessionKey = new Map<string, string>()
 /** Manual compaction in flight (serialize against prompt / dispose). */
 const compactingBySessionKey = new Set<string>()
 /** Serialize ensure/dispose per session key. */
+const handoffs = new Map<
+  string,
+  { requestId: string; ownerId: number; controller: AbortController }
+>()
 const sessionMutexTails = new Map<string, Promise<unknown>>()
 
 async function withSessionMutex<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
@@ -109,10 +114,7 @@ async function withSessionMutex<T>(sessionKey: string, fn: () => Promise<T>): Pr
     release = resolve
   })
   const current = previous.then(() => gate)
-  sessionMutexTails.set(
-    sessionKey,
-    current.catch(() => undefined)
-  )
+  sessionMutexTails.set(sessionKey, current)
   await previous.catch(() => undefined)
   try {
     return await fn()
@@ -138,6 +140,7 @@ export interface PiHostRunInput {
   terminalContext?: string
   locale?: string
   agentStyle?: AgentStyle
+  executionMode?: ExecutionMode
   activeWikiDocs?: SopWikiPromptPart[]
   activeSkillDocs?: SkillPromptPart[]
   emit: (event: AgentEvent) => void
@@ -153,16 +156,25 @@ export interface PiHostRunResult {
 
 export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult> {
   const { runId, sessionKey, emit } = input
-  if (runIdBySessionKey.has(sessionKey) || compactingBySessionKey.has(sessionKey)) {
+  if (
+    runIdBySessionKey.has(sessionKey) ||
+    compactingBySessionKey.has(sessionKey) ||
+    handoffs.has(sessionKey)
+  ) {
     return { ok: false, busy: true, error: 'Wait for the current agent run to finish.' }
   }
   const abortController = new AbortController()
   activeRuns.set(runId, { runId, sessionKey, abortRequested: false, abortController })
   runIdBySessionKey.set(sessionKey, runId)
-  let usageBaseline: { input: number; output: number } | undefined
+  let usageBaseline:
+    | {
+        input: number
+        output: number
+        cacheRead: number
+        cacheWrite: number
+      }
+    | undefined
   let usageSession: AgentSession | undefined
-  let collectedText = ''
-  let hostedForSettle: HostedSession | undefined
 
   try {
     if (!input.executionTabId?.trim()) {
@@ -173,9 +185,10 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     }
 
     const hosted = await ensureHostedSession(sessionKey, input.config)
-    hostedForSettle = hosted
-    hosted.compactionGate.agentLoopActive = false
-    hosted.compactionGate.pendingThresholdCompact = false
+    if (hosted.ownerId !== undefined && hosted.ownerId !== input.webContents.id) {
+      return { ok: false, error: 'Session belongs to another window.' }
+    }
+    hosted.ownerId = input.webContents.id
     const modelRuntime = await syncCrescentProvidersToModelRuntime(input.config)
     const model = await resolvePiModel(input.config, modelRuntime)
     if (!model) {
@@ -196,6 +209,10 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       // Older sessions / models may reject unsupported thinking levels.
     }
 
+    hosted.session.setActiveToolsByName(
+      input.executionMode === 'planned' ? ['bash', 'submit_change_plan'] : hosted.immediateTools
+    )
+
     setPtyBashExecContext(sessionKey, {
       webContents: input.webContents,
       executionTabId: input.executionTabId.trim(),
@@ -205,6 +222,7 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       terminalContext: input.terminalContext,
       locale: input.locale,
       config: input.config,
+      executionMode: normalizeExecutionMode(input.executionMode),
       emit,
       signal: abortController.signal,
       connectionId: input.executionConnectionId?.trim() || undefined,
@@ -218,9 +236,9 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       tabId: input.tabId
     })
 
+    let collectedText = ''
     let lastRetryError = ''
     let compactedThisTurn = false
-    let deferredCompactionNoted = false
     let quotaExceeded:
       | {
           provider?: string
@@ -232,16 +250,11 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     hosted.unsubscribe?.()
 
     const hasLiveSessionMessages = hostedSessionHasMessages(hosted.session)
-    const outlineTabId = input.tabId?.trim() || sessionKey
     const promptText = buildPromptText({
       ...input,
       conversationContext: conversationContextForPrompt(
         input.conversationContext,
         hasLiveSessionMessages
-      ),
-      sessionOutline: formatSessionOutline(
-        readSessionOutline(outlineTabId),
-        resolveOutlineLocale(input.locale)
       ),
       agentStyle: normalizeAgentStyle(input.agentStyle ?? input.config.agentStyle)
     })
@@ -266,30 +279,6 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
     }
 
     hosted.unsubscribe = hosted.session.subscribe((event) => {
-      if (
-        event.type === 'compaction_start' &&
-        event.reason === 'threshold' &&
-        hosted.compactionGate.agentLoopActive
-      ) {
-        return
-      }
-      if (
-        isDeferredThresholdCancel(event, hosted.compactionGate.pendingThresholdCompact) &&
-        !deferredCompactionNoted
-      ) {
-        deferredCompactionNoted = true
-        emit({
-          type: 'status',
-          message: deferredCompactionStatus(bridgeLocale),
-          runId,
-          tabId: input.tabId
-        })
-        return
-      }
-      if (isDeferredThresholdCancel(event, hosted.compactionGate.pendingThresholdCompact)) {
-        return
-      }
-
       if (event.type === 'auto_retry_start' && isQuotaExhaustedError(event.errorMessage ?? '')) {
         const classified = classifyProviderError(event.errorMessage ?? '')
         quotaExceeded = {
@@ -355,17 +344,6 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
 
     const active = activeRuns.get(runId)
     if (active?.abortRequested) {
-      await settleTurnContext({
-        hosted,
-        runId,
-        tabId: input.tabId,
-        goal: input.input,
-        assistantText: collectedText,
-        status: 'interrupted',
-        locale: input.locale,
-        config: input.config,
-        emit
-      })
       return { ok: false, canceled: true, error: 'Canceled.', text: collectedText.trim() }
     }
 
@@ -424,36 +402,12 @@ export async function runPiAgent(input: PiHostRunInput): Promise<PiHostRunResult
       return { ok: false, error: resolved.error }
     }
 
-    await settleTurnContext({
-      hosted,
-      runId,
-      tabId: input.tabId,
-      goal: input.input,
-      assistantText: resolved.text,
-      status: 'completed',
-      locale: input.locale,
-      config: input.config,
-      emit
-    })
     emit({ type: 'done', message: resolved.text, runId, tabId: input.tabId })
     return { ok: true, text: resolved.text }
   } catch (error) {
     const active = activeRuns.get(runId)
     if (active?.abortRequested) {
-      if (hostedForSettle) {
-        await settleTurnContext({
-          hosted: hostedForSettle,
-          runId,
-          tabId: input.tabId,
-          goal: input.input,
-          assistantText: collectedText,
-          status: 'interrupted',
-          locale: input.locale,
-          config: input.config,
-          emit
-        })
-      }
-      return { ok: false, canceled: true, error: 'Canceled.', text: collectedText.trim() }
+      return { ok: false, canceled: true, error: 'Canceled.' }
     }
     const message = error instanceof Error ? error.message : String(error)
     const classified = classifyProviderError(message)
@@ -552,12 +506,172 @@ export interface ReloadCrescentRuntimeResult {
 
 function isHostedSessionBusy(sessionKey: string, hosted: HostedSession): boolean {
   if (runIdBySessionKey.has(sessionKey)) return true
-  if (compactingBySessionKey.has(sessionKey)) return true
+  if (compactingBySessionKey.has(sessionKey) || handoffs.has(sessionKey)) return true
   try {
-    return Boolean(hosted.session.isStreaming)
+    return Boolean(hosted.session.isStreaming || hosted.session.isCompacting)
   } catch {
     return false
   }
+}
+
+/** Read-only availability uses the same authority as generation, never UI history. */
+export function getHostedHandoffStatus(
+  input: AgentHandoffSessionInput,
+  ownerId: number
+): AgentHandoffStatus {
+  if (!validHandoffSession(input)) return { available: false, error: 'invalid' }
+  const hosted = hostedSessions.get(input.sessionKey)
+  if (!hosted || hosted.ownerId !== ownerId) return { available: false, error: 'no_session' }
+  if (isHostedSessionBusy(input.sessionKey, hosted)) return { available: false, error: 'busy' }
+  const messages = hosted.session.sessionManager.buildSessionContext().messages
+  if (
+    !messages.some((message) => message.role === 'user' || message.role === 'compactionSummary')
+  ) {
+    return { available: false, error: 'empty' }
+  }
+  return {
+    available: true,
+    cwd: hosted.cwd,
+    revision: hosted.session.sessionManager.getLeafId() ?? undefined
+  }
+}
+
+export function cancelHostedHandoff(
+  input: AgentCancelHandoffInput,
+  ownerId: number
+): { ok: boolean } {
+  if (!validHandoffSession(input) || !validHandoffRequestId(input.requestId)) return { ok: false }
+  const pending = handoffs.get(input.sessionKey)
+  if (!pending || pending.ownerId !== ownerId || pending.requestId !== input.requestId)
+    return { ok: false }
+  pending.controller.abort()
+  return { ok: true }
+}
+
+/** Independent completion: no session.prompt(), compact(), tools or original-history writes. */
+export async function generateHandoffForHostedSession(
+  input: AgentGenerateHandoffInput,
+  config: AgentConfig,
+  sender: WebContents
+): Promise<AgentGenerateHandoffResult> {
+  if (!validHandoffInput(input)) return { ok: false, error: 'invalid' }
+  const status = getHostedHandoffStatus(input, sender.id)
+  if (!status.available) return { ok: false, error: status.error }
+  if (input.expectedRevision && input.expectedRevision !== status.revision)
+    return { ok: false, error: 'stale' }
+  const controller = new AbortController()
+  // Reserve synchronously before waiting for the mutex: run/compact cannot slip in.
+  handoffs.set(input.sessionKey, { requestId: input.requestId, ownerId: sender.id, controller })
+  const started = Date.now()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, HANDOFF_TIMEOUT_MS)
+  const onDestroyed = (): void => controller.abort()
+  sender.once('destroyed', onDestroyed)
+  const tabHash = createHash('sha256').update(input.tabId).digest('hex').slice(0, 8)
+  writeSystemLog('info', `handoff start tab=${tabHash}`)
+  let result: AgentGenerateHandoffResult = { ok: false, error: 'provider' }
+  const canceled = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new Error('handoff aborted')), {
+      once: true
+    })
+  })
+  try {
+    result = await Promise.race([
+      canceled,
+      withSessionMutex(input.sessionKey, async () => {
+        if (controller.signal.aborted) return { ok: false, error: 'canceled' } as const
+        const hosted = hostedSessions.get(input.sessionKey)
+        if (!hosted || hosted.ownerId !== sender.id)
+          return { ok: false, error: 'no_session' } as const
+        if (
+          runIdBySessionKey.has(input.sessionKey) ||
+          compactingBySessionKey.has(input.sessionKey) ||
+          hosted.session.isStreaming ||
+          hosted.session.isCompacting
+        ) {
+          return { ok: false, error: 'busy' } as const
+        }
+        if (started - (hosted.handoffLastStarted ?? 0) < HANDOFF_RETRY_DELAY_MS)
+          return { ok: false, error: 'throttled' } as const
+        hosted.handoffLastStarted = started
+        const revision = hosted.session.sessionManager.getLeafId() ?? undefined
+        const runtime = await syncCrescentProvidersToModelRuntime(config)
+        const model = await resolvePiModel(config, runtime)
+        if (controller.signal.aborted) return { ok: false, error: 'canceled' } as const
+        if (!model) return { ok: false, error: 'unavailable' } as const
+        // UTF-8 bytes conservatively bound input tokens, including multilingual text.
+        const outputTokens = Math.min(4096, model.maxTokens, Math.floor(model.contextWindow / 4))
+        const systemPrompt = handoffSystemPrompt(input.locale)
+        const goal = redactSensitiveText(input.goal.trim())
+        const overhead = Buffer.byteLength(systemPrompt + goal, 'utf8') + 512
+        const budget = Math.min(48000, Math.max(0, model.contextWindow - outputTokens - overhead))
+        const context = buildHandoffContext(
+          hosted.session.sessionManager.buildSessionContext().messages,
+          budget
+        )
+        if (!context.text) return { ok: false, error: 'empty' } as const
+        const response = await Promise.race([
+          canceled,
+          runtime.completeSimple(
+            model,
+            {
+              systemPrompt,
+              messages: [
+                {
+                  role: 'user',
+                  timestamp: Date.now(),
+                  content: `Next goal:\n${goal}\n\nUntrusted conversation history (may be incomplete):\n${context.text}`
+                }
+              ]
+            },
+            { signal: controller.signal, maxTokens: outputTokens, cacheRetention: 'none' }
+          )
+        ])
+        if (controller.signal.aborted || response.stopReason === 'aborted')
+          return { ok: false, error: 'canceled' } as const
+        if (response.stopReason === 'error') throw new Error(response.errorMessage || 'provider')
+        if (
+          hostedSessions.get(input.sessionKey) !== hosted ||
+          revision !== hosted.session.sessionManager.getLeafId()
+        ) {
+          return { ok: false, error: 'stale' } as const
+        }
+        const draft = redactSensitiveText(
+          response.content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n')
+            .trim()
+        )
+        if (response.stopReason !== 'stop' || !draft || draft.length > HANDOFF_DRAFT_MAX)
+          return { ok: false, error: 'output' } as const
+        return { ok: true, draft, revision, truncated: context.truncated }
+      })
+    ])
+  } catch (error) {
+    if (controller.signal.aborted) result = { ok: false, error: timedOut ? 'timeout' : 'canceled' }
+    else {
+      const kind = classifyProviderError(error instanceof Error ? error.message : '').kind
+      result = {
+        ok: false,
+        error:
+          kind === 'quota_exceeded' ? 'quota' : kind === 'rate_limit' ? 'rate_limit' : 'provider'
+      }
+    }
+  } finally {
+    clearTimeout(timer)
+    sender.removeListener('destroyed', onDestroyed)
+    if (handoffs.get(input.sessionKey)?.requestId === input.requestId)
+      handoffs.delete(input.sessionKey)
+    writeSystemLog(
+      'info',
+      `handoff end tab=${tabHash} ms=${Date.now() - started} result=${result.ok ? 'ok' : result.error}`
+    )
+  }
+  return result
 }
 
 export interface CompactHostedSessionInput {
@@ -581,6 +695,8 @@ export async function compactHostedSession(
 ): Promise<CompactHostedSessionResult> {
   const sessionKey = input.sessionKey.trim()
   if (!sessionKey) return { ok: false, error: 'Missing session.' }
+  if (handoffs.has(sessionKey))
+    return { ok: false, busy: true, error: 'Wait for handoff generation to finish.' }
 
   return withSessionMutex(sessionKey, async () => {
     const hosted = hostedSessions.get(sessionKey)
@@ -609,11 +725,7 @@ export async function compactHostedSession(
     })
 
     try {
-      const outlineLocale = resolveOutlineLocale(input.locale)
-      const outline = formatSessionOutline(readSessionOutline(tabId), outlineLocale)
-      const result = await hosted.session.compact(
-        buildOutlineCompactionInstructions(outline, input.instructions)
-      )
+      const result = await hosted.session.compact(input.instructions)
       emitContextUsage(input.emit, runId, tabId, hosted.session)
       return {
         ok: true,
@@ -645,11 +757,19 @@ export async function reloadCrescentRuntime(
     toDispose.push(sessionKey)
   }
 
+  let reloaded = 0
   for (const sessionKey of toDispose) {
-    const hosted = hostedSessions.get(sessionKey)
-    if (!hosted) continue
-    await disposeHostedSession(hosted)
-    hostedSessions.delete(sessionKey)
+    await withSessionMutex(sessionKey, async () => {
+      const hosted = hostedSessions.get(sessionKey)
+      if (!hosted) return
+      if (isHostedSessionBusy(sessionKey, hosted)) {
+        busySessionKeys.push(sessionKey)
+        return
+      }
+      await disposeHostedSessionUnlocked(hosted)
+      hostedSessions.delete(sessionKey)
+      reloaded += 1
+    })
   }
 
   const warmupKey = input.sessionKey?.trim()
@@ -659,151 +779,10 @@ export async function reloadCrescentRuntime(
 
   return {
     ok: true,
-    reloaded: toDispose.length,
+    reloaded,
     skippedBusy: busySessionKeys.length,
     busySessionKeys
   }
-}
-
-async function settleTurnContext(input: {
-  hosted: HostedSession
-  runId: string
-  tabId?: string
-  goal: string
-  assistantText: string
-  status: SessionOutlineStatus
-  locale?: string
-  config: AgentConfig
-  emit: (event: AgentEvent) => void
-}): Promise<void> {
-  const tabId = input.tabId?.trim() || input.hosted.sessionKey
-  const locale = resolveOutlineLocale(input.locale)
-  const messages = input.hosted.session.messages as unknown[]
-  const assistantText = assistantTextForOutline(input.status, input.assistantText, messages)
-  try {
-    await recordTurnOutline({
-      tabId,
-      runId: input.runId,
-      status: input.status,
-      goal: input.goal,
-      assistantText,
-      messages,
-      locale: input.locale,
-      config: input.config
-    })
-    input.emit({
-      type: 'status',
-      message: outlineRecordedStatus(input.status, locale),
-      runId: input.runId,
-      tabId
-    })
-  } catch {
-    // Outline persistence is best-effort and must not fail the turn.
-  }
-
-  const usage = readHostedSessionContextUsage(input.hosted.session)
-  if (
-    !shouldCompactAfterTurn({
-      pendingThresholdCompact: input.hosted.compactionGate.pendingThresholdCompact,
-      contextTokens: usage.contextTokens,
-      contextWindow: usage.contextWindow
-    })
-  ) {
-    input.hosted.compactionGate.pendingThresholdCompact = false
-    return
-  }
-
-  input.emit({
-    type: 'status',
-    message: postTurnCompactionStatus(locale),
-    runId: input.runId,
-    tabId
-  })
-  input.hosted.compactionGate.agentLoopActive = false
-  const outline = formatSessionOutline(readSessionOutline(tabId), locale)
-  await compactSettledSession({
-    hosted: input.hosted,
-    runId: input.runId,
-    tabId,
-    locale: input.locale,
-    instructions: buildOutlineCompactionInstructions(outline),
-    emit: input.emit
-  })
-  input.hosted.compactionGate.pendingThresholdCompact = false
-}
-
-async function compactSettledSession(input: {
-  hosted: HostedSession
-  runId: string
-  tabId: string
-  locale?: string
-  instructions: string
-  emit: (event: AgentEvent) => void
-}): Promise<void> {
-  const sessionKey = input.hosted.sessionKey
-  await withSessionMutex(sessionKey, async () => {
-    if (compactingBySessionKey.has(sessionKey)) return
-    compactingBySessionKey.add(sessionKey)
-    const hosted = input.hosted
-    hosted.unsubscribe?.()
-    hosted.unsubscribe = hosted.session.subscribe((event) => {
-      if (
-        event.type !== 'compaction_start' &&
-        event.type !== 'compaction_end' &&
-        event.type !== 'summarization_retry_scheduled' &&
-        event.type !== 'summarization_retry_attempt_start' &&
-        event.type !== 'summarization_retry_finished'
-      ) {
-        return
-      }
-      for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
-        runId: input.runId,
-        tabId: input.tabId,
-        locale: input.locale
-      })) {
-        if (agentEvent.type === 'error') continue
-        input.emit(agentEvent)
-      }
-      if (event.type === 'compaction_end') {
-        emitContextUsage(input.emit, input.runId, input.tabId, hosted.session)
-      }
-    })
-
-    try {
-      await hosted.session.compact(input.instructions)
-      emitContextUsage(input.emit, input.runId, input.tabId, hosted.session)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (isBenignCompactionSkip(message)) return
-      const locale = resolveOutlineLocale(input.locale)
-      input.emit({
-        type: 'status',
-        message:
-          locale === 'zh' ? `上下文压缩失败：${message}` : `Context compaction failed: ${message}`,
-        runId: input.runId,
-        tabId: input.tabId
-      })
-    } finally {
-      hosted.unsubscribe?.()
-      hosted.unsubscribe = undefined
-      compactingBySessionKey.delete(sessionKey)
-    }
-  })
-}
-
-function isBenignCompactionSkip(message: string): boolean {
-  return message === 'Nothing to compact (session too small)' || message === 'Already compacted'
-}
-
-function assistantTextForOutline(
-  status: SessionOutlineStatus,
-  collectedText: string,
-  messages: unknown[]
-): string {
-  const streamed = collectedText.trim()
-  if (status !== 'interrupted') return streamed
-  const fromMessages = extractAssistantTextFromCurrentTurn(messages).trim()
-  return streamed.length >= fromMessages.length ? streamed : fromMessages
 }
 
 async function ensureHostedSession(
@@ -839,7 +818,6 @@ async function ensureHostedSessionUnlocked(
   const instructionContext = buildLocalInstructionContext()
   const additionalSkillPaths = collectSkillRoots(config)
   const ptyBashTool = createPtyBashToolDefinition(pi, cwd, sessionKey)
-  const compactionGate = createCompactionGate()
 
   const resourceLoader = new pi.DefaultResourceLoader({
     cwd,
@@ -847,7 +825,6 @@ async function ensureHostedSessionUnlocked(
     settingsManager,
     additionalSkillPaths,
     noExtensions: true,
-    extensionFactories: [createCompactionDeferralExtension(compactionGate)],
     systemPromptOverride: (base) =>
       buildInvariantAgentPrompt({
         base: base ?? '',
@@ -873,6 +850,7 @@ async function ensureHostedSessionUnlocked(
     resourceLoader,
     customTools: [
       ptyBashTool as never,
+      createChangePlanTool(pi, sessionKey) as never,
       openSubterminalTool as never,
       subagentTool as never,
       ...(captureTools as never[]),
@@ -887,15 +865,11 @@ async function ensureHostedSessionUnlocked(
     session,
     cwd,
     toolProfile,
-    compactionGate,
+    immediateTools: session.getActiveToolNames().filter((name) => name !== 'submit_change_plan'),
     closeMcp: mcp.close
   }
   hostedSessions.set(sessionKey, hosted)
   return hosted
-}
-
-async function disposeHostedSession(hosted: HostedSession): Promise<void> {
-  return withSessionMutex(hosted.sessionKey, () => disposeHostedSessionUnlocked(hosted))
 }
 
 async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void> {
@@ -938,7 +912,12 @@ function hostedSessionHasMessages(session: AgentSession): boolean {
   }
 }
 
-function readHostedSessionTokenUsage(session: AgentSession): { input: number; output: number } {
+function readHostedSessionTokenUsage(session: AgentSession): {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+} {
   try {
     return snapshotSessionTokenUsage(session.getSessionStats())
   } catch {
@@ -978,6 +957,8 @@ function emitContextUsage(
     type: 'usage',
     input: 0,
     output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
     ...context,
     runId,
     tabId
@@ -988,7 +969,7 @@ function emitRunUsageDelta(
   emit: (event: AgentEvent) => void,
   runId: string,
   tabId: string | undefined,
-  before: { input: number; output: number },
+  before: { input: number; output: number; cacheRead: number; cacheWrite: number },
   session: AgentSession
 ): void {
   const delta = diffSessionTokenUsage(before, readHostedSessionTokenUsage(session))
@@ -997,6 +978,8 @@ function emitRunUsageDelta(
     type: 'usage',
     input: delta.input,
     output: delta.output,
+    cacheRead: delta.cacheRead,
+    cacheWrite: delta.cacheWrite,
     ...context,
     runId,
     tabId

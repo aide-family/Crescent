@@ -22,6 +22,8 @@ export function runtimeAnchorHost(state: ConnectionState): string | undefined {
 
 export type TerminalAlignment = 'unknown' | 'aligned' | 'drifted'
 export type TerminalMode = 'none' | 'pty' | 'pipe'
+export type ConnectionOrigin = 'connection-card' | 'manual-shell' | 'special-ssh'
+export type MonitorPolicy = 'managed' | 'manual' | 'special'
 
 export interface RecoveryBudget {
   /** Drift key (expected|observed) this budget applies to. */
@@ -32,6 +34,14 @@ export interface RecoveryBudget {
 
 export interface ConnectionState {
   mode: TerminalMode
+  connectionOrigin?: ConnectionOrigin
+  monitorPolicy?: MonitorPolicy
+  targetScope?: 'host' | 'cluster'
+  sshHopChain?: string[]
+  manualSshActive?: boolean
+  owner?: string
+  connectionId?: string
+  connectionName?: string
   expectedHost?: string
   runtimeExpectedHost?: string
   jumpPromptHost?: string
@@ -44,9 +54,34 @@ export interface ConnectionState {
   alignment: TerminalAlignment
   /** True only after login was verified (prompt host matched / confirmed). */
   ready: boolean
+  connectionFault?: 'degraded' | 'lost'
   lastError?: string
   /** Recovery brakes: per-drift-event attempt budget. */
   recovery?: RecoveryBudget
+}
+
+export type ConnectionPhase =
+  | 'local-ready'
+  | 'ssh-connecting'
+  | 'ssh-ready'
+  | 'ssh-degraded'
+  | 'ssh-lost'
+  | 'ssh-restoring'
+
+/** A live local shell does not prove that its SSH target is still present. */
+export function connectionPhase(
+  state: ConnectionState | undefined,
+  alignment: TerminalAlignment,
+  hasSession: boolean,
+  restoring: boolean
+): ConnectionPhase {
+  if (!state?.expectedHost) return 'local-ready'
+  if (restoring) return 'ssh-restoring'
+  if (!hasSession || alignment === 'drifted') return 'ssh-lost'
+  if (state.connectionFault === 'lost') return 'ssh-lost'
+  if (state.connectionFault === 'degraded') return 'ssh-degraded'
+  if (state.ready && alignment === 'aligned') return 'ssh-ready'
+  return state.ready ? 'ssh-degraded' : 'ssh-connecting'
 }
 
 export const RECOVERY_WINDOW_MS = 60_000
@@ -66,6 +101,11 @@ export interface RecoveryStateLike {
 export function createConnectionState(mode: TerminalMode = 'none'): ConnectionState {
   return {
     mode,
+    connectionOrigin: 'manual-shell',
+    monitorPolicy: 'manual',
+    targetScope: 'host',
+    sshHopChain: [],
+    manualSshActive: false,
     aliases: [],
     alignment: 'unknown',
     ready: false
@@ -76,7 +116,13 @@ export function createConnectionState(mode: TerminalMode = 'none'): ConnectionSt
 export function setConnectionExpectedHost(
   state: ConnectionState,
   host: string | null | undefined,
-  options?: { clusterHostRegex?: string | null }
+  options?: {
+    clusterHostRegex?: string | null
+    connectionId?: string
+    connectionName?: string
+    connectionOrigin?: ConnectionOrigin
+    sshHopChain?: string[]
+  }
 ): ConnectionState {
   const expected = normalizeHostToken(host ?? '')
   const clusterHostRegex = normalizeClusterHostRegex(
@@ -86,22 +132,44 @@ export function setConnectionExpectedHost(
     return {
       ...state,
       expectedHost: undefined,
+      connectionId: undefined,
+      connectionName: undefined,
       runtimeExpectedHost: undefined,
       jumpPromptHost: undefined,
       clusterHostRegex: undefined,
+      connectionOrigin: 'manual-shell',
+      monitorPolicy: 'manual',
+      targetScope: 'host',
+      sshHopChain: [],
+      manualSshActive: false,
+      aliases: [],
       alignment: 'unknown',
       ready: false,
+      connectionFault: undefined,
       lastError: undefined
     }
   }
   return {
     ...state,
     expectedHost: expected,
+    connectionId: options?.connectionId?.trim() || undefined,
+    connectionName: options?.connectionName?.trim() || undefined,
     runtimeExpectedHost: undefined,
     jumpPromptHost: undefined,
     clusterHostRegex,
+    connectionOrigin: options?.connectionOrigin ?? 'manual-shell',
+    monitorPolicy:
+      options?.connectionOrigin === 'special-ssh'
+        ? 'special'
+        : options?.connectionOrigin === 'connection-card'
+          ? 'managed'
+          : 'manual',
+    targetScope: clusterHostRegex ? 'cluster' : 'host',
+    sshHopChain: options?.sshHopChain ?? [],
+    manualSshActive: false,
     alignment: 'unknown',
     ready: false,
+    connectionFault: undefined,
     lastError: undefined
   }
 }
@@ -113,7 +181,8 @@ export function patchConnectionClusterHostRegex(
 ): ConnectionState {
   return {
     ...state,
-    clusterHostRegex: normalizeClusterHostRegex(clusterHostRegex)
+    clusterHostRegex: normalizeClusterHostRegex(clusterHostRegex),
+    targetScope: normalizeClusterHostRegex(clusterHostRegex) ? 'cluster' : 'host'
   }
 }
 
@@ -127,6 +196,7 @@ export type ClusterHostPatternValidation =
   | { ok: false; error: string; reason: ClusterHostPatternReason }
 
 const GLOB_META = /[*?]/
+const HOST_GLOB = /^[A-Za-z0-9.*?_-]+$/
 const REGEX_ESCAPE = /[\\^$+{}[\]().|]/
 const REDOS_NESTED_QUANTIFIER = /(?:\+|\*|\}|\{)\s*(?:\+|\*|\{)/
 const REDOS_STACKED_WILDCARDS = /(?:\.\*){3,}/
@@ -148,8 +218,8 @@ function tryCompileRegex(source: string): boolean {
 export function globToAnchoredRegexSource(glob: string): string {
   let compiled = ''
   for (const char of glob) {
-    if (char === '*') compiled += '.*'
-    else if (char === '?') compiled += '.'
+    if (char === '*') compiled += '[^.]*'
+    else if (char === '?') compiled += '[^.]'
     else if (char === '.' || REGEX_ESCAPE.test(char)) compiled += `\\${char}`
     else compiled += char
   }
@@ -174,6 +244,13 @@ export function compileClusterHostPattern(
     }
   }
 
+  // Host globs such as web*.cluster.example are valid JS regexes with a
+  // different meaning. Recognize host-shaped globs before trying regex mode.
+  if (GLOB_META.test(trimmed) && HOST_GLOB.test(trimmed)) {
+    const regex = globToAnchoredRegexSource(trimmed)
+    return { ok: true, value: trimmed, regex }
+  }
+
   if (tryCompileRegex(trimmed)) {
     if (looksLikeRedos(trimmed)) {
       return {
@@ -182,7 +259,7 @@ export function compileClusterHostPattern(
         error: 'Cluster host regex looks too complex; simplify the pattern.'
       }
     }
-    return { ok: true, value: trimmed, regex: trimmed }
+    return { ok: true, value: trimmed, regex: `^(?:${trimmed})$` }
   }
 
   if (GLOB_META.test(trimmed)) {
@@ -379,34 +456,6 @@ export function evaluateInjectionGuard(
     }
   }
 
-  // Auto-learn on an unverified session: the first non-local prompt observed
-  // is treated as the target (covers password/manual logins where confirm-login
-  // had no prompt host yet). A local prompt is never learned.
-  const autoLearned = autoLearnUnverifiedLogin(state, observedHost, {
-    localHost: options.localHost ?? ''
-  })
-  if (autoLearned) {
-    return {
-      effectiveExpectedHost,
-      observedHost,
-      alignment: 'aligned',
-      shouldReanchor: true
-    }
-  }
-
-  if (
-    !runtimeAnchorHost(state) &&
-    observedHost !== 'local-shell' &&
-    !isPromptHostAligned(observedHost, options.localHost ?? '')
-  ) {
-    return {
-      effectiveExpectedHost,
-      observedHost,
-      alignment: 'aligned',
-      shouldReanchor: true
-    }
-  }
-
   // Fell back to the jump box after a deeper runtime target — block + recover.
   if (isReturnToJumpHost(state, observedHost)) {
     return {
@@ -414,22 +463,6 @@ export function evaluateInjectionGuard(
       observedHost,
       alignment: 'drifted',
       shouldReanchor: false
-    }
-  }
-
-  // Peer remote hop (cluster node ↔ node): re-anchor instead of blocking.
-  // Treating every peer hop as drift caused environment-drift recovery loops
-  // and OOM. Jump-box return is handled above; exit-to-local still drifts below.
-  if (
-    runtimeAnchorHost(state) &&
-    observedHost !== 'local-shell' &&
-    !isPromptHostAligned(observedHost, options.localHost ?? '')
-  ) {
-    return {
-      effectiveExpectedHost,
-      observedHost,
-      alignment: 'aligned',
-      shouldReanchor: true
     }
   }
 
@@ -477,7 +510,7 @@ export function resolveSessionAlignment(input: {
 }): { alignment: TerminalAlignment; promptHost?: string } {
   const expected = normalizeHostToken(input.expectedHost ?? '')
   const hasClusterRegex = Boolean(normalizeClusterHostRegex(input.clusterHostRegex))
-  if (!expected && !hasClusterRegex) return { alignment: 'unknown' }
+  const hasTarget = Boolean(expected || hasClusterRegex)
 
   const signal = findNewestPromptSignal(input.output)
   if (signal?.kind === 'waiting') {
@@ -486,13 +519,17 @@ export function resolveSessionAlignment(input: {
     return { alignment: 'unknown' }
   }
   if (signal?.kind === 'local') {
-    return { alignment: 'drifted', promptHost: 'local-shell' }
+    return { alignment: hasTarget ? 'drifted' : 'unknown', promptHost: 'local-shell' }
   }
   if (signal?.kind === 'host') {
     // Laptop hostname after SSH drop is leave-target, not a peer hop.
     if (isLocalMachinePromptHost(signal.host, input.localHost)) {
-      return { alignment: 'drifted', promptHost: 'local-shell' }
+      return { alignment: hasTarget ? 'drifted' : 'unknown', promptHost: 'local-shell' }
     }
+    // Resolve prompt identity even before a new terminal is bound to a target.
+    // Login planning must not mistake the local user@hostname prompt for an
+    // already completed SSH hop when startup output arrives before get-context.
+    if (!hasTarget) return { alignment: 'unknown', promptHost: signal.host }
     if (isHostOnTarget(signal.host, input.aliases, expected || undefined, input.clusterHostRegex)) {
       return { alignment: 'aligned', promptHost: signal.host }
     }
@@ -501,7 +538,7 @@ export function resolveSessionAlignment(input: {
   // No prompt signal matched: keep the legacy heuristic for local prompts that
   // fall outside the strict patterns above.
   if (isLocalShellPromptVisible(input.output)) {
-    return { alignment: 'drifted', promptHost: 'local-shell' }
+    return { alignment: hasTarget ? 'drifted' : 'unknown', promptHost: 'local-shell' }
   }
   return { alignment: 'unknown' }
 }
@@ -595,6 +632,7 @@ export function confirmLoginState(
       runtimeExpectedHost: observed,
       alignment: 'aligned',
       ready: true,
+      connectionFault: undefined,
       lastError: undefined
     },
     ok: true,

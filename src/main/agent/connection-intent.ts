@@ -1,6 +1,7 @@
 import {
   explainLocalFileOperationBypass,
-  hasExplicitLocalWorkIntent
+  hasExplicitLocalWorkIntent,
+  hasExplicitSshConnectionIntent
 } from '../../shared/agent-local-intent'
 import { parseJsonFromModelContent } from '../../shared/json-parse'
 import type { AgentConnectionIntentResult, ConnectionConfig } from './types'
@@ -8,7 +9,7 @@ import type { AgentConnectionIntentResult, ConnectionConfig } from './types'
 export function buildLocalOnlyConnectionIntentResult(
   input: string
 ): AgentConnectionIntentResult | undefined {
-  if (!hasExplicitLocalWorkIntent(input)) return undefined
+  if (!hasExplicitLocalWorkIntent(input) && hasExplicitSshConnectionIntent(input)) return undefined
 
   return {
     ok: false,
@@ -16,7 +17,9 @@ export function buildLocalOnlyConnectionIntentResult(
     confidence: 100,
     executeAfterLogin: false,
     matchBasis: 'none',
-    reason: explainLocalFileOperationBypass()
+    reason: hasExplicitLocalWorkIntent(input)
+      ? explainLocalFileOperationBypass()
+      : 'No request to open or switch an SSH connection; continue in the current terminal.'
   }
 }
 

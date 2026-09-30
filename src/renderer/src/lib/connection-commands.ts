@@ -165,8 +165,8 @@ export function resolveRemainingConnectionCommands(
   const liveSignal = env.output ? findNewestPromptSignal(env.output) : undefined
   const liveRemoteHost = liveSignal?.kind === 'host' ? liveSignal.host : undefined
 
-  // Dead PTY: ignore stale remote promptHost / SSOT and type the full login.
-  if (env.mode === 'none') {
+  // Dead/local PTY: ignore stale remote readiness and type the full login.
+  if (env.mode === 'none' || (!waiting && isLocalLoginEnvironment(env))) {
     return remainingWithoutLeadingSsh(full)
   }
 

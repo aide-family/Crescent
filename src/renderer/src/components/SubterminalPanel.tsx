@@ -20,6 +20,7 @@ import {
   isTerminalCtrlCData
 } from '@renderer/lib/xterm-input-lock'
 import { TerminalLockOverlay } from '@renderer/components/TerminalLockOverlay'
+import { TerminalIdentity } from '@renderer/components/TerminalIdentity'
 import { createXtermReplayGate, hydrateXtermFromHistory } from '@renderer/lib/xterm-hydrate'
 import { attachXtermScrollFollow, writeXtermAndFollow } from '@renderer/lib/xterm-scroll-follow'
 import type { AgentTerminalTab, TemporarySubterminal } from '@renderer/lib/terminal-tabs'
@@ -40,6 +41,9 @@ export interface SubterminalHeightResizeState {
 
 function SubterminalXtermPane({
   subterminal,
+  widthPercent,
+  panelHeight,
+  layoutWidthPercent,
   shellExitedText,
   inputLocked,
   commandRunning,
@@ -47,6 +51,9 @@ function SubterminalXtermPane({
   onInterrupt
 }: {
   subterminal: TemporarySubterminal
+  widthPercent: number
+  panelHeight: number
+  layoutWidthPercent: number
   shellExitedText: string
   inputLocked: boolean
   commandRunning: boolean
@@ -64,6 +71,18 @@ function SubterminalXtermPane({
     if (!terminal) return
     applyXtermInputLock(terminal, inputLocked)
   }, [inputLocked])
+
+  // Flex pane changes can precede ResizeObserver delivery, especially when a
+  // second pane is inserted. Fit after the committed layout for every affected
+  // subterminal so xterm and its PTY agree with the visible width.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const terminal = terminalRef.current
+      const fitAddon = fitAddonRef.current
+      if (terminal && fitAddon) fitAndSyncPty(terminal, fitAddon, subterminal.id)
+    }, 40)
+    return () => window.clearTimeout(timer)
+  }, [subterminal.id, widthPercent, panelHeight, layoutWidthPercent])
 
   useEffect(() => {
     const host = hostRef.current
@@ -174,7 +193,9 @@ export function SubterminalPanel({
   activeTab,
   collapsed,
   panelHeight,
+  layoutWidthPercent,
   resizeRef,
+  heightResizeRef,
   t,
   executionTerminalId,
   agentBusy,
@@ -183,12 +204,16 @@ export function SubterminalPanel({
   onCollapsedChange,
   onCloseSubterminal,
   onCloseAllSubterminals,
-  onOpenLocalSubterminal
+  onOpenLocalSubterminal,
+  onResizeHeight,
+  onResizePair
 }: {
   activeTab: AgentTerminalTab
   collapsed: boolean
   panelHeight: number
+  layoutWidthPercent: number
   resizeRef: MutableRefObject<SubterminalResizeState | null>
+  heightResizeRef: MutableRefObject<SubterminalHeightResizeState | null>
   t: Dictionary
   executionTerminalId?: string
   agentBusy?: boolean
@@ -198,6 +223,14 @@ export function SubterminalPanel({
   onCloseSubterminal: (tabId: string, subterminalId: string) => void
   onCloseAllSubterminals: (tabId: string) => void
   onOpenLocalSubterminal?: () => void
+  onResizeHeight: (height: number) => void
+  onResizePair: (
+    tabId: string,
+    leftId: string,
+    rightId: string,
+    left: number,
+    right: number
+  ) => void
 }): React.JSX.Element | null {
   if (activeTab.subTerminals.length === 0) {
     if (!onOpenLocalSubterminal) return null
@@ -224,16 +257,38 @@ export function SubterminalPanel({
 
   return (
     <div
-      className={
-        collapsed
-          ? 'shrink-0 border-t border-white/8 bg-[var(--app-terminal-rail)]'
-          : 'flex min-h-0 shrink-0 flex-col bg-[var(--app-terminal-rail)]'
-      }
+      className="shrink-0 border-t border-white/8 bg-[var(--app-terminal-rail)]"
       style={{
         height: collapsed ? undefined : panelHeight
       }}
     >
-      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
+      {!collapsed && (
+        <div
+          className="h-1 cursor-row-resize bg-transparent outline-none hover:bg-primary/50 focus-visible:bg-primary/50"
+          role="separator"
+          tabIndex={0}
+          aria-orientation="horizontal"
+          aria-label={t.terminal.resizeSubterminalHeight}
+          title={t.terminal.resizeSubterminalHeight}
+          onPointerDown={(event) => {
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            heightResizeRef.current = {
+              startY: event.clientY,
+              startHeight: panelHeight
+            }
+            document.body.style.cursor = 'row-resize'
+            document.body.style.userSelect = 'none'
+          }}
+          onKeyDown={(event) => {
+            const delta = event.key === 'ArrowUp' ? 16 : event.key === 'ArrowDown' ? -16 : 0
+            if (!delta) return
+            event.preventDefault()
+            onResizeHeight(Math.max(96, Math.min(window.innerHeight * 0.65, panelHeight + delta)))
+          }}
+        />
+      )}
+      <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
         <div className="min-w-0 truncate text-xs font-medium">
           {t.terminal.temporarySubterminal}{' '}
           <span className="tabular-nums text-muted-foreground">
@@ -284,7 +339,7 @@ export function SubterminalPanel({
         </div>
       </div>
       {!collapsed && (
-        <div className="min-h-0 flex-1 overflow-auto p-2">
+        <div className="h-[calc(100%-2.375rem)] overflow-auto p-2">
           <div className="flex h-full min-w-full gap-0">
             {activeTab.subTerminals.map((subterminal, index) => {
               const widths = getSubterminalWidths(activeTab.subTerminals)
@@ -297,21 +352,17 @@ export function SubterminalPanel({
                   className="flex min-w-0"
                   style={{ flexBasis: `${width}%`, flexGrow: 0, flexShrink: 0 }}
                 >
-                  <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-white/8 bg-black/30 text-xs">
-                    <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
+                  <section
+                    data-subterminal-id={subterminal.id}
+                    className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-white/8 bg-black/30 text-xs"
+                  >
+                    <div className="flex min-h-9 shrink-0 items-center justify-between gap-2 border-b px-2">
                       <div className="min-w-0">
                         <p className="truncate font-medium">
-                          {subterminal.agentName
-                            ? `${subterminal.agentName}`
-                            : `${t.terminal.subterminal}: ${subterminal.name}`}
-                          {subterminal.agentName ? ` · ${subterminal.name}` : ''}
-                          {subterminal.connectionName ? ` · ${subterminal.connectionName}` : ''}
+                          {t.terminal.subterminal} · {subterminal.name}
+                          {subterminal.agentName ? ` · ${subterminal.agentName}` : ''}
                         </p>
-                        {subterminal.cwd && (
-                          <p className="truncate text-[10px] text-muted-foreground">
-                            {subterminal.cwd}
-                          </p>
-                        )}
+                        <TerminalIdentity tabId={subterminal.id} t={t} compact />
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
                         {subterminal.agentStatus ? (
@@ -354,6 +405,9 @@ export function SubterminalPanel({
                     </div>
                     <SubterminalXtermPane
                       subterminal={subterminal}
+                      widthPercent={width}
+                      panelHeight={panelHeight}
+                      layoutWidthPercent={layoutWidthPercent}
                       shellExitedText={t.terminal.shellExited}
                       inputLocked={Boolean(
                         agentBusy && executionTerminalId && subterminal.id === executionTerminalId
@@ -369,6 +423,7 @@ export function SubterminalPanel({
                     <div
                       className="mx-1 w-1 shrink-0 cursor-col-resize rounded-full bg-white/10 hover:bg-primary/60"
                       role="separator"
+                      tabIndex={0}
                       aria-orientation="vertical"
                       aria-label={t.terminal.resizeSubterminals}
                       title={t.terminal.resizeSubterminals}
@@ -385,6 +440,19 @@ export function SubterminalPanel({
                         }
                         document.body.style.cursor = 'col-resize'
                         document.body.style.userSelect = 'none'
+                      }}
+                      onKeyDown={(event) => {
+                        const delta =
+                          event.key === 'ArrowLeft' ? -2 : event.key === 'ArrowRight' ? 2 : 0
+                        if (!delta) return
+                        event.preventDefault()
+                        onResizePair(
+                          activeTab.id,
+                          subterminal.id,
+                          nextSubterminal.id,
+                          width + delta,
+                          widths[index + 1] - delta
+                        )
                       }}
                     />
                   )}

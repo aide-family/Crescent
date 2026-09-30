@@ -1,4 +1,12 @@
-import { ArrowDownIcon, ArrowUpIcon, FileJsonIcon, FoldVerticalIcon } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  ForwardIcon,
+  ArrowUpIcon,
+  DatabaseZapIcon,
+  FileJsonIcon,
+  FoldVerticalIcon,
+  GaugeIcon
+} from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -10,26 +18,35 @@ import {
 import type { Dictionary } from '@renderer/i18n'
 import {
   formatCompactTokenCount,
-  formatContextUsagePercent
+  formatContextUsagePercent,
+  formatCacheHitRate
 } from '../../../shared/session-token-usage'
 
 export function SessionUsageBar({
   inputTokens,
   outputTokens,
+  cacheReadTokens,
+  cacheWriteTokens,
   contextPercent,
   contextPending,
   compactDisabled,
   t,
   onExportSessionTrace,
-  onCompactContext
+  onCompactContext,
+  onHandoff,
+  handoffDisabledReason
 }: {
   inputTokens: number
   outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
   contextPercent?: number | null
   contextPending?: boolean
   compactDisabled?: boolean
   t: Dictionary
   onExportSessionTrace: () => void
+  onHandoff?: () => void
+  handoffDisabledReason?: string
   onCompactContext?: () => void
 }): React.JSX.Element {
   const contextLabel = contextPending
@@ -45,12 +62,19 @@ export function SessionUsageBar({
       <TooltipProvider delayDuration={200}>
         <TokenCount direction="input" count={inputTokens} label={t.common.inputTokens} />
         <TokenCount direction="output" count={outputTokens} label={t.common.outputTokens} />
+        <CacheHitRate
+          inputTokens={inputTokens}
+          cacheReadTokens={cacheReadTokens}
+          cacheWriteTokens={cacheWriteTokens}
+          label={t.common.cacheHitRate}
+        />
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="inline-flex items-center text-[11px] tabular-nums text-muted-foreground"
+              className="inline-flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground"
               aria-label={contextLabel}
             >
+              <GaugeIcon className="size-3" aria-hidden="true" />
               {contextPending ? '—' : formatContextUsagePercent(contextPercent)}
             </span>
           </TooltipTrigger>
@@ -74,6 +98,26 @@ export function SessionUsageBar({
             <TooltipContent side="top">{t.common.compactContext}</TooltipContent>
           </Tooltip>
         ) : null}
+        {onHandoff ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t.handoff.title}
+                aria-disabled={Boolean(handoffDisabledReason)}
+                className={handoffDisabledReason ? 'opacity-50' : undefined}
+                onClick={() => {
+                  if (!handoffDisabledReason) onHandoff()
+                }}
+              >
+                <ForwardIcon aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{handoffDisabledReason || t.handoff.title}</TooltipContent>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -90,6 +134,42 @@ export function SessionUsageBar({
         </Tooltip>
       </TooltipProvider>
     </div>
+  )
+}
+
+function CacheHitRate({
+  inputTokens,
+  cacheReadTokens,
+  cacheWriteTokens,
+  label
+}: {
+  inputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  label: string
+}): React.JSX.Element {
+  const value = formatCacheHitRate({
+    input: inputTokens,
+    output: 0,
+    cacheRead: cacheReadTokens,
+    cacheWrite: cacheWriteTokens
+  })
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground"
+          aria-label={`${label} ${value}`}
+        >
+          <DatabaseZapIcon className="size-3" aria-hidden="true" />
+          {value}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {label}: {value}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

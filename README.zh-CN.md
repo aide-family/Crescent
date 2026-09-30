@@ -138,8 +138,10 @@ xattr -cr /Applications/Crescent.app
 ### 从源码安装依赖
 
 ```bash
-npm install
+npm ci
 ```
+
+Node.js 需要 22.19 或更高版本。解压源码包后，在项目根目录执行 `npm ci` 安装依赖，再运行 `npm run dev` 启动开发版。编译和桌面安装包说明见 [SOURCE_BUILD.md](./SOURCE_BUILD.md)。
 
 ### 开发模式
 

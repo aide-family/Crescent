@@ -188,10 +188,32 @@ export function observeTerminalHostResize(
   tabId: string,
   onAfterFit?: () => void
 ): ResizeObserver {
-  const resizeObserver = new ResizeObserver(() => {
+  let frame = 0
+  let fallback = 0
+  const fit = (): void => {
+    if (frame) window.cancelAnimationFrame(frame)
+    if (fallback) window.clearTimeout(fallback)
+    frame = 0
+    fallback = 0
     fitAndSyncPty(terminal, fitAddon, tabId)
     onAfterFit?.()
+  }
+  const resizeObserver = new ResizeObserver(() => {
+    if (frame || fallback) return
+    frame = window.requestAnimationFrame(fit)
+    // Background windows may pause animation frames while their PTY remains
+    // live. Keep a bounded timer so the next command sees the final grid.
+    fallback = window.setTimeout(fit, 120)
   })
   resizeObserver.observe(host)
+  // Callers disconnect the observer on unmount; a pending frame must not fit a
+  // disposed terminal after that. Keeping this method on the observer makes
+  // existing lifecycle cleanup sufficient.
+  const disconnect = resizeObserver.disconnect.bind(resizeObserver)
+  resizeObserver.disconnect = () => {
+    if (frame) window.cancelAnimationFrame(frame)
+    if (fallback) window.clearTimeout(fallback)
+    disconnect()
+  }
   return resizeObserver
 }

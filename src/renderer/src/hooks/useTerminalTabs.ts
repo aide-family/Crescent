@@ -70,7 +70,8 @@ export function reassignSessionRootOnClose(
         pendingClarification: closingTab.pendingClarification,
         providerId: closingTab.providerId ?? tab.providerId,
         model: closingTab.model ?? tab.model,
-        agentStyle: closingTab.agentStyle ?? tab.agentStyle
+        agentStyle: closingTab.agentStyle ?? tab.agentStyle,
+        executionMode: closingTab.executionMode ?? tab.executionMode
       }
     }
     if (getSessionGroupId(tab) === groupId && tab.id !== closingTabId) {

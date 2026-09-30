@@ -1,7 +1,6 @@
 import { extractRiskVerb, hasHighWriteVerb, isStaticallyReadonly } from '../../shared/command-guard'
 import type { CommandAuditSource } from '../../shared/agent-types'
 import { CommandAuditor, CommandAuditTimeoutError } from './command-auditor'
-import { matchCommandWhitelist } from './command-whitelist'
 import type { AgentConfig, CommandAuditResult } from './types'
 
 export interface ClassifyCommandResult {
@@ -13,8 +12,8 @@ export interface ClassifyCommandResult {
 }
 
 /**
- * Funnel order: HIGH → whitelist → READONLY → subagent.
- * Destructive HIGH always wins over a broad whitelist pattern.
+ * Funnel order: HIGH → READONLY → advisory audit (always requires approval).
+ * A model rating or legacy wildcard whitelist cannot authorize unknown commands.
  * Subagent "high" is clamped to low when static READONLY matches.
  */
 export async function classifyCommand(
@@ -34,13 +33,6 @@ export async function classifyCommand(
     return { level: 'high', source: 'rule', elapsedMs, audit }
   }
 
-  const whitelistRule = matchCommandWhitelist(cmd, ctx.config.commandWhitelist ?? [])
-  if (whitelistRule) {
-    const elapsedMs = Date.now() - startedAt
-    const audit = buildRuleAudit('low', 'whitelist', elapsedMs, ctx.locale, whitelistRule)
-    return { level: 'low', source: 'whitelist', elapsedMs, audit, whitelistRule }
-  }
-
   if (isStaticallyReadonly(cmd)) {
     const elapsedMs = Date.now() - startedAt
     const audit = buildRuleAudit('low', 'rule', elapsedMs, ctx.locale)
@@ -57,7 +49,7 @@ export async function classifyCommand(
     })
     const elapsedMs = Date.now() - startedAt
     // Clamp mistaken high ratings when the command is statically read-only.
-    const level: 'low' | 'high' = audit.risk === 'low' || isStaticallyReadonly(cmd) ? 'low' : 'high'
+    const level: 'low' | 'high' = isStaticallyReadonly(cmd) ? 'low' : 'high'
     const human =
       level === 'high'
         ? buildHighRiskHumanSummary(cmd, ctx.locale)

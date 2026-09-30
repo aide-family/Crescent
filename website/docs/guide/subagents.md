@@ -1,46 +1,32 @@
 # 子终端与子代理
 
-主终端继续做当前任务。子终端只收集其他信息。不要让主终端停下来，只靠子终端把问题处理完。
-
-## 流程 {#flow}
-
-```mermaid
-flowchart TD
-  need["需要另一上下文"] --> kind{"哪条路径"}
-  kind -->|"只加窗格"| open["open_subterminal"]
-  open --> local["mode=local"]
-  open --> ssh["mode=ssh 且另一条 connectionId"]
-  kind -->|"旁路采集"| sub["subagent"]
-  sub --> pane["独占停靠终端"]
-  pane --> readers["只读角色可并行，最多 3 个"]
-  sub --> limit["不能再派生子代理或沉淀"]
-```
-
-`open_subterminal` 只给当前 Agent 多开一个窗格。`mode=local` 让下一条 `bash` 在本机执行，然后回到主终端。`mode=ssh` 停靠另一台已保存的主机，不搬走父 `bash`。`subagent` 在自己的停靠终端里收集旁路信息。只读角色可以并行，最多 3 个面板。主机会拒绝 `worker` 和 `delegate`。子代理不能再调用 `subagent`、`open_subterminal`、`create-skill` 或 `create-sop`。
+主终端始终是当前会话的现场。需要另一台机器、本机文件，或一条独立的检查线时，不要把命令混进同一个面板。
 
 ## 停靠子终端
 
-`open_subterminal` 打开一个停靠的子终端。父 `bash` 留在主终端。
+`open_subterminal` 打开一个停靠的子终端，之后的 `bash` 可以走到那里。
 
-- `mode=local`：当前面板是远程 SSH 时，下一条 `bash` 可以改本机文件，例如 `/etc/hosts`。这条命令结束后，`bash` 回到主终端。
-- `mode=ssh`：必须带另一条已经保存的 `connectionId`。这不会搬走父 `bash`。不要为当前这条 SSH 再开一个子终端。
+- `mode=local`：当前面板是远程 SSH 时，用来处理本机工作，例如本机文件。
+- `mode=ssh`：必须带另一条已经保存的 `connectionId`。不要为当前这条 SSH 再开一个子终端；主终端会继续留在当前连接上。
 
-同一面板上不要并发跑多条 `bash`。同一会话的主排查留在主终端。
+同一面板上不要并发跑多条 `bash`。并行的工作各自用一个子终端。
 
 ## 子代理
 
-`subagent` 用来收集旁路信息。每个子代理独占一个停靠终端。父代理的 `bash` 留在主终端，并继续用户任务。
+`subagent` 把一块有边界的任务交给子代理。每个子代理独占一个停靠终端。父代理的 `bash` 仍留在当前面板。
 
 - 单个任务：`{ agent, task }`
 - 并行任务：`{ tasks: [{ agent, task }, ...] }`，最多 3 个面板
 
-只有互相独立的只读工作才并行。`worker` 和 `delegate` 会被拒绝。子代理不能再派生子代理，也不能代替已经断开的主 SSH；主会话应等主机恢复后再在主面板重试。
+只有互相独立的只读工作才并行。会改文件的角色要按顺序跑。子代理不能再派生子代理，也不能代替已经断开的主 SSH；主会话应等主机恢复后再在主面板重试。
 
 | 角色 | 工具 | 做什么 |
 | --- | --- | --- |
 | `scout` | `read`、只读 `bash` | 快速摸清文件、入口、数据流和风险，不改文件 |
 | `researcher` | `read`、只读 `bash` | 从工作区、文档和命令输出收集事实，并标出来源 |
+| `worker` | `read`、`bash`、`edit`、`write` | 完成交办的修改，并说明如何验证 |
 | `reviewer` | `read`、只读 `bash` | 对照任务检查正确性、边界和多余复杂度，不直接大改 |
 | `oracle` | `read`、只读 `bash` | 动手前的第二意见：缺了什么、有什么风险、下一步建议 |
+| `delegate` | `read`、`bash`、`edit`、`write` | 在这个面板里完成一块有边界的任务，把结果交回父代理 |
 
-`worker` 和 `delegate` 会被拒绝。修改和验证留在主终端。子面板在子代理结束后由 Crescent 关闭。
+主任务仍在主面板收尾。子面板在子代理结束后由 Crescent 关闭。

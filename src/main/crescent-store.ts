@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
-import { dirname } from 'path'
+import { dirname, isAbsolute, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { safeStorage } from 'electron'
 
@@ -38,6 +38,7 @@ import type {
   ConnectionInput,
   OperationRecord
 } from './agent/types'
+import { DEFAULT_WHALE_MONITOR_CONFIG, type WhaleMonitorConfig } from '../shared/whale-monitor'
 import {
   normalizeConnectionListMeta,
   reorderInMeta,
@@ -56,6 +57,9 @@ export {
 export interface CrescentConfigFile {
   agent: AgentConfig
   connections: ConnectionConfig[]
+  /** Local Markdown directory used by the Crescent knowledge base. */
+  wikiDirectory?: string
+  whaleMonitor?: WhaleMonitorConfig & { apiKey?: string }
   /** Soft default for connection routing after a successful SSH login. */
   lastUsedConnectionId?: string
   /** Favorite + manual order for custom and ssh-config hosts (ids only). */
@@ -148,6 +152,14 @@ function mapSecretRecord(
 function encryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFile {
   return {
     ...config,
+    ...(config.whaleMonitor
+      ? {
+          whaleMonitor: {
+            ...config.whaleMonitor,
+            apiKey: encryptSecret(config.whaleMonitor.apiKey)
+          }
+        }
+      : {}),
     agent: {
       ...config.agent,
       providers: (config.agent.providers ?? []).map((provider) => ({
@@ -171,6 +183,14 @@ function encryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFil
 function decryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFile {
   return {
     ...config,
+    ...(config.whaleMonitor
+      ? {
+          whaleMonitor: {
+            ...config.whaleMonitor,
+            apiKey: decryptSecret(config.whaleMonitor.apiKey)
+          }
+        }
+      : {}),
     agent: {
       ...config.agent,
       providers: (config.agent.providers ?? []).map((provider) => ({
@@ -200,6 +220,29 @@ export function writeCrescentConfig(config: CrescentConfigFile): CrescentConfigF
   writeJsonFile(getCrescentConfigPath(), encryptConfigFileSecrets(stripDbBackedConfig(normalized)))
 
   return normalized
+}
+
+export function readWhaleMonitorConfig(): WhaleMonitorConfig & { apiKey?: string } {
+  return readCrescentConfig().whaleMonitor ?? { ...DEFAULT_WHALE_MONITOR_CONFIG }
+}
+
+export function writeWhaleMonitorConfig(
+  input: Partial<WhaleMonitorConfig> & { apiKey?: string; clearApiKey?: boolean }
+): WhaleMonitorConfig & { apiKey?: string } {
+  const current = readWhaleMonitorConfig()
+  const apiKey = input.clearApiKey ? undefined : input.apiKey?.trim() || current.apiKey
+  const next = normalizeWhaleMonitorConfig({ ...current, ...input, apiKey })
+  writeCrescentConfig({ ...readCrescentConfig(), whaleMonitor: next })
+  return next
+}
+
+export function readWikiDirectory(): string | undefined {
+  return readCrescentConfig().wikiDirectory
+}
+
+export function writeWikiDirectory(directory: string | undefined): void {
+  const config = readCrescentConfig()
+  writeCrescentConfig({ ...config, wikiDirectory: normalizeWikiDirectory(directory) })
 }
 
 export function readAgentConfig(): AgentConfig {
@@ -503,12 +546,73 @@ function normalizeConfigFile(value: unknown): CrescentConfigFile {
 
   return {
     agent: normalizeAgentConfig(isRecord(record.agent) ? record.agent : {}),
+    whaleMonitor: normalizeWhaleMonitorConfig(record.whaleMonitor),
     connections: Array.isArray(record.connections)
       ? record.connections.map(normalizeConnection).filter((connection) => connection.host)
       : [],
+    wikiDirectory: normalizeWikiDirectory(record.wikiDirectory),
     lastUsedConnectionId: normalizeLastUsedConnectionId(record.lastUsedConnectionId),
     connectionList: normalizeConnectionListMeta(record.connectionList)
   }
+}
+
+function normalizeWikiDirectory(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const directory = resolve(value.trim())
+  return isAbsolute(directory) ? directory : undefined
+}
+
+function normalizeWhaleMonitorConfig(value: unknown): WhaleMonitorConfig & { apiKey?: string } {
+  const record = isRecord(value) ? value : {}
+  const defaults = DEFAULT_WHALE_MONITOR_CONFIG
+  const budget = Number(record.totalBudget)
+  const interval = Number(record.refreshIntervalSeconds)
+  const position = isRecord(record.position) ? record.position : undefined
+  const x = Number(position?.x)
+  const y = Number(position?.y)
+  const startDate = typeof record.startDate === 'string' ? record.startDate : undefined
+  const endDate = typeof record.endDate === 'string' ? record.endDate : undefined
+
+  return {
+    enabled: record.enabled !== false,
+    spendBaseUrl: normalizeMonitorUrl(record.spendBaseUrl, defaults.spendBaseUrl),
+    modelsBaseUrl: normalizeMonitorUrl(record.modelsBaseUrl, defaults.modelsBaseUrl),
+    apiKey: typeof record.apiKey === 'string' ? record.apiKey : undefined,
+    totalBudget: Number.isFinite(budget) && budget >= 0 ? budget : defaults.totalBudget,
+    refreshIntervalSeconds: Number.isFinite(interval)
+      ? Math.min(3600, Math.max(30, Math.round(interval)))
+      : defaults.refreshIntervalSeconds,
+    defaultDateRange:
+      record.defaultDateRange === 'current-day' || record.defaultDateRange === 'custom'
+        ? record.defaultDateRange
+        : 'current-month',
+    ...(isValidMonitorDate(startDate) ? { startDate } : {}),
+    ...(isValidMonitorDate(endDate) ? { endDate } : {}),
+    ...(Number.isFinite(x) && Number.isFinite(y) ? { position: { x, y } } : {})
+  }
+}
+
+function normalizeMonitorUrl(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  try {
+    const parsed = new URL(value.trim())
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.username ||
+      parsed.password
+    ) {
+      return fallback
+    }
+    return parsed.toString()
+  } catch {
+    return fallback
+  }
+}
+
+function isValidMonitorDate(value: string | undefined): value is string {
+  return Boolean(
+    value && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+  )
 }
 
 function stripDbBackedConfig(config: CrescentConfigFile): CrescentConfigFile {

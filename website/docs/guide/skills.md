@@ -12,20 +12,6 @@ Crescent 从配置的 Skill 目录加载 Agent Skills，默认目录是 `~/.cres
 
 Skill 描述稳定的做法，知识库留下某次现场的结论和步骤。两者都留在本机，由 Crescent 在任务开始时提供给 Agent。
 
-## 流程 {#flow}
-
-```mermaid
-flowchart TD
-  call["create-skill 或 create-sop"] --> request["只发出草稿请求"]
-  request --> draft["后台根据会话生成"]
-  draft --> pending["确认前不落盘"]
-  pending --> confirm{"操作者确认"}
-  confirm -->|"确认"| write["写入 Skill 目录或 wiki"]
-  confirm -->|"取消"| stop["不写入"]
-```
-
-`create-skill` 和 `create-sop` 都不直接写文件。宿主根据这次会话在后台生成草稿，确认对话框通过之后，Main 才把 Skill 写入目录，或把 SOP 写入知识库。取消则什么都不留下。
-
 ## 从这次会话沉淀
 
 不要让模型用 `bash`、`write` 或 `edit` 直接写 `SKILL.md` 或知识库文件。让它调用沉淀工具，由 Crescent 在后台生成草稿，你确认之后才落盘。

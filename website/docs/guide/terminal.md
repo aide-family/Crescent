@@ -8,23 +8,6 @@ Crescent 内置本地终端，支持 PTY。Agent 在**当前可见终端**里执
 - Agent 的下一步基于这次输出，而不是假设环境长什么样。
 - 需要另一台机器或另一个上下文时，用 `open_subterminal` 停靠一个专用子终端，而不是把所有命令混在同一个会话里。
 
-## 流程 {#flow}
-
-```mermaid
-flowchart TD
-  goal["理解目标"] --> site["查看当前终端现场"]
-  site --> command["执行一条命令"]
-  command --> review["命令审核"]
-  review --> output["阅读真实输出"]
-  output --> more["继续检查"]
-  output --> fix["应用修复"]
-  output --> summary["给出结论"]
-  site --> sub["另一上下文"]
-  sub --> dock["open_subterminal"]
-```
-
-命令进入终端之前先过 [命令审核](/guide/command-review#flow)。另一台机器或另一条检查线不要和主面板抢同一个 PTY，用 [子终端与子代理](/guide/subagents#flow)。
-
 ## 适合的任务
 
 - 本机磁盘、内存、服务状态巡检

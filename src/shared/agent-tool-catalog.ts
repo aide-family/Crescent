@@ -3,6 +3,17 @@ import type { ToolCatalogEntry } from './agent-types'
 /** Pi coding-agent built-in tools exposed by Crescent after the Pi migration. */
 export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
   {
+    name: 'submit_change_plan',
+    method: 'post',
+    path: 'pi://crescent/submit_change_plan',
+    description: 'Review an exact target-bound plan, then execute approved steps once in order.',
+    source: 'built-in',
+    risk: 'high',
+    requiresApproval: true,
+    external: true,
+    stateChanging: true
+  },
+  {
     name: 'read',
     method: 'get',
     path: 'pi://workspace/read',
@@ -50,8 +61,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'open_subterminal',
     method: 'post',
     path: 'pi://crescent/open_subterminal',
-    description:
-      'Open a docked local or SSH subterminal. Parent bash stays on the main pane. mode=local borrows only the next client-machine command, then bash returns to the main pane.',
+    description: 'Open a docked local or SSH subterminal and route subsequent bash commands there.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,
@@ -63,7 +73,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     method: 'post',
     path: 'pi://crescent/subagent',
     description:
-      'Gather auxiliary information with a read-only child in its own docked subterminal. Parent bash stays on the main pane. worker and delegate are rejected.',
+      'Decide solo vs multi-agent, then delegate. Each child runs in its own docked subterminal. Parent bash stays on the current pane.',
     source: 'built-in',
     risk: 'medium',
     requiresApproval: false,

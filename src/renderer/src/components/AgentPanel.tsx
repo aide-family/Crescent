@@ -1,3 +1,4 @@
+import { normalizeExecutionMode, type ExecutionMode } from '../../../shared/execution-plan'
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -94,6 +95,8 @@ export function AgentPanel({
   aiState,
   aiStatusText,
   modelValidationError,
+  executionMode,
+  onExecutionModeChange,
   agentStyle,
   onAgentStyleChange,
   thinkingCollapsedByDefault,
@@ -125,6 +128,7 @@ export function AgentPanel({
   runningCommandTabId,
   onSelectSession,
   onSelectTerminal,
+  onFocusTerminal,
   onModelChange,
   onSubmit,
   onInsertSlashCommand,
@@ -156,10 +160,14 @@ export function AgentPanel({
   onLoadEarlier,
   sessionInputTokens,
   sessionOutputTokens,
+  sessionCacheReadTokens,
+  sessionCacheWriteTokens,
   contextPercent,
   contextPending,
   onCompactContext,
-  compactDisabled
+  compactDisabled,
+  onHandoff,
+  handoffDisabledReason
 }: {
   sessionChatTab: AgentTerminalTab
   sessionChatTabs: AgentTerminalTab[]
@@ -181,6 +189,8 @@ export function AgentPanel({
   aiState: 'ready' | 'pending' | 'not-ready'
   aiStatusText: string
   modelValidationError?: string
+  executionMode: ExecutionMode
+  onExecutionModeChange: (mode: ExecutionMode) => void
   agentStyle: AgentStyle
   onAgentStyleChange: (style: AgentStyle) => void
   thinkingCollapsedByDefault: boolean
@@ -203,6 +213,8 @@ export function AgentPanel({
   onExportSessionTrace: () => void
   onCompactContext?: () => void
   compactDisabled?: boolean
+  onHandoff?: () => void
+  handoffDisabledReason?: string
   onOpsFeedback: (entry: AgentLogEntry, rating: 'like' | 'dislike') => void
   feedbackByLogId?: Record<number, 'like' | 'dislike'>
   feedbackBusyLogId?: number | null
@@ -220,6 +232,7 @@ export function AgentPanel({
   runningCommandTabId?: string
   onSelectSession: (groupId: string) => void
   onSelectTerminal: (tabId: string) => void
+  onFocusTerminal: (tabId: string) => void
   onModelChange: (selection: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onInsertSlashCommand: (option: SlashCommandOption) => void
@@ -255,6 +268,8 @@ export function AgentPanel({
   onLoadEarlier?: () => void | Promise<void>
   sessionInputTokens: number
   sessionOutputTokens: number
+  sessionCacheReadTokens: number
+  sessionCacheWriteTokens: number
   contextPercent?: number | null
   contextPending?: boolean
 }): React.JSX.Element {
@@ -327,6 +342,7 @@ export function AgentPanel({
         earlierLogsError={earlierLogsError}
         onLoadEarlier={onLoadEarlier}
         onInterruptCommand={onInterruptCommand}
+        onFocusTerminal={onFocusTerminal}
         fallbackExecutionTabId={executionTerminalId}
       />
       {sessionChatTab.pendingClarification?.kind === 'connection-intent' &&
@@ -393,9 +409,13 @@ export function AgentPanel({
         <SessionUsageBar
           inputTokens={sessionInputTokens}
           outputTokens={sessionOutputTokens}
+          cacheReadTokens={sessionCacheReadTokens}
+          cacheWriteTokens={sessionCacheWriteTokens}
           contextPercent={contextPercent}
           contextPending={contextPending}
           compactDisabled={compactDisabled}
+          onHandoff={onHandoff}
+          handoffDisabledReason={handoffDisabledReason}
           t={t}
           onExportSessionTrace={onExportSessionTrace}
           onCompactContext={onCompactContext}
@@ -650,6 +670,33 @@ export function AgentPanel({
                           {option.title}
                         </SelectItem>
                       ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={executionMode}
+                  onValueChange={(value) => onExecutionModeChange(normalizeExecutionMode(value))}
+                  disabled={sessionChatTab.agentBusy}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="app-model-trigger app-style-trigger shrink-0"
+                    aria-label={t.plan.mode}
+                    title={executionMode === 'planned' ? t.plan.plannedHint : t.plan.immediateHint}
+                  >
+                    {executionMode === 'planned' ? t.plan.planned : t.plan.immediate}
+                  </SelectTrigger>
+                  <SelectContent align="start" position="popper" side="top">
+                    <SelectGroup>
+                      <SelectLabel>{t.plan.mode}</SelectLabel>
+                      <SelectItem value="immediate">{t.plan.immediate}</SelectItem>
+                      <p className="max-w-72 px-2 py-1 text-xs text-muted-foreground">
+                        {t.plan.immediateHint}
+                      </p>
+                      <SelectItem value="planned">{t.plan.planned}</SelectItem>
+                      <p className="max-w-72 px-2 py-1 text-xs text-muted-foreground">
+                        {t.plan.plannedHint} {t.plan.notApproval}
+                      </p>
                     </SelectGroup>
                   </SelectContent>
                 </Select>

@@ -1,3 +1,5 @@
+import { normalizeExecutionMode } from '../../shared/execution-plan'
+import { resolvePlanApproval, stopPlansForTab } from './change-plan'
 import { promises as fs } from 'fs'
 import { basename, extname, resolve } from 'path'
 
@@ -38,6 +40,9 @@ import {
 } from './generate-capture'
 import {
   cancelPiAgentRun,
+  generateHandoffForHostedSession,
+  getHostedHandoffStatus,
+  cancelHostedHandoff,
   compactHostedSession,
   reloadCrescentRuntime,
   runPiAgent,
@@ -48,6 +53,8 @@ import {
   resolvePiModel,
   syncCrescentProvidersToModelRuntime
 } from './pi-model-runtime'
+import { validHandoffInput, validHandoffSession, validHandoffRequestId } from '../../shared/handoff'
+import type { AgentCancelHandoffInput } from '../../shared/agent-types'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { BUILT_IN_TOOL_CATALOG } from '../../shared/agent-tool-catalog'
 import { listMcpToolCatalog } from './pi-mcp-tools'
@@ -58,6 +65,7 @@ import { safeWebContentsSend } from '../safe-ipc-send'
 import {
   getWikiDocument,
   deleteWikiDocument,
+  getActiveWikiDirectory,
   listWikiDocuments,
   saveWikiDocument,
   searchWikiDocuments
@@ -67,12 +75,14 @@ import {
   readAgentConfig,
   readCrescentMemory,
   readCustomConnections,
+  readWikiDirectory,
   writeAgentConfig,
   writeCrescentMemory,
+  writeWikiDirectory,
   normalizeAgentConfig
 } from '../crescent-store'
 import { loadSshConfigConnections } from '../connections/ssh-config'
-import { getCrescentAttachmentsDir } from '../crescent-paths'
+import { getCrescentAttachmentsDir, getCrescentWikiDir } from '../crescent-paths'
 import { setSystemLogLevel } from '../logging'
 import { traceStartup } from '../startup-trace'
 import type {
@@ -244,6 +254,25 @@ export function registerAgentIpc(): void {
     })
   })
 
+  ipcMain.handle('agent:handoff-status', (event, payload: unknown) => {
+    if (!validHandoffSession(payload)) return { available: false, error: 'invalid' }
+    return getHostedHandoffStatus(payload, event.sender.id)
+  })
+
+  ipcMain.handle('agent:generate-handoff', (event, payload: unknown) => {
+    if (!validHandoffInput(payload)) return { ok: false, error: 'invalid' }
+    return generateHandoffForHostedSession(payload, readAgentConfig(), event.sender)
+  })
+
+  ipcMain.handle('agent:cancel-handoff', (event, payload: unknown) => {
+    if (
+      !validHandoffSession(payload) ||
+      !validHandoffRequestId((payload as AgentCancelHandoffInput).requestId)
+    )
+      return { ok: false }
+    return cancelHostedHandoff(payload as AgentCancelHandoffInput, event.sender.id)
+  })
+
   ipcMain.handle('agent:compact', async (event, payload?: AgentCompactInput) => {
     const sessionKey =
       (typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : '') ||
@@ -310,6 +339,42 @@ export function registerAgentIpc(): void {
 
   ipcMain.handle('agent:list-wiki-documents', () => {
     return listWikiDocuments()
+  })
+
+  ipcMain.handle('agent:get-wiki-directory', () => ({
+    path: getActiveWikiDirectory(),
+    isDefault: !readWikiDirectory()
+  }))
+
+  ipcMain.handle('agent:choose-wiki-directory', async (event) => {
+    const currentDirectory = getActiveWikiDirectory()
+    const options: OpenDialogOptions = {
+      title: 'Choose knowledge base folder',
+      defaultPath: currentDirectory,
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const browserWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const selection = browserWindow
+      ? await dialog.showOpenDialog(browserWindow, options)
+      : await dialog.showOpenDialog(options)
+    if (selection.canceled || !selection.filePaths[0]) {
+      return {
+        ok: false,
+        canceled: true,
+        directory: { path: currentDirectory, isDefault: !readWikiDirectory() }
+      }
+    }
+
+    const directory = resolve(selection.filePaths[0])
+    const stat = await fs.stat(directory)
+    if (!stat.isDirectory()) throw new Error('The selected knowledge base path is not a folder.')
+    writeWikiDirectory(directory)
+    return { ok: true, directory: { path: directory, isDefault: false } }
+  })
+
+  ipcMain.handle('agent:reset-wiki-directory', () => {
+    writeWikiDirectory(undefined)
+    return { path: getCrescentWikiDir(), isDefault: true }
   })
 
   ipcMain.handle('agent:get-wiki-document', (_, id: string) => {
@@ -469,9 +534,10 @@ export function registerAgentIpc(): void {
     return { ok }
   })
 
-  ipcMain.handle('agent:reject-approvals-for-tab', (_, tabId: string) => {
+  ipcMain.handle('agent:reject-approvals-for-tab', (event, tabId: string) => {
     const normalized = typeof tabId === 'string' ? tabId.trim() : ''
     if (normalized) {
+      stopPlansForTab(normalized, event.sender.id)
       rejectPendingApprovalsForTab(normalized, 'Session was closed.')
     }
     return { ok: true }
@@ -484,6 +550,10 @@ export function registerAgentIpc(): void {
     const ok = await steerPiAgentRun(runId, input)
     return { ok }
   })
+
+  ipcMain.handle('agent:resolve-plan-approval', (event, decision: unknown) =>
+    resolvePlanApproval(event.sender.id, decision)
+  )
 
   ipcMain.handle('agent:resolve-command-approval', (_, decision: CommandApprovalDecision) => {
     return resolveCommandApprovalDecision(decision)
@@ -625,6 +695,7 @@ export function registerAgentIpc(): void {
       terminalContext: payload?.terminalContext,
       locale: payload?.locale,
       agentStyle: normalizeAgentStyle(payload?.agentStyle ?? agentConfig.agentStyle),
+      executionMode: normalizeExecutionMode(payload?.executionMode),
       activeWikiDocs,
       activeSkillDocs,
       emit: (agentEvent) => {

@@ -14,30 +14,6 @@ AI 生成的命令在执行前会经过独立审核。审核说明：
 
 审核发生在命令进入终端之前。你仍然可以在可见终端里看到最终执行的内容和输出。
 
-## 流程 {#flow}
-
-判断顺序是固定的：会改状态的写操作先被标成高风险，白名单不能盖过它。其余命令再看白名单和静态只读规则。两边都对不上时，才交给审核模型。
-
-```mermaid
-flowchart TD
-  command["bash 命令"] --> destructive{"破坏性写操作"}
-  destructive -->|"是"| high["高风险"]
-  destructive -->|"否"| allowlist{"白名单命中"}
-  allowlist -->|"是"| allow["放行"]
-  allowlist -->|"否"| readonly{"静态只读"}
-  readonly -->|"是"| allow
-  readonly -->|"否"| model["审核模型"]
-  model --> low["低风险"]
-  model --> high
-  low --> allow
-  high --> confirm{"操作者确认"}
-  confirm -->|"批准"| run["写入可见终端"]
-  confirm -->|"拒绝、超时或会话关闭"| stop["不执行"]
-  allow --> run
-```
-
-低风险命令直接进入当前可见终端。高风险命令等你在审核卡片里批准后才写入。拒绝、等待超时，或会话已经关闭时，这条命令不会执行。
-
 ## 风险等级
 
 | 等级 | 通常怎么处理 |
