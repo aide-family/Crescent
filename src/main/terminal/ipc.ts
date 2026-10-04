@@ -1,3 +1,5 @@
+import { createPtyScriptRunner } from './script-runner'
+import { stopPlansForTab } from '../agent/change-plan'
 import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'child_process'
 import { dirname, resolve } from 'path'
@@ -5,18 +7,24 @@ import { homedir, hostname, userInfo } from 'os'
 import { spawn as spawnPty } from 'node-pty'
 
 import { safeWebContentsSend } from '../safe-ipc-send'
+import { listConnections } from '../connections/ipc'
 import { resolveShellLaunchConfig } from './shell'
 import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
-import { normalizeHostToken, isPromptHostAligned } from '../../shared/terminal-prompt-host'
 import {
-  autoLearnUnverifiedLogin,
+  normalizeHostToken,
+  isPromptHostAligned,
+  isLocalMachinePromptHost,
+  findNewestPromptSignal
+} from '../../shared/terminal-prompt-host'
+import {
   classifyPipeCommand,
   applyConfirmedLoginAnchor,
   confirmLoginState,
+  connectionPhase,
   createConnectionState,
   evaluateInjectionGuard,
   isReturnToJumpHost,
-  learnHostAlias,
+  matchesClusterHostRegex,
   patchConnectionClusterHostRegex,
   resolveGateAlignment,
   resolveLoginConfirmTarget,
@@ -25,10 +33,17 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
-import { sanitizeExpectedTargetHost } from '../../shared/ssh-destination'
+import {
+  extractSshDestinationHost,
+  isSshCommandLine,
+  sanitizeExpectedTargetHost
+} from '../../shared/ssh-destination'
+import { isIpv4Literal } from '../../shared/ssh-destination'
 import { redactSensitiveText } from '../../shared/secret-redaction'
+import type { TerminalExecutionTarget } from '../../shared/agent-types'
 import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './graceful-teardown'
 import { createPendingCommandController } from './pending-command'
+import { recoverTimedOutSshSession } from './timeout-recovery'
 import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
 import {
   isPtyExecutionTabLocked,
@@ -78,16 +93,22 @@ export interface TerminalCommandExecutionResult {
   environmentDrift?: boolean
   observedHost?: string
   expectedHost?: string
+  code?: 'SSH_TARGET_UNAVAILABLE'
+  connectionPhase?: ReturnType<typeof connectionPhase>
+  recoveryAction?: 'reconnect-or-select-target' | 'wait-for-target-prompt'
   /** Stable key for the same drift event (expected|observed), used for recovery brakes. */
   driftKey?: string
   subterminalName?: string
   subterminalTabId?: string
+  /** True only after the command wrapper was handed to the terminal. */
+  dispatched?: boolean
 }
 
 export interface TemporarySubterminalOpenOptions {
   cols?: number
   rows?: number
   initialCommand?: string
+  owner?: string
 }
 
 export interface TemporarySubterminalOpenResult {
@@ -136,6 +157,8 @@ const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 /** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
 const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
 const terminalOutputBuffers = new Map<string, string>()
+/** Only PTY output emitted after degradation can prove timeout recovery. */
+const degradedRecoveryOutput = new Map<string, string>()
 /**
  * Per-tab connection state SSOT. Written ONLY by: prompt observations,
  * ready/login confirmation, expected-host updates, and PTY/PIPE events.
@@ -143,6 +166,48 @@ const terminalOutputBuffers = new Map<string, string>()
  * through this map.
  */
 const connectionStates = new Map<string, ConnectionState>()
+const manualInputLines = new Map<string, string>()
+
+/** User keyboard input is the authority for a manually initiated SSH hop. */
+function noteManualTerminalInput(
+  key: string,
+  data: string,
+  webContents: WebContents,
+  tabId: string
+): void {
+  if (data.includes('\x1b')) {
+    manualInputLines.delete(key)
+    return
+  }
+  let line = manualInputLines.get(key) ?? ''
+  for (const char of data) {
+    if (char === '\x7f' || char === '\b') {
+      line = line.slice(0, -1)
+    } else if (char === '\r' || char === '\n') {
+      if (
+        isSshCommandLine(line.trim()) &&
+        !hasUnterminatedSecretPrompt(terminalOutputBuffers.get(key) ?? '')
+      ) {
+        const state = getConnectionState(key)
+        const manual = setConnectionExpectedHost(state, null)
+        setConnectionState(key, {
+          ...manual,
+          connectionOrigin: 'manual-shell',
+          monitorPolicy: 'manual',
+          manualSshActive: true
+        })
+        sendIfAlive(webContents, tabId, key, 'terminal:connection-origin', {
+          tabId,
+          connectionOrigin: 'manual-shell'
+        })
+      }
+      line = ''
+    } else if (char >= ' ' && line.length < 4096) {
+      line += char
+    }
+  }
+  manualInputLines.set(key, line)
+}
 /** Owning renderer for drift notifications (kept across soft restarts). */
 const sessionWebContents = new Map<string, WebContents>()
 /** Raw echo lines of automation-pasted commands, suppressed from display by default. */
@@ -220,31 +285,71 @@ function connTrace(...parts: unknown[]): void {
   console.info('[conn-trace]', ...parts)
 }
 
+function invalidateTerminalPlans(key: string): void {
+  const separator = key.indexOf(':')
+  stopPlansForTab(key.slice(separator + 1), Number(key.slice(0, separator)))
+}
+
+function setConnectionState(key: string, next: ConnectionState): void {
+  const previous = connectionStates.get(key)
+  const identity = (state: ConnectionState): string =>
+    JSON.stringify([
+      state.connectionId,
+      state.expectedHost,
+      runtimeAnchorHost(state),
+      state.ready,
+      state.alignment,
+      state.connectionFault,
+      state.clusterHostRegex
+    ])
+  if (previous && identity(previous) !== identity(next)) invalidateTerminalPlans(key)
+  if (next.connectionFault !== 'degraded') degradedRecoveryOutput.delete(key)
+  connectionStates.set(key, next)
+}
+
+function markCommandTimeoutDegraded(key: string): void {
+  const state = connectionStates.get(key)
+  if (!state?.expectedHost || state.connectionFault === 'lost') return
+  setConnectionState(key, {
+    ...state,
+    alignment: 'unknown',
+    ready: false,
+    connectionFault: 'degraded'
+  })
+  degradedRecoveryOutput.set(key, '')
+}
+
 function getConnectionState(key: string, mode: ConnectionState['mode'] = 'none'): ConnectionState {
   const existing = connectionStates.get(key)
   if (existing) return existing
   const created = createConnectionState(mode)
-  connectionStates.set(key, created)
+  setConnectionState(key, created)
   return created
 }
 
 function setSessionExpectedHost(
   key: string,
   host: string | null | undefined,
-  options?: { clusterHostRegex?: string | null }
+  options?: {
+    clusterHostRegex?: string | null
+    connectionId?: string
+    connectionName?: string
+    connectionOrigin?: ConnectionState['connectionOrigin']
+    sshHopChain?: string[]
+  }
 ): void {
   const state = getConnectionState(key)
-  connectionStates.set(key, setConnectionExpectedHost(state, host, options))
+  setConnectionState(key, setConnectionExpectedHost(state, host, options))
 }
 
 /** Sync SSOT mode when a session is created (PTY/PIPE event). */
 function noteSessionMode(key: string, mode: 'pty' | 'pipe'): void {
   const state = connectionStates.get(key)
   if (state) {
-    connectionStates.set(key, { ...state, mode })
+    setConnectionState(key, { ...state, mode })
     return
   }
-  connectionStates.set(key, createConnectionState(mode))
+  setConnectionState(key, createConnectionState(mode))
 }
 
 export function executeCommandInTerminal(
@@ -252,7 +357,9 @@ export function executeCommandInTerminal(
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   tabId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
   const normalizedTabId = normalizeTabId(tabId)
   const normalizedCommand = command.trim()
@@ -274,9 +381,30 @@ export function executeCommandInTerminal(
   }
   const key = getSessionKey(senderId, normalizedTabId)
   const session = sessions.get(key)
+  const boundTarget = connectionStates.get(key)
+  if (
+    requiredSsh &&
+    boundTarget?.monitorPolicy !== 'manual' &&
+    !boundTarget?.expectedHost &&
+    (session || !parseTemporarySubterminalTabId(normalizedTabId))
+  ) {
+    return Promise.resolve({
+      ok: false,
+      code: 'SSH_TARGET_UNAVAILABLE',
+      command: normalizedCommand,
+      output: '',
+      connectionPhase: 'ssh-lost',
+      recoveryAction: 'reconnect-or-select-target',
+      error: 'SSH_TARGET_UNAVAILABLE: Agent SSH target binding is missing. No command was sent.'
+    })
+  }
   const effectiveTimeoutMs = normalizeCommandTimeout(timeoutMs)
 
   if (!session) {
+    const state = connectionStates.get(key)
+    if (state?.expectedHost) {
+      return Promise.resolve(unavailableSshTarget(normalizedCommand, state, 'ssh-lost'))
+    }
     return Promise.resolve({
       ok: false,
       command: normalizedCommand,
@@ -311,6 +439,23 @@ export function executeCommandInTerminal(
     return Promise.resolve(drift)
   }
 
+  const state = connectionStates.get(key)
+  if (state?.expectedHost) {
+    const output = terminalOutputBuffers.get(key) ?? ''
+    const alignment = resolveGateAlignment(state, output, hostname())
+    const phase = connectionPhase(state, alignment, true, restoringSessionKeys.has(key))
+    if (phase !== 'ssh-ready') {
+      setConnectionState(key, {
+        ...state,
+        alignment,
+        ready: false,
+        connectionFault: phase === 'ssh-lost' ? 'lost' : 'degraded'
+      })
+      if (phase === 'ssh-degraded') degradedRecoveryOutput.set(key, '')
+      return Promise.resolve(unavailableSshTarget(normalizedCommand, state, phase, session))
+    }
+  }
+
   if (session.mode === 'pipe' && classifyPipeCommand(normalizedCommand) === 'interactive') {
     return Promise.resolve({
       ok: false,
@@ -340,6 +485,7 @@ export function executeCommandInTerminal(
     continuationPromptTimeoutMs: TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS,
     secretPromptTimeoutMs: TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS,
     interruptSession: () => interruptCommandSession(key, session),
+    onTimeout: () => markCommandTimeoutDegraded(key),
     display: (message) => session.display(message),
     hasUnterminatedSecretPrompt,
     hasShellContinuationPrompt,
@@ -387,6 +533,17 @@ export function executeCommandInTerminal(
   })
 
   void pending.promise.then((result) => {
+    if (result.terminalExited) {
+      const state = connectionStates.get(key)
+      if (state?.expectedHost) {
+        setConnectionState(key, {
+          ...state,
+          alignment: 'unknown',
+          ready: false,
+          connectionFault: 'lost'
+        })
+      }
+    }
     const readableResult = formatReadableCommandResult(result)
     if (readableResult) session.display(readableResult)
   })
@@ -407,7 +564,73 @@ export function executeCommandInTerminal(
     session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
   }
 
-  return pending.promise
+  onDispatched?.()
+
+  return pending.promise.then((result) => ({ ...result, dispatched: true }))
+}
+
+function unavailableSshTarget(
+  command: string,
+  state: ConnectionState,
+  phase: ReturnType<typeof connectionPhase>,
+  session?: TerminalSession
+): TerminalCommandExecutionResult {
+  const expectedHost = runtimeAnchorHost(state) ?? state.expectedHost
+  const observedHost = state.promptHost
+  const awaitingPrompt = phase === 'ssh-degraded'
+  return {
+    ok: false,
+    code: 'SSH_TARGET_UNAVAILABLE',
+    command,
+    mode: session?.mode,
+    cwd: session?.cwd,
+    output: '',
+    expectedHost,
+    observedHost,
+    connectionPhase: phase,
+    recoveryAction: awaitingPrompt ? 'wait-for-target-prompt' : 'reconnect-or-select-target',
+    error: awaitingPrompt
+      ? `SSH_TARGET_UNAVAILABLE: Waiting for a fresh prompt from ${expectedHost ?? 'SSH target'} after command timeout. Use Ctrl+C if the shell is still busy, then wait for the target prompt. No command was sent.`
+      : `SSH_TARGET_UNAVAILABLE: Expected ${expectedHost ?? 'SSH target'}, observed ${observedHost ?? 'unknown'} (${phase}). Reconnect or explicitly select another target. No command was sent.`
+  }
+}
+
+/** Run-local binding; a new PTY, changed connection, cwd or login identity revokes plans. */
+export function readTerminalPlanIdentity(senderId: number, tabId: string): string | undefined {
+  const key = getSessionKey(senderId, tabId)
+  const session = sessions.get(key)
+  const state = connectionStates.get(key)
+  const health = readTerminalSessionHealth(senderId, tabId)
+  if (
+    !session ||
+    health.restoring ||
+    (state?.expectedHost && (!health.ready || health.alignment !== 'aligned'))
+  )
+    return undefined
+  return JSON.stringify({
+    sessionId: session.id,
+    cwd: session.cwd,
+    target: readTerminalExecutionTarget(senderId, tabId),
+    connectionId: state?.connectionId
+  })
+}
+
+export function readTerminalExecutionTarget(
+  senderId: number,
+  tabId: string
+): TerminalExecutionTarget {
+  const state = connectionStates.get(getSessionKey(senderId, tabId))
+  return {
+    paneRole: parseTemporarySubterminalTabId(tabId) ? 'subterminal' : 'main',
+    paneId: tabId,
+    owner: state?.owner ?? 'user',
+    executionMode: state?.expectedHost || state?.manualSshActive ? 'ssh' : 'local',
+    connectionName: state?.connectionName,
+    expectedTarget:
+      (state ? runtimeAnchorHost(state) : undefined) ??
+      state?.expectedHost ??
+      (state?.manualSshActive ? state.promptHost : undefined)
+  }
 }
 
 /**
@@ -472,9 +695,19 @@ export async function executeCommandInTerminalWithPermissionRequest(
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   tabId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
-  let result = await executeCommandInTerminal(webContents.id, command, timeoutMs, tabId, signal)
+  let result = await executeCommandInTerminal(
+    webContents.id,
+    command,
+    timeoutMs,
+    tabId,
+    signal,
+    requiredSsh,
+    onDispatched
+  )
 
   if (isLocalFilePermissionFailure(result)) {
     result = await requestLocalFileAccessAndAnnotateResult(webContents, command, result)
@@ -490,7 +723,9 @@ export async function executeCommandInTemporaryTerminal(
   command: string,
   timeoutMs = TERMINAL_COMMAND_TIMEOUT_MS,
   mode: 'wait' | 'detach' = 'wait',
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requiredSsh = false,
+  onDispatched?: () => void
 ): Promise<TerminalCommandExecutionResult> {
   const parent = normalizeTabId(parentTabId)
   const normalizedCommand = command.trim()
@@ -547,7 +782,9 @@ export async function executeCommandInTemporaryTerminal(
       command,
       timeoutMs,
       entry.tabId,
-      signal
+      signal,
+      requiredSsh,
+      onDispatched
     )
 
     if (isLocalFilePermissionFailure(result)) {
@@ -591,6 +828,11 @@ export function openTemporarySubterminal(
     }
   }
 
+  if (options?.owner) {
+    const state = getConnectionState(key)
+    setConnectionState(key, { ...state, owner: options.owner })
+  }
+
   return {
     ok: true,
     name,
@@ -622,6 +864,7 @@ export function closeTemporarySubterminal(
   if (!normalized) return
   const key = getSessionKey(webContents.id, normalized)
   stopSession(key)
+  invalidateTerminalPlans(key)
   connectionStates.delete(key)
   sessionWebContents.delete(key)
   restoringSessionKeys.delete(key)
@@ -876,7 +1119,7 @@ function extractLikelyLocalDirectory(command: string): string | undefined {
 export function registerTerminalIpc(): void {
   ipcMain.handle(
     'terminal:start',
-    (
+    async (
       event,
       options?: { cols?: number; rows?: number; tabId?: string; initialCommand?: string }
     ) => {
@@ -944,9 +1187,15 @@ export function registerTerminalIpc(): void {
 
   ipcMain.handle(
     'terminal:set-expected-host',
-    (
+    async (
       event,
-      payload?: { tabId?: string; host?: string | null; clusterHostRegex?: string | null }
+      payload?: {
+        tabId?: string
+        host?: string | null
+        clusterHostRegex?: string | null
+        connectionId?: string
+        connectionName?: string
+      }
     ) => {
       const tabId = normalizeTabId(payload?.tabId)
       if (!tabId || !isUsableTerminalTabId(tabId)) {
@@ -957,8 +1206,36 @@ export function registerTerminalIpc(): void {
       const host = typeof payload?.host === 'string' ? payload.host.trim() : ''
       const clusterHostRegex =
         typeof payload?.clusterHostRegex === 'string' ? payload.clusterHostRegex : null
-      setSessionExpectedHost(key, host || null, {
-        clusterHostRegex: host ? clusterHostRegex : null
+      const connectionId =
+        typeof payload?.connectionId === 'string' ? payload.connectionId.trim() : ''
+      const savedConnection = connectionId
+        ? (await listConnections()).find((connection) => connection.id === connectionId)
+        : undefined
+      if (connectionId && (!savedConnection || savedConnection.host !== host)) {
+        return {
+          ok: false as const,
+          error: 'SSH connection identity does not match a saved connection.'
+        }
+      }
+      const actionHops = (savedConnection?.actions ?? [])
+        .map(extractSshDestinationHost)
+        .filter((hop): hop is string => Boolean(hop))
+      const proxyJump = (savedConnection?.sshOptions ?? []).flatMap((option) => {
+        const match = option.match(/(?:^-J\s*|ProxyJump=)([^\s]+)/i)
+        return match ? match[1].split(',').map((hop) => hop.replace(/^.*@/, '')) : []
+      })
+      const sshHopChain = [...proxyJump, host, ...actionHops].filter(Boolean)
+      const connectionOrigin = savedConnection
+        ? sshHopChain.length > 1
+          ? 'special-ssh'
+          : 'connection-card'
+        : 'manual-shell'
+      setSessionExpectedHost(key, savedConnection ? host : null, {
+        clusterHostRegex: host ? (savedConnection?.clusterHostRegex ?? clusterHostRegex) : null,
+        connectionId: savedConnection?.id,
+        connectionName: savedConnection?.name,
+        connectionOrigin,
+        sshHopChain
       })
       return { ok: true as const, host: host || undefined }
     }
@@ -975,7 +1252,7 @@ export function registerTerminalIpc(): void {
       sessionWebContents.set(key, event.sender)
       const state = getConnectionState(key)
       const next = patchConnectionClusterHostRegex(state, payload?.clusterHostRegex)
-      connectionStates.set(key, next)
+      setConnectionState(key, next)
       return { ok: true as const, clusterHostRegex: next.clusterHostRegex }
     }
   )
@@ -1032,12 +1309,62 @@ export function registerTerminalIpc(): void {
           clusterHostRegex: state.clusterHostRegex,
           localHost
         }).promptHost
+        const expectedFinalHost = expectedTargetHost || state.expectedHost
+        const onKnownIntermediateHop = Boolean(
+          promptHost &&
+          state.sshHopChain?.slice(0, -1).some((hop) => isPromptHostAligned(promptHost, hop))
+        )
+        if (
+          state.monitorPolicy === 'special' &&
+          expectedFinalHost &&
+          promptHost &&
+          !isPromptHostAligned(promptHost, expectedFinalHost) &&
+          (onKnownIntermediateHop || !matchesClusterHostRegex(promptHost, state.clusterHostRegex))
+        ) {
+          setConnectionState(targetKey, {
+            ...state,
+            promptHost,
+            alignment: 'unknown',
+            ready: false
+          })
+          return undefined
+        }
+        if (
+          promptHost &&
+          jumpPromptHost &&
+          isPromptHostAligned(promptHost, jumpPromptHost) &&
+          expectedFinalHost &&
+          !isPromptHostAligned(promptHost, expectedFinalHost)
+        ) {
+          setConnectionState(targetKey, {
+            ...state,
+            promptHost,
+            alignment: 'drifted',
+            ready: false
+          })
+          return undefined
+        }
+        if (
+          promptHost &&
+          expectedFinalHost &&
+          !isIpv4Literal(expectedFinalHost) &&
+          !isPromptHostAligned(promptHost, expectedFinalHost) &&
+          !matchesClusterHostRegex(promptHost, state.clusterHostRegex)
+        ) {
+          setConnectionState(targetKey, {
+            ...state,
+            promptHost,
+            alignment: 'drifted',
+            ready: false
+          })
+          return undefined
+        }
         const result = confirmLoginState(state, promptHost, { localHost })
         const anchored = applyConfirmedLoginAnchor(result.state, {
           expectedTargetHost,
           jumpPromptHost
         })
-        connectionStates.set(targetKey, anchored)
+        setConnectionState(targetKey, anchored)
         return result.ok ? anchored : undefined
       }
 
@@ -1162,19 +1489,33 @@ export function registerTerminalIpc(): void {
 
     if (isUserInputLocked(event.sender.id, tabId)) return
 
+    noteManualTerminalInput(getSessionKey(event.sender.id, tabId), data, event.sender, tabId)
     session.write(data)
   })
 
-  ipcMain.on(
+  ipcMain.handle(
     'terminal:paste-command',
-    (event, payload: { command?: string; execute?: boolean; tabId?: string }) => {
+    async (
+      event,
+      payload: {
+        command?: string
+        execute?: boolean
+        tabId?: string
+      }
+    ) => {
       const command = sanitizeCommand(payload?.command)
-      if (!command) return
+      if (!command) return { ok: false as const, error: 'Command is empty.' }
 
       const tabId = normalizeTabId(payload?.tabId)
-      if (!tabId) return
+      if (!tabId) return { ok: false as const, error: 'Terminal tab is missing.' }
       const key = getSessionKey(event.sender.id, tabId)
-      const session = sessions.get(key)
+      let session = sessions.get(key)
+      connTrace(
+        'paste-command-received',
+        `tab=${tabId}`,
+        `execute=${Boolean(payload?.execute)}`,
+        `session=${session?.mode ?? 'missing'}`
+      )
       if (!session) {
         sendIfAlive(
           event.sender,
@@ -1183,10 +1524,21 @@ export function registerTerminalIpc(): void {
           'terminal:data',
           '\r\n\x1b[31mTerminal session is not active. Command paste was blocked.\x1b[0m\r\n'
         )
-        return
+        return { ok: false as const, error: 'Terminal session is not active.' }
       }
 
-      if (isUserInputLocked(event.sender.id, tabId)) return
+      const unlockDeadline = Date.now() + 10_000
+      while (isUserInputLocked(event.sender.id, tabId) && Date.now() < unlockDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (isUserInputLocked(event.sender.id, tabId)) {
+        const error = 'Terminal input remained locked; command was not sent.'
+        connTrace('paste-command-blocked', `tab=${tabId}`, 'reason=input-locked')
+        sendIfAlive(event.sender, tabId, key, 'terminal:data', `\r\n\x1b[31m${error}\x1b[0m\r\n`)
+        return { ok: false as const, error }
+      }
+      session = sessions.get(key)
+      if (!session) return { ok: false as const, error: 'Terminal session is no longer active.' }
 
       if (!payload?.execute && session.mode === 'pipe') {
         sendIfAlive(
@@ -1196,7 +1548,7 @@ export function registerTerminalIpc(): void {
           'terminal:data',
           '\r\n\x1b[33mPipe fallback cannot paste without executing. Press Run SSH/Execute instead.\x1b[0m\r\n'
         )
-        return
+        return { ok: false as const, error: 'Pipe fallback cannot paste without executing.' }
       }
 
       if (session.mode === 'pipe' && classifyPipeCommand(command) === 'interactive') {
@@ -1207,7 +1559,7 @@ export function registerTerminalIpc(): void {
           'terminal:data',
           '\r\n\x1b[31mInteractive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback; command not executed. One-shot non-interactive ssh (BatchMode or remote command without -t) is still allowed.\x1b[0m\r\n'
         )
-        return
+        return { ok: false as const, error: 'Interactive SSH login requires PTY mode.' }
       }
 
       if (payload?.execute) {
@@ -1219,6 +1571,8 @@ export function registerTerminalIpc(): void {
       }
 
       session.write(`${command}${payload?.execute ? '\r' : ''}`)
+      connTrace('paste-command-written', `tab=${tabId}`, `mode=${session.mode}`)
+      return { ok: true as const }
     }
   )
 
@@ -1231,7 +1585,7 @@ export function registerTerminalIpc(): void {
     // Match injection-guard: prefer the runtime anchor learned after login so
     // IP-configured connections that show a hostname prompt stay aligned.
     const effectiveExpectedHost = (state ? runtimeAnchorHost(state) : undefined) ?? expectedHost
-    let resolved = state
+    const resolved = state
       ? resolveSessionAlignment({
           output,
           expectedHost: effectiveExpectedHost || state.expectedHost,
@@ -1255,74 +1609,18 @@ export function registerTerminalIpc(): void {
         ...state,
         jumpPromptHost: normalizeHostToken(resolved.promptHost)
       }
-      connectionStates.set(key, withJump)
+      setConnectionState(key, withJump)
       state = withJump
-    }
-
-    // Manual / slow confirm-login often leaves ready=false with an empty alias
-    // list while the PTY already shows a remote prompt. Learn that host here so
-    // submit routing does not treat a live shell as drifted and reconnect.
-    // Never re-learn after a runtime anchor exists (EnvGuard drift / hop).
-    if (
-      state &&
-      key &&
-      !state.ready &&
-      !runtimeAnchorHost(state) &&
-      resolved?.promptHost &&
-      resolved.promptHost !== 'local-shell'
-    ) {
-      const learned = autoLearnUnverifiedLogin(state, resolved.promptHost, {
-        localHost: hostname()
-      })
-      if (learned) {
-        connectionStates.set(key, learned)
-        state = learned
-        resolved = resolveSessionAlignment({
-          output,
-          expectedHost: runtimeAnchorHost(learned) ?? learned.expectedHost,
-          aliases: learned.aliases,
-          clusterHostRegex: learned.clusterHostRegex,
-          localHost: hostname()
-        })
-      }
-    }
-
-    // Peer hop while verified: learn the live remote prompt as an alias so
-    // status stays aligned. Never heal a fall-back to the jump box / laptop —
-    // those must stay drifted so recovery can restore the operation target.
-    if (
-      state &&
-      key &&
-      state.ready &&
-      runtimeAnchorHost(state) &&
-      resolved?.alignment === 'drifted' &&
-      resolved.promptHost &&
-      resolved.promptHost !== 'local-shell' &&
-      !isPromptHostAligned(resolved.promptHost, hostname()) &&
-      !isReturnToJumpHost(state, resolved.promptHost)
-    ) {
-      const learned = learnHostAlias(state, resolved.promptHost)
-      const healed: ConnectionState = {
-        ...learned,
-        promptHost: resolved.promptHost,
-        alignment: 'aligned',
-        ready: true,
-        lastError: undefined
-      }
-      connectionStates.set(key, healed)
-      state = healed
-      resolved = resolveSessionAlignment({
-        output,
-        expectedHost: runtimeAnchorHost(healed) ?? healed.expectedHost,
-        aliases: healed.aliases,
-        clusterHostRegex: healed.clusterHostRegex,
-        localHost: hostname()
-      })
     }
 
     // Live buffer only. After SSH drop / respawn the SSOT host is stale; a
     // missing or local-shell prompt must not look like the current remote.
     const promptHost = resolved?.promptHost
+    const manualSshActive = Boolean(
+      state?.manualSshActive &&
+      promptHost !== 'local-shell' &&
+      !(promptHost && isLocalMachinePromptHost(promptHost, hostname()))
+    )
     const gateAlignment = state
       ? resolveGateAlignment(state, output, hostname())
       : (resolved?.alignment ?? 'unknown')
@@ -1351,6 +1649,26 @@ export function registerTerminalIpc(): void {
     }
     const session = sessions.get(key)
     const restoring = restoringSessionKeys.has(key)
+    const phase = connectionPhase(state, alignment, Boolean(session), restoring)
+    const identity = {
+      paneRole: parseTemporarySubterminalTabId(tabId)
+        ? ('subterminal' as const)
+        : ('main' as const),
+      paneId: tabId,
+      owner: state?.owner ?? 'user',
+      executionMode: state?.expectedHost || manualSshActive ? ('ssh' as const) : ('local' as const),
+      connectionId: state?.connectionId,
+      connectionName: state?.connectionName,
+      expectedTarget: (state ? runtimeAnchorHost(state) : undefined) ?? state?.expectedHost,
+      observedHost: promptHost,
+      connectionPhase: phase,
+      connectionOrigin: state?.connectionOrigin ?? 'manual-shell',
+      monitorPolicy: state?.monitorPolicy ?? 'manual',
+      targetScope: state?.targetScope ?? 'host',
+      sshHopChain: state?.sshHopChain ?? [],
+      manualSshActive,
+      clusterHostRegex: state?.clusterHostRegex
+    }
     if (!session) {
       // No live PTY: never report aligned/ready from stale SSOT or output buffer.
       // Restore/reconnect must recreate a session instead of short-circuiting.
@@ -1368,7 +1686,8 @@ export function registerTerminalIpc(): void {
         jumpPromptHost: state?.jumpPromptHost,
         runtimeExpectedHost: state?.runtimeExpectedHost,
         returnToJumpHost,
-        restoring
+        restoring,
+        ...identity
       }
     }
 
@@ -1387,7 +1706,8 @@ export function registerTerminalIpc(): void {
       jumpPromptHost: state?.jumpPromptHost,
       runtimeExpectedHost: state?.runtimeExpectedHost,
       returnToJumpHost,
-      restoring
+      restoring,
+      ...identity
     }
   })
 
@@ -1411,6 +1731,7 @@ export function registerTerminalIpc(): void {
     if (!tabId) return
     const key = getSessionKey(event.sender.id, tabId)
     stopSession(key)
+    invalidateTerminalPlans(key)
     connectionStates.delete(key)
     sessionWebContents.delete(key)
     restoringSessionKeys.delete(key)
@@ -1429,6 +1750,7 @@ export function stopAllTerminalSessions(): void {
     stopSession(key)
   }
   connectionStates.clear()
+  degradedRecoveryOutput.clear()
   sessionWebContents.clear()
   automationEchoSuppressions.clear()
   temporarySubterminals.clear()
@@ -1436,6 +1758,7 @@ export function stopAllTerminalSessions(): void {
 }
 
 function stopSession(key: string): void {
+  invalidateTerminalPlans(key)
   const session = sessions.get(key)
   if (!session) return
 
@@ -1456,10 +1779,11 @@ function stopSession(key: string): void {
 function invalidateConnectionSessionLiveness(key: string): void {
   const state = connectionStates.get(key)
   if (!state) return
-  connectionStates.set(key, {
+  setConnectionState(key, {
     ...state,
     alignment: 'unknown',
     ready: false,
+    connectionFault: 'lost',
     lastError: undefined
   })
 }
@@ -1475,34 +1799,7 @@ function detectEnvironmentDriftForSession(
   if (!state) return undefined
 
   const verdict = evaluateInjectionGuard(state, buffer, { localHost: hostname() })
-  if (verdict.alignment !== 'drifted') {
-    if (verdict.shouldReanchor && verdict.observedHost) {
-      const learned = learnHostAlias(state, verdict.observedHost)
-      const anchored: ConnectionState = {
-        ...learned,
-        promptHost: verdict.observedHost,
-        runtimeExpectedHost: verdict.observedHost,
-        alignment: 'aligned',
-        ready: true,
-        lastError: undefined
-      }
-      connectionStates.set(key, anchored)
-      connTrace('re-anchor', `tab=${tabId}`, `runtimeExpectedHost=${verdict.observedHost}`)
-    } else if (
-      verdict.alignment === 'aligned' &&
-      verdict.observedHost &&
-      state.runtimeExpectedHost
-    ) {
-      // Keep the runtime anchor in sync with the observed prompt (idempotent).
-      connectionStates.set(key, {
-        ...state,
-        promptHost: verdict.observedHost,
-        alignment: 'aligned',
-        ready: true
-      })
-    }
-    return undefined
-  }
+  if (verdict.alignment !== 'drifted') return undefined
 
   const observedHost = verdict.observedHost
   const anchorHost = verdict.effectiveExpectedHost
@@ -1510,11 +1807,17 @@ function detectEnvironmentDriftForSession(
 
   // Only exit-to-local (or laptop hostname) is a real session break. Remote→
   // remote hops are healed above via shouldReanchor; never fire recovery for them.
-  connectionStates.set(key, { ...state, promptHost: observedHost, ready: false })
+  setConnectionState(key, {
+    ...state,
+    promptHost: observedHost,
+    alignment: 'drifted',
+    ready: false,
+    connectionFault: 'lost'
+  })
   const driftKey = `${anchorHost}|${observedHost}`
 
   const webContents = sessionWebContents.get(key)
-  if (webContents && !webContents.isDestroyed()) {
+  if (state.monitorPolicy === 'managed' && webContents && !webContents.isDestroyed()) {
     sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
       tabId,
       observedHost,
@@ -1546,6 +1849,9 @@ function detectEnvironmentDriftForSession(
     cwd: session.cwd,
     output: '',
     environmentDrift: true,
+    code: 'SSH_TARGET_UNAVAILABLE',
+    connectionPhase: 'ssh-lost',
+    recoveryAction: 'reconnect-or-select-target',
     observedHost,
     expectedHost: anchorHost,
     driftKey,
@@ -1946,26 +2252,6 @@ function createCommandWrapper(command: string, startMarker: string, endMarker: s
   ].join('\n')
 }
 
-function createPtyScriptRunner(script: string): string {
-  const encodedScript = Buffer.from(script, 'utf8').toString('base64')
-
-  return (
-    [
-      '__crescent_script=$(mktemp "${TMPDIR:-/tmp}/crescent.XXXXXX")',
-      '&&',
-      `{ printf %s '${encodedScript}' | base64 -d > "$__crescent_script" 2>/dev/null || printf %s '${encodedScript}' | base64 -D > "$__crescent_script"; }`,
-      '&&',
-      '. "$__crescent_script"',
-      ';',
-      'rm -f "$__crescent_script"',
-      ';',
-      'stty echo 2>/dev/null',
-      ';',
-      'unset __crescent_script __crescent_status'
-    ].join(' ') + '\r'
-  )
-}
-
 function parseCommandBuffer(
   buffer: string,
   startMarker: string,
@@ -2038,7 +2324,63 @@ function sanitizeDimension(value: unknown, fallback: number): number {
 function appendTerminalContext(key: string, data: string): void {
   const current = terminalOutputBuffers.get(key) ?? ''
   const next = `${current}${data}`
-  terminalOutputBuffers.set(key, next.slice(-MAX_CONTEXT_BUFFER))
+  const output = next.slice(-MAX_CONTEXT_BUFFER)
+  terminalOutputBuffers.set(key, output)
+  const state = connectionStates.get(key)
+  if (state?.manualSshActive && !state.expectedHost) {
+    const signal = findNewestPromptSignal(data)
+    if (
+      signal?.kind === 'local' ||
+      (signal?.kind === 'host' && isLocalMachinePromptHost(signal.host, hostname()))
+    ) {
+      setConnectionState(key, { ...state, manualSshActive: false })
+    }
+  }
+  if (!state?.expectedHost) return
+  if (!state.ready && state.connectionFault !== 'degraded') return
+  const sshClosed =
+    /(?:connection to .+ closed|broken pipe|connection (?:timed out|reset by peer)|ssh: connect to host .+:)/i.test(
+      data
+    )
+  if (state.connectionFault === 'degraded' && degradedRecoveryOutput.has(key)) {
+    const freshOutput = `${degradedRecoveryOutput.get(key)}${data}`.slice(-MAX_CONTEXT_BUFFER)
+    degradedRecoveryOutput.set(key, freshOutput)
+    const recovered = sshClosed
+      ? undefined
+      : recoverTimedOutSshSession(state, freshOutput, hostname())
+    if (recovered) {
+      setConnectionState(key, recovered)
+      return
+    }
+  }
+  const alignment = resolveGateAlignment(state, output, hostname())
+  if (!sshClosed && (!state.ready || alignment !== 'drifted')) return
+  const observedHost =
+    resolveSessionAlignment({
+      output,
+      expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
+      aliases: state.aliases,
+      clusterHostRegex: state.clusterHostRegex,
+      localHost: hostname()
+    }).promptHost ?? (sshClosed ? 'unknown' : undefined)
+  const expectedHost = runtimeAnchorHost(state) ?? state.expectedHost
+  setConnectionState(key, {
+    ...state,
+    promptHost: observedHost,
+    alignment: sshClosed ? 'unknown' : alignment,
+    ready: false,
+    connectionFault: 'lost'
+  })
+  const webContents = sessionWebContents.get(key)
+  const tabId = key.slice(key.indexOf(':') + 1)
+  if (webContents && !webContents.isDestroyed() && observedHost && expectedHost) {
+    sendIfAlive(webContents, tabId, key, 'terminal:environment-drift', {
+      tabId,
+      observedHost,
+      expectedHost,
+      driftKey: `${expectedHost}|${observedHost}`
+    })
+  }
 }
 
 function flushVisibleTerminalData(key: string): void {
@@ -2299,6 +2641,7 @@ function isAutomationControlOutput(value: string): boolean {
     normalized.includes('__CRESCENT_CMD_START_') ||
     normalized.includes('__CRESCENT_CMD_END_') ||
     normalized.includes('__crescent_script=$(mktemp') ||
+    normalized.includes('__crescent_encoded=') ||
     normalized.includes('__crescent_status=') ||
     normalized.includes('unset __crescent_status') ||
     /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized) ||

@@ -16,6 +16,11 @@ import { isKnownNativeLogNoise } from './native-log-filter'
 import { openExternalUrlIfAllowed } from './open-external-url'
 import { parseClipboardWriteText } from './clipboard-write'
 import { isAllowedRendererPermission } from './renderer-permissions'
+import {
+  registerWhaleMonitorIpc,
+  startWhaleMonitorScheduler,
+  stopWhaleMonitorScheduler
+} from './whale-monitor'
 
 let stopAttachmentCleanup: (() => void) | undefined
 
@@ -247,10 +252,12 @@ app.whenReady().then(async () => {
   registerConnectionIpc()
   registerStorageIpc()
   registerTerminalIpc()
+  registerWhaleMonitorIpc()
   registerUpdateIpc()
   stopAttachmentCleanup = startAttachmentCleanupScheduler()
 
   const mainWindow = createWindow()
+  startWhaleMonitorScheduler()
   attachRendererCrashRecovery(mainWindow, {
     iconPath: icon,
     notifyTitle: 'Crescent',
@@ -287,8 +294,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  stopAllTerminalSessions()
   stopAttachmentCleanup?.()
   stopAttachmentCleanup = undefined
+  stopWhaleMonitorScheduler()
 })
 
 // In this file you can include the rest of your app's specific main process

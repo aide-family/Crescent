@@ -1,6 +1,11 @@
 import type { SessionTokenUsage } from './agent-types'
 
-export const EMPTY_SESSION_TOKEN_USAGE: SessionTokenUsage = { input: 0, output: 0 }
+export const EMPTY_SESSION_TOKEN_USAGE: SessionTokenUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0
+}
 
 export function snapshotSessionTokenUsage(value: unknown): SessionTokenUsage {
   if (!value || typeof value !== 'object') return { ...EMPTY_SESSION_TOKEN_USAGE }
@@ -12,7 +17,9 @@ export function snapshotSessionTokenUsage(value: unknown): SessionTokenUsage {
 
   return {
     input: readNonNegativeInt(tokens.input),
-    output: readNonNegativeInt(tokens.output)
+    output: readNonNegativeInt(tokens.output),
+    cacheRead: readNonNegativeInt(tokens.cacheRead),
+    cacheWrite: readNonNegativeInt(tokens.cacheWrite)
   }
 }
 
@@ -22,7 +29,9 @@ export function diffSessionTokenUsage(
 ): SessionTokenUsage {
   return {
     input: Math.max(0, after.input - before.input),
-    output: Math.max(0, after.output - before.output)
+    output: Math.max(0, after.output - before.output),
+    cacheRead: Math.max(0, after.cacheRead - before.cacheRead),
+    cacheWrite: Math.max(0, after.cacheWrite - before.cacheWrite)
   }
 }
 
@@ -32,7 +41,9 @@ export function addSessionTokenUsage(
 ): SessionTokenUsage {
   return {
     input: base.input + delta.input,
-    output: base.output + delta.output
+    output: base.output + delta.output,
+    cacheRead: base.cacheRead + delta.cacheRead,
+    cacheWrite: base.cacheWrite + delta.cacheWrite
   }
 }
 
@@ -46,6 +57,12 @@ export function formatCompactTokenCount(value: number): string {
 export function formatContextUsagePercent(percent: number | null | undefined): string {
   if (percent == null || !Number.isFinite(percent)) return '—'
   return `${Math.max(0, Math.min(100, Math.round(percent)))}%`
+}
+
+export function formatCacheHitRate(usage: SessionTokenUsage): string {
+  const totalInput = usage.input + usage.cacheRead + usage.cacheWrite
+  if (totalInput <= 0) return '—'
+  return `${Math.round((usage.cacheRead / totalInput) * 100)}%`
 }
 
 function formatCompactScaled(scaled: number, suffix: 'k' | 'M'): string {

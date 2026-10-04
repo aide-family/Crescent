@@ -48,6 +48,45 @@ export function hasExplicitLocalWorkIntent(input: string): boolean {
   return LOCAL_PATH_PATTERN.test(value) || LOCAL_INSPECT_PATTERN.test(value)
 }
 
+/** Strip pasted data before looking for SSH actions or connection mentions. */
+export function connectionInstructionText(input: string): string {
+  return input
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:>|#|\$|\w+@\S+\s*[$#]|\s*(?:\/\/|\*))/.test(line))
+    .join(' ')
+    .trim()
+}
+
+/** Only a request to open/change an SSH session may select a saved connection. */
+export function hasExplicitSshConnectionIntent(input: string): boolean {
+  const request = connectionInstructionText(input)
+  if (!request) return false
+  if (
+    /^(?:(?:请|帮我)\s*)?(?:怎么|如何|为什么|解释|分析|what|how|why|explain).{0,30}(?:连接|登录|ssh|connect|login)/i.test(
+      request
+    )
+  ) {
+    return false
+  }
+  return (
+    /(?:重连|重新连接|恢复连接|再连|重试\s*(?:ssh\s*)?(?:登录|连接))/.test(request) ||
+    /(?:连接|登录|登陆|登入|切换)\s*(?:到|至|进|去)\s*[^\s，。！？]{1,80}/u.test(request) ||
+    /(?:登录|登陆|登入|连接|切换)\s*[A-Za-z0-9_.-]+\s*(?:集群|服务器|主机|环境|$)/u.test(request) ||
+    /(?:登录|登陆|登入|连接|切换)\s*[\p{Script=Han}A-Za-z0-9_.-]{1,60}(?:集群|服务器|主机|环境)(?:$|[\s，。！？])/u.test(
+      request
+    ) ||
+    /(?:登录|登陆|登入|连接|切换)\s+[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+){1,3}(?:$|[，。！？])/u.test(
+      request
+    ) ||
+    /打开\s*SSH\b/i.test(request) ||
+    /(?:^|[\s，。])(?:ssh|login|connect|reconnect|re-connect)\s+(?:to\s+)?[\w@.-]+/i.test(
+      request
+    ) ||
+    /^\/connection(?::|\s|$)/i.test(request)
+  )
+}
+
 export function explainLocalFileOperationBypass(): string {
   return [
     'Request is classified as local work.',

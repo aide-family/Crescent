@@ -54,7 +54,10 @@ export function mapPiSessionEventToAgentEvents(
           phase: 'started',
           toolCallId: event.toolCallId,
           command: extractBashCommand(event.args),
-          message: formatToolArgs(event.args),
+          message:
+            event.toolName === 'submit_change_plan'
+              ? 'Submitting structured plan for host validation.'
+              : formatToolArgs(event.args),
           ...base
         }
       ]

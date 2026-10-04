@@ -8,6 +8,9 @@ import { RendererCrashLoopPanel } from '@renderer/components/RendererCrashLoopPa
 import App from './App'
 import { dictionaries, type Locale } from './i18n'
 import { parseWorkbenchLayout, type WorkbenchLayout } from '@renderer/lib/app-shell'
+import { initializeAppTheme } from '@renderer/lib/app-theme'
+
+initializeAppTheme()
 
 function resolveBootLocale(): Locale {
   try {

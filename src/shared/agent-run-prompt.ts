@@ -1,3 +1,4 @@
+import type { ExecutionMode } from './execution-plan'
 import { buildAgentStyleContract, DEFAULT_AGENT_STYLE, type AgentStyle } from './agent-style'
 
 export const SOP_GUIDANCE_HEADER = '# 生效 SOP 指引（用户选定）'
@@ -20,13 +21,12 @@ export interface SkillPromptPart {
 export interface BuildPromptTextInput {
   input: string
   conversationContext?: string
-  /** Durable conclusions and changes. Injected even when the hot session already has messages. */
-  sessionOutline?: string
   terminalContext?: string
   locale?: string
   activeWikiDocs?: SopWikiPromptPart[]
   activeSkillDocs?: SkillPromptPart[]
   agentStyle?: AgentStyle
+  executionMode?: ExecutionMode
 }
 
 /** Build the active SOP guidance block from wiki docs; empty when none. Caps total length. */
@@ -103,7 +103,7 @@ export function conversationContextForPrompt(
 
 /**
  * Assemble the user-facing prompt for a Pi agent run.
- * Order: language → working style → conversation → session outline → terminal → SOP → skills → user input.
+ * Order: language → working style → conversation → terminal → SOP → skills → user input.
  */
 export function buildPromptText(input: BuildPromptTextInput): string {
   const parts: string[] = []
@@ -113,9 +113,6 @@ export function buildPromptText(input: BuildPromptTextInput): string {
   if (input.conversationContext?.trim()) {
     parts.push(`# Recent conversation\n${input.conversationContext.trim()}\n`)
   }
-  if (input.sessionOutline?.trim()) {
-    parts.push(`${input.sessionOutline.trim()}\n`)
-  }
   if (input.terminalContext?.trim()) {
     parts.push(`# Current terminal context\n${input.terminalContext.trim()}\n`)
   }
@@ -123,6 +120,11 @@ export function buildPromptText(input: BuildPromptTextInput): string {
   if (sopGuidance) parts.push(`${sopGuidance}\n`)
   const skillGuidance = buildActiveSkillGuidance(input.activeSkillDocs ?? [])
   if (skillGuidance) parts.push(`${skillGuidance}\n`)
+  parts.push(
+    input.executionMode === 'planned'
+      ? '# Execution mode: planned\nOnly read-only bash investigation is allowed. Submit changes with submit_change_plan. The host reviews the exact commands, backups, checks and recovery, waits for operator approval, then executes them. Selecting this mode is not approval. After failure stop and report completed/remaining steps; never retry or improvise recovery.'
+      : '# Execution mode: immediate\nKnown read-only bash queries execute automatically. Mutating, mixed and unknown commands require individual approval.'
+  )
   parts.push(input.input.trim())
   return parts.join('\n')
 }

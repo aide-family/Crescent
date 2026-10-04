@@ -87,6 +87,10 @@ export function formatCommandExecutionActionTitle(
   t: Dictionary
 ): string {
   if (event.phase === 'started') return t.terminal.commandRunning
+  if (event.lifecycle === 'blocked-before-dispatch') return t.input.toolBlocked
+  if (event.lifecycle === 'completion-unknown') return t.input.toolCompletionUnknown
+  if (event.lifecycle === 'interrupted') return t.input.toolInterrupted
+  if (event.lifecycle === 'timed-out') return t.input.toolTimedOut
 
   return event.result?.ok ? t.terminal.commandExecuted : t.terminal.commandFailed
 }
