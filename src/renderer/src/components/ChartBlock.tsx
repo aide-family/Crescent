@@ -1,3 +1,4 @@
+import { readAppTheme } from '@renderer/lib/app-theme'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { CheckIcon, CopyIcon, DownloadIcon, Loader2Icon, Maximize2Icon, XIcon } from 'lucide-react'
 import { createPortal } from 'react-dom'
@@ -21,11 +22,8 @@ import {
   XAxis
 } from 'recharts'
 
-import {
-  ARCHITECTURE_CANVAS,
-  ARCHITECTURE_GRID,
-  CHART_SERIES_COLORS
-} from '../../../shared/architecture-theme'
+import { APP_THEMES, getChartSeriesColors, type AppThemeId } from '@renderer/lib/theme-definitions'
+import { useDiagramTheme } from '@renderer/hooks/useAppTheme'
 import { parseChartSpec, type ChartSpec } from '../../../shared/chart-spec'
 import type { Dictionary } from '@renderer/i18n'
 import { serializeChartSvgFromHost } from '@renderer/lib/chart-export'
@@ -53,14 +51,11 @@ import {
   type ChartConfig
 } from '@renderer/components/ui/chart'
 
-const TICK_FILL = 'rgba(238,242,247,0.72)'
-
 const panelStyle = {
   '--background': 'var(--app-markdown-surface-raised)',
   '--foreground': 'var(--app-markdown-text)',
   '--muted-foreground': 'var(--app-markdown-muted)',
-  '--border': 'var(--app-markdown-border)',
-  '--app-diagram-canvas': ARCHITECTURE_CANVAS
+  '--border': 'var(--app-markdown-border)'
 } as CSSProperties
 
 export function ChartBlock({
@@ -84,7 +79,7 @@ export function ChartBlock({
   const inlineChartHostRef = useRef<HTMLDivElement | null>(null)
   const expandedChartHostRef = useRef<HTMLDivElement | null>(null)
   const reduceMotion = usePrefersReducedMotion()
-  const spec = closed ? parseChartSpec(code) : null
+  const spec = useMemo(() => (closed ? parseChartSpec(code) : null), [closed, code])
   const uiState = resolveMermaidBlockUiState({
     closed,
     streaming,
@@ -109,7 +104,10 @@ export function ChartBlock({
     if (!host) {
       throw new Error('Chart is not ready to export.')
     }
-    const serialized = serializeChartSvgFromHost(host)
+    const displayedTheme = host
+      .querySelector('[data-theme-id]')
+      ?.getAttribute('data-theme-id') as AppThemeId | null
+    const serialized = serializeChartSvgFromHost(host, displayedTheme ?? readAppTheme())
     if (!serialized) {
       throw new Error('Chart SVG was not found.')
     }
@@ -355,7 +353,7 @@ function ChartPanelBody({
         className={`overflow-hidden rounded-md border border-[var(--app-markdown-border)] ${
           tall ? 'min-h-[60vh] flex-1' : ''
         }`}
-        style={{ background: ARCHITECTURE_CANVAS }}
+        style={{ background: 'var(--app-diagram-canvas)' }}
       >
         <div className={tall ? 'flex h-full min-h-[60vh] items-center p-4' : 'p-2'}>
           <ResultChart spec={spec} reduceMotion={reduceMotion} tall={tall} />
@@ -375,10 +373,12 @@ function ResultChart({
   reduceMotion: boolean
   tall?: boolean
 }): React.JSX.Element {
+  const themeId = useDiagramTheme()
+  const theme = APP_THEMES[themeId]
   const rows = useMemo(() => toChartRows(spec), [spec])
-  const config = useMemo(() => toChartConfig(spec), [spec])
+  const config = useMemo(() => toChartConfig(spec, themeId), [spec, themeId])
   const sliceRows = useMemo(() => toSliceRows(spec), [spec])
-  const sliceConfig = useMemo(() => toSliceConfig(spec), [spec])
+  const sliceConfig = useMemo(() => toSliceConfig(spec, themeId), [spec, themeId])
   const multiple = spec.series.length > 1
   const squareClass = tall
     ? 'mx-auto aspect-square max-h-[min(70vh,520px)] w-full'
@@ -389,7 +389,7 @@ function ResultChart({
 
   if (spec.type === 'pie') {
     return (
-      <ChartContainer config={sliceConfig} className={squareClass}>
+      <ChartContainer config={sliceConfig} className={squareClass} data-theme-id={themeId}>
         <PieChart>
           <ChartTooltip
             cursor={false}
@@ -403,7 +403,7 @@ function ResultChart({
 
   if (spec.type === 'radial') {
     return (
-      <ChartContainer config={sliceConfig} className={squareClass}>
+      <ChartContainer config={sliceConfig} className={squareClass} data-theme-id={themeId}>
         <RadialBarChart data={sliceRows} innerRadius={30} outerRadius={110}>
           <ChartTooltip
             cursor={false}
@@ -417,11 +417,11 @@ function ResultChart({
 
   if (spec.type === 'radar') {
     return (
-      <ChartContainer config={config} className={squareClass}>
+      <ChartContainer config={config} className={squareClass} data-theme-id={themeId}>
         <RadarChart data={rows}>
           <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-          <PolarGrid stroke={ARCHITECTURE_GRID} />
-          <PolarAngleAxis dataKey="category" tick={{ fill: TICK_FILL, fontSize: 11 }} />
+          <PolarGrid stroke={theme.diagram.grid} />
+          <PolarAngleAxis dataKey="category" tick={{ fill: theme.diagram.muted, fontSize: 11 }} />
           {multiple ? <ChartLegend content={<ChartLegendContent />} /> : null}
           {spec.series.map((_, index) => {
             const key = seriesKey(index)
@@ -448,18 +448,18 @@ function ResultChart({
       tickMargin={spec.type === 'bar' ? 10 : 8}
       interval={spec.categories.length <= 8 ? 0 : 'preserveStartEnd'}
       tickFormatter={formatCategoryTick}
-      tick={{ fill: TICK_FILL, fontSize: 11 }}
+      tick={{ fill: theme.diagram.muted, fontSize: 11 }}
     />
   )
   const tooltip = (
     <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel={!multiple} />} />
   )
   const legend = multiple ? <ChartLegend content={<ChartLegendContent />} /> : null
-  const grid = <CartesianGrid vertical={false} stroke={ARCHITECTURE_GRID} />
+  const grid = <CartesianGrid vertical={false} stroke={theme.diagram.grid} />
 
   if (spec.type === 'area') {
     return (
-      <ChartContainer config={config} className={cartesianClass}>
+      <ChartContainer config={config} className={cartesianClass} data-theme-id={themeId}>
         <AreaChart accessibilityLayer data={rows} margin={chartMargin}>
           {grid}
           {categoryAxis}
@@ -487,7 +487,7 @@ function ResultChart({
 
   if (spec.type === 'line') {
     return (
-      <ChartContainer config={config} className={cartesianClass}>
+      <ChartContainer config={config} className={cartesianClass} data-theme-id={themeId}>
         <LineChart accessibilityLayer data={rows} margin={chartMargin}>
           {grid}
           {categoryAxis}
@@ -513,7 +513,7 @@ function ResultChart({
   }
 
   return (
-    <ChartContainer config={config} className={cartesianClass}>
+    <ChartContainer config={config} className={cartesianClass} data-theme-id={themeId}>
       <BarChart accessibilityLayer data={rows}>
         {grid}
         {categoryAxis}
@@ -526,7 +526,7 @@ function ResultChart({
               key={key}
               dataKey={key}
               fill={`var(--color-${key})`}
-              radius={8}
+              radius={theme.geometry.radiusSmall}
               isAnimationActive={!reduceMotion}
             />
           )
@@ -556,12 +556,12 @@ function toChartRows(spec: ChartSpec): Array<Record<string, string | number>> {
   })
 }
 
-function toChartConfig(spec: ChartSpec): ChartConfig {
+function toChartConfig(spec: ChartSpec, themeId: AppThemeId): ChartConfig {
   const config: ChartConfig = {}
   spec.series.forEach((series, index) => {
     config[seriesKey(index)] = {
       label: series.name,
-      color: chartColor(index)
+      color: chartColor(index, themeId)
     }
   })
   return config
@@ -583,19 +583,20 @@ function toSliceRows(spec: ChartSpec): SliceRow[] {
   }))
 }
 
-function toSliceConfig(spec: ChartSpec): ChartConfig {
+function toSliceConfig(spec: ChartSpec, themeId: AppThemeId): ChartConfig {
   const config: ChartConfig = {}
   spec.categories.forEach((category, index) => {
     config[seriesKey(index)] = {
       label: category,
-      color: chartColor(index)
+      color: chartColor(index, themeId)
     }
   })
   return config
 }
 
-function chartColor(index: number): string {
-  return CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length] ?? CHART_SERIES_COLORS[0]!
+function chartColor(index: number, themeId: AppThemeId): string {
+  const colors = getChartSeriesColors(themeId)
+  return colors[index % colors.length] ?? colors[0]!
 }
 
 function seriesKey(index: number): string {

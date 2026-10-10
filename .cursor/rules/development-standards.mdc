@@ -1,5 +1,5 @@
 ---
-description: Development must follow pi-dev, Electron, and desktop-app-design
+description: Development must follow pi-dev, electron-development, and the project UI design system
 alwaysApply: true
 ---
 
@@ -14,15 +14,15 @@ Project skills (`.cursor/skills/`): `pi-dev`, `electron-development`.
 - Read installed `@earendil-works/pi-*` docs/types in `node_modules` before changing agent code. Keep those packages on one version.
 - Import pi only through `src/main/agent/pi-sdk.ts` (`import()`). Never static-import pi into CJS main.
 - Custom tools must be allowlisted, truncate large output, and use `withFileMutationQueue` for file writes.
-- Put pi-facing tests next to the module (`src/main/agent/*.test.ts`) **locally only** — test files are gitignored and must not be committed (`docs/TESTING.md`).
+- Put pi-facing tests next to the module (`src/main/agent/*.test.ts`) **locally only** — test files are gitignored and must not be committed (`Document/TESTING.md`).
 
-## Electron (`electron-dev`, `electron`)
+## Electron (`electron-development`)
 
 - Renderer: no Node, no filesystem. Main owns OS/DB/secrets. Preload is the only bridge.
 - Keep `contextIsolation: true`, `nodeIntegration: false`. Whitelist IPC in preload; validate arguments in main.
 - Native modules stay outside the bundler (`asarUnpack` / `external`), loaded at runtime.
 
-## Desktop UI (`desktop-app-design`, `docs/UI_DESIGN_SYSTEM.md`)
+## Desktop UI (`Document/UI_DESIGN_SYSTEM.md`)
 
 - Dense, keyboard-first, quiet operations chrome. No marketing layouts or nested cards.
 - Accent is `#13c2c2`. Terminal/code/mermaid use shared tokens. Visible focus rings; Escape closes overlays.

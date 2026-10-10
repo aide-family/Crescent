@@ -30,9 +30,30 @@ jobs:
             exit 1
           fi
 
+  quality:
+    name: Release quality gate
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release source
+        run: npm run ci
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   build:
     name: Build ${{ matrix.name }}
-    needs: validate
+    needs: [validate, quality]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -48,6 +69,11 @@ jobs:
             artifact_name: crescent-macos-x64
             platform: mac
             arch_flags: --x64
+          - name: macOS Universal
+            os: macos-latest
+            artifact_name: crescent-macos-universal
+            platform: mac
+            arch_flags: --universal
           - name: Windows
             os: windows-latest
             artifact_name: crescent-windows

@@ -1,18 +1,15 @@
+import { APP_THEMES } from '@renderer/lib/theme-definitions'
 import { memo } from 'react'
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react'
 
-import {
-  ARCHITECTURE_KIND_ICON,
-  ARCHITECTURE_KIND_TONE,
-  ARCH_NODE_HEIGHT,
-  ARCH_NODE_WIDTH
-} from './kinds'
+import { ARCHITECTURE_KIND_ICON, ARCH_NODE_HEIGHT, ARCH_NODE_WIDTH } from './kinds'
 import type { ArchNodeData } from './layout'
 
 const handleClass = '!size-1.5 !border-0 !bg-transparent'
 
 function ArchNodeComponent({ data }: NodeProps<Node<ArchNodeData>>): React.JSX.Element {
-  const tone = ARCHITECTURE_KIND_TONE[data.kind]
+  const theme = APP_THEMES[data.themeId]
+  const tone = theme.diagram.kinds[data.kind]
   const Icon = ARCHITECTURE_KIND_ICON[data.kind]
 
   return (
@@ -21,9 +18,13 @@ function ArchNodeComponent({ data }: NodeProps<Node<ArchNodeData>>): React.JSX.E
       style={{
         width: ARCH_NODE_WIDTH,
         height: ARCH_NODE_HEIGHT,
+        borderRadius: theme.geometry.radius,
         background: tone.fill,
         borderColor: tone.border,
-        boxShadow: `0 0 0 1px ${tone.glow}, 0 0 18px ${tone.glow}`
+        boxShadow:
+          data.themeId === 'night-shift' || data.themeId === 'ink-signal'
+            ? 'none'
+            : `0 0 0 1px ${tone.glow}, 0 0 12px ${tone.glow}`
       }}
     >
       <Handle
@@ -84,14 +85,14 @@ function ArchNodeComponent({ data }: NodeProps<Node<ArchNodeData>>): React.JSX.E
       />
       <div className="flex min-w-0 items-center gap-2">
         <Icon className="size-3.5 shrink-0" style={{ color: tone.border }} aria-hidden="true" />
-        <span className="min-w-0 truncate text-[12px] font-semibold tracking-tight text-[#eef2f7]">
+        <span className="min-w-0 truncate text-[12px] font-semibold tracking-tight text-[var(--app-markdown-text)]">
           {data.label}
         </span>
       </div>
       {data.subtitle ? (
         <span
           className="truncate pl-5 font-mono text-[10px] leading-tight"
-          style={{ color: tone.border }}
+          style={{ color: theme.diagram.muted }}
         >
           {data.subtitle}
         </span>

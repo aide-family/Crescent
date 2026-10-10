@@ -80,17 +80,27 @@ export function rejectPendingApprovalsForRun(
 
 export function rejectPendingApprovalsForTab(
   tabId: string,
-  rejectionReason = 'Session was closed.'
+  rejectionReason = 'Session was closed.',
+  ownerId?: number
 ): void {
   for (const [requestId, pending] of [...pendingCommandApprovals.entries()]) {
+    if (ownerId !== undefined && pending.webContents.id !== ownerId) continue
     if (pending.tabId !== tabId && pending.chatTabId !== tabId) continue
     settlePendingCommandApproval(requestId, { approved: false, rejectionReason })
   }
 }
 
-export function resolveCommandApprovalDecision(decision: CommandApprovalDecision): { ok: boolean } {
-  const requestId = decision?.requestId?.trim()
-  if (!requestId) return { ok: false }
+export function resolveCommandApprovalDecision(
+  decision: CommandApprovalDecision,
+  ownerId: number
+): { ok: boolean } {
+  const requestId = typeof decision?.requestId === 'string' ? decision.requestId.trim() : ''
+  if (
+    !requestId ||
+    pendingCommandApprovals.get(requestId)?.webContents.id !== ownerId ||
+    typeof decision.approved !== 'boolean'
+  )
+    return { ok: false }
   const settled = settlePendingCommandApproval(
     requestId,
     {
@@ -133,6 +143,7 @@ export function requestCommandApproval(input: {
   return new Promise((resolve) => {
     const finish = (decision: CommandApprovalDecisionResult): void => {
       input.signal?.removeEventListener('abort', onAbort)
+      input.webContents.removeListener('destroyed', onAbort)
       resolve(decision)
     }
     const timeout = setTimeout(() => {
@@ -160,6 +171,7 @@ export function requestCommandApproval(input: {
       purposeAbort
     })
     input.signal?.addEventListener('abort', onAbort, { once: true })
+    input.webContents.once('destroyed', onAbort)
     if (input.signal?.aborted) {
       onAbort()
       return

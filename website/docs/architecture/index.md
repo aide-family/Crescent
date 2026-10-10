@@ -6,7 +6,7 @@ Crescent 是 Electron、React 和 TypeScript 桌面工作台。Agent 不脱离�
 
 <ArchitectureDiagram name="usage-zh" />
 
-进程边界、IPC 和当前重构顺序写在仓库 [docs/ARCHITECTURE.md](https://github.com/aide-family/Crescent/blob/main/docs/ARCHITECTURE.md)。那份文档是工程说明，这里只描述使用时能看到的关系。
+进程边界、IPC 和当前重构顺序写在仓库 [Document/ARCHITECTURE.md](https://github.com/aide-family/Crescent/blob/main/Document/ARCHITECTURE.md)。那份文档是工程说明，这里只描述使用时能看到的关系。
 
 ## 系统架构 {#system}
 

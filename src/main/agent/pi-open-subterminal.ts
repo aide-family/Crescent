@@ -59,6 +59,7 @@ export interface AgentSubterminalOpenedPayload {
 }
 
 interface SubterminalReadyWaiter {
+  ownerId?: number
   resolve: (result: { ok: boolean; error?: string }) => void
   timeout: NodeJS.Timeout
   abortHandler?: () => void
@@ -67,15 +68,18 @@ interface SubterminalReadyWaiter {
 
 const readyWaiters = new Map<string, SubterminalReadyWaiter>()
 
-export function resolveAgentSubterminalReady(payload: {
-  tabId?: string
-  ok?: boolean
-  error?: string
-}): { ok: boolean } {
+export function resolveAgentSubterminalReady(
+  payload: {
+    tabId?: string
+    ok?: boolean
+    error?: string
+  },
+  ownerId: number
+): { ok: boolean } {
   const tabId = payload?.tabId?.trim()
   if (!tabId) return { ok: false }
   const waiter = readyWaiters.get(tabId)
-  if (!waiter) return { ok: false }
+  if (!waiter || waiter.ownerId !== ownerId || typeof payload.ok !== 'boolean') return { ok: false }
   clearTimeout(waiter.timeout)
   if (waiter.signal && waiter.abortHandler) {
     waiter.signal.removeEventListener('abort', waiter.abortHandler)
@@ -120,7 +124,7 @@ export function waitForRendererReady(
   tabId: string,
   signal?: AbortSignal,
   timeoutMs = LOCAL_SUBTERMINAL_READY_TIMEOUT_MS,
-  options?: { failOnTimeout?: boolean }
+  options?: { failOnTimeout?: boolean; ownerId?: number }
 ): Promise<{ ok: boolean; error?: string }> {
   const failOnTimeout = options?.failOnTimeout === true
   return new Promise((resolve) => {
@@ -177,6 +181,7 @@ export function waitForRendererReady(
     }
 
     readyWaiters.set(tabId, {
+      ownerId: options?.ownerId,
       resolve: finish,
       timeout,
       abortHandler: signal ? abortHandler : undefined,
@@ -380,7 +385,8 @@ export async function openAgentSubterminal(input: {
   const readyTimeoutMs =
     mode === 'ssh' ? SSH_SUBTERMINAL_READY_TIMEOUT_MS : LOCAL_SUBTERMINAL_READY_TIMEOUT_MS
   const ready = await waitForRendererReady(opened.tabId, input.signal, readyTimeoutMs, {
-    failOnTimeout: mode === 'ssh'
+    failOnTimeout: mode === 'ssh',
+    ownerId: webContents.id
   })
   if (!ready.ok) {
     closeTemporarySubterminal(webContents, opened.tabId)

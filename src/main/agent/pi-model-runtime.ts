@@ -1,3 +1,4 @@
+import { normalizeThinkingLevel, type AgentThinkingLevel } from '../../shared/agent-thinking'
 import type { Api, Model } from '@earendil-works/pi-ai'
 
 import {
@@ -135,10 +136,11 @@ export function filterRuntimeModelsByEnabledProviders<T extends { provider: stri
 }
 
 export function resolveThinkingLevelForModel(
-  model: Pick<Model<Api>, 'reasoning'> | undefined
-): 'off' | 'high' {
+  model: Pick<Model<Api>, 'reasoning'> | undefined,
+  preferred?: AgentThinkingLevel
+): AgentThinkingLevel {
   if (!model?.reasoning) return 'off'
-  return 'high'
+  return normalizeThinkingLevel(preferred)
 }
 
 export async function listPiAvailableModels(config: AgentConfig): Promise<
@@ -208,6 +210,9 @@ export function toProviderConfigInput(provider: AgentProviderConfig): ProviderCo
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: deepseek ? 128_000 : 128_000,
         maxTokens: reasoning ? 16_384 : 8_192,
+        ...(model.samplingParamsByThinkingLevel
+          ? { samplingParamsByThinkingLevel: model.samplingParamsByThinkingLevel }
+          : {}),
         ...(deepseek
           ? {
               compat: deepSeekModelCompat(),

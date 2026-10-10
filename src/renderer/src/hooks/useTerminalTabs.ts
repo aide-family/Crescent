@@ -1,3 +1,4 @@
+import { storageClient } from '@renderer/clients'
 import {
   useCallback,
   useEffect,
@@ -171,7 +172,7 @@ export function useTerminalTabs({
 
       pendingTabsSaveRef.current = null
       lastSavedTabsKeyRef.current = key
-      void window.api.storage.saveTabs(current.tabs)
+      void storageClient.saveTabs(current.tabs)
     }, 350)
 
     pendingTabsSaveRef.current = { key, timer, tabs: storedTabs }
@@ -183,7 +184,7 @@ export function useTerminalTabs({
       if (!pending) return
 
       window.clearTimeout(pending.timer)
-      void window.api.storage.saveTabs(pending.tabs)
+      void storageClient.saveTabs(pending.tabs)
       pendingTabsSaveRef.current = null
     }
   }, [])

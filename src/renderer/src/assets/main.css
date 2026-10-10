@@ -69,8 +69,8 @@
   }
 
   * {
-    scrollbar-color: color-mix(in oklch, var(--primary) 46%, transparent)
-      color-mix(in oklch, var(--muted) 28%, transparent);
+    scrollbar-color: color-mix(in srgb, var(--primary) 46%, transparent)
+      color-mix(in srgb, var(--muted) 28%, transparent);
     scrollbar-width: thin;
   }
 
@@ -80,17 +80,17 @@
   }
 
   *::-webkit-scrollbar-track {
-    background: color-mix(in oklch, var(--muted) 22%, transparent);
+    background: color-mix(in srgb, var(--muted) 22%, transparent);
     border-radius: 999px;
   }
 
   *::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--primary) 46%, transparent);
+    background: color-mix(in srgb, var(--primary) 46%, transparent);
     border-radius: 999px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--primary) 68%, transparent);
+    background: color-mix(in srgb, var(--primary) 68%, transparent);
   }
 
   *::-webkit-scrollbar-corner {
@@ -107,10 +107,10 @@
   --normal-border: var(--border);
   --normal-text: var(--foreground);
   --success-bg: var(--card);
-  --success-border: color-mix(in oklch, var(--primary) 35%, var(--border));
+  --success-border: color-mix(in srgb, var(--primary) 35%, var(--border));
   --success-text: var(--foreground);
   --error-bg: var(--card);
-  --error-border: color-mix(in oklch, var(--destructive) 40%, var(--border));
+  --error-border: color-mix(in srgb, var(--destructive) 40%, var(--border));
   --error-text: var(--foreground);
   font-family: inherit;
 }
@@ -131,7 +131,7 @@
 }
 
 .app-commandbar [data-slot='select-trigger'] {
-  background-color: color-mix(in oklch, var(--app-panel-strong) 70%, transparent);
+  background-color: color-mix(in srgb, var(--app-panel-strong) 70%, transparent);
   border-color: var(--border);
   box-shadow: none;
 }
@@ -157,7 +157,7 @@
   background:
     linear-gradient(
       180deg,
-      color-mix(in oklch, var(--app-panel-strong) 42%, transparent),
+      color-mix(in srgb, var(--app-panel-strong) 42%, transparent),
       transparent 22rem
     ),
     var(--app-panel);
@@ -166,7 +166,7 @@
 .app-agent-log-list {
   background: radial-gradient(
     circle at 50% 0%,
-    color-mix(in oklch, var(--primary) 4%, transparent),
+    color-mix(in srgb, var(--primary) 4%, transparent),
     transparent 34rem
   );
   scroll-behavior: smooth;
@@ -191,7 +191,7 @@
 .app-agent-message-assistant .app-agent-message-content {
   min-width: 0;
   padding-left: 0.75rem;
-  border-left: 2px solid color-mix(in oklch, var(--primary) 42%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--primary) 42%, transparent);
 }
 
 .app-agent-message-error {
@@ -210,11 +210,11 @@
 .app-agent-tool-step {
   border-radius: 0.5rem;
   padding: 0.4rem 0.5rem;
-  background: color-mix(in oklch, var(--muted) 18%, transparent);
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
 }
 
 .app-agent-tool-step:hover {
-  background: color-mix(in oklch, var(--muted) 30%, transparent);
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
 }
 
 .app-agent-result {
@@ -306,9 +306,9 @@
 .app-composer-thinking {
   border-color: transparent;
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--primary) 18%, transparent),
-    0 0 14px color-mix(in oklch, #a855f7 16%, transparent),
-    0 0 18px color-mix(in oklch, var(--primary) 14%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent),
+    0 0 14px color-mix(in srgb, #a855f7 16%, transparent),
+    0 0 18px color-mix(in srgb, var(--primary) 14%, transparent);
 }
 
 .app-composer-thinking::before {
@@ -352,8 +352,8 @@
 }
 
 .app-composer:focus-within:not(.app-composer-thinking) {
-  border-color: color-mix(in oklch, var(--ring) 45%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in oklch, var(--ring) 28%, transparent);
+  border-color: color-mix(in srgb, var(--ring) 45%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 28%, transparent);
 }
 
 .app-composer-body {
@@ -433,7 +433,7 @@
 }
 
 .app-composer-toolbar {
-  border-top: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   margin-top: 0.125rem;
   padding: 0.375rem 0.125rem 0.125rem;
 }
@@ -488,7 +488,7 @@
   padding: 0.25rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: color-mix(in oklch, var(--popover) 94%, transparent);
+  background: color-mix(in srgb, var(--popover) 94%, transparent);
   box-shadow: var(--app-shadow);
   backdrop-filter: blur(10px);
 }
@@ -598,7 +598,7 @@
 }
 
 .app-document-panel article {
-  color: color-mix(in oklch, var(--foreground) 94%, var(--muted-foreground));
+  color: color-mix(in srgb, var(--foreground) 94%, var(--muted-foreground));
 }
 
 .app-connection-grid {
@@ -606,7 +606,7 @@
 }
 
 .app-connection-grid > :first-child {
-  background: color-mix(in oklch, var(--muted) 22%, transparent);
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
 }
 
 .app-connection-grid > :last-child {
@@ -614,7 +614,7 @@
 }
 
 .markdown-body {
-  color: color-mix(in oklch, var(--foreground) 92%, var(--muted-foreground));
+  color: color-mix(in srgb, var(--foreground) 92%, var(--muted-foreground));
 }
 
 .markdown-body :is(h1, h2, h3, h4, h5) {
@@ -633,7 +633,7 @@
 
 .markdown-body ul,
 .markdown-body ol {
-  color: color-mix(in oklch, var(--foreground) 88%, var(--muted-foreground));
+  color: color-mix(in srgb, var(--foreground) 88%, var(--muted-foreground));
 }
 
 .markdown-body hr {
@@ -656,8 +656,8 @@
 }
 
 .markdown-body blockquote {
-  background: color-mix(in oklch, var(--app-markdown-surface) 88%, transparent);
-  border-left: 2px solid color-mix(in oklch, var(--app-markdown-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--app-markdown-surface) 88%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--app-markdown-accent) 55%, transparent);
   border-radius: 0 0.375rem 0.375rem 0;
   color: var(--app-markdown-muted);
   padding-block: 0.45rem;
@@ -692,7 +692,7 @@
 
 .app-list-row {
   min-width: 0;
-  border: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   border-radius: 0.5rem;
   background: var(--background);
   padding: 0.5rem 0.625rem;
@@ -703,38 +703,38 @@
 }
 
 .app-list-row:hover {
-  border-color: color-mix(in oklch, var(--primary) 26%, var(--border));
-  background: color-mix(in oklch, var(--accent) 72%, var(--background));
+  border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
+  background: color-mix(in srgb, var(--accent) 72%, var(--background));
 }
 
 .app-list-row:focus-visible {
   outline: none;
-  border-color: color-mix(in oklch, var(--ring) 55%, var(--border));
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent);
+  border-color: color-mix(in srgb, var(--ring) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 40%, transparent);
 }
 
 .app-list-row[data-selected='true'] {
-  border-color: color-mix(in oklch, var(--primary) 48%, transparent);
-  background: color-mix(in oklch, var(--primary) 8%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 48%, transparent);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
   box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .app-list-row[data-selected='true']:hover {
-  border-color: color-mix(in oklch, var(--primary) 58%, transparent);
-  background: color-mix(in oklch, var(--primary) 11%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 58%, transparent);
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
   box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .app-list-row[data-selected='true']:focus-visible {
   box-shadow:
     inset 2px 0 0 var(--primary),
-    0 0 0 2px color-mix(in oklch, var(--ring) 40%, transparent);
+    0 0 0 2px color-mix(in srgb, var(--ring) 40%, transparent);
 }
 
 .app-empty-state {
-  border: 1px dashed color-mix(in oklch, var(--border) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 0.5rem;
-  background: color-mix(in oklch, var(--muted) 12%, transparent);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
   padding: 0.625rem 0.75rem;
   font-size: 12px;
   color: var(--muted-foreground);
@@ -821,23 +821,23 @@
 }
 
 .app-tabbar button[aria-selected='true'] {
-  background: color-mix(in oklch, var(--primary) 14%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
 
 @keyframes app-tab-attention-pulse {
   0%,
   100% {
-    border-color: color-mix(in oklch, var(--primary) 45%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 18%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
   }
   50% {
-    border-color: color-mix(in oklch, var(--primary) 92%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 55%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 92%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
   }
 }
 
 .app-tabbar button.app-tab-attention {
-  border-color: color-mix(in oklch, var(--primary) 70%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent);
   animation: app-tab-attention-pulse 1.1s ease-in-out infinite;
 }
 
@@ -872,7 +872,7 @@
 }
 
 .app-arch-canvas .react-flow__controls-button:hover {
-  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 @keyframes app-arch-edge-flow {
@@ -894,17 +894,18 @@
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+    /* Zero avoids measuring Mermaid bounds during an SVG transform transition. */
+    transition-duration: 0s !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
 
   .app-composer-thinking {
-    border-color: color-mix(in oklch, var(--primary) 75%, var(--border));
+    border-color: color-mix(in srgb, var(--primary) 75%, var(--border));
     box-shadow:
-      0 0 0 1px color-mix(in oklch, #a855f7 28%, transparent),
-      0 0 0 2px color-mix(in oklch, var(--primary) 35%, transparent),
-      0 0 10px color-mix(in oklch, var(--primary) 14%, transparent);
+      0 0 0 1px color-mix(in srgb, #a855f7 28%, transparent),
+      0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent),
+      0 0 10px color-mix(in srgb, var(--primary) 14%, transparent);
   }
 
   .app-composer-thinking::before {
@@ -979,7 +980,7 @@
   .app-connection-grid > :first-child {
     max-height: 42vh;
     border-right: 0;
-    border-bottom: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   }
 }
 
@@ -989,8 +990,8 @@
 
 .xterm .xterm-viewport {
   background-color: transparent !important;
-  scrollbar-color: color-mix(in oklch, var(--primary) 46%, transparent)
-    color-mix(in oklch, var(--muted) 28%, transparent);
+  scrollbar-color: color-mix(in srgb, var(--primary) 46%, transparent)
+    color-mix(in srgb, var(--muted) 28%, transparent);
   scrollbar-width: thin;
 }
 
@@ -1000,17 +1001,17 @@
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-track {
-  background: color-mix(in oklch, var(--muted) 22%, transparent);
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
   border-radius: 999px;
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--primary) 46%, transparent);
+  background: color-mix(in srgb, var(--primary) 46%, transparent);
   border-radius: 999px;
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--primary) 68%, transparent);
+  background: color-mix(in srgb, var(--primary) 68%, transparent);
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-corner {
@@ -1117,4 +1118,122 @@
   75% {
     transform: translateY(-2px) rotate(3deg);
   }
+}
+
+/* All effects are display-only. No CRT overlay is used so exports stay clean. */
+.app-agent-tool-step,
+.app-reference-menu,
+.app-list-row,
+.app-empty-state,
+.app-input-dock form > div:first-child {
+  border-radius: var(--app-radius);
+}
+.app-ref-chip[data-slot='badge'],
+.markdown-body code,
+.app-reference-menu button {
+  border-radius: var(--app-radius-small);
+}
+.markdown-body blockquote {
+  border-radius: 0 var(--app-radius-small) var(--app-radius-small) 0;
+}
+.app-agent-result,
+.app-modal-panel {
+  box-shadow: var(--app-shadow-raised);
+}
+.app-composer {
+  box-shadow: var(--app-shadow);
+}
+.app-tabbar {
+  border-bottom-color: var(--app-border-strong);
+}
+.app-code-panel-header,
+.app-modal-header,
+[data-slot='sheet-header'] {
+  border-bottom: 1px solid var(--app-border-strong);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.app-section-label,
+.app-code-panel-lang {
+  text-transform: var(--app-label-case);
+  letter-spacing: var(--app-label-spacing);
+}
+.dark[data-crescent-theme='route-survey'] .app-empty-state {
+  background-image:
+    linear-gradient(var(--app-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--app-grid-color) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.app-command-approval {
+  border-left: 3px solid var(--app-warning);
+}
+.app-command-approval[data-risk='high'] {
+  border-left-color: var(--destructive);
+}
+.dark[data-crescent-theme='ink-signal'] .app-command-approval {
+  background: var(--app-panel-strong);
+  border-radius: var(--app-radius);
+}
+.dark[data-crescent-theme='ink-signal'] .app-command-approval > :first-child {
+  border-bottom: 1px solid var(--app-border-strong);
+}
+.app-theme-preview {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  width: 94px;
+  height: 51px;
+  flex-shrink: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--app-radius);
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: var(--app-shadow);
+}
+.app-theme-preview-terminal {
+  flex: 1;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--app-radius-small);
+  background: var(--app-terminal);
+  color: var(--primary);
+  font: 10px var(--app-mono);
+}
+.app-theme-preview-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-small);
+  background: var(--app-panel-raised);
+}
+.app-theme-preview-panel i {
+  height: 2px;
+  background: var(--muted-foreground);
+  opacity: 0.7;
+}
+.app-theme-preview-panel i:first-child {
+  width: 65%;
+  background: var(--primary);
+  opacity: 1;
+}
+.app-theme-preview-panel i:last-child {
+  width: 75%;
+}
+
+.rounded {
+  border-radius: var(--app-radius-small);
+}
+
+:is(
+  button,
+  input:not(.xterm-helper-textarea),
+  textarea:not(.xterm-helper-textarea),
+  [role='combobox'],
+  [role='menuitem']
+):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

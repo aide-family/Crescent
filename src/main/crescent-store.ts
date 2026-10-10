@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { normalizeThinkingLevel, normalizeSamplingMap } from '../shared/agent-thinking'
+import { tokenizeSshOptions } from '../shared/ssh-options'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname, isAbsolute, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { safeStorage } from 'electron'
@@ -113,28 +115,28 @@ export const defaultMemoryFile: CrescentMemoryFile = {
 const SECRET_ENCRYPTED_PREFIX = 'crescent-enc:v1:'
 
 function encryptSecret(value: string | undefined): string | undefined {
-  if (!value || value.startsWith(SECRET_ENCRYPTED_PREFIX)) return value
-  try {
-    if (safeStorage.isEncryptionAvailable()) {
-      return SECRET_ENCRYPTED_PREFIX + safeStorage.encryptString(value).toString('base64')
-    }
-  } catch {
-    // safeStorage not ready / unavailable: fall back to legacy plaintext so
-    // connections keep working in headless or keyring-less environments.
+  if (!value) return value
+  if (
+    !safeStorage.isEncryptionAvailable() ||
+    (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')
+  ) {
+    throw new Error('Secure credential storage is unavailable. Credentials were not saved.')
   }
-  return value
+  return SECRET_ENCRYPTED_PREFIX + safeStorage.encryptString(value).toString('base64')
 }
 
 function decryptSecret(value: string | undefined): string | undefined {
   if (!value || !value.startsWith(SECRET_ENCRYPTED_PREFIX)) return value
   try {
-    if (!safeStorage.isEncryptionAvailable()) return undefined
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage unavailable')
     return safeStorage.decryptString(
       Buffer.from(value.slice(SECRET_ENCRYPTED_PREFIX.length), 'base64')
     )
   } catch {
-    console.warn('[crescent-store] failed to decrypt a stored secret; the value will be dropped.')
-    return undefined
+    // Do not convert an unreadable credential into an empty value and overwrite it on save.
+    throw new Error(
+      'Stored credentials could not be decrypted. Unlock secure storage before saving settings.'
+    )
   }
 }
 
@@ -175,7 +177,8 @@ function encryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFil
     connections: config.connections.map((connection) => ({
       ...connection,
       password: encryptSecret(connection.password),
-      rootPassword: encryptSecret(connection.rootPassword)
+      rootPassword: encryptSecret(connection.rootPassword),
+      actions: connection.actions?.map((action) => encryptSecret(action) ?? '')
     }))
   }
 }
@@ -206,13 +209,32 @@ function decryptConfigFileSecrets(config: CrescentConfigFile): CrescentConfigFil
     connections: config.connections.map((connection) => ({
       ...connection,
       password: decryptSecret(connection.password),
-      rootPassword: decryptSecret(connection.rootPassword)
+      rootPassword: decryptSecret(connection.rootPassword),
+      actions: connection.actions?.map((action) => decryptSecret(action) ?? '')
     }))
   }
 }
 
 export function readCrescentConfig(): CrescentConfigFile {
-  return decryptConfigFileSecrets(normalizeConfigFile(readJsonFile(getCrescentConfigPath(), {})))
+  const stored = normalizeConfigFile(readJsonFile(getCrescentConfigPath(), {}))
+  const decrypted = decryptConfigFileSecrets(stored)
+  const secrets = [
+    stored.whaleMonitor?.apiKey,
+    ...stored.agent.providers.map((provider) => provider.apiKey),
+    ...stored.agent.mcpServers.flatMap((server) => [
+      ...Object.values(server.env),
+      ...Object.values(server.headers ?? {})
+    ]),
+    ...stored.connections.flatMap((connection) => [
+      connection.password,
+      connection.rootPassword,
+      ...(connection.actions ?? [])
+    ])
+  ]
+  if (secrets.some((value) => value && !value.startsWith(SECRET_ENCRYPTED_PREFIX))) {
+    writeJsonFile(getCrescentConfigPath(), encryptConfigFileSecrets(stripDbBackedConfig(decrypted)))
+  }
+  return decrypted
 }
 
 export function writeCrescentConfig(config: CrescentConfigFile): CrescentConfigFile {
@@ -285,6 +307,7 @@ export function upsertCustomConnection(input: ConnectionInput): ConnectionConfig
   const current = readCrescentConfig()
   const id = input.id?.trim() || `custom-${randomUUID()}`
   const connection = normalizeConnection({ ...input, id, source: 'custom' })
+  tokenizeSshOptions(connection.sshOptions ?? [])
   const connections = [
     ...current.connections.filter((candidate) => candidate.id !== id),
     connection
@@ -436,6 +459,7 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     model: selection.model,
     workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
     agentStyle: normalizeAgentStyle(config.agentStyle),
+    thinkingLevel: normalizeThinkingLevel(config.thinkingLevel),
     showAgentThinking:
       typeof config.showAgentThinking === 'boolean' ? config.showAgentThinking : undefined,
     agentMode: config.agentMode === 'plan-execute' ? 'plan-execute' : 'react',
@@ -537,7 +561,8 @@ function normalizeAgentProviderModel(value: unknown): AgentProviderModelConfig {
   return {
     id,
     name: String(record.name || id),
-    reasoning: Boolean(record.reasoning)
+    reasoning: Boolean(record.reasoning),
+    samplingParamsByThinkingLevel: normalizeSamplingMap(record.samplingParamsByThinkingLevel)
   }
 }
 
@@ -618,6 +643,8 @@ function isValidMonitorDate(value: string | undefined): value is string {
 function stripDbBackedConfig(config: CrescentConfigFile): CrescentConfigFile {
   const agent = { ...config.agent } as Partial<AgentConfig>
   delete agent.commandWhitelist
+  delete agent.agentMode
+  delete agent.maxActiveTools
 
   return {
     ...config,
@@ -725,14 +752,21 @@ function readJsonFile(path: string, fallback: unknown): unknown {
 
 function writeJsonFile(path: string, value: unknown): void {
   ensureParentDir(path)
-  const tmpPath = `${path}.tmp`
-
-  writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  renameSync(tmpPath, path)
+  const tmpPath = `${path}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx'
+    })
+    renameSync(tmpPath, path)
+  } finally {
+    if (existsSync(tmpPath)) unlinkSync(tmpPath)
+  }
 }
 
 function ensureParentDir(path: string): void {
-  mkdirSync(dirname(path), { recursive: true })
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

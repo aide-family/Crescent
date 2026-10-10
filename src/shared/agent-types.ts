@@ -1,3 +1,4 @@
+import type { AgentThinkingLevel, AgentSamplingMap } from './agent-thinking'
 import type { ExecutionMode } from './execution-plan'
 import type { AgentStyle } from './agent-style'
 import type { SystemLogLevel } from './log-levels'
@@ -21,11 +22,13 @@ export interface AgentConfig {
   agentStyle: AgentStyle
   /** When set, overrides the style default for showing the thinking block. */
   showAgentThinking?: boolean
+  /** Requested reasoning effort; the runtime clamps it to model capabilities. */
+  thinkingLevel?: AgentThinkingLevel
   /** @deprecated Ignored; Pi owns the agent loop. Kept for config migration. */
   agentMode: AgentMode
   /** @deprecated Ignored after Pi migration. */
   maxActiveTools: number
-  /** @deprecated Agent no longer drives terminal commands. */
+  /** Legacy command whitelist; mutations still require the host approval policy. */
   commandWhitelist: string[]
   /** @deprecated OpenAPI tools removed from agent loop; retained for settings migration. */
   openApiProfiles: AgentOpenApiProfile[]
@@ -97,6 +100,8 @@ export interface AgentProviderConfig {
 }
 
 export interface AgentProviderModelConfig {
+  /** Optional provider-specific sampling overrides by reasoning effort. */
+  samplingParamsByThinkingLevel?: AgentSamplingMap
   id: string
   name?: string
   reasoning?: boolean

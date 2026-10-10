@@ -72,7 +72,7 @@ The Agent runs on a small, reviewable tool set instead of an open-ended plugin s
 - `bash` executed in the visible terminal pane, so every command is observable and high-risk commands still need approval.
 - `open_subterminal` to dock a dedicated local or SSH terminal for cross-context work.
 
-OpenAPI and MCP tooling from earlier versions has been removed from the Agent loop; their settings remain only for config migration.
+OpenAPI tools are deprecated and retained only for settings migration. Configured MCP tools are loaded as Crescent-owned Pi custom tools; every invocation requires operator approval.
 
 ## Comparison
 
@@ -122,7 +122,7 @@ Verify downloads with `SHA256SUMS.txt` from the same release when possible.
 
 #### macOS: “is damaged and can’t be opened”
 
-Until repository signing secrets are configured, some release builds may still be unsigned. See [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md). After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt—clear the quarantine attribute, then open the app:
+Until repository signing secrets are configured, some release builds may still be unsigned. See [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md). After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt—clear the quarantine attribute, then open the app:
 
 1. Move `Crescent.app` into Applications.
 2. Run:
@@ -192,7 +192,7 @@ Crescent is especially useful for:
 
 Crescent already includes the core MVP capabilities: local terminal, model provider configuration, terminal-grounded Agent execution, Agent run panel, command review, Skills, and a knowledge base.
 
-Phase 1–4 product and distribution plumbing are in place: in-app updates against GitHub Releases, packaging smoke checks, and CI signing/notarization when certificate secrets are configured (see [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)).
+Phase 1–4 product and distribution plumbing are in place: in-app updates against GitHub Releases, packaging smoke checks, and CI signing/notarization when certificate secrets are configured (see [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md)).
 
 See [ROADMAP.md](./ROADMAP.md) for details.
 

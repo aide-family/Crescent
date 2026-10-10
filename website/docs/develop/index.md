@@ -41,10 +41,10 @@ npm run docs:build
 
 这些文件仍在仓库中维护，站点不复制正文：
 
-- [签名与公证](https://github.com/aide-family/Crescent/blob/main/docs/CODE_SIGNING.md)
+- [签名与公证](https://github.com/aide-family/Crescent/blob/main/Document/CODE_SIGNING.md)
 - [路线图](https://github.com/aide-family/Crescent/blob/main/ROADMAP.md)
-- [架构](https://github.com/aide-family/Crescent/blob/main/docs/ARCHITECTURE.md)
-- [测试](https://github.com/aide-family/Crescent/blob/main/docs/TESTING.md)
+- [架构](https://github.com/aide-family/Crescent/blob/main/Document/ARCHITECTURE.md)
+- [测试](https://github.com/aide-family/Crescent/blob/main/Document/TESTING.md)
 
 ## 参与
 

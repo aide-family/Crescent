@@ -126,7 +126,10 @@ export function WikiSheet({
             <SheetTitle>{t.wiki.title}</SheetTitle>
             <SheetDescription>{t.wiki.description}</SheetDescription>
             {wikiDirectory && (
-              <div className="mt-1 truncate text-xs text-muted-foreground" title={wikiDirectory.path}>
+              <div
+                className="mt-1 truncate text-xs text-muted-foreground"
+                title={wikiDirectory.path}
+              >
                 {t.wiki.directoryLabel}: <code>{wikiDirectory.path}</code>
               </div>
             )}

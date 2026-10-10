@@ -1,3 +1,4 @@
+import { readAppTheme } from '@renderer/lib/app-theme'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Background,
@@ -20,7 +21,8 @@ import {
   type ArchitectureSpec
 } from '../../../shared/architecture-spec'
 import type { Dictionary } from '@renderer/i18n'
-import { APP_UI_THEME } from '@renderer/lib/design-system'
+import { APP_THEMES } from '@renderer/lib/theme-definitions'
+import { useDiagramTheme } from '@renderer/hooks/useAppTheme'
 import { resolveMermaidBlockUiState } from '@renderer/lib/markdown-fence'
 import {
   exportFeedback,
@@ -40,7 +42,7 @@ import { ArchEdge } from './architecture/ArchEdge'
 import { ArchGroupNode } from './architecture/ArchGroupNode'
 import { ArchNode } from './architecture/ArchNode'
 import { buildArchitectureExportSvg } from './architecture/export-svg'
-import { ARCHITECTURE_KIND_ORDER, ARCHITECTURE_KIND_TONE } from './architecture/kinds'
+import { ARCHITECTURE_KIND_ORDER } from './architecture/kinds'
 import { buildArchitectureFlowGraph } from './architecture/layout'
 
 const nodeTypes = {
@@ -57,10 +59,6 @@ const panelStyle = {
   '--foreground': 'var(--app-markdown-text)',
   '--muted-foreground': 'var(--app-markdown-muted)',
   '--border': 'var(--app-markdown-border)'
-} as CSSProperties
-
-const canvasVars = {
-  '--app-diagram-canvas': APP_UI_THEME.diagram.canvas
 } as CSSProperties
 
 export function ArchitectureBlock({
@@ -82,7 +80,7 @@ export function ArchitectureBlock({
   const [expanded, setExpanded] = useState(false)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const reduceMotion = usePrefersReducedMotion()
-  const spec = closed ? parseArchitectureSpec(code) : null
+  const spec = useMemo(() => (closed ? parseArchitectureSpec(code) : null), [closed, code])
   const uiState = resolveMermaidBlockUiState({
     closed,
     streaming,
@@ -101,7 +99,7 @@ export function ArchitectureBlock({
 
   async function exportSvg(): Promise<void> {
     if (!spec) return
-    const { svg } = buildArchitectureExportSvg(spec)
+    const { svg } = buildArchitectureExportSvg(spec, readAppTheme())
     await saveTextFile(
       svg,
       buildArchitectureFilename('svg'),
@@ -115,7 +113,7 @@ export function ArchitectureBlock({
     if (!spec) return
     const feedback = exportFeedback(t)
     try {
-      const { svg, width, height } = buildArchitectureExportSvg(spec)
+      const { svg, width, height } = buildArchitectureExportSvg(spec, readAppTheme())
       const result = await window.api.agent.saveSvgAsPng({
         svg,
         defaultPath: buildArchitectureFilename('png'),
@@ -141,10 +139,7 @@ export function ArchitectureBlock({
             {spec.title}
           </div>
         ) : null}
-        <div
-          className="app-arch-canvas relative h-[320px] min-h-[240px] overflow-hidden rounded-md border border-[var(--app-markdown-border)]"
-          style={canvasVars}
-        >
+        <div className="app-arch-canvas relative h-[320px] min-h-[240px] overflow-hidden rounded-md border border-[var(--app-markdown-border)]">
           <ReactFlowProvider>
             <ArchitectureCanvas spec={spec} reduceMotion={reduceMotion} />
           </ReactFlowProvider>
@@ -253,7 +248,6 @@ export function ArchitectureBlock({
             <div
               ref={expandedOverlayRef}
               className="app-fullscreen-overlay app-mermaid-expanded fixed inset-0 z-50 flex flex-col overscroll-contain"
-              style={canvasVars}
             >
               <div
                 ref={panelRef}
@@ -301,7 +295,9 @@ function ArchitectureCanvas({
   reduceMotion: boolean
   tall?: boolean
 }): React.JSX.Element {
-  const graph = useMemo(() => buildArchitectureFlowGraph(spec), [spec])
+  const themeId = useDiagramTheme()
+  const theme = APP_THEMES[themeId]
+  const graph = useMemo(() => buildArchitectureFlowGraph(spec, themeId), [spec, themeId])
   const { fitView } = useReactFlow()
 
   useEffect(() => {
@@ -309,7 +305,7 @@ function ArchitectureCanvas({
       void fitView({ padding: 0.16, duration: reduceMotion ? 0 : 200 })
     }, 30)
     return () => window.clearTimeout(timer)
-  }, [fitView, graph.nodes, graph.edges, reduceMotion])
+  }, [fitView, spec, reduceMotion])
 
   return (
     <ReactFlow
@@ -333,22 +329,23 @@ function ArchitectureCanvas({
         id="arch-grid"
         variant={BackgroundVariant.Lines}
         gap={24}
-        color={APP_UI_THEME.diagram.grid}
+        color={theme.diagram.grid}
         lineWidth={1}
       />
       <Controls
         showInteractive={false}
-        className="!overflow-hidden !rounded-md !border !border-[var(--app-markdown-border)] !bg-[rgba(11,14,20,0.92)] !shadow-none"
+        className="!overflow-hidden !rounded-md !border !border-[var(--app-markdown-border)] !bg-[var(--app-diagram-canvas)] !shadow-none"
       />
     </ReactFlow>
   )
 }
 
 function ArchitectureLegend({ t }: { t: Dictionary }): React.JSX.Element {
+  const theme = APP_THEMES[useDiagramTheme()]
   return (
-    <div className="pointer-events-none absolute right-2 bottom-2 z-10 flex flex-wrap gap-1.5 rounded-md border border-[var(--app-markdown-border)] bg-[rgba(11,14,20,0.9)] px-2 py-1.5">
+    <div className="pointer-events-none absolute right-2 bottom-2 z-10 flex flex-wrap gap-1.5 rounded-md border border-[var(--app-markdown-border)] bg-[var(--app-diagram-canvas)] px-2 py-1.5">
       {ARCHITECTURE_KIND_ORDER.map((kind) => {
-        const tone = ARCHITECTURE_KIND_TONE[kind]
+        const tone = theme.diagram.kinds[kind]
         return (
           <span
             key={kind}

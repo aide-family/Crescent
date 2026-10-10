@@ -1,4 +1,4 @@
-import { ARCHITECTURE_CANVAS, CHART_SERIES_COLORS } from '../../../shared/architecture-theme'
+import { APP_THEMES, getChartSeriesColors, type AppThemeId } from './theme-definitions'
 
 const PAINT_PROPS = [
   'fill',
@@ -23,7 +23,10 @@ export type SerializedChartSvg = {
  * Clone the live Recharts SVG under `host`, inline computed paint styles,
  * and wrap with an opaque architecture canvas background for file export.
  */
-export function serializeChartSvgFromHost(host: HTMLElement): SerializedChartSvg | null {
+export function serializeChartSvgFromHost(
+  host: HTMLElement,
+  themeId: AppThemeId = 'crescent'
+): SerializedChartSvg | null {
   const source =
     host.querySelector<SVGSVGElement>('svg.recharts-surface') ??
     host.querySelector<SVGSVGElement>('svg')
@@ -54,7 +57,7 @@ export function serializeChartSvgFromHost(host: HTMLElement): SerializedChartSvg
   background.setAttribute('y', '0')
   background.setAttribute('width', String(width))
   background.setAttribute('height', String(height))
-  background.setAttribute('fill', ARCHITECTURE_CANVAS)
+  background.setAttribute('fill', APP_THEMES[themeId].diagram.canvas)
   clone.insertBefore(background, clone.firstChild)
 
   let svg = new XMLSerializer().serializeToString(clone)
@@ -63,7 +66,7 @@ export function serializeChartSvgFromHost(host: HTMLElement): SerializedChartSvg
   }
 
   // Safety net: any unresolved series CSS vars → architecture palette hex.
-  svg = replaceCssVarsInSvgMarkup(svg, chartSeriesCssVarMap())
+  svg = replaceCssVarsInSvgMarkup(svg, chartSeriesCssVarMap(themeId))
 
   return { svg, width, height }
 }
@@ -73,13 +76,13 @@ export function replaceCssVarsInSvgMarkup(markup: string, vars: Record<string, s
   return markup.replace(
     /var\(\s*(--[\w-]+)\s*(?:,\s*([^)]+))?\)/g,
     (_match, name: string, fallback?: string) =>
-      vars[name] ?? fallback?.trim() ?? ARCHITECTURE_CANVAS
+      vars[name] ?? fallback?.trim() ?? APP_THEMES.crescent.diagram.canvas
   )
 }
 
-export function chartSeriesCssVarMap(): Record<string, string> {
+export function chartSeriesCssVarMap(themeId: AppThemeId = 'crescent'): Record<string, string> {
   const map: Record<string, string> = {}
-  CHART_SERIES_COLORS.forEach((color, index) => {
+  getChartSeriesColors(themeId).forEach((color, index) => {
     map[`--color-s${index}`] = color
     map[`--chart-${index + 1}`] = color
   })

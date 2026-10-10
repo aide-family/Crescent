@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { rendererIpc } from './ipc-security'
 
 import {
   WORKBENCH_LAYOUT_DB_KEY,
@@ -13,11 +13,11 @@ export function readStoredWorkbenchLayout(): WorkbenchLayout | null {
 }
 
 export function registerWorkbenchLayoutIpc(): void {
-  ipcMain.handle('app:get-workbench-layout', () => {
+  rendererIpc.handle('app:get-workbench-layout', () => {
     return { layout: readStoredWorkbenchLayout() }
   })
 
-  ipcMain.handle('app:set-workbench-layout', (_event, layout: unknown) => {
+  rendererIpc.handle('app:set-workbench-layout', (_event, layout: unknown) => {
     const next = applyWorkbenchLayoutUpdate(layout)
     if (!next.ok) return next
     writeCrescentDbValue(WORKBENCH_LAYOUT_DB_KEY, next.layout)

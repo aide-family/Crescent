@@ -4,7 +4,7 @@
 
 ## macOS: “is damaged and can’t be opened”
 
-Until repository signing secrets are configured, some release builds may still be unsigned. See [docs/CODE_SIGNING.md](https://github.com/aide-family/Crescent/blob/main/docs/CODE_SIGNING.md) in the repository.
+Until repository signing secrets are configured, some release builds may still be unsigned. See [Document/CODE_SIGNING.md](https://github.com/aide-family/Crescent/blob/main/Document/CODE_SIGNING.md) in the repository.
 
 After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt. Move `Crescent.app` into Applications, then clear the quarantine attribute:
 

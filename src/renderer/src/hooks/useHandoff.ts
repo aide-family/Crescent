@@ -1,3 +1,4 @@
+import { agentClient } from '@renderer/clients'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dictionary, Locale } from '@renderer/i18n'
 import type { AgentHandoffStatus } from '../../../shared/agent-types'
@@ -57,7 +58,7 @@ export function useHandoff(input: {
       mounted.current = false
       for (const [id, editor] of Object.entries(editors.current)) {
         if (editor.requestId)
-          void window.api.agent
+          void agentClient
             .cancelHandoff({ sessionKey: id, tabId: id, requestId: editor.requestId })
             .catch(() => {})
       }
@@ -69,7 +70,7 @@ export function useHandoff(input: {
     for (const [id, editor] of Object.entries(editors.current)) {
       if (liveTabs.current.has(id)) continue
       if (editor.requestId)
-        void window.api.agent
+        void agentClient
           .cancelHandoff({ sessionKey: id, tabId: id, requestId: editor.requestId })
           .catch(() => {})
       delete editors.current[id]
@@ -81,7 +82,7 @@ export function useHandoff(input: {
     let current = true
     let retry: ReturnType<typeof setTimeout> | undefined
     const refresh = (): void => {
-      void window.api.agent
+      void agentClient
         .handoffStatus({ sessionKey: tabId, tabId })
         .then((status) => {
           if (!current) return
@@ -127,7 +128,7 @@ export function useHandoff(input: {
     const requestId = crypto.randomUUID()
     update(sourceId, { generating: true, error: undefined, requestId, lastStarted: Date.now() })
     try {
-      const result = await window.api.agent.generateHandoff({
+      const result = await agentClient.generateHandoff({
         sessionKey: sourceId,
         tabId: sourceId,
         requestId,
@@ -154,7 +155,7 @@ export function useHandoff(input: {
     const current = editors.current[tabId]
     if (current?.creating) return
     if (current?.requestId)
-      void window.api.agent
+      void agentClient
         .cancelHandoff({ sessionKey: tabId, tabId, requestId: current.requestId })
         .catch(() => {})
     // Invalidate before awaiting IPC so late replies cannot reopen/overwrite the editor.
@@ -174,7 +175,7 @@ export function useHandoff(input: {
       return
     update(sourceId, { creating: true, error: undefined })
     try {
-      const latest = await window.api.agent.handoffStatus({ sessionKey: sourceId, tabId: sourceId })
+      const latest = await agentClient.handoffStatus({ sessionKey: sourceId, tabId: sourceId })
       if (!latest.available || latest.revision !== current.revision) {
         update(sourceId, { error: t.handoff.errors[latest.error ?? 'stale'] })
         return

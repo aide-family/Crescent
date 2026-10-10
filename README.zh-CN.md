@@ -72,7 +72,7 @@ Agent 只运行一组小而可审核的工具，而不是开放式的插件面�
 - `bash`：在当前可见终端执行，每条命令都可观察，高危命令仍需审批。
 - `open_subterminal`：停靠一个专用的本地 / SSH 子终端，用于跨上下文工作。
 
-早期版本的 OpenAPI 与 MCP 工具已从 Agent 循环中移除，相关设置仅保留用于配置迁移。
+OpenAPI 工具已停用，相关设置仅保留用于配置迁移。启用的 MCP 工具由 Crescent 主进程加载为 Pi 自定义工具，每次调用均需人工审批。
 
 ## 方案对比
 
@@ -122,7 +122,7 @@ flowchart TD
 
 #### macOS：「已损坏，无法打开」
 
-在仓库配置签名密钥之前，部分正式包可能仍未签名。详见 [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)。从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏，可按下面步骤解除隔离后再打开：
+在仓库配置签名密钥之前，部分正式包可能仍未签名。详见 [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md)。从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏，可按下面步骤解除隔离后再打开：
 
 1. 将 `Crescent.app` 拖到「应用程序」。
 2. 在终端执行：
@@ -194,7 +194,7 @@ Crescent 特别适合这些人：
 
 Crescent 目前已经具备可用 MVP 的核心能力：本地终端、模型配置、终端闭环 Agent 执行、Agent 运行面板、命令审核、Skills 和知识库等。
 
-Phase 1–4 产品与分发基础设施已就绪：基于 GitHub Releases 的应用内更新、打包冒烟检查，以及在配置证书密钥后由 CI 执行签名/公证（见 [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)）。
+Phase 1–4 产品与分发基础设施已就绪：基于 GitHub Releases 的应用内更新、打包冒烟检查，以及在配置证书密钥后由 CI 执行签名/公证（见 [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md)）。
 
 更多细节见 [ROADMAP.md](./ROADMAP.md)。
 

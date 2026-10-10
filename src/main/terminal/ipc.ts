@@ -1,24 +1,63 @@
-import { createPtyScriptRunner } from './script-runner'
-import { stopPlansForTab } from '../agent/change-plan'
-import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron'
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'child_process'
+import { BrowserWindow, dialog, type OpenDialogOptions, type WebContents } from 'electron'
+import { homedir, hostname } from 'os'
 import { dirname, resolve } from 'path'
-import { homedir, hostname, userInfo } from 'os'
-import { spawn as spawnPty } from 'node-pty'
+import { stopPlansForTab } from '../agent/change-plan'
+import { rendererIpc } from '../ipc-security'
+import { resolveTerminalSecretReference } from '../renderer-secrets'
+import {
+  createCommandWrapper,
+  extractPartialCommandOutput,
+  filterAutomationControlLines,
+  filterAutomationControlOutputWithState,
+  formatPipePrompt,
+  formatReadableCommandInput,
+  formatReadableCommandResult,
+  hasShellContinuationPrompt,
+  isAutomationEchoLine,
+  parseCommandBuffer,
+  sanitizeCommand
+} from './output-format'
+import { createPtyScriptRunner } from './script-runner'
+import { TerminalSessionManager } from './session/manager'
+import { createPipeSession } from './session/pipe-session'
+import { createPtySession } from './session/pty-session'
+import { TerminalRendererEvents } from './session/renderer-events'
+import type {
+  TerminalSessionEvents,
+  TemporarySubterminalEntry,
+  TerminalCommandExecutionResult,
+  TerminalExitNotification,
+  TerminalSession
+} from './session/types'
+const visibleTerminalEvents = new TerminalRendererEvents(appendTerminalContext)
+export {
+  filterAutomationControlOutputWithState,
+  formatReadableCommandInput,
+  isAutomationEchoLine
+} from './output-format'
+export type { TerminalAutomationFilterState, TerminalCommandExecutionResult } from './session/types'
+const sessionManager = new TerminalSessionManager(flushVisibleTerminalData)
+const {
+  sessions,
+  terminalOutputBuffers,
+  degradedRecoveryOutput,
+  connectionStates,
+  manualInputLines,
+  sessionWebContents,
+  automationEchoSuppressions,
+  terminalDataWaiters,
+  terminalExitWaiters,
+  terminalUserInterruptNotifiers,
+  pendingCommandPromises,
+  terminalAutomationFilterStates,
+  temporarySubterminals,
+  restoringSessionKeys
+} = sessionManager
 
-import { safeWebContentsSend } from '../safe-ipc-send'
-import { listConnections } from '../connections/ipc'
-import { resolveShellLaunchConfig } from './shell'
-import { hasUnterminatedSecretPrompt } from '../../shared/terminal-password-prompt'
+import type { TerminalExecutionTarget } from '../../shared/agent-types'
 import {
-  normalizeHostToken,
-  isPromptHostAligned,
-  isLocalMachinePromptHost,
-  findNewestPromptSignal
-} from '../../shared/terminal-prompt-host'
-import {
-  classifyPipeCommand,
   applyConfirmedLoginAnchor,
+  classifyPipeCommand,
   confirmLoginState,
   connectionPhase,
   createConnectionState,
@@ -33,76 +72,37 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
+import { redactSensitiveText } from '../../shared/secret-redaction'
 import {
   extractSshDestinationHost,
+  isIpv4Literal,
   isSshCommandLine,
   sanitizeExpectedTargetHost
 } from '../../shared/ssh-destination'
-import { isIpv4Literal } from '../../shared/ssh-destination'
-import { redactSensitiveText } from '../../shared/secret-redaction'
-import type { TerminalExecutionTarget } from '../../shared/agent-types'
-import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './graceful-teardown'
-import { createPendingCommandController } from './pending-command'
-import { recoverTimedOutSshSession } from './timeout-recovery'
+import {
+  extractPasswordPromptLine,
+  hasUnterminatedSecretPrompt,
+  isPrivilegePasswordPrompt
+} from '../../shared/terminal-password-prompt'
+import {
+  findNewestPromptSignal,
+  isLocalMachinePromptHost,
+  isPromptHostAligned,
+  normalizeHostToken
+} from '../../shared/terminal-prompt-host'
+import { listConnections } from '../connections/ipc'
+import { safeWebContentsSend } from '../safe-ipc-send'
 import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
+import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './graceful-teardown'
 import {
   isPtyExecutionTabLocked,
   isTerminalInterruptPayload,
   resolveUserCommandInterrupt,
   shouldBlockTerminalUserInput
 } from './input-lock'
-
-interface TerminalSession {
-  id: number
-  mode: 'pty' | 'pipe'
-  pid: number
-  cwd: string
-  shell: string
-  write: (data: string) => void
-  display: (data: string) => void
-  interrupt: () => void
-  resize: (cols: number, rows: number) => void
-  clear: () => void
-  kill: () => void
-}
-
-interface TerminalExitNotification {
-  exitCode: number
-  signal?: number | string
-}
-
-export interface TerminalAutomationFilterState {
-  startMarker: string
-  endMarker: string
-  phase: 'before-start' | 'body'
-  pending: string
-}
-
-export interface TerminalCommandExecutionResult {
-  ok: boolean
-  command: string
-  mode?: 'pty' | 'pipe'
-  cwd?: string
-  exitCode?: number
-  output: string
-  error?: string
-  timedOut?: boolean
-  interrupted?: boolean
-  terminalExited?: boolean
-  detached?: boolean
-  environmentDrift?: boolean
-  observedHost?: string
-  expectedHost?: string
-  code?: 'SSH_TARGET_UNAVAILABLE'
-  connectionPhase?: ReturnType<typeof connectionPhase>
-  recoveryAction?: 'reconnect-or-select-target' | 'wait-for-target-prompt'
-  /** Stable key for the same drift event (expected|observed), used for recovery brakes. */
-  driftKey?: string
-  subterminalName?: string
-  subterminalTabId?: string
-  /** True only after the command wrapper was handed to the terminal. */
-  dispatched?: boolean
-}
+import { createPendingCommandController } from './pending-command'
+import { resolveShellLaunchConfig } from './shell'
+import { recoverTimedOutSshSession } from './timeout-recovery'
 
 export interface TemporarySubterminalOpenOptions {
   cols?: number
@@ -136,17 +136,8 @@ export interface TemporarySubterminalSnapshot {
   error?: string
 }
 
-interface TemporarySubterminalEntry {
-  name: string
-  tabId: string
-  busy: boolean
-  detached: boolean
-  lastUsedAt: number
-}
-
-const sessions = new Map<string, TerminalSession>()
 let nextSessionId = 1
-const PIPE_PROMPT_PREFIX = '__TERMINAL_AGENT_PROMPT__'
+
 const MAX_CONTEXT_BUFFER = 24_000
 const TERMINAL_COMMAND_TIMEOUT_MS = 60_000
 const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
@@ -156,17 +147,15 @@ const TERMINAL_COMMAND_START_TIMEOUT_MS = 8_000
 const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 /** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
 const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
-const terminalOutputBuffers = new Map<string, string>()
+
 /** Only PTY output emitted after degradation can prove timeout recovery. */
-const degradedRecoveryOutput = new Map<string, string>()
+
 /**
  * Per-tab connection state SSOT. Written ONLY by: prompt observations,
  * ready/login confirmation, expected-host updates, and PTY/PIPE events.
  * Subterminal login never writes the parent tab. Everything else reads
  * through this map.
  */
-const connectionStates = new Map<string, ConnectionState>()
-const manualInputLines = new Map<string, string>()
 
 /** User keyboard input is the authority for a manually initiated SSH hop. */
 function noteManualTerminalInput(
@@ -209,29 +198,15 @@ function noteManualTerminalInput(
   manualInputLines.set(key, line)
 }
 /** Owning renderer for drift notifications (kept across soft restarts). */
-const sessionWebContents = new Map<string, WebContents>()
+
 /** Raw echo lines of automation-pasted commands, suppressed from display by default. */
-const automationEchoSuppressions = new Map<string, { echo: string; until: number }>()
+
 /** Coalesce visible PTY→renderer frames (~16–32ms) to cut IPC/re-render pressure. */
-const TERMINAL_DATA_COALESCE_MS = 24
-const pendingVisibleTerminalData = new Map<
-  string,
-  {
-    webContents: WebContents
-    tabId: string
-    chunks: string[]
-    timer: ReturnType<typeof setTimeout>
-  }
->()
-const terminalDataWaiters = new Map<string, Set<(data: string) => void>>()
-const terminalExitWaiters = new Map<string, Set<(event: TerminalExitNotification) => void>>()
-const terminalUserInterruptNotifiers = new Map<string, Set<() => void>>()
+
 /** In-flight automated command waiters (Stop / Ctrl+C can await settle). */
-const pendingCommandPromises = new Map<string, Promise<TerminalCommandExecutionResult>>()
-const terminalAutomationFilterStates = new Map<string, TerminalAutomationFilterState>()
+
 export const MAX_TEMPORARY_SUBTERMINALS = 3
-const temporarySubterminals = new Map<string, TemporarySubterminalEntry[]>()
-const restoringSessionKeys = new Set<string>()
+
 let onMainTabLoginConfirmed: ((tabId: string) => void) | undefined
 
 export function registerMainTabLoginConfirmedHandler(handler: (tabId: string) => void): void {
@@ -1117,7 +1092,7 @@ function extractLikelyLocalDirectory(command: string): string | undefined {
 }
 
 export function registerTerminalIpc(): void {
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:start',
     async (
       event,
@@ -1165,7 +1140,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:teardown-gracefully',
     async (event, payload?: { tabId?: string; timeoutMs?: number }) => {
       const tabId = normalizeTabId(payload?.tabId)
@@ -1178,14 +1153,14 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle('terminal:clear-restoring', (event, payload?: { tabId?: string }) => {
+  rendererIpc.handle('terminal:clear-restoring', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return { ok: false }
     markTerminalSessionRestoring(event.sender.id, tabId, false)
     return { ok: true }
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:set-expected-host',
     async (
       event,
@@ -1241,7 +1216,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:patch-cluster-host-regex',
     (event, payload?: { tabId?: string; clusterHostRegex?: string | null }) => {
       const tabId = normalizeTabId(payload?.tabId)
@@ -1261,7 +1236,7 @@ export function registerTerminalIpc(): void {
    * Verified-login write-back (SSOT write source). Confirms only on the pane
    * that logged in. Subterminal logins never mark the parent tab ready.
    */
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:confirm-login',
     (
       event,
@@ -1398,7 +1373,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:open-subterminal',
     (
       event,
@@ -1423,7 +1398,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:read-subterminal',
     (event, options?: { parentTabId?: string; terminalName?: string; maxChars?: number }) => {
       return readTemporarySubterminalOutput(
@@ -1435,7 +1410,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:interrupt-subterminal',
     (event, options?: { parentTabId?: string; terminalName?: string }) => {
       return interruptTemporarySubterminal(
@@ -1446,54 +1421,81 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
+  rendererIpc.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return { ok: false, interrupted: false, error: 'Missing tabId' }
     const interrupted = interruptPendingTerminalCommands(event.sender.id, tabId)
     return { ok: true, interrupted }
   })
 
-  ipcMain.on('terminal:write', (event, payload: { data?: string; tabId?: string } | string) => {
-    const data = typeof payload === 'string' ? payload : payload?.data
-    if (typeof data !== 'string') return
+  rendererIpc.on(
+    'terminal:write',
+    async (event, payload: { data?: string; tabId?: string } | string) => {
+      let data = typeof payload === 'string' ? payload : payload?.data
+      if (typeof data !== 'string') return
 
-    const tabId = normalizeTabId(typeof payload === 'string' ? undefined : payload?.tabId)
-    if (!tabId) return
-    const session = sessions.get(getSessionKey(event.sender.id, tabId))
-    if (!session) {
-      sendIfAlive(
-        event.sender,
-        tabId,
-        getSessionKey(event.sender.id, tabId),
-        'terminal:data',
-        '\r\n\x1b[31mTerminal session is not active. Command input was blocked.\x1b[0m\r\n'
-      )
-      return
+      const tabId = normalizeTabId(typeof payload === 'string' ? undefined : payload?.tabId)
+      if (!tabId) return
+      const session = sessions.get(getSessionKey(event.sender.id, tabId))
+      if (!session) {
+        sendIfAlive(
+          event.sender,
+          tabId,
+          getSessionKey(event.sender.id, tabId),
+          'terminal:data',
+          '\r\n\x1b[31mTerminal session is not active. Command input was blocked.\x1b[0m\r\n'
+        )
+        return
+      }
+
+      if (session.mode === 'pipe' && classifyPipeCommand(data) === 'interactive') {
+        sendIfAlive(
+          event.sender,
+          tabId,
+          getSessionKey(event.sender.id, tabId),
+          'terminal:data',
+          '\r\n\x1b[31mInteractive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback; command blocked. One-shot non-interactive ssh (BatchMode or remote command without -t) is still allowed.\x1b[0m\r\n'
+        )
+        return
+      }
+
+      if (isTerminalInterruptPayload(data)) {
+        interruptPendingTerminalCommands(event.sender.id, tabId)
+        return
+      }
+
+      if (isUserInputLocked(event.sender.id, tabId)) return
+
+      if (data.startsWith('__crescent_secret_')) {
+        const key = getSessionKey(event.sender.id, tabId)
+        const connectionId = connectionStates.get(key)?.connectionId
+        const connection = (await listConnections()).find((item) => item.id === connectionId)
+        // Recheck after resolving env credentials; PTY/lock/prompt may have changed.
+        if (
+          sessions.get(key) !== session ||
+          connectionStates.get(key)?.connectionId !== connectionId ||
+          isUserInputLocked(event.sender.id, tabId)
+        )
+          return
+        data =
+          resolveTerminalSecretReference(
+            data,
+            connection,
+            session.mode === 'pty' &&
+              hasUnterminatedSecretPrompt(terminalOutputBuffers.get(key) ?? ''),
+            isPrivilegePasswordPrompt(
+              extractPasswordPromptLine(terminalOutputBuffers.get(key) ?? '') ?? ''
+            )
+          ) ?? data
+        session.write(data)
+        return
+      }
+      noteManualTerminalInput(getSessionKey(event.sender.id, tabId), data, event.sender, tabId)
+      session.write(data)
     }
+  )
 
-    if (session.mode === 'pipe' && classifyPipeCommand(data) === 'interactive') {
-      sendIfAlive(
-        event.sender,
-        tabId,
-        getSessionKey(event.sender.id, tabId),
-        'terminal:data',
-        '\r\n\x1b[31mInteractive commands (ssh login shell, sudo/su/passwd prompts, mysql/psql/sftp REPL) require PTY mode. Current terminal is pipe fallback; command blocked. One-shot non-interactive ssh (BatchMode or remote command without -t) is still allowed.\x1b[0m\r\n'
-      )
-      return
-    }
-
-    if (isTerminalInterruptPayload(data)) {
-      interruptPendingTerminalCommands(event.sender.id, tabId)
-      return
-    }
-
-    if (isUserInputLocked(event.sender.id, tabId)) return
-
-    noteManualTerminalInput(getSessionKey(event.sender.id, tabId), data, event.sender, tabId)
-    session.write(data)
-  })
-
-  ipcMain.handle(
+  rendererIpc.handle(
     'terminal:paste-command',
     async (
       event,
@@ -1576,7 +1578,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
+  rendererIpc.handle('terminal:get-context', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     const key = tabId ? getSessionKey(event.sender.id, tabId) : ''
     let state = key ? connectionStates.get(key) : undefined
@@ -1711,7 +1713,7 @@ export function registerTerminalIpc(): void {
     }
   })
 
-  ipcMain.on(
+  rendererIpc.on(
     'terminal:resize',
     (event, dimensions: { cols?: number; rows?: number; tabId?: string }) => {
       const tabId = normalizeTabId(dimensions?.tabId)
@@ -1726,7 +1728,7 @@ export function registerTerminalIpc(): void {
     }
   )
 
-  ipcMain.on('terminal:stop', (event, payload?: { tabId?: string }) => {
+  rendererIpc.on('terminal:stop', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return
     const key = getSessionKey(event.sender.id, tabId)
@@ -1738,7 +1740,7 @@ export function registerTerminalIpc(): void {
     releaseTemporarySubterminalByTabId(event.sender.id, tabId)
   })
 
-  ipcMain.on('terminal:clear', (event, payload?: { tabId?: string }) => {
+  rendererIpc.on('terminal:clear', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return
     sessions.get(getSessionKey(event.sender.id, tabId))?.clear()
@@ -1746,33 +1748,15 @@ export function registerTerminalIpc(): void {
 }
 
 export function stopAllTerminalSessions(): void {
-  for (const key of sessions.keys()) {
-    stopSession(key)
-  }
-  connectionStates.clear()
-  degradedRecoveryOutput.clear()
-  sessionWebContents.clear()
-  automationEchoSuppressions.clear()
-  temporarySubterminals.clear()
-  restoringSessionKeys.clear()
+  for (const key of sessions.keys()) invalidateTerminalPlans(key)
+  sessionManager.clear()
+  visibleTerminalEvents.flushAll()
 }
 
 function stopSession(key: string): void {
   invalidateTerminalPlans(key)
-  const session = sessions.get(key)
-  if (!session) return
-
-  flushVisibleTerminalData(key)
-  session.kill()
-  sessions.delete(key)
-  terminalDataWaiters.delete(key)
-  terminalExitWaiters.delete(key)
-  terminalOutputBuffers.delete(key)
-  terminalAutomationFilterStates.delete(key)
-  automationEchoSuppressions.delete(key)
-  // Keep connectionStates / sessionWebContents across soft PTY restarts so
-  // reconnect can re-gate, but invalidate ready/alignment — a dead PTY is
-  // never "already on target".
+  sessionManager.stop(key)
+  // Keep owner and connection identity across a soft restart, but clear liveness.
   invalidateConnectionSessionLiveness(key)
 }
 
@@ -2000,17 +1984,47 @@ function createTerminalSession(input: {
   key: string
 }): TerminalSession {
   sessionWebContents.set(input.key, input.webContents)
+  let creating = true
+  const current = (): boolean => creating || sessions.get(input.key)?.id === input.sessionId
+  const events: TerminalSessionEvents = {
+    onData: (data) => {
+      if (current()) sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', data)
+    },
+    onDisplay: (data) => {
+      if (current()) sendVisibleTerminalData(input.webContents, input.tabId, input.key, data)
+    },
+    onPrompt: (cwd) => {
+      if (!current()) return
+      const session = sessions.get(input.key)
+      if (session?.id === input.sessionId) session.cwd = cwd
+      sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
+        tabId: input.tabId,
+        cwd,
+        prompt: formatPipePrompt(cwd)
+      })
+    },
+    onExit: (event) => {
+      if (!current()) return
+      notifyTerminalExit(input.key, event)
+      sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:exit', {
+        tabId: input.tabId,
+        sessionId: input.sessionId,
+        ...event
+      })
+      deleteIfCurrent(input.key, input.sessionId)
+    }
+  }
   try {
-    return createPtySession(input)
-  } catch (error) {
-    sendIfAlive(
-      input.webContents,
-      input.tabId,
-      input.key,
-      'terminal:data',
-      `\r\n\x1b[33mPTY unavailable (${error instanceof Error ? error.message : String(error)}). Falling back to shell pipes.\x1b[0m\r\n`
-    )
-    return createPipeSession(input)
+    try {
+      return createPtySession(input, events)
+    } catch (error) {
+      events.onData(
+        `\r\n\x1b[33mPTY unavailable (${error instanceof Error ? error.message : String(error)}). Falling back to shell pipes.\x1b[0m\r\n`
+      )
+      return createPipeSession(input, events)
+    }
+  } finally {
+    creating = false
   }
 }
 
@@ -2021,161 +2035,8 @@ function resolveTerminalArgs(defaultArgs: string[], initialCommand: string | und
   return process.platform === 'win32' ? [command] : ['-lc', command]
 }
 
-function createPtySession(input: {
-  sessionId: number
-  shell: string
-  args: string[]
-  cwd: string
-  env: NodeJS.ProcessEnv
-  cols: number
-  rows: number
-  webContents: WebContents
-  tabId: string
-  key: string
-}): TerminalSession {
-  const pty = spawnPty(input.shell, input.args, {
-    name: 'xterm-256color',
-    cols: input.cols,
-    rows: input.rows,
-    cwd: input.cwd,
-    env: input.env
-  })
-  const dataDisposable = pty.onData((data) => {
-    sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', data)
-  })
-  const exitDisposable = pty.onExit(({ exitCode, signal }) => {
-    notifyTerminalExit(input.key, { exitCode, signal })
-    sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:exit', {
-      tabId: input.tabId,
-      sessionId: input.sessionId,
-      exitCode,
-      signal
-    })
-    deleteIfCurrent(input.key, input.sessionId)
-  })
-
-  return {
-    id: input.sessionId,
-    mode: 'pty',
-    pid: pty.pid,
-    cwd: input.cwd,
-    shell: input.shell,
-    write: (data) => pty.write(data),
-    display: (data) => sendVisibleTerminalData(input.webContents, input.tabId, input.key, data),
-    interrupt: () => pty.write('\x03'),
-    resize: (cols, rows) => pty.resize(cols, rows),
-    clear: () => pty.clear(),
-    kill: () => {
-      dataDisposable.dispose()
-      exitDisposable.dispose()
-      pty.kill()
-    }
-  }
-}
-
-function createPipeSession(input: {
-  sessionId: number
-  shell: string
-  args: string[]
-  cwd: string
-  env: NodeJS.ProcessEnv
-  webContents: WebContents
-  tabId: string
-  key: string
-}): TerminalSession {
-  const shell = process.platform === 'win32' ? input.shell : '/bin/sh'
-  const args = process.platform === 'win32' ? input.args : []
-  const child = spawnProcess(shell, args, {
-    cwd: input.cwd,
-    env: input.env,
-    stdio: 'pipe'
-  }) as ChildProcessWithoutNullStreams
-  let currentCwd = input.cwd
-  let stdoutBuffer = ''
-
-  child.stdout.on('data', (data: Buffer) => {
-    stdoutBuffer += data.toString()
-    const lines = stdoutBuffer.split(/\r?\n/)
-    stdoutBuffer = lines.pop() ?? ''
-
-    for (const line of lines) {
-      if (line.startsWith(PIPE_PROMPT_PREFIX)) {
-        currentCwd = line.slice(PIPE_PROMPT_PREFIX.length) || currentCwd
-        const session = sessions.get(input.key)
-        if (session) session.cwd = currentCwd
-        sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
-          tabId: input.tabId,
-          cwd: currentCwd,
-          prompt: formatPipePrompt(currentCwd)
-        })
-      } else {
-        sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', `${line}\r\n`)
-      }
-    }
-  })
-  child.stderr.on('data', (data: Buffer) => {
-    sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:data', data.toString())
-  })
-  child.on('exit', (exitCode, signal) => {
-    notifyTerminalExit(input.key, {
-      exitCode: exitCode ?? 0,
-      signal: signal ?? undefined
-    })
-    sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:exit', {
-      tabId: input.tabId,
-      sessionId: input.sessionId,
-      exitCode: exitCode ?? 0,
-      signal: signal ?? undefined
-    })
-    deleteIfCurrent(input.key, input.sessionId)
-  })
-  sendIfAlive(
-    input.webContents,
-    input.tabId,
-    input.key,
-    'terminal:data',
-    '\x1b[33mLine-mode shell fallback active.\x1b[0m\r\n'
-  )
-  sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
-    tabId: input.tabId,
-    cwd: currentCwd,
-    prompt: formatPipePrompt(currentCwd)
-  })
-
-  return {
-    id: input.sessionId,
-    mode: 'pipe',
-    pid: child.pid ?? -1,
-    cwd: currentCwd,
-    shell,
-    display: (data) => sendVisibleTerminalData(input.webContents, input.tabId, input.key, data),
-    interrupt: () => interruptPipeProcess(child),
-    write: (data) => {
-      const command = data.replace(/\r?\n$/, '')
-
-      if (!command.trim()) {
-        sendIfAlive(input.webContents, input.tabId, input.key, 'terminal:prompt', {
-          tabId: input.tabId,
-          cwd: currentCwd,
-          prompt: formatPipePrompt(currentCwd)
-        })
-        return
-      }
-
-      child.stdin.write(`${command}\nprintf '\\n${PIPE_PROMPT_PREFIX}%s\\n' "$PWD"\n`)
-    },
-    resize: () => undefined,
-    clear: () => undefined,
-    kill: () => child.kill()
-  }
-}
-
 function deleteIfCurrent(key: string, sessionId: number): void {
-  if (sessions.get(key)?.id === sessionId) {
-    sessions.delete(key)
-    terminalAutomationFilterStates.delete(key)
-    invalidateConnectionSessionLiveness(key)
-  }
+  if (sessionManager.finish(key, sessionId)) invalidateConnectionSessionLiveness(key)
 }
 
 function waitForSessionExit(key: string): Promise<void> {
@@ -2197,31 +2058,13 @@ function sleep(ms: number): Promise<void> {
 }
 
 function notifyTerminalExit(key: string, event: TerminalExitNotification): void {
-  const waiters = terminalExitWaiters.get(key)
-  if (!waiters) return
-
-  terminalExitWaiters.delete(key)
-  waiters.forEach((listener) => listener(event))
+  sessionManager.notifyExit(key, event)
 }
 
 function interruptCommandSession(key: string, session: TerminalSession): void {
   if (sessions.get(key)?.id !== session.id) return
 
   session.interrupt()
-}
-
-function interruptPipeProcess(child: ChildProcessWithoutNullStreams): void {
-  if (child.killed) return
-
-  try {
-    child.kill('SIGINT')
-  } catch {
-    try {
-      child.stdin.write('\x03')
-    } catch {
-      // Best effort interruption for pipe fallback.
-    }
-  }
 }
 
 function normalizeCommandTimeout(timeoutMs: number): number {
@@ -2234,84 +2077,6 @@ function normalizeCommandTimeout(timeoutMs: number): number {
 
 export function isInteractiveCommand(data: string): boolean {
   return classifyPipeCommand(data) === 'interactive'
-}
-
-function sanitizeCommand(value: unknown): string {
-  if (typeof value !== 'string') return ''
-
-  return value.replace(/[\r\n]+/g, ' && ').trim()
-}
-
-function createCommandWrapper(command: string, startMarker: string, endMarker: string): string {
-  return [
-    `printf '\\n${startMarker}\\n'`,
-    command,
-    '__crescent_status=$?',
-    `printf '\\n${endMarker}:%s\\n' "$__crescent_status"`,
-    'unset __crescent_status'
-  ].join('\n')
-}
-
-function parseCommandBuffer(
-  buffer: string,
-  startMarker: string,
-  endMarker: string
-): { done: boolean; exitCode?: number; output: string } {
-  const normalized = stripAnsi(buffer).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  const startIndex = normalized.indexOf(startMarker)
-  const endIndex = normalized.indexOf(endMarker)
-
-  if (startIndex === -1 || endIndex === -1) return { done: false, output: '' }
-
-  const statusMatch = normalized
-    .slice(endIndex)
-    .match(new RegExp(`${escapeRegExp(endMarker)}:(\\d+)`))
-  if (!statusMatch) return { done: false, output: '' }
-
-  return {
-    done: true,
-    exitCode: Number(statusMatch[1]),
-    output: removeAutomationNoise(
-      normalized.slice(startIndex + startMarker.length, endIndex)
-    ).trim()
-  }
-}
-
-function extractPartialCommandOutput(buffer: string, startMarker: string): string {
-  const normalized = stripAnsi(buffer).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  const startIndex = normalized.indexOf(startMarker)
-
-  if (startIndex === -1) return removeAutomationNoise(normalized).trim()
-  return removeAutomationNoise(normalized.slice(startIndex + startMarker.length)).trim()
-}
-
-function stripAnsi(value: string): string {
-  let output = ''
-
-  for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) !== 27) {
-      output += value[index]
-      continue
-    }
-
-    index += 1
-    if (value[index] !== '[') {
-      index -= 1
-      continue
-    }
-
-    while (index + 1 < value.length) {
-      index += 1
-      const code = value.charCodeAt(index)
-      if (code >= 64 && code <= 126) break
-    }
-  }
-
-  return output
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function sanitizeDimension(value: unknown, fallback: number): number {
@@ -2384,42 +2149,15 @@ function appendTerminalContext(key: string, data: string): void {
 }
 
 function flushVisibleTerminalData(key: string): void {
-  const pending = pendingVisibleTerminalData.get(key)
-  if (!pending) return
-  pendingVisibleTerminalData.delete(key)
-  clearTimeout(pending.timer)
-  const data = pending.chunks.join('')
-  if (!data) return
-  safeWebContentsSend(pending.webContents, 'terminal:data', { tabId: pending.tabId, data })
+  visibleTerminalEvents.flush(key)
 }
-
 function sendVisibleTerminalData(
   webContents: WebContents,
   tabId: string,
   key: string,
   data: string
 ): void {
-  if (!data) return
-
-  appendTerminalContext(key, data)
-
-  const existing = pendingVisibleTerminalData.get(key)
-  if (existing) {
-    existing.chunks.push(data)
-    existing.webContents = webContents
-    existing.tabId = tabId
-    return
-  }
-
-  const timer = setTimeout(() => {
-    flushVisibleTerminalData(key)
-  }, TERMINAL_DATA_COALESCE_MS)
-  pendingVisibleTerminalData.set(key, {
-    webContents,
-    tabId,
-    chunks: [data],
-    timer
-  })
+  visibleTerminalEvents.send(webContents, tabId, key, data)
 }
 
 function sendIfAlive(
@@ -2492,204 +2230,6 @@ function suppressAutomationEcho(key: string, data: string): string {
  * compacted command is also matched as a trailing segment. The command itself
  * is displayed once via `session.display`, which is why the echo is dropped.
  */
-export function isAutomationEchoLine(line: string, command: string): boolean {
-  const compactEcho = compactForEcho(command)
-  if (!compactEcho) return false
-
-  const stripped = stripPromptPrefix(line.trim())
-  return (
-    Boolean(stripped && compactForEcho(stripped) === compactEcho) ||
-    compactForEcho(line).endsWith(compactEcho)
-  )
-}
-
-function compactForEcho(value: string): string {
-  return stripAnsi(value).replace(/\s+/g, '')
-}
-
-function filterAutomationControlLines(data: string): string {
-  const parts = removeAutomationNoise(data).split(/(\r?\n)/)
-  let output = ''
-  let skippedControlLine = false
-
-  for (const part of parts) {
-    if (/^\r?\n$/.test(part)) {
-      if (skippedControlLine) {
-        skippedControlLine = false
-        continue
-      }
-      output += part
-      continue
-    }
-
-    if (isAutomationControlOutput(part)) {
-      skippedControlLine = true
-      continue
-    }
-
-    skippedControlLine = false
-    output += part
-  }
-
-  return output
-}
-
-export function filterAutomationControlOutputWithState(
-  data: string,
-  state: TerminalAutomationFilterState
-): string {
-  state.pending += removeAutomationNoise(data)
-
-  if (state.phase === 'before-start') {
-    const startIndex = state.pending.indexOf(state.startMarker)
-    if (startIndex === -1) {
-      state.pending = keepMarkerTail(state.pending, state.startMarker)
-      return ''
-    }
-
-    state.pending = state.pending.slice(startIndex + state.startMarker.length)
-    state.pending = state.pending.replace(/^(\r\n|\n|\r)/, '')
-    state.phase = 'body'
-  }
-
-  const endIndex = state.pending.indexOf(state.endMarker)
-  if (endIndex !== -1) {
-    const beforeEndMarker = state.pending.slice(0, endIndex)
-    const afterEndMarker = state.pending.slice(endIndex)
-    const afterEndLine = afterEndMarker.replace(
-      new RegExp(`${escapeRegExp(state.endMarker)}:?\\d*\\r?\\n?`),
-      ''
-    )
-    state.pending = ''
-    return stripAutomationDisplayNoise(beforeEndMarker) + filterAutomationControlLines(afterEndLine)
-  }
-
-  const holdLength = Math.max(state.endMarker.length - 1, 0)
-  if (hasUnterminatedSecretPrompt(state.pending)) {
-    const output = state.pending
-    state.pending = ''
-    return stripAutomationDisplayNoise(output)
-  }
-
-  if (state.pending.length <= holdLength) return ''
-
-  const safeLength = state.pending.length - holdLength
-  const candidate = state.pending.slice(0, safeLength)
-  const lastNewlineIndex = Math.max(candidate.lastIndexOf('\n'), candidate.lastIndexOf('\r'))
-  if (lastNewlineIndex === -1) return ''
-
-  const emitLength = lastNewlineIndex + 1
-  const output = state.pending.slice(0, emitLength)
-  state.pending = state.pending.slice(emitLength)
-
-  return stripAutomationDisplayNoise(output)
-}
-
-function keepMarkerTail(value: string, marker: string): string {
-  const maxLength = Math.max(marker.length - 1, 0)
-  if (value.length <= maxLength) return value
-
-  return value.slice(-maxLength)
-}
-
-function stripAutomationDisplayNoise(value: string): string {
-  return value
-    .split(/(\r?\n|\r)/)
-    .filter((part) => !isAutomationControlOutput(part))
-    .map((part) => (/^\r?\n$|^\r$/.test(part) ? part : stripPromptPrefix(part)))
-    .join('')
-}
-
-export function formatReadableCommandInput(command: string): string {
-  return `${command.replace(/\r?\n/g, '\r\n')}\r\n`
-}
-
-function stripPromptPrefix(value: string): string {
-  return value
-    .replace(/^\s*(?:[\w.-]+@[\w.-]+(?:\[[^\]]+\])?:[^\r\n#$>]*[#$]|[$#]|➜\s+\S+)\s+/, '')
-    .replace(/^\s*(?:>\s*)+/, '')
-}
-
-function formatReadableCommandResult(result: TerminalCommandExecutionResult): string {
-  if (result.ok && !result.timedOut && !result.interrupted && !result.terminalExited) return ''
-
-  const status = result.interrupted
-    ? 'interrupted (Ctrl+C)'
-    : result.timedOut
-      ? 'timeout'
-      : result.terminalExited
-        ? `terminal exited: ${result.exitCode ?? 'unknown'}`
-        : `command failed: exit code ${result.exitCode ?? 'unknown'}`
-
-  return `\r\n\x1b[33m[Crescent] ${status}\x1b[0m\r\n`
-}
-
-function formatPipePrompt(cwd: string): string {
-  const username = userInfo().username || 'user'
-  const host = hostname() || 'localhost'
-  const home = homedir()
-  const displayCwd =
-    cwd === home ? '~' : cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd
-
-  return `\x1b[38;5;45m${username}@${host}\x1b[0m:\x1b[38;5;111m${displayCwd}\x1b[0m $ `
-}
-
-function isAutomationControlOutput(value: string): boolean {
-  const normalized = stripAnsi(value)
-
-  return (
-    normalized.includes('__CRESCENT_CMD_START_') ||
-    normalized.includes('__CRESCENT_CMD_END_') ||
-    normalized.includes('__crescent_script=$(mktemp') ||
-    normalized.includes('__crescent_encoded=') ||
-    normalized.includes('__crescent_status=') ||
-    normalized.includes('unset __crescent_status') ||
-    /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized) ||
-    /printf\s+%s\s+'[A-Za-z0-9+/=]{80,}'/.test(normalized) ||
-    /base64\s+-[dD]\s+>/.test(normalized) ||
-    /^[A-Za-z0-9+/=]{100,}$/.test(normalized.trim())
-  )
-}
-
-function removeAutomationNoise(value: string): string {
-  const parts = value.split(/(\r\n|\n|\r)/)
-  let output = ''
-  let skippedLine = false
-
-  for (const part of parts) {
-    if (/^(\r\n|\n|\r)$/.test(part)) {
-      if (!skippedLine) output += part
-      skippedLine = false
-      continue
-    }
-
-    if (
-      /_zsh_autosuggest_highlight_apply:\d+: POSTDISPLAY: parameter not set/.test(stripAnsi(part))
-    ) {
-      skippedLine = true
-      continue
-    }
-
-    output += part
-  }
-
-  return output
-}
-
-function hasShellContinuationPrompt(value: string): boolean {
-  const normalized = stripAnsi(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  const tail = normalized.slice(-800)
-  const lines = tail.split('\n')
-  const lastLine = lines[lines.length - 1] ?? ''
-  const promptPattern =
-    /^\s*(>|quote>|dquote>|bquote>|cmdand\s+cursh\s+cmdor\s+quote>|heredoc>)\s*$/
-
-  if (promptPattern.test(lastLine)) return true
-
-  const previousLine = lines[lines.length - 2] ?? ''
-  return promptPattern.test(previousLine) && lastLine.trim() === ''
-}
-
 function normalizeTabId(tabId: string | undefined): string {
   return tabId?.trim() ?? ''
 }

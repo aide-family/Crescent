@@ -1,11 +1,15 @@
 import {
+  AGENT_THINKING_LEVELS,
+  normalizeThinkingLevel,
+  type AgentThinkingLevel
+} from '../../../shared/agent-thinking'
+import {
   BotIcon,
   CheckIcon,
   FileTextIcon,
   PencilIcon,
   PlusIcon,
   PowerIcon,
-  SettingsIcon,
   Trash2Icon,
   XIcon
 } from 'lucide-react'
@@ -23,8 +27,7 @@ import {
   SheetContent,
   SheetDescription,
   SheetHeader,
-  SheetTitle,
-  SheetTrigger
+  SheetTitle
 } from '@renderer/components/ui/sheet'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
@@ -74,13 +77,13 @@ export type OpenApiProfilePatch = Partial<{
   toolDenyList: string[]
 }>
 
-const LOG_LEVEL_LABEL_KEYS: Record<SystemLogLevel, keyof Dictionary['settings']> = {
+const LOG_LEVEL_LABEL_KEYS = {
   off: 'logLevelOff',
   debug: 'logLevelDebug',
   info: 'logLevelInfo',
   warn: 'logLevelWarn',
   error: 'logLevelError'
-}
+} as const satisfies Record<SystemLogLevel, keyof Dictionary['settings']>
 
 export interface SettingsSheetProps {
   open: boolean
@@ -114,6 +117,7 @@ export interface SettingsSheetProps {
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onAgentStyleChange: (style: AgentStyle) => void
+  onThinkingLevelChange: (level: AgentThinkingLevel) => void
   onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
@@ -170,6 +174,7 @@ export function SettingsSheet({
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
+  onThinkingLevelChange,
   onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
@@ -208,17 +213,11 @@ export function SettingsSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t.common.settings}
-          title={t.common.settings}
-        >
-          <SettingsIcon aria-hidden="true" />
-        </Button>
-      </SheetTrigger>
       <SheetContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          document.getElementById('settings-trigger')?.focus()
+        }}
         side="right"
         className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
       >
@@ -432,6 +431,27 @@ export function SettingsSheet({
                   </SelectContent>
                 </Select>
                 <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="thinking-level">{t.settings.thinkingLevel}</FieldLabel>
+                <Select
+                  value={normalizeThinkingLevel(config.thinkingLevel)}
+                  onValueChange={(value) => onThinkingLevelChange(normalizeThinkingLevel(value))}
+                >
+                  <SelectTrigger id="thinking-level" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {AGENT_THINKING_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {t.settings.thinkingLevels[level]}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{t.settings.thinkingLevelHint}</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="log-level">{t.settings.logLevel}</FieldLabel>

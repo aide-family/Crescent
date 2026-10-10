@@ -1,4 +1,5 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { rendererIpc } from './ipc-security'
+import { BrowserWindow } from 'electron'
 import { readWhaleMonitorConfig, writeWhaleMonitorConfig } from './crescent-store'
 import type {
   WhaleModelsSnapshot,
@@ -20,8 +21,8 @@ let inFlightModels: Promise<WhaleModelsSnapshot> | undefined
 const activeControllers = new Set<AbortController>()
 
 export function registerWhaleMonitorIpc(): void {
-  ipcMain.handle('whale-monitor:get-snapshot', () => getWhaleMonitorSnapshot())
-  ipcMain.handle('whale-monitor:save-settings', (_event, input: unknown) => {
+  rendererIpc.handle('whale-monitor:get-snapshot', () => getWhaleMonitorSnapshot())
+  rendererIpc.handle('whale-monitor:save-settings', (_event, input: unknown) => {
     const current = readWhaleMonitorConfig()
     const validated = validateSettingsInput(input, current)
     const next = writeWhaleMonitorConfig({
@@ -33,18 +34,18 @@ export function registerWhaleMonitorIpc(): void {
     broadcastSnapshot()
     return toSettings(next)
   })
-  ipcMain.handle('whale-monitor:refresh-usage', async (_event, range: unknown) => {
+  rendererIpc.handle('whale-monitor:refresh-usage', async (_event, range: unknown) => {
     const normalized = validateDateRange(range)
     const result = await fetchUsage(normalized.startDate, normalized.endDate)
     broadcastSnapshot()
     return result
   })
-  ipcMain.handle('whale-monitor:refresh-models', async () => {
+  rendererIpc.handle('whale-monitor:refresh-models', async () => {
     const result = await fetchModels()
     broadcastSnapshot()
     return result
   })
-  ipcMain.handle('whale-monitor:set-position', (_event, position: unknown) => {
+  rendererIpc.handle('whale-monitor:set-position', (_event, position: unknown) => {
     if (!isRecord(position)) return { ok: false }
     const x = typeof position.x === 'number' ? position.x : Number.NaN
     const y = typeof position.y === 'number' ? position.y : Number.NaN

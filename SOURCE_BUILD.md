@@ -17,6 +17,8 @@ npm run dev
 
 `npm ci` 会按 `package-lock.json` 安装依赖并准备 Electron 原生模块。之后每次开发启动运行 `npm run dev` 即可。应用可以启动和浏览；要使用 AI Agent，还需要在应用设置中配置模型供应商和 API 凭据。
 
+Pi 三个依赖统一使用官方 1.0.3，按 `package-lock.json` 安装；已移除 1.0.0 的安全重打包归档。干净安装与依赖审计记录见 [本地实施记录](Document/IMPLEMENTATION_2026-10-05.md)。
+
 ## 编译和桌面安装包
 
 ```bash

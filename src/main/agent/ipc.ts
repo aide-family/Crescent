@@ -1,16 +1,21 @@
+import { promises as fs } from 'fs'
+import {
+  importOpenApiDocument,
+  savePastedAttachment,
+  requestMicrophonePermission,
+  transcribeAudioAttachment,
+  saveRenderedImage,
+  saveSvgAsPng,
+  pickSavePath,
+  writeDataUrlFile
+} from './artifacts'
+import { publicAgentConfig, mergeAgentSecrets } from '../renderer-secrets'
+import { rendererIpc } from '../ipc-security'
 import { normalizeExecutionMode } from '../../shared/execution-plan'
 import { resolvePlanApproval, stopPlansForTab } from './change-plan'
-import { promises as fs } from 'fs'
-import { basename, extname, resolve } from 'path'
+import { basename, resolve } from 'path'
 
-import {
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  nativeImage,
-  type OpenDialogOptions,
-  type WebContents
-} from 'electron'
+import { BrowserWindow, dialog, type OpenDialogOptions, type WebContents } from 'electron'
 
 import { listEditableInstructionFiles, saveEditableInstructionFile } from './instruction-files'
 import { AgentMemory } from './memory'
@@ -82,7 +87,7 @@ import {
   normalizeAgentConfig
 } from '../crescent-store'
 import { loadSshConfigConnections } from '../connections/ssh-config'
-import { getCrescentAttachmentsDir, getCrescentWikiDir } from '../crescent-paths'
+import { getCrescentWikiDir } from '../crescent-paths'
 import { setSystemLogLevel } from '../logging'
 import { traceStartup } from '../startup-trace'
 import type {
@@ -98,7 +103,6 @@ import type {
   CommandApprovalDecision,
   PastedAttachmentInput,
   TranscribeAudioInput,
-  TranscribeAudioResult,
   TranscriptionSupportResult,
   WikiSaveInput
 } from './types'
@@ -107,32 +111,32 @@ const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 const MAX_COMPACT_INSTRUCTIONS = 2_000
 
 export function registerAgentIpc(): void {
-  ipcMain.handle('agent:get-config', () => {
+  rendererIpc.handle('agent:get-config', () => {
     const start = traceStartup('ipc:agent:get-config')
     const config = readAgentConfig()
     traceStartup('ipc:agent:get-config:done', start)
-    return config
+    return publicAgentConfig(config)
   })
 
-  ipcMain.handle('agent:get-models', async () => {
+  rendererIpc.handle('agent:get-models', async () => {
     const start = traceStartup('ipc:agent:get-models')
     const models = await listPiAvailableModels(readAgentConfig())
     traceStartup('ipc:agent:get-models:done', start)
     return models
   })
 
-  ipcMain.handle('agent:list-skills', () => {
+  rendererIpc.handle('agent:list-skills', () => {
     const config = readAgentConfig()
     return listAgentSkills(config.skillRoot, {
       loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
     })
   })
 
-  ipcMain.handle('agent:search-skills', (_, query: string) => {
+  rendererIpc.handle('agent:search-skills', (_, query: string) => {
     return searchAgentSkills(query ?? '')
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:install-skill',
     (_, payload: { installSource?: string; installSkill?: string }) => {
       return installAgentSkill({
@@ -143,7 +147,7 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:start-skill-install',
     (event, payload: { installSource?: string; installSkill?: string }) => {
       const installId = `${Date.now()}_${Math.random().toString(36).slice(2)}`
@@ -189,7 +193,7 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:cancel-skill-install', (_, installId: string) => {
+  rendererIpc.handle('agent:cancel-skill-install', (_, installId: string) => {
     const session = activeSkillInstalls.get(installId)
     if (!session) return { ok: false }
 
@@ -197,28 +201,28 @@ export function registerAgentIpc(): void {
     return { ok: true }
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:import-skill',
     (event, payload?: { sourcePath?: string; overwrite?: boolean }) => {
       return importAgentSkillsFromDialog(event.sender, payload)
     }
   )
 
-  ipcMain.handle('agent:delete-skill', (_, path: string) => {
+  rendererIpc.handle('agent:delete-skill', (_, path: string) => {
     const config = readAgentConfig()
     return deleteAgentSkill(path ?? '', config.skillRoot, {
       loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
     })
   })
 
-  ipcMain.handle('agent:get-skill-content', (_, path: string) => {
+  rendererIpc.handle('agent:get-skill-content', (_, path: string) => {
     const config = readAgentConfig()
     return readAgentSkillContent(path ?? '', config.skillRoot, {
       loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
     })
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:get-catalog-skill-content',
     (_, payload: { installSource?: string; installSkill?: string; name?: string }) => {
       return readCatalogSkillContent(
@@ -232,7 +236,7 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:generate-sop', async (_, payload: AgentGenerateSopInput) => {
+  rendererIpc.handle('agent:generate-sop', async (_, payload: AgentGenerateSopInput) => {
     return generateAndSaveSop(
       {
         summary: payload?.summary ?? '',
@@ -246,25 +250,26 @@ export function registerAgentIpc(): void {
     )
   })
 
-  ipcMain.handle('agent:reload-runtime', async (_, payload?: { sessionKey?: string }) => {
+  rendererIpc.handle('agent:reload-runtime', async (event, payload?: { sessionKey?: string }) => {
     const sessionKey = typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : ''
     return reloadCrescentRuntime({
+      ownerId: event.sender.id,
       sessionKey: sessionKey || undefined,
       config: readAgentConfig()
     })
   })
 
-  ipcMain.handle('agent:handoff-status', (event, payload: unknown) => {
+  rendererIpc.handle('agent:handoff-status', (event, payload: unknown) => {
     if (!validHandoffSession(payload)) return { available: false, error: 'invalid' }
     return getHostedHandoffStatus(payload, event.sender.id)
   })
 
-  ipcMain.handle('agent:generate-handoff', (event, payload: unknown) => {
+  rendererIpc.handle('agent:generate-handoff', (event, payload: unknown) => {
     if (!validHandoffInput(payload)) return { ok: false, error: 'invalid' }
     return generateHandoffForHostedSession(payload, readAgentConfig(), event.sender)
   })
 
-  ipcMain.handle('agent:cancel-handoff', (event, payload: unknown) => {
+  rendererIpc.handle('agent:cancel-handoff', (event, payload: unknown) => {
     if (
       !validHandoffSession(payload) ||
       !validHandoffRequestId((payload as AgentCancelHandoffInput).requestId)
@@ -273,7 +278,7 @@ export function registerAgentIpc(): void {
     return cancelHostedHandoff(payload as AgentCancelHandoffInput, event.sender.id)
   })
 
-  ipcMain.handle('agent:compact', async (event, payload?: AgentCompactInput) => {
+  rendererIpc.handle('agent:compact', async (event, payload?: AgentCompactInput) => {
     const sessionKey =
       (typeof payload?.sessionKey === 'string' ? payload.sessionKey.trim() : '') ||
       (typeof payload?.tabId === 'string' ? payload.tabId.trim() : '')
@@ -285,6 +290,7 @@ export function registerAgentIpc(): void {
     const tabId = typeof payload?.tabId === 'string' ? payload.tabId.trim() : sessionKey
 
     return compactHostedSession({
+      ownerId: event.sender.id,
       sessionKey,
       tabId,
       instructions,
@@ -298,7 +304,7 @@ export function registerAgentIpc(): void {
     })
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:generate-capture-draft',
     async (_, payload: AgentGenerateCaptureDraftInput) => {
       const kind = payload?.kind === 'skill' ? 'skill' : 'sop'
@@ -319,34 +325,37 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:commit-capture-draft', async (_, payload: AgentCommitCaptureDraftInput) => {
-    const kind = payload?.kind === 'skill' ? 'skill' : 'sop'
-    return commitCaptureDraft(
-      {
-        kind,
-        title: typeof payload?.title === 'string' ? payload.title : '',
-        content: typeof payload?.content === 'string' ? payload.content : '',
-        skillName: typeof payload?.skillName === 'string' ? payload.skillName : undefined,
-        overwrite: Boolean(payload?.overwrite)
-      },
-      { skillRoot: readAgentConfig().skillRoot }
-    )
-  })
+  rendererIpc.handle(
+    'agent:commit-capture-draft',
+    async (_, payload: AgentCommitCaptureDraftInput) => {
+      const kind = payload?.kind === 'skill' ? 'skill' : 'sop'
+      return commitCaptureDraft(
+        {
+          kind,
+          title: typeof payload?.title === 'string' ? payload.title : '',
+          content: typeof payload?.content === 'string' ? payload.content : '',
+          skillName: typeof payload?.skillName === 'string' ? payload.skillName : undefined,
+          overwrite: Boolean(payload?.overwrite)
+        },
+        { skillRoot: readAgentConfig().skillRoot }
+      )
+    }
+  )
 
-  ipcMain.handle('agent:list-instruction-files', () => {
+  rendererIpc.handle('agent:list-instruction-files', () => {
     return listEditableInstructionFiles()
   })
 
-  ipcMain.handle('agent:list-wiki-documents', () => {
+  rendererIpc.handle('agent:list-wiki-documents', () => {
     return listWikiDocuments()
   })
 
-  ipcMain.handle('agent:get-wiki-directory', () => ({
+  rendererIpc.handle('agent:get-wiki-directory', () => ({
     path: getActiveWikiDirectory(),
     isDefault: !readWikiDirectory()
   }))
 
-  ipcMain.handle('agent:choose-wiki-directory', async (event) => {
+  rendererIpc.handle('agent:choose-wiki-directory', async (event) => {
     const currentDirectory = getActiveWikiDirectory()
     const options: OpenDialogOptions = {
       title: 'Choose knowledge base folder',
@@ -372,28 +381,28 @@ export function registerAgentIpc(): void {
     return { ok: true, directory: { path: directory, isDefault: false } }
   })
 
-  ipcMain.handle('agent:reset-wiki-directory', () => {
+  rendererIpc.handle('agent:reset-wiki-directory', () => {
     writeWikiDirectory(undefined)
     return { path: getCrescentWikiDir(), isDefault: true }
   })
 
-  ipcMain.handle('agent:get-wiki-document', (_, id: string) => {
+  rendererIpc.handle('agent:get-wiki-document', (_, id: string) => {
     return getWikiDocument(id ?? '')
   })
 
-  ipcMain.handle('agent:save-wiki-document', (_, input: WikiSaveInput) => {
+  rendererIpc.handle('agent:save-wiki-document', (_, input: WikiSaveInput) => {
     return saveWikiDocument(input)
   })
 
-  ipcMain.handle('agent:delete-wiki-document', (_, id: string) => {
+  rendererIpc.handle('agent:delete-wiki-document', (_, id: string) => {
     return deleteWikiDocument(id ?? '')
   })
 
-  ipcMain.handle('agent:search-wiki-documents', (_, query: string) => {
+  rendererIpc.handle('agent:search-wiki-documents', (_, query: string) => {
     return searchWikiDocuments(query ?? '', 12, 6000)
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:pick-path-reference',
     async (event, payload: { kind?: AgentPathReference['kind'] }) => {
       const kind = payload?.kind === 'directory' ? 'directory' : 'file'
@@ -402,23 +411,23 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:import-openapi-document', async (event) => {
+  rendererIpc.handle('agent:import-openapi-document', async (event) => {
     return importOpenApiDocument(event.sender)
   })
 
-  ipcMain.handle('agent:save-pasted-attachment', async (_, payload: PastedAttachmentInput) => {
+  rendererIpc.handle('agent:save-pasted-attachment', async (_, payload: PastedAttachmentInput) => {
     return savePastedAttachment(payload)
   })
 
-  ipcMain.handle('agent:request-microphone-permission', async () => {
+  rendererIpc.handle('agent:request-microphone-permission', async () => {
     return requestMicrophonePermission()
   })
 
-  ipcMain.handle('agent:transcribe-audio', async (_, payload: TranscribeAudioInput) => {
+  rendererIpc.handle('agent:transcribe-audio', async (_, payload: TranscribeAudioInput) => {
     return transcribeAudioAttachment(payload)
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:check-transcription-support',
     async (
       _,
@@ -437,13 +446,13 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:save-rendered-image',
     async (event, payload: { dataUrl?: string; defaultPath?: string }) => {
       return saveRenderedImage(event.sender, payload)
     }
   )
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:save-svg-as-png',
     async (
       event,
@@ -452,7 +461,7 @@ export function registerAgentIpc(): void {
       return saveSvgAsPng(event.sender, payload)
     }
   )
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:pick-save-path',
     async (
       event,
@@ -461,14 +470,14 @@ export function registerAgentIpc(): void {
       return pickSavePath(event.sender, payload)
     }
   )
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:write-data-url-file',
-    async (_, payload: { path?: string; dataUrl?: string }) => {
-      return writeDataUrlFile(payload)
+    async (event, payload: { path?: string; dataUrl?: string }) => {
+      return writeDataUrlFile(event.sender.id, payload)
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:save-instruction-file',
     (_, payload: { name?: string; content?: string }) => {
       return saveEditableInstructionFile({
@@ -478,23 +487,17 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:save-config', (_, config: Partial<AgentConfig>) => {
-    const nextConfig = normalizeAgentConfig({
-      ...readAgentConfig(),
-      ...config
-    })
+  rendererIpc.handle('agent:save-config', (_, config: Partial<AgentConfig>) => {
+    const nextConfig = normalizeAgentConfig(mergeAgentSecrets(config, readAgentConfig()))
 
     const saved = writeAgentConfig(nextConfig)
     setSystemLogLevel(saved.logLevel ?? 'info')
-    return saved
+    return publicAgentConfig(saved)
   })
 
-  ipcMain.handle('agent:validate-config', async (_, config: Partial<AgentConfig>) => {
+  rendererIpc.handle('agent:validate-config', async (_, config: Partial<AgentConfig>) => {
     const start = traceStartup('ipc:agent:validate-config')
-    const nextConfig = normalizeAgentConfig({
-      ...readAgentConfig(),
-      ...config
-    })
+    const nextConfig = normalizeAgentConfig(mergeAgentSecrets(config, readAgentConfig()))
 
     try {
       await validateModel(nextConfig)
@@ -527,53 +530,59 @@ export function registerAgentIpc(): void {
     }
   })
 
-  ipcMain.handle('agent:cancel', async (_, runId: string) => {
+  rendererIpc.handle('agent:cancel', async (event, runId: string) => {
     const normalizedRunId = typeof runId === 'string' ? runId.trim() : ''
     if (!normalizedRunId) return { ok: false }
-    const ok = await cancelPiAgentRun(normalizedRunId)
+    const ok = await cancelPiAgentRun(normalizedRunId, event.sender.id)
     return { ok }
   })
 
-  ipcMain.handle('agent:reject-approvals-for-tab', (event, tabId: string) => {
+  rendererIpc.handle('agent:reject-approvals-for-tab', (event, tabId: string) => {
     const normalized = typeof tabId === 'string' ? tabId.trim() : ''
     if (normalized) {
       stopPlansForTab(normalized, event.sender.id)
-      rejectPendingApprovalsForTab(normalized, 'Session was closed.')
+      rejectPendingApprovalsForTab(normalized, 'Session was closed.', event.sender.id)
     }
     return { ok: true }
   })
 
-  ipcMain.handle('agent:supplement', async (_, payload: { runId?: string; input?: string }) => {
-    const runId = payload?.runId?.trim()
-    const input = payload?.input?.trim()
-    if (!runId || !input) return { ok: false }
-    const ok = await steerPiAgentRun(runId, input)
-    return { ok }
-  })
-
-  ipcMain.handle('agent:resolve-plan-approval', (event, decision: unknown) =>
-    resolvePlanApproval(event.sender.id, decision)
-  )
-
-  ipcMain.handle('agent:resolve-command-approval', (_, decision: CommandApprovalDecision) => {
-    return resolveCommandApprovalDecision(decision)
-  })
-
-  ipcMain.handle(
-    'agent:ack-subterminal-opened',
-    (_, payload: { tabId?: string; ok?: boolean; error?: string }) => {
-      return resolveAgentSubterminalReady(payload)
+  rendererIpc.handle(
+    'agent:supplement',
+    async (event, payload: { runId?: string; input?: string }) => {
+      const runId = payload?.runId?.trim()
+      const input = payload?.input?.trim()
+      if (!runId || !input) return { ok: false }
+      const ok = await steerPiAgentRun(runId, input, event.sender.id)
+      return { ok }
     }
   )
 
-  ipcMain.handle('agent:generate-command', async () => {
+  rendererIpc.handle('agent:resolve-plan-approval', (event, decision: unknown) =>
+    resolvePlanApproval(event.sender.id, decision)
+  )
+
+  rendererIpc.handle(
+    'agent:resolve-command-approval',
+    (event, decision: CommandApprovalDecision) => {
+      return resolveCommandApprovalDecision(decision, event.sender.id)
+    }
+  )
+
+  rendererIpc.handle(
+    'agent:ack-subterminal-opened',
+    (event, payload: { tabId?: string; ok?: boolean; error?: string }) => {
+      return resolveAgentSubterminalReady(payload, event.sender.id)
+    }
+  )
+
+  rendererIpc.handle('agent:generate-command', async () => {
     return {
       ok: false,
       error: 'Command generation was removed. Use the Pi coding agent chat instead.'
     }
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'agent:resolve-connection-intent',
     async (_, payload: AgentConnectionIntentInput): Promise<AgentConnectionIntentResult> => {
       const input = payload?.input?.trim()
@@ -622,7 +631,7 @@ export function registerAgentIpc(): void {
     }
   )
 
-  ipcMain.handle('agent:run', async (event, payload: AgentRunInput) => {
+  rendererIpc.handle('agent:run', async (event, payload: AgentRunInput) => {
     const input = payload?.input?.trim()
     const runId =
       payload?.runId?.trim() || `run-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -774,346 +783,6 @@ async function importAgentSkillsFromDialog(
     })
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-async function importOpenApiDocument(
-  webContents: WebContents
-): Promise<{ ok: boolean; path?: string; canceled?: boolean }> {
-  const options: OpenDialogOptions = {
-    title: 'Import OpenAPI document',
-    properties: ['openFile'],
-    filters: [
-      { name: 'OpenAPI', extensions: ['json', 'yaml', 'yml'] },
-      { name: 'All files', extensions: ['*'] }
-    ]
-  }
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const selection = browserWindow
-    ? await dialog.showOpenDialog(browserWindow, options)
-    : await dialog.showOpenDialog(options)
-
-  if (selection.canceled || !selection.filePaths[0]) {
-    return { ok: false, canceled: true }
-  }
-
-  return { ok: true, path: resolve(selection.filePaths[0]) }
-}
-
-async function savePastedAttachment(input: PastedAttachmentInput): Promise<AgentPathReference> {
-  const attachmentDir = getCrescentAttachmentsDir()
-  await fs.mkdir(attachmentDir, { recursive: true })
-
-  const fallbackName = input.mimeType?.startsWith('image/')
-    ? 'pasted-image'
-    : input.mimeType?.startsWith('audio/')
-      ? 'voice-input'
-      : 'pasted-file'
-  const safeName = sanitizeAttachmentName(input.name || fallbackName)
-  const extension = extname(safeName) || extensionFromMimeType(input.mimeType)
-  const baseName = sanitizeAttachmentName(
-    safeName.slice(0, safeName.length - extname(safeName).length)
-  )
-  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${baseName || fallbackName}${extension}`
-  const path = resolve(attachmentDir, filename)
-
-  await fs.writeFile(path, Buffer.from(input.base64 ?? '', 'base64'))
-
-  return {
-    id: `file:${path}`,
-    kind: 'file',
-    path,
-    name: basename(path) || path
-  }
-}
-
-async function requestMicrophonePermission(): Promise<{ ok: boolean; granted: boolean }> {
-  if (process.platform !== 'darwin') return { ok: true, granted: true }
-
-  const { systemPreferences } = await import('electron')
-  const status = systemPreferences.getMediaAccessStatus('microphone')
-  if (status === 'granted') return { ok: true, granted: true }
-  if (status === 'denied' || status === 'restricted') return { ok: true, granted: false }
-
-  const granted = await systemPreferences.askForMediaAccess('microphone')
-  return { ok: true, granted }
-}
-
-async function transcribeAudioAttachment(
-  input: TranscribeAudioInput
-): Promise<TranscribeAudioResult> {
-  const base64 = input?.base64?.trim() ?? ''
-  if (!base64) return { ok: false, error: 'Audio data is empty.' }
-
-  try {
-    const saved = await savePastedAttachment({
-      name: input.name || 'voice-input.webm',
-      mimeType: input.mimeType || 'audio/webm',
-      base64
-    })
-    const text = (
-      await new AgentBrain(readAgentConfig()).transcribeAudio({
-        path: saved.path,
-        language: input.language
-      })
-    ).trim()
-    if (!text) return { ok: false, error: 'Transcription returned empty text.', path: saved.path }
-    return { ok: true, text, path: saved.path }
-  } catch (error) {
-    return {
-      ok: false,
-      error: formatTranscriptionError(error)
-    }
-  }
-}
-
-function formatTranscriptionError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  const status =
-    error && typeof error === 'object' && 'status' in error
-      ? Number((error as { status?: number }).status)
-      : undefined
-
-  if (status === 404 || /404|Not Found/i.test(message)) {
-    return 'Current model provider does not support audio transcription (/audio/transcriptions). Use an OpenAI-compatible provider that exposes Whisper, or rely on system speech recognition.'
-  }
-
-  // OpenAI SDK often includes "404 ... no body" / empty response text.
-  if (/no body/i.test(message)) {
-    return `${message} (provider likely missing /audio/transcriptions)`
-  }
-
-  return message
-}
-
-async function saveRenderedImage(
-  webContents: WebContents,
-  input: { dataUrl?: string; defaultPath?: string }
-): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> {
-  const image = nativeImage.createFromDataURL(input.dataUrl ?? '')
-  if (image.isEmpty()) return { ok: false, error: 'Image data is empty.' }
-
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const selection = browserWindow
-    ? await dialog.showSaveDialog(browserWindow, {
-        defaultPath: input.defaultPath || 'crescent-mermaid.png',
-        filters: [{ name: 'PNG image', extensions: ['png'] }]
-      })
-    : await dialog.showSaveDialog({
-        defaultPath: input.defaultPath || 'crescent-mermaid.png',
-        filters: [{ name: 'PNG image', extensions: ['png'] }]
-      })
-
-  if (selection.canceled || !selection.filePath) return { ok: false, canceled: true }
-
-  await fs.writeFile(resolve(selection.filePath), image.toPNG())
-  return { ok: true, path: resolve(selection.filePath) }
-}
-
-async function saveSvgAsPng(
-  webContents: WebContents,
-  input: { svg?: string; defaultPath?: string; width?: number; height?: number }
-): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> {
-  const svg = input.svg?.trim() ?? ''
-  if (!svg.includes('<svg')) return { ok: false, error: 'SVG content is empty.' }
-
-  const width = Math.max(1, Math.ceil(input.width || 1200))
-  const height = Math.max(1, Math.ceil(input.height || 800))
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const selection = browserWindow
-    ? await dialog.showSaveDialog(browserWindow, {
-        defaultPath: input.defaultPath || 'crescent-mermaid.png',
-        filters: [{ name: 'PNG image', extensions: ['png'] }]
-      })
-    : await dialog.showSaveDialog({
-        defaultPath: input.defaultPath || 'crescent-mermaid.png',
-        filters: [{ name: 'PNG image', extensions: ['png'] }]
-      })
-
-  if (selection.canceled || !selection.filePath) return { ok: false, canceled: true }
-
-  const maxCaptureSide = 8192
-  const scale = Math.min(1, maxCaptureSide / width, maxCaptureSide / height)
-  const captureWidth = Math.max(1, Math.ceil(width * scale))
-  const captureHeight = Math.max(1, Math.ceil(height * scale))
-  const exportWindow = new BrowserWindow({
-    show: false,
-    frame: false,
-    transparent: false,
-    backgroundColor: '#171717',
-    width: captureWidth,
-    height: captureHeight,
-    useContentSize: true,
-    webPreferences: {
-      contextIsolation: true,
-      javascript: false,
-      nodeIntegration: false,
-      sandbox: true
-    }
-  })
-
-  try {
-    exportWindow.setContentSize(captureWidth, captureHeight)
-    const html = buildSvgExportHtml(svg, width, height, scale)
-    await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-    await new Promise((resolve) => setTimeout(resolve, 120))
-    const image = await exportWindow.webContents.capturePage({
-      x: 0,
-      y: 0,
-      width: captureWidth,
-      height: captureHeight
-    })
-    if (image.isEmpty()) return { ok: false, error: 'Captured PNG image is empty.' }
-
-    const path = resolve(selection.filePath)
-    await fs.writeFile(path, image.toPNG())
-    return { ok: true, path }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    if (!exportWindow.isDestroyed()) exportWindow.close()
-  }
-}
-
-function buildSvgExportHtml(svg: string, width: number, height: number, scale: number): string {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      html,
-      body {
-        width: ${Math.ceil(width * scale)}px;
-        height: ${Math.ceil(height * scale)}px;
-        margin: 0;
-        overflow: hidden;
-        background: #171717;
-      }
-
-      .export-frame {
-        width: ${width}px;
-        height: ${height}px;
-        transform: scale(${scale});
-        transform-origin: top left;
-        background: #171717;
-      }
-
-      svg {
-        display: block;
-        width: ${width}px !important;
-        height: ${height}px !important;
-        max-width: none !important;
-        max-height: none !important;
-        background: #171717;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="export-frame">${svg}</div>
-  </body>
-</html>`
-}
-
-async function pickSavePath(
-  webContents: WebContents,
-  input: { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }
-): Promise<{ ok: boolean; path?: string; canceled?: boolean }> {
-  const browserWindow = BrowserWindow.fromWebContents(webContents) ?? undefined
-  const options = {
-    defaultPath: input.defaultPath || 'crescent-export',
-    filters: input.filters
-  }
-  const selection = browserWindow
-    ? await dialog.showSaveDialog(browserWindow, options)
-    : await dialog.showSaveDialog(options)
-
-  if (selection.canceled || !selection.filePath) return { ok: false, canceled: true }
-  const path = resolve(selection.filePath)
-  rememberAllowedSavePath(path)
-  return { ok: true, path }
-}
-
-/** Paths returned by pickSavePath; writeDataUrlFile only accepts these. */
-const allowedSavePaths = new Map<string, number>()
-const ALLOWED_SAVE_PATH_TTL_MS = 5 * 60_000
-
-function rememberAllowedSavePath(path: string): void {
-  const now = Date.now()
-  for (const [entry, expiresAt] of allowedSavePaths.entries()) {
-    if (expiresAt <= now) allowedSavePaths.delete(entry)
-  }
-  allowedSavePaths.set(path, now + ALLOWED_SAVE_PATH_TTL_MS)
-}
-
-function consumeAllowedSavePath(path: string): boolean {
-  const expiresAt = allowedSavePaths.get(path)
-  if (expiresAt === undefined) return false
-  allowedSavePaths.delete(path)
-  return expiresAt > Date.now()
-}
-
-async function writeDataUrlFile(input: {
-  path?: string
-  dataUrl?: string
-}): Promise<{ ok: boolean; path?: string; error?: string }> {
-  const path = input.path ? resolve(input.path) : ''
-  const match = input.dataUrl?.match(/^data:[^,]*;base64,(.+)$/)
-  if (!path) return { ok: false, error: 'A save path is required.' }
-  if (!match) return { ok: false, error: 'A base64 data URL is required.' }
-  if (!consumeAllowedSavePath(path)) {
-    return {
-      ok: false,
-      error: 'Save path must come from a recent save dialog selection.'
-    }
-  }
-
-  try {
-    await fs.writeFile(path, Buffer.from(match[1], 'base64'))
-    return { ok: true, path }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-function sanitizeAttachmentName(value: string): string {
-  const name = basename(value.trim() || 'attachment')
-    .replace(/[^\w.-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-
-  return name.slice(0, 120) || 'attachment'
-}
-
-function extensionFromMimeType(mimeType?: string): string {
-  switch (mimeType) {
-    case 'image/png':
-      return '.png'
-    case 'image/jpeg':
-      return '.jpg'
-    case 'image/gif':
-      return '.gif'
-    case 'image/webp':
-      return '.webp'
-    case 'application/pdf':
-      return '.pdf'
-    case 'audio/webm':
-      return '.webm'
-    case 'audio/wav':
-    case 'audio/wave':
-    case 'audio/x-wav':
-      return '.wav'
-    case 'audio/mpeg':
-    case 'audio/mp3':
-      return '.mp3'
-    case 'audio/mp4':
-    case 'audio/m4a':
-    case 'audio/x-m4a':
-      return '.m4a'
-    case 'audio/ogg':
-      return '.ogg'
-    case 'audio/flac':
-      return '.flac'
-    default:
-      return ''
   }
 }
 

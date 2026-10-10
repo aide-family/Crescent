@@ -1,3 +1,4 @@
+import { terminalClient } from '@renderer/clients'
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 
 import { formatReadableSubterminalOutput, getSubterminalWidths } from '@renderer/lib/terminal-text'
@@ -128,7 +129,7 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
 
   const closeSubterminal = useCallback(
     (parentTabId: string, subterminalId: string): void => {
-      window.api.terminal.stop(subterminalId)
+      terminalClient.stop(subterminalId)
       updateTab(parentTabId, (tab) => ({
         ...tab,
         subTerminals: tab.subTerminals.filter((subterminal) => subterminal.id !== subterminalId)
@@ -140,7 +141,7 @@ export function useTerminalSessions({ tabsRef, setTabs }: UseTerminalSessionsInp
   const closeAllSubterminals = useCallback(
     (parentTabId: string): void => {
       const parentTab = tabsRef.current.find((tab) => tab.id === parentTabId)
-      parentTab?.subTerminals.forEach((subterminal) => window.api.terminal.stop(subterminal.id))
+      parentTab?.subTerminals.forEach((subterminal) => terminalClient.stop(subterminal.id))
       updateTab(parentTabId, (tab) => ({ ...tab, subTerminals: [] }))
     },
     [tabsRef, updateTab]

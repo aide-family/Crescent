@@ -1,10 +1,6 @@
-import {
-  BrowserWindow,
-  Notification,
-  dialog,
-  ipcMain,
-  type RenderProcessGoneDetails
-} from 'electron'
+import { redactSensitiveText } from '../shared/secret-redaction'
+import { rendererIpc } from './ipc-security'
+import { BrowserWindow, Notification, dialog, type RenderProcessGoneDetails } from 'electron'
 import { writeFileSync } from 'fs'
 
 import { writeCrescentDbFlag, readCrescentDbFlag } from './crescent-sqlite'
@@ -18,7 +14,7 @@ const diagnosticLines: string[] = []
 let autoReloadBlocked = false
 
 export function appendRendererDiagnostic(line: string): void {
-  const trimmed = line.trim()
+  const trimmed = redactSensitiveText(line).trim()
   if (!trimmed) return
   diagnosticLines.push(`${new Date().toISOString()} ${trimmed}`)
   while (diagnosticLines.length > MAX_DIAGNOSTIC_LINES) diagnosticLines.shift()
@@ -37,16 +33,16 @@ export function clearRendererRecoveryFlags(): void {
 }
 
 export function registerRendererRecoveryIpc(_iconPath: string): void {
-  ipcMain.handle('app:get-renderer-recovery-mode', () => {
+  rendererIpc.handle('app:get-renderer-recovery-mode', () => {
     return { mode: getRendererRecoveryMode() }
   })
 
-  ipcMain.handle('app:clear-renderer-recovery', () => {
+  rendererIpc.handle('app:clear-renderer-recovery', () => {
     clearRendererRecoveryFlags()
     return { ok: true }
   })
 
-  ipcMain.handle('app:export-renderer-diagnostics', async () => {
+  rendererIpc.handle('app:export-renderer-diagnostics', async () => {
     const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
     const result = await dialog.showSaveDialog(target ?? undefined, {
       title: 'Export Crescent diagnostics',
@@ -67,7 +63,7 @@ export function registerRendererRecoveryIpc(_iconPath: string): void {
     return { ok: true, path: result.filePath }
   })
 
-  ipcMain.on('renderer:diagnostic-error', (_event, payload?: { message?: string }) => {
+  rendererIpc.on('renderer:diagnostic-error', (_event, payload?: { message?: string }) => {
     const message = String(payload?.message ?? '').slice(0, 2048)
     if (!message) return
     appendRendererDiagnostic(`[renderer-error] ${message}`)

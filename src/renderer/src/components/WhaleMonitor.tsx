@@ -4,38 +4,21 @@ import whaleIdlePoster from '@renderer/assets/whale-idle-poster.png'
 import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import type { WhaleMonitorConfigInput, WhaleMonitorSnapshot } from '../../../shared/whale-monitor'
 
-interface WhaleMotionAsset {
-  id: string
-  category: string
-  src: string
-}
+import {
+  whaleMotionAssets,
+  idleMotion,
+  staticIdleMotion,
+  type WhaleMotionAsset
+} from './whale/registry'
 
 interface ActiveWhaleMotion extends WhaleMotionAsset {
+  src: string
   loop: boolean
   token: number
 }
 
 const WHALE_WIDGET_HEIGHT = 136
 const PET_DOUBLE_CLICK_DELAY_MS = 350
-const whaleMotionModules = import.meta.glob<string>('../assets/whale-motions/**/*.webm', {
-  eager: true,
-  import: 'default',
-  query: '?url'
-})
-const whaleMotionAssets: WhaleMotionAsset[] = Object.entries(whaleMotionModules).map(
-  ([path, src]) => {
-    const parts = path.split('/')
-    const category = parts.at(-2) ?? 'other'
-    const name = (parts.at(-1) ?? path).replace(/\.webm$/, '')
-    return { id: `${category}/${name}`, category, src }
-  }
-)
-const idleMotion = whaleMotionAssets.find((motion) => motion.id === 'idle/breathing') ?? {
-  id: 'idle/static',
-  category: 'idle',
-  src: ''
-}
-const staticIdleMotion = { id: 'idle/static', category: 'idle', src: '' }
 const workMotions = whaleMotionAssets.filter((motion) => motion.category === 'work')
 const clickMotions = whaleMotionAssets.filter((motion) => motion.category === 'clicks')
 const dragMotions = whaleMotionAssets.filter((motion) => motion.category === 'drag')
@@ -105,7 +88,7 @@ function WhaleAvatar({
             loop={motion.loop}
             muted
             playsInline
-            preload="auto"
+            preload="metadata"
             src={motion.src}
             className={`whale-pet-sprite absolute inset-0 h-full w-full object-contain drop-shadow-xl ${videoReady ? 'opacity-100' : 'opacity-0'}`}
             onCanPlay={() => setVideoState({ token: motion.token, ready: true, failed: false })}
@@ -137,6 +120,7 @@ export function WhaleMonitor({
   const [dragging, setDragging] = useState(false)
   const [activeMotion, setActiveMotion] = useState<ActiveWhaleMotion>(() => ({
     ...idleMotion,
+    src: '',
     loop: true,
     token: 0
   }))
@@ -177,11 +161,30 @@ export function WhaleMonitor({
   )
 
   const playMotion = useCallback((motion: WhaleMotionAsset, loop: boolean): void => {
-    const nextMotion = { ...motion, loop, token: motionTokenRef.current + 1 }
-    motionTokenRef.current = nextMotion.token
-    activeMotionRef.current = nextMotion
-    setActiveMotion(nextMotion)
+    const token = ++motionTokenRef.current
+    void motion
+      .load()
+      .then((src) => {
+        if (motionTokenRef.current !== token) return
+        const nextMotion = { ...motion, src, loop, token }
+        activeMotionRef.current = nextMotion
+        setActiveMotion(nextMotion)
+      })
+      .catch(() => {
+        if (motionTokenRef.current !== token) return
+        failedMotionsRef.current.add(motion.id)
+        const nextMotion = { ...staticIdleMotion, src: '', loop: true, token }
+        activeMotionRef.current = nextMotion
+        setActiveMotion(nextMotion)
+      })
   }, [])
+
+  useEffect(() => {
+    playMotion(idleMotion, true)
+    return () => {
+      motionTokenRef.current += 1
+    }
+  }, [playMotion])
 
   const playRandomMotion = useCallback(
     (pool: WhaleMotionAsset[], loop = false): void => {
@@ -801,14 +804,14 @@ export function WhaleMonitor({
         {detailsOpen ? (
           <span
             aria-hidden="true"
-            className="invisible rounded-full border border-teal-300/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur"
+            className="invisible rounded-full border border-primary/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur"
           >
             {balanceLabel}
           </span>
         ) : (
           <button
             data-whale-drag-handle
-            className="rounded-full border border-teal-300/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur hover:bg-card"
+            className="rounded-full border border-primary/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur hover:bg-card"
             onClick={handlePetClick}
           >
             {balanceLabel}

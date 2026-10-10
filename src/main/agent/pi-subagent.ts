@@ -1,3 +1,4 @@
+import { createPiRuntime } from './runtime/pi/runtime'
 import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
@@ -13,10 +14,7 @@ import {
   shouldBlockToolsWhileMainRestoring
 } from '../terminal/session-health'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
-import {
-  extractAssistantTextFromCurrentTurn,
-  mapPiSessionEventToAgentEvents
-} from './pi-event-bridge'
+import { extractAssistantTextFromCurrentTurn } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { createCrescentSettingsManager } from './pi-packages'
 import {
@@ -531,11 +529,11 @@ async function runChildPiSession(input: {
   })
   await resourceLoader.reload()
 
-  const { session } = await pi.createAgentSession({
+  const session = await createPiRuntime(pi).createSession({
     cwd,
     agentDir,
     model,
-    thinkingLevel: resolveThinkingLevelForModel(model),
+    thinkingLevel: resolveThinkingLevelForModel(model, parent.config.thinkingLevel),
     modelRuntime,
     resourceLoader,
     tools: [...input.profile.tools],
@@ -550,17 +548,15 @@ async function runChildPiSession(input: {
   }
   rememberChildHandle(parent.runId, handle)
 
-  const unsubscribe = session.subscribe((event) => {
-    for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
-      runId: parent.runId,
-      tabId: parent.chatTabId,
-      locale: parent.locale,
-      fromSubagent: true
-    })) {
-      if (agentEvent.type === 'token' || agentEvent.type === 'thought') continue
-      parent.emit(agentEvent)
-    }
-  })
+  const unsubscribe = session.subscribe(
+    (event) => {
+      for (const agentEvent of event.events) {
+        if (agentEvent.type === 'token' || agentEvent.type === 'thought') continue
+        parent.emit(agentEvent)
+      }
+    },
+    { runId: parent.runId, tabId: parent.chatTabId, locale: parent.locale, fromSubagent: true }
+  )
 
   const abortChild = (): void => {
     void session.abort()
@@ -572,7 +568,7 @@ async function runChildPiSession(input: {
   }
 
   try {
-    session.setThinkingLevel(resolveThinkingLevelForModel(model))
+    session.setThinkingLevel(resolveThinkingLevelForModel(model, parent.config.thinkingLevel))
   } catch {
     // ignore unsupported thinking levels
   }

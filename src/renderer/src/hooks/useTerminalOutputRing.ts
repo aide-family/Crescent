@@ -1,3 +1,4 @@
+import { terminalClient } from '@renderer/clients'
 import { useEffect } from 'react'
 
 import { createCrescentBootstrapFilter, parseSubterminalTabId } from '../lib/terminal-text'
@@ -15,7 +16,7 @@ export function useTerminalOutputRing(): void {
       return created
     }
 
-    return window.api.terminal.onData((event) => {
+    return terminalClient.onData((event) => {
       const subterminal = parseSubterminalTabId(event.tabId)
       if (subterminal) {
         appendTerminalOutputRing(event.tabId, event.data)

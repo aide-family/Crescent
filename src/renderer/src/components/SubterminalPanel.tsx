@@ -1,3 +1,5 @@
+import { readAppTheme, subscribeAppTheme } from '@renderer/lib/app-theme'
+import { getAppTerminalTheme } from '@renderer/lib/theme-definitions'
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
@@ -6,7 +8,7 @@ import { ChevronDownIcon, ChevronUpIcon, PlusIcon, Trash2Icon, XIcon } from 'luc
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
-import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '@renderer/lib/design-system'
+import { APP_TERMINAL_TYPOGRAPHY } from '@renderer/lib/design-system'
 import { fitAndSyncPty, observeTerminalHostResize } from '@renderer/lib/pipe-terminal'
 import {
   createCrescentBootstrapFilter,
@@ -94,7 +96,10 @@ function SubterminalXtermPane({
       fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
       fontSize: APP_TERMINAL_TYPOGRAPHY.subterminalFontSize,
       lineHeight: APP_TERMINAL_TYPOGRAPHY.subterminalLineHeight,
-      theme: appTerminalTheme
+      theme: getAppTerminalTheme(readAppTheme())
+    })
+    const stopTheme = subscribeAppTheme(() => {
+      terminal.options.theme = getAppTerminalTheme(readAppTheme())
     })
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
@@ -164,6 +169,7 @@ function SubterminalXtermPane({
       stopExit()
       scrollFollow.dispose()
       resizeObserver.disconnect()
+      stopTheme()
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
@@ -176,7 +182,7 @@ function SubterminalXtermPane({
     <div className="relative min-h-0 flex-1">
       <div
         ref={hostRef}
-        className="subterminal-canvas absolute inset-0 overflow-hidden bg-black/40"
+        className="subterminal-canvas absolute inset-0 overflow-hidden bg-[var(--app-terminal)]"
       />
       {inputLocked ? (
         <TerminalLockOverlay

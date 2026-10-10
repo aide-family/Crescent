@@ -2,7 +2,8 @@ import { homedir } from 'os'
 import { join, resolve } from 'path'
 
 export function getCrescentDir(): string {
-  return join(homedir(), '.crescent')
+  const override = process.env.CRESCENT_DATA_DIR?.trim()
+  return override ? resolve(override) : join(homedir(), '.crescent')
 }
 
 export function getCrescentConfigPath(): string {

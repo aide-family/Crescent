@@ -16,7 +16,7 @@ npm run typecheck
 npm run build
 ```
 
-When local test files exist (gitignored — see `docs/TESTING.md`), also run `npm run test:local` before commit.
+When local test files exist (gitignored — see `Document/TESTING.md`), also run `npm run test:local` before commit.
 
 - If any step fails, fix it and re-run the full gate. Do not commit a red tree.
 - Do not use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.

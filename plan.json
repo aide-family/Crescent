@@ -323,7 +323,7 @@
       "iteration": "C",
       "status": "completed",
       "dependsOn": ["p5-arch-agent-panel"],
-      "notes": "Follow docs/UI_DESIGN_SYSTEM.md; accent #13c2c2; no new palette.",
+      "notes": "Follow Document/UI_DESIGN_SYSTEM.md; accent #13c2c2; no new palette.",
       "tests": ["manual: user/assistant blocks clearer than command/status rows"]
     },
     {
@@ -379,7 +379,7 @@
       "iteration": "C",
       "status": "completed",
       "dependsOn": [],
-      "notes": "docs/CODE_SIGNING.md + release.yml conditional signing when CSC_*/APPLE_* secrets present.",
+      "notes": "Document/CODE_SIGNING.md + release.yml conditional signing when CSC_*/APPLE_* secrets present.",
       "tests": ["manual: downloaded signed build opens without xattr workaround"]
     },
     {

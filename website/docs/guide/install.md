@@ -4,7 +4,7 @@
 
 ## macOS：「已损坏，无法打开」
 
-在仓库配置签名密钥之前，部分正式包可能仍未签名。说明见仓库内 [docs/CODE_SIGNING.md](https://github.com/aide-family/Crescent/blob/main/docs/CODE_SIGNING.md)。
+在仓库配置签名密钥之前，部分正式包可能仍未签名。说明见仓库内 [Document/CODE_SIGNING.md](https://github.com/aide-family/Crescent/blob/main/Document/CODE_SIGNING.md)。
 
 从浏览器下载后，Gatekeeper 可能提示 **「Crescent」已损坏，无法打开**。这不是安装包损坏。把 `Crescent.app` 放进「应用程序」后，解除隔离再打开：
 

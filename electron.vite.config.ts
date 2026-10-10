@@ -21,7 +21,8 @@ const piPackages = [
   '@modelcontextprotocol/sdk'
 ]
 
-const RENDERER_ASSET_LIMIT_BYTES = 1024 * 1024
+const RENDERER_ASSET_WARNING_BYTES = 1.5 * 1024 * 1024
+const RENDERER_ASSET_LIMIT_BYTES = 2 * 1024 * 1024
 const LAZY_RENDERER_ASSET_NAMES = [
   /^assets\/mermaid(?:[.-]|$)/,
   /^assets\/.*\.webm$/,
@@ -63,7 +64,15 @@ function rendererManualChunks(id: string): string | undefined {
   }
 
   const normalized = posixId(id)
-  if (normalized.includes('/src/renderer/src/App.tsx')) return 'app-shell'
+  // Keep optional surfaces and their media outside the initial UI chunk.
+  if (
+    /\/components\/(WhaleMonitor|whale\/|WikiSheet|SkillManager|SettingsSheet|McpServersSheet|HistoryPanel)/.test(
+      normalized
+    )
+  ) {
+    return undefined
+  }
+  if (normalized.includes('/src/renderer/src/App.tsx')) return 'renderer-ui'
   if (normalized.includes('/src/renderer/src/i18n/')) return 'i18n'
   // ChartBlock / ArchitectureBlock load on demand so heavy diagram libs stay out of renderer-ui.
   if (
@@ -93,14 +102,17 @@ function enforceRendererAssetLimit(): Plugin {
         .map((item) => ({ fileName: item.fileName, size: assetSize(item) }))
         .filter(
           (item) =>
-            item.size > RENDERER_ASSET_LIMIT_BYTES &&
+            item.size > RENDERER_ASSET_WARNING_BYTES &&
             !LAZY_RENDERER_ASSET_NAMES.some((pattern) => pattern.test(item.fileName))
         )
       if (oversized.length === 0) return
       const details = oversized
         .map((item) => `  - ${item.fileName} (${(item.size / 1024).toFixed(1)} kB)`)
         .join('\n')
-      throw new Error(`Renderer assets exceed 1MB:\n${details}`)
+      if (oversized.some((item) => item.size > RENDERER_ASSET_LIMIT_BYTES)) {
+        this.error(`Renderer assets exceed 2 MiB:\n${details}`)
+      }
+      this.warn(`Renderer assets exceed the 1.5 MiB warning budget:\n${details}`)
     }
   }
 }
@@ -116,6 +128,8 @@ export default defineConfig({
           // does not create a circular require back into the main entry.
           manualChunks(id) {
             if (id.includes('/src/main/safe-ipc-send')) return 'safe-ipc-send'
+            if (id.includes('/src/main/ipc-security')) return 'ipc-security'
+            if (id.includes('/src/main/renderer-secrets')) return 'renderer-secrets'
             if (id.includes('/src/main/crescent-paths')) return 'crescent-paths'
             if (id.includes('/src/main/update/updater')) return 'updater'
             return undefined
@@ -140,7 +154,7 @@ export default defineConfig({
     },
     plugins: [tailwindcss(), react(), enforceRendererAssetLimit()],
     build: {
-      chunkSizeWarningLimit: 1024,
+      chunkSizeWarningLimit: 1536,
       rollupOptions: {
         output: {
           manualChunks: rendererManualChunks

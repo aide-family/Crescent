@@ -10,7 +10,7 @@ function ArchEdgeComponent({
   style
 }: EdgeProps<Edge<ArchEdgeData>>): React.JSX.Element {
   const path = data?.path ?? ''
-  const color = data?.color ?? '#8fa7b8'
+  const color = data?.color ?? 'var(--app-markdown-muted)'
   const dashed = data?.dashed === true
   const animate = data?.animate === true && !dashed
   const label = data?.label
@@ -42,7 +42,8 @@ function ArchEdgeComponent({
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               color,
-              background: 'rgba(11,14,20,0.88)',
+              borderRadius: data?.radius,
+              background: data?.canvas,
               border: `1px solid ${color}55`
             }}
           >

@@ -71,7 +71,7 @@ Edit this file to encode team or personal agent conventions.
 # Tool usage preferences
 
 - Prefer built-in terminal tools for shell work.
-- Prefer OpenAPI / MCP tools when they match the request better than ad-hoc shell.
+- Use only tools actually exposed by Crescent. Configured MCP tools require operator approval; OpenAPI tools are deprecated.
 - Keep command allow/deny and approval rules in Settings; do not bypass them here.
 - Prefer read-only discovery before write/update/delete operations.
 - When writing local files or Wiki docs, use clear paths and confirm destinations when unsure.

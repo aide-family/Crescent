@@ -1,4 +1,5 @@
-import { ipcMain, type WebContents } from 'electron'
+import { rendererIpc } from '../ipc-security'
+import { type WebContents } from 'electron'
 
 import {
   deleteAgentLogs,
@@ -45,18 +46,18 @@ import type {
 const pendingSessionSummaryTimers = new Map<string, NodeJS.Timeout>()
 
 export function registerStorageIpc(): void {
-  ipcMain.handle('storage:save-tabs', (_, tabs: StoredSessionTab[]) => {
+  rendererIpc.handle('storage:save-tabs', (_, tabs: StoredSessionTab[]) => {
     saveSessionTabs(tabs)
     return { ok: true }
   })
 
-  ipcMain.handle('storage:save-agent-log', (event, entry: StoredAgentLogEntry) => {
+  rendererIpc.handle('storage:save-agent-log', (event, entry: StoredAgentLogEntry) => {
     saveAgentLog(entry)
     scheduleSessionSummary(entry.tabId, event.sender)
     return { ok: true }
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:update-agent-log',
     (event, input: Pick<StoredAgentLogEntry, 'tabId' | 'logId' | 'text'>) => {
       updateAgentLog(input)
@@ -65,7 +66,7 @@ export function registerStorageIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:delete-agent-logs',
     (event, input: { tabId?: string; logIds?: number[] }) => {
       const tabId = input?.tabId?.trim() ?? ''
@@ -76,34 +77,37 @@ export function registerStorageIpc(): void {
     }
   )
 
-  ipcMain.handle('storage:save-agent-run', (_, run: StoredAgentRun) => {
+  rendererIpc.handle('storage:save-agent-run', (_, run: StoredAgentRun) => {
     saveAgentRun(run)
     return { ok: true }
   })
 
-  ipcMain.handle('storage:get-agent-run', (_, runId: string) => {
+  rendererIpc.handle('storage:get-agent-run', (_, runId: string) => {
     return getAgentRun(runId ?? '')
   })
 
-  ipcMain.handle('storage:list-agent-runs', (_, payload?: { tabId?: string; limit?: number }) => {
-    return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
-  })
+  rendererIpc.handle(
+    'storage:list-agent-runs',
+    (_, payload?: { tabId?: string; limit?: number }) => {
+      return listAgentRunsForTab(payload?.tabId ?? '', payload?.limit)
+    }
+  )
 
-  ipcMain.handle('storage:list-all-agent-runs', (_, tabId?: string) => {
+  rendererIpc.handle('storage:list-all-agent-runs', (_, tabId?: string) => {
     return listAllAgentRunsForTab(typeof tabId === 'string' ? tabId : '')
   })
 
-  ipcMain.handle('storage:get-session-token-usage', (_, tabId?: string) => {
+  rendererIpc.handle('storage:get-session-token-usage', (_, tabId?: string) => {
     return getSessionTokenUsage(typeof tabId === 'string' ? tabId : '')
   })
 
-  ipcMain.handle('storage:get-agent-log', (_, payload?: { tabId?: string; logId?: number }) => {
+  rendererIpc.handle('storage:get-agent-log', (_, payload?: { tabId?: string; logId?: number }) => {
     const tabId = payload?.tabId?.trim() ?? ''
     const logId = typeof payload?.logId === 'number' ? payload.logId : Number.NaN
     return getAgentLog(tabId, logId)
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:list-agent-logs',
     (_, payload?: { tabId?: string; beforeLogId?: number; limit?: number }) => {
       return listAgentLogs(payload?.tabId ?? '', {
@@ -113,41 +117,41 @@ export function registerStorageIpc(): void {
     }
   )
 
-  ipcMain.handle('storage:count-agent-logs', (_, tabId?: string) => {
+  rendererIpc.handle('storage:count-agent-logs', (_, tabId?: string) => {
     return countAgentLogs(tabId ?? '')
   })
 
-  ipcMain.handle('storage:list-session-history', (_, limit?: number) => {
+  rendererIpc.handle('storage:list-session-history', (_, limit?: number) => {
     return listSessionHistory(limit)
   })
 
-  ipcMain.handle('storage:get-session-history', (_, tabId: string) => {
+  rendererIpc.handle('storage:get-session-history', (_, tabId: string) => {
     return readSessionHistoryDetail(tabId)
   })
 
-  ipcMain.handle('storage:delete-session-history', (_, tabId: string) => {
+  rendererIpc.handle('storage:delete-session-history', (_, tabId: string) => {
     return { ok: deleteSessionHistory(tabId ?? '') }
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:rename-session-history',
     (_, payload: { tabId?: string; title?: string }) => {
       return { ok: renameSessionHistory(payload?.tabId ?? '', payload?.title ?? '') }
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:submit-ops-feedback',
     async (_, payload: SubmitOpsFeedbackInput): Promise<SubmitOpsFeedbackResult> => {
       return submitOpsFeedback(payload)
     }
   )
 
-  ipcMain.handle('storage:get-ops-feedback', (_, runId: string) => {
+  rendererIpc.handle('storage:get-ops-feedback', (_, runId: string) => {
     return getOpsHistoryByRunId(runId ?? '')
   })
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:list-ops-feedback',
     (_, payload?: { connectionId?: string; tabId?: string; limit?: number }) => {
       return listOpsHistoryForConnection(
@@ -157,7 +161,7 @@ export function registerStorageIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  rendererIpc.handle(
     'storage:update-ops-feedback',
     (_, payload: UpdateOpsFeedbackInput): UpdateOpsFeedbackResult => {
       const id = payload?.id?.trim() ?? ''
@@ -175,7 +179,7 @@ export function registerStorageIpc(): void {
     }
   )
 
-  ipcMain.handle('storage:delete-ops-feedback', (_, id: string) => {
+  rendererIpc.handle('storage:delete-ops-feedback', (_, id: string) => {
     return { ok: deleteOpsHistoryRecord(id ?? '') }
   })
 }
