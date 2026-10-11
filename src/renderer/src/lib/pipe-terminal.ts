@@ -172,9 +172,84 @@ export function applyTerminalConvertEol(terminal: Terminal, mode: 'pty' | 'pipe'
   terminal.options.convertEol = mode === 'pipe'
 }
 
+/** Last text row may sit at most this far above the terminal box's bottom edge. */
+export const TERMINAL_MAX_BOTTOM_GAP_PX = 8
+
+const baseLineHeights = new WeakMap<Terminal, number>()
+
+function baseLineHeightFor(terminal: Terminal): number {
+  const stored = baseLineHeights.get(terminal)
+  if (stored != null) return stored
+  const base = terminal.options?.lineHeight ?? 1
+  baseLineHeights.set(terminal, base)
+  return base
+}
+
+function terminalCellHeight(terminal: Terminal): number {
+  const core = (
+    terminal as Terminal & {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } }
+    }
+  )._core
+  const height = core?._renderService?.dimensions?.css?.cell?.height ?? 0
+  return Number.isFinite(height) ? height : 0
+}
+
+function terminalBottomGap(terminal: Terminal): number | undefined {
+  const parent = terminal.element?.parentElement
+  const cellHeight = terminalCellHeight(terminal)
+  if (!parent || cellHeight <= 0 || terminal.rows < 1) return undefined
+  return parent.clientHeight - terminal.rows * cellHeight
+}
+
+/**
+ * Grow line height just enough that the unused strip under the last row is at most `maxGap`.
+ * Returns the base height when the gap is already within the limit.
+ */
+export function resolveLineHeightForBottomGap(input: {
+  baseLineHeight: number
+  parentHeight: number
+  rows: number
+  cellHeight: number
+  maxGap?: number
+}): number {
+  const maxGap = input.maxGap ?? TERMINAL_MAX_BOTTOM_GAP_PX
+  const { baseLineHeight, parentHeight, rows, cellHeight } = input
+  if (rows < 1 || cellHeight <= 0 || parentHeight <= maxGap || baseLineHeight <= 0) {
+    return baseLineHeight
+  }
+  const used = rows * cellHeight
+  const gap = parentHeight - used
+  if (gap <= maxGap) return baseLineHeight
+  const next = baseLineHeight * ((parentHeight - maxGap) / used)
+  if (!Number.isFinite(next) || next <= baseLineHeight) return baseLineHeight
+  return next
+}
+
 /** Fit the xterm grid, then push the same cols/rows to the PTY. */
 export function fitAndSyncPty(terminal: Terminal, fitAddon: FitAddon, tabId: string): void {
+  const baseLineHeight = baseLineHeightFor(terminal)
+  if (terminal.options && terminal.options.lineHeight !== baseLineHeight) {
+    terminal.options.lineHeight = baseLineHeight
+  }
   fitAddon.fit()
+  const parentHeight = terminal.element?.parentElement?.clientHeight ?? 0
+  const cellHeight = terminalCellHeight(terminal)
+  const nextLineHeight = resolveLineHeightForBottomGap({
+    baseLineHeight,
+    parentHeight,
+    rows: terminal.rows,
+    cellHeight
+  })
+  if (terminal.options && nextLineHeight !== baseLineHeight) {
+    terminal.options.lineHeight = nextLineHeight
+    fitAddon.fit()
+    const gap = terminalBottomGap(terminal)
+    if (gap == null || gap > TERMINAL_MAX_BOTTOM_GAP_PX || gap < 0) {
+      terminal.options.lineHeight = baseLineHeight
+      fitAddon.fit()
+    }
+  }
   const { cols, rows } = terminal
   if (!isUsableTerminalSize(cols, rows)) return
   window.api.terminal.resize({ cols, rows, tabId })

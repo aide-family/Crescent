@@ -1,6 +1,5 @@
 import { createChangePlanTool } from './pi-change-plan'
 import { normalizeExecutionMode, type ExecutionMode } from '../../shared/execution-plan'
-import { homedir } from 'os'
 import { createHash } from 'node:crypto'
 import { writeSystemLog } from '../logging'
 import { buildHandoffContext, handoffSystemPrompt } from './handoff-context'
@@ -20,15 +19,11 @@ import type {
   AgentCancelHandoffInput,
   AgentHandoffStatus
 } from '../../shared/agent-types'
-import { resolve } from 'path'
-
 import type { WebContents } from 'electron'
 
 import { buildLocalInstructionContext } from './instruction-files'
 import { mapPiSessionEventToAgentEvents, resolveHostedPromptResult } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
-import { getCrescentPiSkillsDir } from './pi-paths'
-import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 import {
   resolvePiModel,
   resolveThinkingLevelForModel,
@@ -36,6 +31,7 @@ import {
 } from './pi-model-runtime'
 import { loadMcpPiTools } from './pi-mcp-tools'
 import { loadPiSdk, type PiSdkFacade } from './pi-sdk'
+import { resolveAgentSkillRoots } from './skills'
 import {
   clearPtyBashExecContext,
   clearPtyBashExecContextsForRun,
@@ -56,6 +52,7 @@ import {
   SUBAGENT_DISCIPLINE
 } from './pi-subagent'
 import {
+  hostedSessionSkillProfile,
   hostedSessionToolProfile,
   needsModelChange,
   shouldReuseHostedSession
@@ -81,6 +78,7 @@ interface HostedSession {
   session: AgentSession
   cwd: string
   toolProfile: string
+  skillProfile: string
   immediateTools: string[]
   ownerId?: number
   handoffLastStarted?: number
@@ -799,7 +797,8 @@ async function ensureHostedSessionUnlocked(
   const existing = hostedSessions.get(sessionKey)
   const cwd = resolveAgentWorkspaceCwd(config)
   const toolProfile = hostedSessionToolProfile(config.mcpServers)
-  if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
+  const skillProfile = hostedSessionSkillProfile(config)
+  if (shouldReuseHostedSession(existing, { cwd, toolProfile, skillProfile })) {
     return existing as HostedSession
   }
   if (existing) {
@@ -825,6 +824,7 @@ async function ensureHostedSessionUnlocked(
     settingsManager,
     additionalSkillPaths,
     noExtensions: true,
+    noSkills: true,
     systemPromptOverride: (base) =>
       buildInvariantAgentPrompt({
         base: base ?? '',
@@ -865,6 +865,7 @@ async function ensureHostedSessionUnlocked(
     session,
     cwd,
     toolProfile,
+    skillProfile,
     immediateTools: session.getActiveToolNames().filter((name) => name !== 'submit_change_plan'),
     closeMcp: mcp.close
   }
@@ -893,15 +894,9 @@ async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void
 }
 
 function collectSkillRoots(config: AgentConfig): string[] {
-  const roots = [getCrescentPiSkillsDir()]
-  const configured = config.skillRoot?.trim()
-  if (configured) {
-    roots.push(resolve(configured.replace(/^~(?=$|[/\\])/, homedir())))
-  }
-  if (config.loadGlobalAgentSkills) {
-    roots.push(resolve(GLOBAL_AGENT_SKILLS_TILDE.replace(/^~(?=$|[/\\])/, homedir())))
-  }
-  return [...new Set(roots)]
+  return resolveAgentSkillRoots(config.skillRoot, {
+    loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+  })
 }
 
 function hostedSessionHasMessages(session: AgentSession): boolean {

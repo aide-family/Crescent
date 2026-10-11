@@ -50,16 +50,16 @@
 
 建议每个 pane 至少能表达以下信息：
 
-| 字段 | 用途 |
-| --- | --- |
-| `paneRole` | `main` 或 `subterminal`，表示主终端或子终端 |
-| `paneId` / `tabId` | 稳定、唯一的终端标识 |
-| `owner` | `user`、`agent` 或具体子 Agent 名称 |
-| `executionMode` | `local` 或 `ssh` |
-| `connectionId` / `connectionName` | 已保存 SSH 连接的身份 |
-| `expectedTarget` | 预期目标主机、集群或连接别名 |
-| `observedHost` | 最近一次从连接握手或 prompt 等可信信号观测到的主机 |
-| `connectionPhase` | 连接状态，见第 5 节 |
+| 字段                              | 用途                                               |
+| --------------------------------- | -------------------------------------------------- |
+| `paneRole`                        | `main` 或 `subterminal`，表示主终端或子终端        |
+| `paneId` / `tabId`                | 稳定、唯一的终端标识                               |
+| `owner`                           | `user`、`agent` 或具体子 Agent 名称                |
+| `executionMode`                   | `local` 或 `ssh`                                   |
+| `connectionId` / `connectionName` | 已保存 SSH 连接的身份                              |
+| `expectedTarget`                  | 预期目标主机、集群或连接别名                       |
+| `observedHost`                    | 最近一次从连接握手或 prompt 等可信信号观测到的主机 |
+| `connectionPhase`                 | 连接状态，见第 5 节                                |
 
 这些字段应在创建 pane、绑定连接、重连、切换目标、关闭 pane 时由主进程更新。Renderer 展示这些数据，但不自行推断执行目标。
 
@@ -250,4 +250,3 @@ local-ready
 - ProxyJump 或多跳场景需要区分跳板机和最终目标。目标匹配规则必须明确“允许的中间 hop”与“任务最终执行目标”。
 - 进程退出事件不覆盖所有网络断开场景。应同时使用 SSH 输出/退出信息、终端 prompt 观测和命令开始前的状态门禁，并对冲突信号失败关闭。
 - 当前 `bash` 运行在可见 PTY 中。最小改造应在宿主主进程实际写入命令的边界保护目标身份，不通过扩大 Pi 插件面或在 renderer 中执行命令实现。
-

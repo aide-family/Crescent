@@ -15,6 +15,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'pat
 
 import type {
   AgentSkillContext,
+  AgentSkillFileContent,
+  AgentSkillFileEntry,
+  AgentSkillFileWriteResult,
   AgentSkillInstallResult,
   AgentSkillOption,
   AgentSkillSearchResult
@@ -57,27 +60,38 @@ export type ListAgentSkillsOptions = {
   globalSkillRoot?: string
 }
 
+/** Absolute skill root directories the agent may load for the current config. */
+export function resolveAgentSkillRoots(
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): string[] {
+  const roots = [resolveSkillRoot(skillRoot)]
+  if (options?.loadGlobalAgentSkills) {
+    const globalRoot = resolveSkillRoot(options.globalSkillRoot || GLOBAL_AGENT_SKILLS_TILDE)
+    if (globalRoot !== roots[0]) roots.push(globalRoot)
+  }
+  return roots
+}
+
 export function listAgentSkills(
   skillRoot?: string,
   options?: ListAgentSkillsOptions
 ): AgentSkillOption[] {
   const seen = new Set<string>()
   const skills: AgentSkillOption[] = []
-  const root = resolveSkillRoot(skillRoot)
-  const roots: Array<{ root: string; removable: boolean }> = [{ root, removable: true }]
-  if (options?.loadGlobalAgentSkills) {
-    const globalRoot = resolveSkillRoot(options.globalSkillRoot || GLOBAL_AGENT_SKILLS_TILDE)
-    if (globalRoot !== root) {
-      roots.push({ root: globalRoot, removable: true })
-    }
-  }
+  const writableRoot = resolveSkillRoot(skillRoot)
+  const roots = resolveAgentSkillRoots(skillRoot, options).map((root) => ({
+    root,
+    removable: true,
+    writable: root === writableRoot
+  }))
 
-  for (const { root: currentRoot, removable } of roots) {
+  for (const { root: currentRoot, removable, writable } of roots) {
     for (const path of findSkillFiles(currentRoot)) {
       const resolvedPath = resolve(path)
       if (seen.has(resolvedPath)) continue
       seen.add(resolvedPath)
-      skills.push(readSkill(path, currentRoot, removable))
+      skills.push(readSkill(path, currentRoot, removable, writable))
     }
   }
 
@@ -665,7 +679,7 @@ export function createAgentSkill(input: CreateAgentSkillInput): CreateAgentSkill
 
   mkdirSync(skillDir, { recursive: true })
   writeFileSync(skillPath, content.endsWith('\n') ? content : `${content}\n`, 'utf8')
-  return { ok: true, skill: readSkill(skillPath, root, true) }
+  return { ok: true, skill: readSkill(skillPath, root, true, true) }
 }
 
 export type ImportAgentSkillsResult =
@@ -794,13 +808,204 @@ export function readAgentSkillContent(
   skillRoot?: string,
   options?: ListAgentSkillsOptions
 ): string {
-  const skillPath = resolve(path)
-  const skill = listAgentSkills(skillRoot, options).find(
-    (candidate) => resolve(candidate.path) === skillPath
-  )
+  const skill = findListedSkill(path, skillRoot, options)
   if (!skill) throw new Error('Skill not found.')
 
   return readSkillContent(skill.path)
+}
+
+const MAX_SKILL_TREE_ENTRIES = 400
+const MAX_SKILL_TREE_DEPTH = 6
+const MAX_SKILL_FILE_CHARS = 200_000
+
+export function listAgentSkillEntries(
+  path: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillFileEntry[] {
+  const skill = findListedSkill(path, skillRoot, options)
+  if (!skill) throw new Error('Skill not found.')
+
+  const skillDir = dirname(resolve(skill.path))
+  const entries: AgentSkillFileEntry[] = []
+  collectSkillEntries(skillDir, skillDir, 0, entries)
+  return entries
+}
+
+export function readAgentSkillFile(
+  path: string,
+  relativePath: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillFileContent {
+  const skill = findListedSkill(path, skillRoot, options)
+  if (!skill) return { ok: false, error: 'Skill not found.' }
+
+  const resolved = resolveSkillRelativeFile(skill, relativePath)
+  if (!resolved.ok) return resolved
+  if (!existsSync(resolved.target)) return { ok: false, error: 'Skill file not found.' }
+
+  try {
+    const stats = statSync(resolved.target)
+    if (stats.isDirectory()) return { ok: false, error: 'Path is a directory.' }
+    if (looksLikeBinaryFile(resolved.target)) {
+      return { ok: true, relativePath: resolved.relativePath, binary: true }
+    }
+    const content = readFileSync(resolved.target, 'utf8')
+    if (content.length > MAX_SKILL_FILE_CHARS) {
+      return {
+        ok: true,
+        relativePath: resolved.relativePath,
+        content: content.slice(0, MAX_SKILL_FILE_CHARS),
+        truncated: true
+      }
+    }
+    return { ok: true, relativePath: resolved.relativePath, content }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+export function writeAgentSkillFile(
+  path: string,
+  relativePath: string,
+  content: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillFileWriteResult {
+  const skill = findListedSkill(path, skillRoot, options)
+  if (!skill) return { ok: false, error: 'Skill not found.' }
+  if (!skill.writable) {
+    return { ok: false, error: 'This skill is read-only and cannot be edited.' }
+  }
+
+  const resolved = resolveSkillRelativeFile(skill, relativePath)
+  if (!resolved.ok) return resolved
+
+  try {
+    if (existsSync(resolved.target)) {
+      const stats = statSync(resolved.target)
+      if (stats.isDirectory()) return { ok: false, error: 'Path is a directory.' }
+      if (looksLikeBinaryFile(resolved.target)) {
+        return { ok: false, error: 'Binary skill files cannot be edited.' }
+      }
+    }
+
+    mkdirSync(dirname(resolved.target), { recursive: true })
+    const nextContent = content.endsWith('\n') ? content : `${content}\n`
+    if (nextContent.length > MAX_SKILL_FILE_CHARS) {
+      return { ok: false, error: 'Skill file content is too large.' }
+    }
+    writeFileSync(resolved.target, nextContent, 'utf8')
+    const refreshed = findListedSkill(skill.path, skillRoot, options) ?? skill
+    return {
+      ok: true,
+      relativePath: resolved.relativePath,
+      skill: refreshed
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+function resolveSkillRelativeFile(
+  skill: AgentSkillOption,
+  relativePath: string
+):
+  | { ok: true; relativePath: string; target: string; skillDir: string }
+  | { ok: false; error: string } {
+  const skillDir = dirname(resolve(skill.path))
+  const trimmed = relativePath.trim().replace(/\\/g, '/')
+  if (!trimmed || trimmed.includes('\0') || trimmed.split('/').includes('..')) {
+    return { ok: false, error: 'Invalid skill file path.' }
+  }
+
+  const target = resolve(skillDir, trimmed)
+  if (!isPathInside(skillDir, target) && target !== skillDir) {
+    return { ok: false, error: 'Skill file path is outside the skill directory.' }
+  }
+
+  return { ok: true, relativePath: trimmed, target, skillDir }
+}
+
+function findListedSkill(
+  path: string,
+  skillRoot?: string,
+  options?: ListAgentSkillsOptions
+): AgentSkillOption | undefined {
+  const skillPath = resolve(path)
+  return listAgentSkills(skillRoot, options).find(
+    (candidate) => resolve(candidate.path) === skillPath
+  )
+}
+
+function collectSkillEntries(
+  skillDir: string,
+  currentDir: string,
+  depth: number,
+  entries: AgentSkillFileEntry[]
+): void {
+  if (depth > MAX_SKILL_TREE_DEPTH || entries.length >= MAX_SKILL_TREE_ENTRIES) return
+  if (!existsSync(currentDir)) return
+
+  let children
+  try {
+    children = readdirSync(currentDir, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  children.sort((left, right) => {
+    if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1
+    return left.name.localeCompare(right.name)
+  })
+
+  for (const entry of children) {
+    if (entries.length >= MAX_SKILL_TREE_ENTRIES) return
+    if (entry.name === '.git' || entry.name === 'node_modules') continue
+
+    const fullPath = join(currentDir, entry.name)
+    const relativePath = relative(skillDir, fullPath).split(sep).join('/')
+    if (entry.isDirectory()) {
+      entries.push({ relativePath, name: entry.name, kind: 'directory' })
+      collectSkillEntries(skillDir, fullPath, depth + 1, entries)
+      continue
+    }
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue
+    try {
+      const stats = statSync(fullPath)
+      if (!stats.isFile()) continue
+      entries.push({
+        relativePath,
+        name: entry.name,
+        kind: 'file',
+        size: stats.size
+      })
+    } catch {
+      // skip unreadable entries
+    }
+  }
+}
+
+function looksLikeBinaryFile(path: string): boolean {
+  try {
+    const buffer = readFileSync(path)
+    const sample = buffer.subarray(0, Math.min(buffer.length, 8000))
+    if (sample.includes(0)) return true
+    let weird = 0
+    for (const byte of sample) {
+      if (byte < 7 || (byte > 14 && byte < 32 && byte !== 27)) weird += 1
+    }
+    return sample.length > 0 && weird / sample.length > 0.3
+  } catch {
+    return true
+  }
 }
 
 export function buildAgentSkillContext(input: string, skillRoot?: string): AgentSkillContext {
@@ -836,31 +1041,30 @@ export function buildAgentSkillContext(input: string, skillRoot?: string): Agent
 }
 
 function findSkillFiles(root: string): string[] {
-  if (!existsSync(root)) return []
-
-  const files: string[] = []
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-
-    const skillPath = join(root, entry.name, 'SKILL.md')
-    if (existsSync(skillPath)) files.push(skillPath)
-  }
-
-  return files
+  return findSkillDirectories(root).map((directory) => join(directory, 'SKILL.md'))
 }
 
-function readSkill(path: string, root: string, removable: boolean): AgentSkillOption {
+function readSkill(
+  path: string,
+  root: string,
+  removable: boolean,
+  writable: boolean
+): AgentSkillOption {
   const content = readFileSync(path, 'utf8')
-  const name = extractSkillName(content) || basename(path.replace(/\/SKILL\.md$/, ''))
+  const skillDir = dirname(path)
+  const name = extractSkillName(content) || basename(skillDir)
+  const relativePath = relative(root, skillDir).split(sep).join('/')
 
   return {
-    id: name,
+    id: relativePath || name,
     name,
     description: extractSkillDescription(content),
     aliases: extractSkillAliases(content),
     path,
+    relativePath: relativePath || basename(skillDir),
     source: root,
-    removable
+    removable,
+    writable
   }
 }
 

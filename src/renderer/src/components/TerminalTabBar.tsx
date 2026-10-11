@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { PlusIcon, XIcon } from 'lucide-react'
 
 import { TerminalActivityDot } from '@renderer/components/StatusIndicators'
@@ -33,7 +34,8 @@ export function TerminalTabBar({
   onOpenTabMenu,
   onCloseTab,
   onCloseOtherTabs,
-  onCloseAllTabs
+  onCloseAllTabs,
+  onBrowseFiles
 }: {
   tabs: AgentTerminalTab[]
   labelTabs?: AgentTerminalTab[]
@@ -50,6 +52,7 @@ export function TerminalTabBar({
   onCloseTab: (tabId: string) => void
   onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: (tabId: string) => void
+  onBrowseFiles?: (tabId: string) => void
 }): React.JSX.Element {
   const titleSource = labelTabs ?? tabs
   const activeTabRef = useRef<HTMLButtonElement>(null)
@@ -218,39 +221,56 @@ export function TerminalTabBar({
           </Button>
         </>
       )}
-      {tabMenu && (
-        <div
-          className="fixed z-50 min-w-36 overflow-hidden rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-lg overscroll-contain"
-          style={{ left: tabMenu.x, top: tabMenu.y }}
-          role="menu"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => onCloseTab(tabMenu.tabId)}
+      {tabMenu &&
+        createPortal(
+          <div
+            className="fixed z-50 min-w-36 overflow-hidden rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-lg overscroll-contain"
+            style={{ left: tabMenu.x, top: tabMenu.y }}
+            role="menu"
+            onClick={(event) => event.stopPropagation()}
           >
-            {t.common.closeTab}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => onCloseOtherTabs(tabMenu.tabId)}
-          >
-            {t.common.closeOtherTabs}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="block w-full rounded-md px-2 py-1.5 text-left text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => onCloseAllTabs(tabMenu.tabId)}
-          >
-            {t.common.closeAllTabs}
-          </button>
-        </div>
-      )}
+            {(() => {
+              const menuTab = tabs.find((tab) => tab.id === tabMenu.tabId)
+              const canBrowse = Boolean(onBrowseFiles) && Boolean(menuTab?.connectionId)
+              if (!canBrowse) return null
+              return (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+                  onClick={() => onBrowseFiles?.(tabMenu.tabId)}
+                >
+                  {t.serverFiles.browse}
+                </button>
+              )
+            })()}
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() => onCloseTab(tabMenu.tabId)}
+            >
+              {t.common.closeTab}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() => onCloseOtherTabs(tabMenu.tabId)}
+            >
+              {t.common.closeOtherTabs}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() => onCloseAllTabs(tabMenu.tabId)}
+            >
+              {t.common.closeAllTabs}
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

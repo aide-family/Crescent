@@ -137,8 +137,10 @@
 }
 
 .app-frame {
+  min-width: 0;
   padding: 0;
   gap: 0;
+  overflow: hidden;
 }
 
 .app-terminal-pane,
@@ -150,6 +152,7 @@
 }
 
 .app-terminal-pane {
+  min-width: 0;
   background: var(--app-terminal);
 }
 
@@ -252,7 +255,7 @@
 
 .terminal-canvas,
 .subterminal-canvas {
-  padding: 12px;
+  overflow: hidden;
 }
 
 .terminal-canvas {
@@ -519,6 +522,59 @@
   color: var(--muted-foreground);
 }
 
+.app-footer {
+  border-top: 1px solid var(--border);
+  background: var(--app-chrome);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-footer-cluster {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.app-footer-version {
+  letter-spacing: 0.01em;
+}
+
+.app-footer-sep {
+  width: 1px;
+  height: 0.75rem;
+  margin-inline: 0.25rem;
+  background: var(--border);
+}
+
+.app-footer-action {
+  color: var(--muted-foreground);
+}
+
+.app-footer-action:hover,
+.app-footer-action:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.app-footer-update {
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+}
+
+.app-footer-update:hover,
+.app-footer-update:focus-visible {
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+}
+
+.app-footer-pet[data-enabled='false'] {
+  opacity: 0.45;
+}
+
+.app-footer-pet[data-enabled='true'] > span {
+  border-color: var(--primary);
+}
+
 /*
   Nested sticky pinning (top offset only — no z-index):
   - .app-sticky-scope sets the offset for nested bars under a section title
@@ -591,10 +647,6 @@
   border-color: var(--border);
   background: var(--card);
   box-shadow: none;
-}
-
-.app-sheet-detail {
-  max-width: min(52vw, 680px);
 }
 
 .app-document-panel article {
@@ -807,6 +859,22 @@
   color: inherit;
 }
 
+/* Shiki token colors on Crescent markdown canvas (transparent theme bg). */
+.app-code-panel-body pre.shiki {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  font: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  overflow: visible;
+}
+
+.app-code-panel-body pre.shiki code {
+  font: inherit;
+  white-space: inherit;
+}
+
 .app-mermaid-expanded {
   background: var(--app-markdown-canvas);
 }
@@ -983,8 +1051,11 @@
   }
 }
 
-.xterm {
+.terminal-canvas .xterm,
+.subterminal-canvas .xterm {
+  width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 .xterm .xterm-viewport {

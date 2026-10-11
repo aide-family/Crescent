@@ -12,6 +12,12 @@ export const WIKI_MIN_PREVIEW_WIDTH = 360
 export const WIKI_FALLBACK_PREVIEW_WIDTH = 620
 export const WIKI_REFRESH_MIN_LOADING_MS = 350
 
+export const SKILL_TARGET_SHEET_RATIO = 0.8
+export const SKILL_LIST_COLUMN_WIDTH = 360
+export const SKILL_SHEET_CHROME_WIDTH = 44
+export const SKILL_MIN_DETAIL_WIDTH = 420
+export const SKILL_FALLBACK_DETAIL_WIDTH = 720
+
 export function getDefaultWikiPreviewWidth(): number {
   if (typeof window === 'undefined') return WIKI_FALLBACK_PREVIEW_WIDTH
 
@@ -20,6 +26,25 @@ export function getDefaultWikiPreviewWidth(): number {
     Math.floor(window.innerWidth * WIKI_TARGET_PREVIEW_SHEET_RATIO) -
       WIKI_SHEET_SELECTED_FIXED_WIDTH
   )
+}
+
+export function getDefaultSkillDetailWidth(): number {
+  if (typeof window === 'undefined') return SKILL_FALLBACK_DETAIL_WIDTH
+
+  return Math.max(
+    SKILL_MIN_DETAIL_WIDTH,
+    Math.floor(window.innerWidth * SKILL_TARGET_SHEET_RATIO) -
+      SKILL_LIST_COLUMN_WIDTH -
+      SKILL_SHEET_CHROME_WIDTH
+  )
+}
+
+export function clampSkillDetailWidth(width: number, viewportWidth = window.innerWidth): number {
+  const maxWidth = Math.max(
+    SKILL_MIN_DETAIL_WIDTH,
+    viewportWidth - 48 - SKILL_LIST_COLUMN_WIDTH - SKILL_SHEET_CHROME_WIDTH
+  )
+  return Math.max(SKILL_MIN_DETAIL_WIDTH, Math.min(maxWidth, width))
 }
 
 export function buildModelSelectionValue(providerId: string | undefined, model: string): string {

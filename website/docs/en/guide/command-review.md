@@ -24,11 +24,11 @@ A low-risk command goes straight into the visible terminal. A high-risk command 
 
 ## Risk levels
 
-| Level | What usually happens |
-| --- | --- |
-| Low | Clear read-only checks can run automatically. Several read-only commands collapse into one group |
-| Medium | Limited impact, or an unclear intent, waits for you |
-| High | Deletes, restarts, privilege changes, file writes, and config edits wait until you approve them |
+| Level  | What usually happens                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| Low    | Clear read-only checks can run automatically. Several read-only commands collapse into one group |
+| Medium | Limited impact, or an unclear intent, waits for you                                              |
+| High   | Deletes, restarts, privilege changes, file writes, and config edits wait until you approve them  |
 
 You can add a note when you approve or reject, for example “read-only only”, “wrong scope”, or “watch the target path”. If the session is already closed, a pending approval is cancelled.
 

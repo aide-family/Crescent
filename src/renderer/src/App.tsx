@@ -3,6 +3,8 @@ import { ChangePlanReview } from '@renderer/components/ChangePlanReview'
 import {
   FormEvent,
   KeyboardEvent,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -36,6 +38,7 @@ import {
   type CloseTabsConfirmRequest,
   type PasswordPromptRequest
 } from '@renderer/components/AppModals'
+import { AppFooter } from '@renderer/components/AppFooter'
 import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
 import {
   extractResultMarkdown,
@@ -45,7 +48,6 @@ import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { McpServersSheet } from '@renderer/components/McpServersSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
-import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import { ThemeSwitcher } from '@renderer/components/ThemeSwitcher'
 import {
   type SkillInstallLogStatus,
@@ -138,6 +140,8 @@ import {
   WIKI_REFRESH_MIN_LOADING_MS,
   WIKI_SHEET_SELECTED_FIXED_WIDTH,
   buildModelSelectionValue,
+  clampSkillDetailWidth,
+  getDefaultSkillDetailWidth,
   getDefaultWikiPreviewWidth,
   isLocalConnection,
   parseModelSelectionValue,
@@ -404,6 +408,7 @@ import {
 } from '@renderer/lib/onboarding'
 import { parseCaptureIntent } from '../../shared/capture-intent'
 import { mergeCaptureTraces } from '../../shared/capture-transcript'
+import type { AppUpdateStatusEvent } from '../../shared/update-types'
 
 const emptyConfig: AgentConfig = {
   providers: [],
@@ -519,6 +524,11 @@ function resolveSubterminalTabState(
   }
 }
 
+const ServerFilesSheet = lazy(async () => {
+  const mod = await import('@renderer/components/ServerFilesSheet')
+  return { default: mod.ServerFilesSheet }
+})
+
 function App({
   recoveryMode = 'none',
   initialWorkbenchLayout = null
@@ -569,6 +579,10 @@ function App({
     startHeight: number
   } | null>(null)
   const wikiSheetResizeRef = useRef<{
+    startX: number
+    startWidth: number
+  } | null>(null)
+  const skillSheetResizeRef = useRef<{
     startX: number
     startWidth: number
   } | null>(null)
@@ -734,6 +748,10 @@ function App({
   const liveRunUsageRef = useRef(
     new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
   )
+  const [appVersion, setAppVersion] = useState('')
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
+    state: 'idle'
+  })
   const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
   const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
   const [historyTitleDraft, setHistoryTitleDraft] = useState('')
@@ -752,6 +770,8 @@ function App({
   const [wikiDeletingId, setWikiDeletingId] = useState<string | null>(null)
   const [wikiMessage, setWikiMessage] = useState<SkillManageMessage | null>(null)
   const [wikiPreviewWidth, setWikiPreviewWidth] = useState(620)
+  const [skillDetailWidth, setSkillDetailWidth] = useState(() => getDefaultSkillDetailWidth())
+  const [skillFileSaving, setSkillFileSaving] = useState(false)
   const [savingHistoryWikiTabId, setSavingHistoryWikiTabId] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
@@ -815,6 +835,7 @@ function App({
     x: number
     y: number
   } | null>(null)
+  const [serverFilesConnectionId, setServerFilesConnectionId] = useState<string | null>(null)
   const {
     updateTab,
     updateSubterminalOutput,
@@ -2054,17 +2075,6 @@ function App({
   })
 
   useEffect(() => {
-    return window.api.terminal.onConnectionOrigin(({ tabId }) => {
-      updateTab(tabId, (current) => ({
-        ...current,
-        connectionId: undefined,
-        connectionName: undefined,
-        isSsh: false
-      }))
-    })
-  }, [updateTab])
-
-  useEffect(() => {
     return window.api.terminal.onEnvironmentDrift((event) => {
       // Main only emits for true session breaks (exit-to-local / jump-box
       // fall-back). Peer hops are re-anchored in-process and never reach here.
@@ -2242,7 +2252,12 @@ function App({
   }, [selectSessionTab])
 
   useEffect(() => {
+    let cancelled = false
+    void window.api.update.getVersion().then((result) => {
+      if (!cancelled) setAppVersion(result.version)
+    })
     const unsubscribe = window.api.update.onStatus((event) => {
+      setAppUpdateStatus(event)
       if (event.state === 'downloaded' && event.installerPath) {
         toast.success(t.app.updateSaved)
       }
@@ -2251,6 +2266,7 @@ function App({
       void window.api.update.check()
     }
     return () => {
+      cancelled = true
       unsubscribe()
     }
   }, [t.app.updateSaved])
@@ -2474,6 +2490,16 @@ function App({
         return
       }
 
+      const skillSheetResize = skillSheetResizeRef.current
+      if (skillSheetResize) {
+        // Detail pane right edge: drag rightward to widen content preview (Wiki parity).
+        const nextWidth = clampSkillDetailWidth(
+          skillSheetResize.startWidth + (event.clientX - skillSheetResize.startX)
+        )
+        setSkillDetailWidth(nextWidth)
+        return
+      }
+
       const subterminalResize = subterminalResizeRef.current
       if (subterminalResize) {
         const deltaPercent = ((event.clientX - subterminalResize.startX) / window.innerWidth) * 100
@@ -2506,6 +2532,7 @@ function App({
       subterminalResizeRef.current = null
       subterminalHeightResizeRef.current = null
       wikiSheetResizeRef.current = null
+      skillSheetResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       if (resized) window.requestAnimationFrame(() => syncActiveTerminalSize())
@@ -3133,7 +3160,15 @@ function App({
         commandWhitelist: parseCommandWhitelist(commandWhitelistText)
       })
       setSkillManageMessage({ type: 'success', text: t.settings.skillDirectorySaved })
-      setSkills(await window.api.agent.listSkills())
+      const nextSkills = await window.api.agent.listSkills()
+      setSkills(nextSkills)
+      const allowedPaths = new Set(nextSkills.map((skill) => skill.path))
+      setTabs((current) =>
+        current.map((tab) => ({
+          ...tab,
+          skillRefs: (tab.skillRefs ?? []).filter((skill) => allowedPaths.has(skill.path))
+        }))
+      )
       setConfig(nextConfig)
     } catch (error) {
       setSkillManageMessage({
@@ -3559,13 +3594,27 @@ function App({
   }
 
   async function previewSkill(skill: AgentSkillOption): Promise<void> {
+    setSkillDetailWidth(getDefaultSkillDetailWidth())
     setSkillPreviewLoadingPath(skill.path)
     setSkillManageMessage(null)
     setSkillInstallLogResultId(null)
-    setSelectedSkillPreview({ skill, content: '' })
+    setSelectedSkillPreview({
+      skill,
+      content: '',
+      selectedFilePath: 'SKILL.md',
+      files: []
+    })
     try {
-      const content = await window.api.agent.getSkillContent(skill.path)
-      setSelectedSkillPreview({ skill, content })
+      const [content, files] = await Promise.all([
+        window.api.agent.getSkillContent(skill.path),
+        window.api.agent.listSkillFiles(skill.path).catch(() => [])
+      ])
+      setSelectedSkillPreview({
+        skill,
+        content,
+        files,
+        selectedFilePath: 'SKILL.md'
+      })
     } catch (error) {
       setSelectedSkillPreview(null)
       setSkillManageMessage({
@@ -3577,7 +3626,117 @@ function App({
     }
   }
 
+  async function selectSkillPreviewFile(relativePath: string): Promise<void> {
+    const current = selectedSkillPreview
+    if (!current || current.catalogResultId || current.selectedFilePath === relativePath) return
+
+    setSkillPreviewLoadingPath(current.skill.path)
+    setSelectedSkillPreview({
+      ...current,
+      selectedFilePath: relativePath,
+      content: '',
+      selectedFileBinary: false,
+      selectedFileTruncated: false,
+      selectedFileError: undefined
+    })
+    try {
+      const result = await window.api.agent.getSkillFile(current.skill.path, relativePath)
+      setSelectedSkillPreview((preview) => {
+        if (!preview || preview.skill.path !== current.skill.path) return preview
+        if (preview.selectedFilePath !== relativePath) return preview
+        if (!result.ok) {
+          return {
+            ...preview,
+            content: '',
+            selectedFileError: result.error || t.settings.skillPreviewFileFailed,
+            selectedFileBinary: false,
+            selectedFileTruncated: false
+          }
+        }
+        if (result.binary) {
+          return {
+            ...preview,
+            content: '',
+            selectedFileBinary: true,
+            selectedFileTruncated: false,
+            selectedFileError: undefined
+          }
+        }
+        return {
+          ...preview,
+          content: result.content,
+          selectedFileBinary: false,
+          selectedFileTruncated: Boolean(result.truncated),
+          selectedFileError: undefined
+        }
+      })
+    } catch (error) {
+      setSelectedSkillPreview((preview) =>
+        preview && preview.skill.path === current.skill.path
+          ? {
+              ...preview,
+              content: '',
+              selectedFileError:
+                error instanceof Error ? error.message : t.settings.skillPreviewFileFailed,
+              selectedFileBinary: false,
+              selectedFileTruncated: false
+            }
+          : preview
+      )
+    } finally {
+      setSkillPreviewLoadingPath((path) => (path === current.skill.path ? null : path))
+    }
+  }
+
+  async function saveSkillPreviewFile(
+    skill: AgentSkillOption,
+    relativePath: string,
+    content: string
+  ): Promise<boolean> {
+    setSkillFileSaving(true)
+    setSkillManageMessage(null)
+    try {
+      const result = await window.api.agent.writeSkillFile(skill.path, relativePath, content)
+      if (!result.ok) {
+        setSkillManageMessage({
+          type: 'error',
+          text: result.error || t.settings.skillFileSaveFailed
+        })
+        toast.error(result.error || t.settings.skillFileSaveFailed)
+        return false
+      }
+
+      const nextSkills = await window.api.agent.listSkills()
+      setSkills(nextSkills)
+      const refreshed = nextSkills.find((item) => item.path === result.skill.path) ?? result.skill
+      setSelectedSkillPreview((preview) =>
+        preview && preview.skill.path === skill.path
+          ? {
+              ...preview,
+              skill: refreshed,
+              content,
+              selectedFilePath: relativePath,
+              selectedFileBinary: false,
+              selectedFileTruncated: false,
+              selectedFileError: undefined
+            }
+          : preview
+      )
+      setSkillManageMessage({ type: 'success', text: t.settings.skillFileSaved })
+      toast.success(t.settings.skillFileSaved)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.settings.skillFileSaveFailed
+      setSkillManageMessage({ type: 'error', text: message })
+      toast.error(message)
+      return false
+    } finally {
+      setSkillFileSaving(false)
+    }
+  }
+
   async function previewCatalogSkill(result: AgentSkillSearchResult): Promise<void> {
+    setSkillDetailWidth(getDefaultSkillDetailWidth())
     const skill: AgentSkillOption = {
       id: result.id,
       name: result.name,
@@ -6039,12 +6198,8 @@ function App({
 
     const terminalContext = await window.api.terminal.getContext(terminalTabId)
     if (terminalContext.connectionOrigin === 'manual-shell' && terminalTab?.connectionId) {
-      updateTab(terminalTabId, (current) => ({
-        ...current,
-        connectionId: undefined,
-        connectionName: undefined,
-        isSsh: false
-      }))
+      // Keep the saved connection on the tab for browse and reconnect.
+      // This turn only treats the live shell as a manual hop.
       terminalTab = {
         ...terminalTab,
         connectionId: undefined,
@@ -8133,11 +8288,21 @@ function App({
       skillInstallLogStatuses={skillInstallLogStatuses}
       skillInstallLogResultId={skillInstallLogResultId}
       installedSkillNames={installedSkillNames}
+      skillDetailWidth={skillDetailWidth}
+      skillFileSaving={skillFileSaving}
       onSkillRootChange={(value) => updateConfig('skillRoot', value)}
       onSaveSkillRoot={() => void saveSkillRoot()}
       onLoadGlobalAgentSkillsChange={(checked) => {
         void persistAgentConfigPatch({ loadGlobalAgentSkills: checked }).then(async () => {
-          setSkills(await window.api.agent.listSkills())
+          const nextSkills = await window.api.agent.listSkills()
+          setSkills(nextSkills)
+          const allowedPaths = new Set(nextSkills.map((skill) => skill.path))
+          setTabs((current) =>
+            current.map((tab) => ({
+              ...tab,
+              skillRefs: (tab.skillRefs ?? []).filter((skill) => allowedPaths.has(skill.path))
+            }))
+          )
         })
       }}
       onLocalSkillSearchQueryChange={setLocalSkillSearchQuery}
@@ -8152,9 +8317,19 @@ function App({
       onDeleteSkill={(skill) => void deleteSkill(skill)}
       onPreviewSkill={(skill) => void previewSkill(skill)}
       onPreviewCatalogSkill={(result) => void previewCatalogSkill(result)}
+      onSelectSkillPreviewFile={(relativePath) => void selectSkillPreviewFile(relativePath)}
+      onSaveSkillFile={(skill, relativePath, content) =>
+        saveSkillPreviewFile(skill, relativePath, content)
+      }
       onDeleteSkillInstallLog={deleteSkillInstallLog}
       onSelectedSkillPreviewChange={setSelectedSkillPreview}
-      onSkillInstallLogResultIdChange={setSkillInstallLogResultId}
+      onSkillInstallLogResultIdChange={(resultId) => {
+        if (resultId) setSkillDetailWidth(getDefaultSkillDetailWidth())
+        setSkillInstallLogResultId(resultId)
+      }}
+      onStartDetailResize={(startX, startWidth) => {
+        skillSheetResizeRef.current = { startX, startWidth }
+      }}
     />
   )
 
@@ -8343,32 +8518,6 @@ function App({
               {localeOptions.find((option) => option.value === locale)?.shortLabel}
             </span>
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={
-              whaleEnabled
-                ? locale === 'en'
-                  ? 'Hide whale pet'
-                  : '隐藏桌宠'
-                : locale === 'en'
-                  ? 'Show whale pet'
-                  : '显示桌宠'
-            }
-            title={
-              whaleEnabled
-                ? locale === 'en'
-                  ? 'Hide whale pet'
-                  : '隐藏桌宠'
-                : locale === 'en'
-                  ? 'Show whale pet'
-                  : '显示桌宠'
-            }
-            onClick={() => void toggleWhaleMonitor()}
-          >
-            <WhalePetPortrait />
-          </Button>
           <ThemeSwitcher t={t} />
           <SettingsSheet
             open={sheetOpen}
@@ -8530,6 +8679,21 @@ function App({
             onCloseTab={closeTab}
             onCloseOtherTabs={closeOtherTabs}
             onCloseAllTabs={closeAllTabs}
+            onBrowseFiles={(tabId) => {
+              setTabMenu(null)
+              const topTab = tabsRef.current.find((item) => item.id === tabId)
+              if (topTab?.connectionId) {
+                setServerFilesConnectionId(topTab.connectionId)
+                return
+              }
+              const sub = resolveSubterminalTabState(tabsRef.current, tabId)
+              if (!sub) return
+              const parent = tabsRef.current.find((item) => item.id === sub.parentTabId)
+              const child = parent?.subTerminals.find((item) => item.id === tabId)
+              const connectionId = child?.connectionId
+              if (!connectionId) return
+              setServerFilesConnectionId(connectionId)
+            }}
             onConnectionQueryChange={setConnectionSearchQuery}
             onShowConnectionList={showConnectionList}
             onConnect={connectFromConnectionCard}
@@ -8887,6 +9051,11 @@ function App({
           void openConnectionInSubterminal(connection)
           setConnectionModalOpen(false)
         }}
+        onBrowseFiles={(connection) => {
+          if (connection.source === 'local') return
+          setServerFilesConnectionId(connection.id)
+          setConnectionModalOpen(false)
+        }}
         onCopyConnection={(connection) => void copyConnection(connection)}
         onDuplicateConnection={duplicateConnection}
         onEditConnection={editConnection}
@@ -8920,6 +9089,21 @@ function App({
           })
         }}
       />
+      <Suspense fallback={null}>
+        <ServerFilesSheet
+          open={Boolean(serverFilesConnectionId)}
+          onOpenChange={(open) => {
+            if (!open) setServerFilesConnectionId(null)
+          }}
+          connection={
+            serverFilesConnectionId
+              ? (displayConnections.find((item) => item.id === serverFilesConnectionId) ?? null)
+              : null
+          }
+          formatConnectionTarget={formatConnectionTarget}
+          t={t}
+        />
+      </Suspense>
       <CloseTabsConfirmModal
         request={closeTabsConfirmRequest}
         t={t}
@@ -8948,6 +9132,32 @@ function App({
           setSkillOpen(true)
         }}
         onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
+      />
+      <AppFooter
+        version={appVersion}
+        updateStatus={appUpdateStatus}
+        t={t}
+        whaleEnabled={whaleEnabled}
+        onToggleWhale={() => void toggleWhaleMonitor()}
+        onDownloadUpdate={() => {
+          if (appUpdateStatus.state === 'downloading') return
+          setAppUpdateStatus({
+            state: 'downloading',
+            percent: 0,
+            bytesPerSecond: 0,
+            transferred: 0,
+            total: 0
+          })
+          void window.api.update.downloadInstaller().then((result) => {
+            if (!result.ok) {
+              toast.error(result.error || t.settings.updateDownloadFailed)
+              setAppUpdateStatus({
+                state: 'error',
+                message: result.error || t.settings.updateDownloadFailed
+              })
+            }
+          })
+        }}
       />
       <WhaleMonitor
         locale={locale}
@@ -9347,7 +9557,7 @@ async function waitForPromptHostOrTimeout(
 }
 
 function sendTerminalInput(value: string, tabId: string): void {
-  window.api.terminal.write(`${value}\r`, tabId)
+  window.api.terminal.write(`${value}\r`, tabId, 'automation')
 }
 
 function getSelectedTextWithinLog(logId: number): string {

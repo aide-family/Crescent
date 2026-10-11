@@ -498,8 +498,28 @@ function MarkdownCodeBlock({
   streaming?: boolean
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null)
   const normalizedLanguage = language.trim().toLowerCase()
   const label = language || 'text'
+  const shouldHighlight = closed && !streaming
+
+  useEffect(() => {
+    if (!shouldHighlight) return
+    let cancelled = false
+    void import('@renderer/lib/shiki/highlight-code')
+      .then(({ highlightCode }) => highlightCode(code, language))
+      .then((html) => {
+        if (!cancelled) setHighlightedHtml(html)
+      })
+      .catch(() => {
+        if (!cancelled) setHighlightedHtml(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [code, language, shouldHighlight])
+
+  const displayHtml = shouldHighlight ? highlightedHtml : null
 
   async function copyCode(): Promise<void> {
     try {
@@ -578,9 +598,13 @@ function MarkdownCodeBlock({
           {copied ? t.common.copied : t.common.copy}
         </Button>
       </div>
-      <pre className="app-code-panel-body">
-        <code>{code}</code>
-      </pre>
+      {displayHtml ? (
+        <div className="app-code-panel-body" dangerouslySetInnerHTML={{ __html: displayHtml }} />
+      ) : (
+        <pre className="app-code-panel-body">
+          <code>{code}</code>
+        </pre>
+      )}
     </div>
   )
 }

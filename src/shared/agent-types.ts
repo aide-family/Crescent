@@ -559,9 +559,29 @@ export interface AgentSkillOption {
   description: string
   aliases?: string[]
   path: string
+  /** Path of the skill directory relative to its skill root (e.g. nested/two). */
+  relativePath?: string
   source: string
   removable?: boolean
+  /** True when the skill lives under the configured writable skillRoot. */
+  writable?: boolean
 }
+
+export interface AgentSkillFileEntry {
+  relativePath: string
+  name: string
+  kind: 'file' | 'directory'
+  size?: number
+}
+
+export type AgentSkillFileContent =
+  | { ok: true; relativePath: string; content: string; truncated?: boolean; binary?: false }
+  | { ok: true; relativePath: string; binary: true; content?: undefined }
+  | { ok: false; error: string }
+
+export type AgentSkillFileWriteResult =
+  | { ok: true; relativePath: string; skill: AgentSkillOption }
+  | { ok: false; error: string }
 
 export interface AgentSkillSearchResult {
   id: string

@@ -144,6 +144,28 @@ export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<
   return Boolean(fingerprint && failed.has(fingerprint))
 }
 
+const BARE_SESSION_EXIT_RE = /^(?:sudo\s+)?(?:exit|logout)(?:\s+-?\d+)?\s*$/i
+
+/**
+ * Bare `exit` / `logout` (or trailing `; exit` / `&& exit`) peels nested SSH/kubectl
+ * hops and can false-trigger host reconnect. Agent must not run these on remote panes.
+ */
+export function isRemoteSessionExitCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (!trimmed) return false
+  const parts = trimmed.split(/(?:&&|\|\||;|\n|\r)/)
+  return parts.some((part) => BARE_SESSION_EXIT_RE.test(part.trim()))
+}
+
+export function shouldBlockRemoteSessionExit(input: {
+  command: string
+  isSsh?: boolean
+  parentConnectionId?: string
+}): boolean {
+  if (!input.isSsh && !input.parentConnectionId?.trim()) return false
+  return isRemoteSessionExitCommand(input.command)
+}
+
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
 
 registerPtyExecutionTabChecker((tabId) => {
@@ -398,6 +420,19 @@ export async function executeReviewedPtyCommand(input: {
       tabId: executionTabId,
       fromSubagent
     })
+    return blocked(message)
+  }
+
+  if (
+    shouldBlockRemoteSessionExit({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      parentConnectionId: context.parentConnectionId
+    })
+  ) {
+    const message = zh
+      ? '禁止在远程会话执行 exit/logout：会剥离子 hop 并触发整链重连。保持当前 shell；断线时由主机恢复连接，不要用 bash ssh 重连。'
+      : 'Do not run exit/logout on a remote session — it peels nested hops and can trigger a full reconnect. Stay in the current shell; the host owns reconnect (do not bash ssh).'
     return blocked(message)
   }
 

@@ -587,4 +587,3 @@ export const architectureDiagramPresets: Record<string, ArchitectureSpec> = {
   'terminal-zh': terminalArchitectureZh,
   'terminal-en': terminalArchitectureEn
 }
-

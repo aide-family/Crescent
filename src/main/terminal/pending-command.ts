@@ -5,6 +5,10 @@ import {
   detectsTerminalCtrlC,
   hasLikelyShellPrompt
 } from './command-interrupt'
+import {
+  TERMINAL_COMMAND_START_DEADLINE_FLOOR_MS,
+  TERMINAL_COMMAND_START_TIMEOUT_BASE_MS
+} from './script-runner'
 
 export interface PendingCommandResult {
   ok: boolean
@@ -36,7 +40,10 @@ export interface CreatePendingCommandControllerInput {
   interruptGraceMs?: number
   /** Wait after observing ^C before settle (unless prompt returns sooner). */
   ctrlCConfirmMs?: number
+  /** Idle wait for start marker; re-armed on PTY progress before start. */
   startTimeoutMs?: number
+  /** Absolute wall-clock cap from write; prevents infinite idle-reset. */
+  startDeadlineMs?: number
   continuationPromptTimeoutMs?: number
   secretPromptTimeoutMs?: number
   interruptSession: () => void
@@ -71,7 +78,8 @@ export function createPendingCommandController(
   const timers = input.timers ?? { setTimeout, clearTimeout }
   const interruptGraceMs = input.interruptGraceMs ?? 2_000
   const ctrlCConfirmMs = input.ctrlCConfirmMs ?? TERMINAL_CTRL_C_CONFIRM_MS
-  const startTimeoutMs = input.startTimeoutMs ?? 8_000
+  const startTimeoutMs = input.startTimeoutMs ?? TERMINAL_COMMAND_START_TIMEOUT_BASE_MS
+  const startDeadlineMs = input.startDeadlineMs ?? TERMINAL_COMMAND_START_DEADLINE_FLOOR_MS
   const continuationPromptTimeoutMs = input.continuationPromptTimeoutMs ?? 5_000
   const secretPromptTimeoutMs = input.secretPromptTimeoutMs ?? 300_000
 
@@ -84,6 +92,7 @@ export function createPendingCommandController(
   let continuationPromptTimeout: ReturnType<typeof setTimeout> | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
   let startTimeout: ReturnType<typeof setTimeout> | undefined
+  let startDeadlineTimeout: ReturnType<typeof setTimeout> | undefined
   let ctrlCConfirmTimeout: ReturnType<typeof setTimeout> | undefined
   let resolvePromise!: (result: PendingCommandResult) => void
 
@@ -91,14 +100,20 @@ export function createPendingCommandController(
     resolvePromise = resolve
   })
 
+  const clearStartWatchdogs = (): void => {
+    if (startTimeout) timers.clearTimeout(startTimeout)
+    if (startDeadlineTimeout) timers.clearTimeout(startDeadlineTimeout)
+    startTimeout = undefined
+    startDeadlineTimeout = undefined
+  }
+
   const clearAllTimers = (): void => {
     if (timeout) timers.clearTimeout(timeout)
-    if (startTimeout) timers.clearTimeout(startTimeout)
     if (interruptGraceTimeout) timers.clearTimeout(interruptGraceTimeout)
     if (continuationPromptTimeout) timers.clearTimeout(continuationPromptTimeout)
     if (ctrlCConfirmTimeout) timers.clearTimeout(ctrlCConfirmTimeout)
+    clearStartWatchdogs()
     timeout = undefined
-    startTimeout = undefined
     interruptGraceTimeout = undefined
     continuationPromptTimeout = undefined
     ctrlCConfirmTimeout = undefined
@@ -156,6 +171,7 @@ export function createPendingCommandController(
     }, ms)
   }
 
+  /** Idle watchdog: fires only after silence lasting startTimeoutMs. */
   const armStartTimeout = (): void => {
     if (startTimeout) timers.clearTimeout(startTimeout)
     startTimeout = timers.setTimeout(() => {
@@ -165,6 +181,24 @@ export function createPendingCommandController(
         `\r\n\x1b[33m[Crescent] command did not start within ${startTimeoutMs}ms; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
       )
     }, startTimeoutMs)
+  }
+
+  /** Absolute cap from write so idle-reset cannot stretch forever. */
+  const armStartDeadline = (): void => {
+    if (startDeadlineTimeout) timers.clearTimeout(startDeadlineTimeout)
+    startDeadlineTimeout = timers.setTimeout(() => {
+      if (commandStarted || settled || waitingForSecretPrompt) return
+      interruptForTimeout(
+        'Command did not reach the execution start marker before the absolute start deadline; Crescent sent Ctrl+C to recover.',
+        `\r\n\x1b[33m[Crescent] command did not start within ${startDeadlineMs}ms (absolute); sending Ctrl+C to recover the shell.\x1b[0m\r\n`
+      )
+    }, startDeadlineMs)
+  }
+
+  const markCommandStarted = (): void => {
+    if (commandStarted) return
+    commandStarted = true
+    clearStartWatchdogs()
   }
 
   const armCtrlCConfirm = (): void => {
@@ -183,7 +217,12 @@ export function createPendingCommandController(
   const onData = (data: string): void => {
     if (settled) return
     buffer += data
-    if (buffer.includes(input.startMarker)) commandStarted = true
+    if (buffer.includes(input.startMarker)) markCommandStarted()
+
+    // Bootstrap still in flight: any PTY progress resets the idle start watchdog.
+    if (!commandStarted && !waitingForSecretPrompt && !timeoutTriggered) {
+      armStartTimeout()
+    }
 
     if (!timeoutTriggered && detectsTerminalCtrlC(data)) {
       armCtrlCConfirm()
@@ -198,10 +237,7 @@ export function createPendingCommandController(
       const atSecretPrompt = Boolean(input.hasUnterminatedSecretPrompt?.(buffer))
       if (atSecretPrompt && !waitingForSecretPrompt) {
         waitingForSecretPrompt = true
-        if (startTimeout) {
-          timers.clearTimeout(startTimeout)
-          startTimeout = undefined
-        }
+        clearStartWatchdogs()
         if (continuationPromptTimeout) {
           timers.clearTimeout(continuationPromptTimeout)
           continuationPromptTimeout = undefined
@@ -210,7 +246,10 @@ export function createPendingCommandController(
       } else if (!atSecretPrompt && waitingForSecretPrompt) {
         waitingForSecretPrompt = false
         armCommandTimeout(input.timeoutMs)
-        if (!commandStarted) armStartTimeout()
+        if (!commandStarted) {
+          armStartTimeout()
+          armStartDeadline()
+        }
       }
 
       if (
@@ -267,6 +306,7 @@ export function createPendingCommandController(
 
   armCommandTimeout(input.timeoutMs)
   armStartTimeout()
+  armStartDeadline()
 
   if (input.signal) {
     if (input.signal.aborted) {

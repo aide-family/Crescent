@@ -173,10 +173,10 @@ function SubterminalXtermPane({
   }, [subterminal.id, shellExitedText])
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
       <div
         ref={hostRef}
-        className="subterminal-canvas absolute inset-0 overflow-hidden bg-black/40"
+        className="subterminal-canvas absolute inset-x-3 top-1 bottom-0 overflow-hidden bg-black/40"
       />
       {inputLocked ? (
         <TerminalLockOverlay

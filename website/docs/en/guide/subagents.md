@@ -26,11 +26,11 @@ Do not run concurrent `bash` on one pane. Same-session investigation stays on th
 
 Use parallel tasks only for independent read-only work. `worker` and `delegate` are rejected. A child cannot spawn another child, and it cannot replace a dead main SSH session. Wait for the host to restore that session, then retry `bash` on the main pane.
 
-| Profile | Tools | Role |
-| --- | --- | --- |
-| `scout` | `read`, read-only `bash` | Fast recon of files, entry points, data flow, and risks. Does not edit |
-| `researcher` | `read`, read-only `bash` | Gather facts from the workspace, docs, and command output, and cite sources |
-| `reviewer` | `read`, read-only `bash` | Check correctness, edge cases, and extra complexity against the task. Does not make large edits |
-| `oracle` | `read`, read-only `bash` | A second opinion before acting: gaps, risks, and a recommended next step |
+| Profile      | Tools                    | Role                                                                                            |
+| ------------ | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `scout`      | `read`, read-only `bash` | Fast recon of files, entry points, data flow, and risks. Does not edit                          |
+| `researcher` | `read`, read-only `bash` | Gather facts from the workspace, docs, and command output, and cite sources                     |
+| `reviewer`   | `read`, read-only `bash` | Check correctness, edge cases, and extra complexity against the task. Does not make large edits |
+| `oracle`     | `read`, read-only `bash` | A second opinion before acting: gaps, risks, and a recommended next step                        |
 
 `worker` and `delegate` are rejected. Changes and verification stay on the main pane. Crescent closes a child pane when that child finishes.

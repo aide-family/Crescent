@@ -33,6 +33,9 @@ import type {
   AgentCompactResult,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
+  AgentSkillFileContent,
+  AgentSkillFileEntry,
+  AgentSkillFileWriteResult,
   AgentSkillOption,
   AgentSkillSearchResult,
   AgentValidationResult,
@@ -69,6 +72,7 @@ import type {
   AppUpdateStatusEvent,
   AppUpdateVersionResult
 } from '../shared/update-types'
+import type { RemoteFsListResult, RemoteFsReadResult } from '../shared/remote-fs-types'
 import type {
   WhaleModelsSnapshot,
   WhaleMonitorConfigInput,
@@ -116,7 +120,7 @@ interface TerminalAgentApi {
       shell: string
       cwd: string
     }>
-    write: (data: string, tabId?: string) => void
+    write: (data: string, tabId?: string, source?: 'user' | 'automation') => void
     pasteCommand: (
       command: string,
       execute?: boolean,
@@ -257,6 +261,13 @@ interface TerminalAgentApi {
     }>
     deleteSkill: (path: string) => Promise<AgentSkillOption[]>
     getSkillContent: (path: string) => Promise<string>
+    listSkillFiles: (path: string) => Promise<AgentSkillFileEntry[]>
+    getSkillFile: (path: string, relativePath: string) => Promise<AgentSkillFileContent>
+    writeSkillFile: (
+      path: string,
+      relativePath: string,
+      content: string
+    ) => Promise<AgentSkillFileWriteResult>
     getCatalogSkillContent: (input: {
       installSource: string
       installSkill?: string
@@ -378,6 +389,10 @@ interface TerminalAgentApi {
       id: string
       action: 'up' | 'down' | 'top' | 'bottom'
     }) => Promise<ConnectionConfig[]>
+  }
+  remoteFs: {
+    list: (input: { connectionId: string; path?: string }) => Promise<RemoteFsListResult>
+    read: (input: { connectionId: string; path: string }) => Promise<RemoteFsReadResult>
   }
   storage: {
     saveTabs: (tabs: StoredSessionTab[]) => Promise<{ ok: boolean }>

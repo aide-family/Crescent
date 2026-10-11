@@ -166,6 +166,7 @@ app.whenReady().then(async () => {
     { registerConnectionIpc },
     { startAttachmentCleanupScheduler },
     { initializeCrescentDatabase },
+    { registerRemoteFsIpc },
     { registerStorageIpc },
     { registerUpdateIpc },
     { configureAboutPanel, installApplicationMenu, registerMenuIpc }
@@ -174,6 +175,7 @@ app.whenReady().then(async () => {
     import('./connections/ipc'),
     import('./attachment-cleanup'),
     import('./crescent-sqlite'),
+    import('./remote-fs/ipc'),
     import('./storage/ipc'),
     import('./update/ipc'),
     import('./menu')
@@ -250,6 +252,7 @@ app.whenReady().then(async () => {
   ensureDefaultInstructionFiles()
   registerAgentIpc()
   registerConnectionIpc()
+  registerRemoteFsIpc()
   registerStorageIpc()
   registerTerminalIpc()
   registerWhaleMonitorIpc()
@@ -288,6 +291,7 @@ app.whenReady().then(async () => {
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   stopAllTerminalSessions()
+  void import('./remote-fs/ipc').then(({ stopRemoteFsSessions }) => stopRemoteFsSessions())
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -298,6 +302,7 @@ app.on('before-quit', () => {
   stopAttachmentCleanup?.()
   stopAttachmentCleanup = undefined
   stopWhaleMonitorScheduler()
+  void import('./remote-fs/ipc').then(({ stopRemoteFsSessions }) => stopRemoteFsSessions())
 })
 
 // In this file you can include the rest of your app's specific main process

@@ -33,7 +33,9 @@ const title = computed(() => resolved.value?.title ?? 'architecture')
 
 const isEnglish = computed(() => {
   if (props.name?.endsWith('-en')) return true
-  return String(lang.value ?? '').toLowerCase().startsWith('en')
+  return String(lang.value ?? '')
+    .toLowerCase()
+    .startsWith('en')
 })
 
 const unavailable = computed(() =>

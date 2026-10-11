@@ -26,8 +26,11 @@ import {
   deleteAgentSkill,
   importAgentSkillsFromPath,
   installAgentSkill,
+  listAgentSkillEntries,
   listAgentSkills,
   readAgentSkillContent,
+  readAgentSkillFile,
+  writeAgentSkillFile,
   searchAgentSkills,
   startAgentSkillInstall,
   readCatalogSkillContent
@@ -217,6 +220,30 @@ export function registerAgentIpc(): void {
       loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
     })
   })
+
+  ipcMain.handle('agent:list-skill-files', (_, path: string) => {
+    const config = readAgentConfig()
+    return listAgentSkillEntries(path ?? '', config.skillRoot, {
+      loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+    })
+  })
+
+  ipcMain.handle('agent:get-skill-file', (_, path: string, relativePath: string) => {
+    const config = readAgentConfig()
+    return readAgentSkillFile(path ?? '', relativePath ?? '', config.skillRoot, {
+      loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+    })
+  })
+
+  ipcMain.handle(
+    'agent:write-skill-file',
+    (_, path: string, relativePath: string, content: string) => {
+      const config = readAgentConfig()
+      return writeAgentSkillFile(path ?? '', relativePath ?? '', content ?? '', config.skillRoot, {
+        loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+      })
+    }
+  )
 
   ipcMain.handle(
     'agent:get-catalog-skill-content',
@@ -661,19 +688,22 @@ export function registerAgentIpc(): void {
     const skillListOptions = {
       loadGlobalAgentSkills: Boolean(agentConfig.loadGlobalAgentSkills)
     }
+    const skillCatalog = listAgentSkills(skillRoot, skillListOptions)
+    const catalogByPath = new Map(
+      skillCatalog.map((skill) => [resolve(skill.path), skill] as const)
+    )
     const skillPaths = [
       ...new Set((payload?.activeSkillPaths ?? []).map((path) => path.trim()).filter(Boolean))
     ]
-    const skillCatalog = skillPaths.length ? listAgentSkills(skillRoot, skillListOptions) : []
     const activeSkillDocs = skillPaths.flatMap((skillPath) => {
+      const matched = catalogByPath.get(resolve(skillPath))
+      if (!matched) return []
       try {
-        const content = readAgentSkillContent(skillPath, skillRoot, skillListOptions)
-        const resolved = resolve(skillPath)
-        const matched = skillCatalog.find((skill) => resolve(skill.path) === resolved)
+        const content = readAgentSkillContent(matched.path, skillRoot, skillListOptions)
         return [
           {
-            name: matched?.name ?? skillPath.split('/').filter(Boolean).slice(-2, -1)[0] ?? 'Skill',
-            path: matched?.path ?? skillPath,
+            name: matched.name,
+            path: matched.path,
             content
           }
         ]

@@ -48,7 +48,7 @@ export function buildArchitectureExportSvg(spec: ArchitectureSpec): {
     .map((edge) => {
       const dash = edge.dashed ? ' stroke-dasharray="6 6"' : ''
       const label = edge.label
-        ? `<text x="${(edge.x1 + edge.x2) / 2}" y="${(edge.y1 + edge.y2) / 2 - 6}" text-anchor="middle" fill="${edge.color}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">${escapeXml(edge.label)}</text>`
+        ? `<text x="${edge.labelX ?? (edge.x1 + edge.x2) / 2}" y="${edge.labelY ?? (edge.y1 + edge.y2) / 2 - 6}" text-anchor="middle" fill="${edge.color}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">${escapeXml(edge.label)}</text>`
         : ''
       return `<path d="${edge.d}" fill="none" stroke="${edge.color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"${dash} marker-end="url(#arch-arrow-${edge.index})" />${label}`
     })

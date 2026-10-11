@@ -69,6 +69,13 @@ export function hasExplicitSshConnectionIntent(input: string): boolean {
   ) {
     return false
   }
+  const normalized = request
+    .trim()
+    .replace(/^[.!?。！？\s]+|[.!?。！？\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+  // Bare short reconnect utterances (host reconnect path; not agent bash ssh).
+  if (/^(?:恢复|restore)$/i.test(normalized)) return true
+
   return (
     /(?:重连|重新连接|恢复连接|再连|重试\s*(?:ssh\s*)?(?:登录|连接))/.test(request) ||
     /(?:连接|登录|登陆|登入|切换)\s*(?:到|至|进|去)\s*[^\s，。！？]{1,80}/u.test(request) ||

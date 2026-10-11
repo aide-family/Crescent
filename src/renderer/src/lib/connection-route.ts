@@ -103,9 +103,9 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
-  // A multi-hop card has no safe generic recovery path once its final hop
-  // cannot be identified. Ask the operator to select the target explicitly.
-  if (ctx.monitorPolicy === 'special' && ctx.sessionAligned === 'drifted') {
+  // Multi-hop card: clarify only on true leave-target (local / jump). Nested
+  // kubectl-exec / peer hops soft-align and must not force a fresh login.
+  if (ctx.monitorPolicy === 'special' && leaveTarget) {
     return {
       targetTabId: activeTabId,
       action: 'clarify',
@@ -133,14 +133,13 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       ? atMention.connection
       : findDirectlyMentionedConnection(message, connections)
 
-  // Reconnect (retry / re-login / password changed). A uniquely named
-  // connection wins over the current tab's binding; otherwise reconnect the
-  // current tab's configured SSH. Do not dump every saved connection as a
+  // Reconnect (retry / re-login / password changed / bare「恢复」). A uniquely
+  // named connection wins over the current tab's binding; otherwise reconnect
+  // the current tab's configured SSH. Do not dump every saved connection as a
   // picker, and never retry a different host than the one the user named.
-  if (
-    isExplicitConnectionRequest(message) &&
-    isExplicitReconnectRequest(connectionInstructionText(message))
-  ) {
+  // Bare reconnect without a bound target clarifies — never fall through to
+  // agent bash `ssh` (command-review rejectable).
+  if (isExplicitReconnectRequest(connectionInstructionText(message))) {
     const connection =
       (mentioned && connections.find((candidate) => candidate.id === mentioned.id)) ||
       (activeTab?.connectionId &&
@@ -157,6 +156,13 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
           !isPasswordChangedReconnectRequest(message) &&
           !isConnectionOnlyRequest(message, connection)
       }
+    }
+    return {
+      targetTabId: activeTabId,
+      action: 'clarify',
+      label: activeLabel,
+      reason: 'explicit-reconnect-no-target',
+      clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
     }
   }
 

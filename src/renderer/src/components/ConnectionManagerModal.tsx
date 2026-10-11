@@ -6,6 +6,7 @@ import {
   ArrowUpToLineIcon,
   CopyIcon,
   CopyPlusIcon,
+  FolderSearchIcon,
   InfoIcon,
   Layers2Icon,
   Loader2Icon,
@@ -63,6 +64,7 @@ export function ConnectionManagerModal({
   onConnect,
   onConnectInSession,
   onConnectInSubterminal,
+  onBrowseFiles,
   onCopyConnection,
   onDuplicateConnection,
   onEditConnection,
@@ -105,6 +107,7 @@ export function ConnectionManagerModal({
   onConnect: (connection: ConnectionConfig) => void
   onConnectInSession: (connection: ConnectionConfig) => void
   onConnectInSubterminal: (connection: ConnectionConfig) => void
+  onBrowseFiles: (connection: ConnectionConfig) => void
   onCopyConnection: (connection: ConnectionConfig) => void
   onDuplicateConnection: (connection: ConnectionConfig) => void
   onEditConnection: (connection: ConnectionConfig) => void
@@ -357,6 +360,23 @@ export function ConnectionManagerModal({
                     }}
                   >
                     <InfoIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
+                {connection.source !== 'local' ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-xs"
+                    aria-label={t.serverFiles.browse}
+                    title={t.serverFiles.browseDescription}
+                    disabled={connectDisabled}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (connectionActionBusy) return
+                      onBrowseFiles(connection)
+                    }}
+                  >
+                    <FolderSearchIcon aria-hidden="true" />
                   </Button>
                 ) : null}
                 <Button

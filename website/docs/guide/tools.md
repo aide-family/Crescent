@@ -2,13 +2,13 @@
 
 Agent 只使用一组小而可审核的工具：
 
-| 工具 | 作用 |
-| --- | --- |
-| `read` / `write` / `edit` | 读写 Agent 工作区内的文件。工作区默认是 `~/.crescent/workspace`，可在设置里改 |
-| `bash` | 在主终端执行。`open_subterminal(mode=local)` 可以借走下一条本机命令，然后回到主终端。每条命令都看得到，高风险命令仍要 [审核](/guide/command-review) |
-| `open_subterminal` | 停靠本机或另一台主机的窗格，不把主任务搬走。详见 [子终端与子代理](/guide/subagents) |
-| `subagent` | 在子终端收集旁路信息。主终端继续工作 |
-| `create-skill` / `create-sop` | 把这次会话整理成 Skill 或 SOP 草稿，确认后才写入。详见 [Skills 与知识库](/guide/skills) |
+| 工具                          | 作用                                                                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read` / `write` / `edit`     | 读写 Agent 工作区内的文件。工作区默认是 `~/.crescent/workspace`，可在设置里改                                                                       |
+| `bash`                        | 在主终端执行。`open_subterminal(mode=local)` 可以借走下一条本机命令，然后回到主终端。每条命令都看得到，高风险命令仍要 [审核](/guide/command-review) |
+| `open_subterminal`            | 停靠本机或另一台主机的窗格，不把主任务搬走。详见 [子终端与子代理](/guide/subagents)                                                                 |
+| `subagent`                    | 在子终端收集旁路信息。主终端继续工作                                                                                                                |
+| `create-skill` / `create-sop` | 把这次会话整理成 Skill 或 SOP 草稿，确认后才写入。详见 [Skills 与知识库](/guide/skills)                                                             |
 
 ## 流程 {#flow}
 
