@@ -37,6 +37,7 @@ import {
   resolveSessionAlignment,
   runtimeAnchorHost,
   setConnectionExpectedHost,
+  shouldEmitStreamEnvironmentDrift,
   shouldTreatSshClosedAsSessionLoss,
   type ConnectionState
 } from '../../shared/connection-state'
@@ -173,6 +174,32 @@ const degradedRecoveryOutput = new Map<string, string>()
  */
 const connectionStates = new Map<string, ConnectionState>()
 const manualInputLines = new Map<string, string>()
+/** Blank Enter on a ready remote prompt; redraws in this window are not drift. */
+const BLANK_ENTER_DRIFT_SUPPRESS_MS = 2_000
+const blankEnterDriftUntil = new Map<string, number>()
+
+function noteBlankEnterOnReadyRemote(key: string): void {
+  const state = getConnectionState(key)
+  const promptHost = state.promptHost
+  if (!state.ready || !state.expectedHost) return
+  if (!promptHost || promptHost === 'local-shell') return
+  if (isReturnToJumpHost(state, promptHost)) return
+  blankEnterDriftUntil.set(key, Date.now() + BLANK_ENTER_DRIFT_SUPPRESS_MS)
+}
+
+function clearBlankEnterDrift(key: string): void {
+  blankEnterDriftUntil.delete(key)
+}
+
+function blankEnterDriftActive(key: string): boolean {
+  const until = blankEnterDriftUntil.get(key)
+  if (until === undefined) return false
+  if (Date.now() > until) {
+    blankEnterDriftUntil.delete(key)
+    return false
+  }
+  return true
+}
 
 /** User keyboard input is the authority for a manually initiated SSH hop. */
 function noteManualTerminalInput(
@@ -185,6 +212,7 @@ function noteManualTerminalInput(
   if (resolveTerminalWriteSource(source) !== 'user') return
   if (data.includes('\x1b')) {
     manualInputLines.delete(key)
+    clearBlankEnterDrift(key)
     return
   }
   let line = manualInputLines.get(key) ?? ''
@@ -199,6 +227,7 @@ function noteManualTerminalInput(
           output: terminalOutputBuffers.get(key) ?? ''
         })
       ) {
+        clearBlankEnterDrift(key)
         const state = getConnectionState(key)
         const manual = setConnectionExpectedHost(state, null)
         setConnectionState(key, {
@@ -211,6 +240,10 @@ function noteManualTerminalInput(
           tabId,
           connectionOrigin: 'manual-shell'
         })
+      } else if (line.trim() === '') {
+        noteBlankEnterOnReadyRemote(key)
+      } else {
+        clearBlankEnterDrift(key)
       }
       line = ''
     } else if (char >= ' ' && line.length < 4096) {
@@ -2387,12 +2420,20 @@ function appendTerminalContext(key: string, data: string): void {
     clusterHostRegex: state.clusterHostRegex,
     localHost
   })
-  // Nested hops (kubectl-exec pods, peer SSH, inner close without leave-target):
-  // refresh promptHost and keep the session ready — never auto-reconnect.
-  if (!leaveTarget && !closeIsSessionLoss) {
+  const emitDrift = shouldEmitStreamEnvironmentDrift({
+    leaveTarget,
+    closeIsSessionLoss,
+    blankEnterOnReadyRemote: blankEnterDriftActive(key),
+    chunk: data
+  })
+  // Nested hops (kubectl-exec pods, peer SSH, inner close without leave-target)
+  // and a blank Enter on an already-ready remote prompt: refresh promptHost and
+  // keep the session ready — never auto-reconnect.
+  if (!emitDrift) {
     if (
       state.ready &&
       resolvedPrompt.promptHost &&
+      resolvedPrompt.promptHost !== 'local-shell' &&
       resolvedPrompt.promptHost !== state.promptHost
     ) {
       setConnectionState(key, {

@@ -1,5 +1,8 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
-import { connectionInstructionText } from '../../../shared/agent-local-intent'
+import {
+  connectionInstructionText,
+  hasExplicitLocalWorkIntent
+} from '../../../shared/agent-local-intent'
 import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
 import {
   findDirectlyMentionedConnection,
@@ -259,10 +262,13 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
-  // --- Layer C: soft keyword mismatch (only when active is not a ready login) ---
-  const softMatches = isExplicitConnectionRequest(message)
-    ? findSoftConnectionMatches(connectionInstructionText(message), connections)
-    : []
+  // --- Layer C: name soft-match (only when active is not a ready login) ---
+  // A unique or ambiguous configured name matches without a connect verb.
+  // Local work never selects a connection. Host/user matching stays in
+  // findDirectlyMentionedConnection and still requires a connect verb.
+  const softMatches = hasExplicitLocalWorkIntent(message)
+    ? []
+    : findSoftConnectionMatches(connectionInstructionText(message), connections)
   if (softMatches.length > 1) {
     return {
       targetTabId: activeTabId,

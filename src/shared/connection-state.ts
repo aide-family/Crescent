@@ -426,6 +426,35 @@ export function isStreamLeaveTarget(
 }
 
 /**
+ * A blank Enter on an already-ready remote prompt reprints the same line.
+ * That redraw is not a disconnect. A real close in the same chunk still drifts.
+ */
+export function shouldEmitStreamEnvironmentDrift(input: {
+  leaveTarget: boolean
+  closeIsSessionLoss: boolean
+  blankEnterOnReadyRemote: boolean
+  chunk: string
+}): boolean {
+  if (input.blankEnterOnReadyRemote && !detectSshClosedMessage(input.chunk)) return false
+  return input.leaveTarget || input.closeIsSessionLoss
+}
+
+/**
+ * Cancel a reconnect when the live prompt is still a remote host.
+ * Leave-target (local shell or jump-box fallback) still reconnects.
+ */
+export function shouldCancelConnectionRestore(input: {
+  mode?: string
+  promptHost?: string
+  returnToJumpHost?: boolean
+}): boolean {
+  if (input.mode !== 'pty' && input.mode !== 'pipe') return false
+  if (!input.promptHost || input.promptHost === 'local-shell') return false
+  if (input.returnToJumpHost) return false
+  return true
+}
+
+/**
  * Whether a stream chunk that matched {@link detectSshClosedMessage} should mark
  * the session lost and emit environment-drift. Nested kubectl/SSH exits print
  * "Connection to X closed" while the outer special-ssh shell is still alive —

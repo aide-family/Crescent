@@ -9,6 +9,8 @@ import type { AgentConnectionIntentResult, ConnectionConfig } from './types'
 export function buildLocalOnlyConnectionIntentResult(
   input: string
 ): AgentConnectionIntentResult | undefined {
+  // Name-only requests are resolved by the renderer matcher before this IPC.
+  // Reaching here without a connect verb means stay on the current terminal.
   if (!hasExplicitLocalWorkIntent(input) && hasExplicitSshConnectionIntent(input)) return undefined
 
   return {

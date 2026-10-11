@@ -133,6 +133,7 @@ import {
   recordRecoveryAttempt,
   resolveRunStopReason,
   shouldAttemptRecovery,
+  shouldCancelConnectionRestore,
   type RunStopReason
 } from '../../shared/connection-state'
 import {
@@ -4869,9 +4870,21 @@ function App({
     }
 
     // Recovery brake #1: read SSOT first. Live PTY already on target -> nothing to do.
+    // A blank Enter can poison alignment to drifted while the newest prompt is
+    // still the remote host. Re-read that prompt before typing exit.
     const context = await window.api.terminal.getContext(tabId)
     if (context.mode !== 'none' && context.alignment === 'aligned' && !context.restoring) {
       connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
+      return true
+    }
+    if (
+      shouldCancelConnectionRestore({
+        mode: context.mode,
+        promptHost: context.promptHost,
+        returnToJumpHost: context.returnToJumpHost
+      })
+    ) {
+      connTrace('restore-cancel', `tab=${tabId}`, 'still on remote')
       return true
     }
 

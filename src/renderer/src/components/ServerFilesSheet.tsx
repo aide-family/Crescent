@@ -197,8 +197,8 @@ function ServerFilesBrowser({
 
   function looksLikeDirectoryEntry(entry: RemoteFsEntry): boolean {
     if (entry.isDir || entry.type === 'dir') return true
-    if (entry.type === 'link') return true
     // Hidden dirs often arrive with incomplete attrs (type=other).
+    // Symlinks are not assumed to be directories: a failed listing falls through to preview.
     if (entry.type === 'other' && isHiddenName(entry.name)) return true
     return false
   }
@@ -209,7 +209,9 @@ function ServerFilesBrowser({
       return
     }
 
-    // Symlinks / incomplete attrs (common for hidden dirs): try navigate first.
+    // Symlinks and incomplete attrs: try a directory first.
+    // A link to a file fails the listing and continues to the file preview.
+    // A hidden type=other directory still surfaces the list error.
     if (entry.type === 'link' || entry.type === 'other') {
       const surfaceError = looksLikeDirectoryEntry(entry)
       const openedAsDir = await tryOpenAsDirectory(entry.path, { surfaceError })

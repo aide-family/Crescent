@@ -73,11 +73,24 @@ export async function readViaExec(client: Client, path: string, maxBytes: number
   throw lastError ?? new Error('Remote exec read failed.')
 }
 
+/**
+ * `ls` without a trailing slash prints a file's own row and exits 0.
+ * A trailing slash makes `ls` require a directory (and follows a symlink to one).
+ */
+export function directoryListingPath(path: string): string {
+  if (!path || path.endsWith('/')) return path || '/'
+  return `${path}/`
+}
+
+/** Commands used when SFTP readdir fails. The path always names a directory. */
+export function remoteDirectoryListCommands(path: string): string[] {
+  const quoted = shellQuoteUnix(directoryListingPath(path))
+  return [`LC_ALL=C ls -la --time-style=long-iso ${quoted}`, `LC_ALL=C ls -la ${quoted}`]
+}
+
 /** List a directory via `ls -la` when SFTP readdir fails. */
 export async function listViaExec(client: Client, path: string): Promise<RemoteFsEntry[]> {
-  const quoted = shellQuoteUnix(path)
-  // Prefer GNU long-iso timestamps; fall back to classic ls -la.
-  const attempts = [`LC_ALL=C ls -la --time-style=long-iso ${quoted}`, `LC_ALL=C ls -la ${quoted}`]
+  const attempts = remoteDirectoryListCommands(path)
 
   let lastError: Error | undefined
   for (const command of attempts) {
