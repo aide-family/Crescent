@@ -41,6 +41,7 @@ import {
   setPtyBashExecContext
 } from './pi-terminal-bash'
 import {
+  createCloseSubterminalToolDefinition,
   createOpenSubterminalToolDefinition,
   OPEN_SUBTERMINAL_DISCIPLINE,
   rejectAllSubterminalReadyWaiters
@@ -837,6 +838,7 @@ async function ensureHostedSessionUnlocked(
   await resourceLoader.reload()
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
+  const closeSubterminalTool = await createCloseSubterminalToolDefinition(pi, sessionKey)
   const captureTools = await createCaptureToolDefinitions(pi, sessionKey)
   const subagentTool = await createSubagentToolDefinition(pi, sessionKey)
   const mcp = await loadMcpPiTools(pi, config.mcpServers)
@@ -852,6 +854,7 @@ async function ensureHostedSessionUnlocked(
       ptyBashTool as never,
       createChangePlanTool(pi, sessionKey) as never,
       openSubterminalTool as never,
+      closeSubterminalTool as never,
       subagentTool as never,
       ...(captureTools as never[]),
       ...(mcp.tools as never[])

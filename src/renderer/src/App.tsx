@@ -23,7 +23,8 @@ import {
   LanguagesIcon,
   MessageSquareIcon,
   PlugIcon,
-  ServerIcon
+  ServerIcon,
+  ShieldCheckIcon
 } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
 import { deferAfterFirstPaint } from '@renderer/lib/defer-after-paint'
@@ -47,8 +48,8 @@ import {
 import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
 import { SettingsSheet } from '@renderer/components/SettingsSheet'
 import { McpServersSheet } from '@renderer/components/McpServersSheet'
+import { CommandWhitelistSheet } from '@renderer/components/CommandWhitelistSheet'
 import { ProductLogo } from '@renderer/components/ProductLogo'
-import { ThemeSwitcher } from '@renderer/components/ThemeSwitcher'
 import {
   type SkillInstallLogStatus,
   type SkillManageMessage
@@ -684,6 +685,7 @@ function App({
   const [instructionContent, setInstructionContent] = useState('')
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [commandWhitelistOpen, setCommandWhitelistOpen] = useState(false)
   const [whaleEnabled, setWhaleEnabled] = useState(true)
   const [skillOpen, setSkillOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
@@ -2391,7 +2393,12 @@ function App({
         return
       }
 
-      const tab = tabsRef.current.find((current) => current.id === tabId)
+      const subterminal = parseSubterminalTabId(tabId)
+      const tab =
+        tabsRef.current.find((current) => current.id === tabId) ??
+        (subterminal
+          ? tabsRef.current.find((current) => current.id === subterminal.parentTabId)
+          : undefined)
       if (!tab) return
 
       const connection = tab.connectionId
@@ -2413,12 +2420,13 @@ function App({
       passwordPromptOpenTabsRef.current.add(tabId)
       const request = {
         tabId,
-        title: tab.title,
+        title: subterminal ? `${tab.title} · ${subterminal.name}` : tab.title,
         prompt: promptLine
       }
       passwordPromptsByTabRef.current.set(tabId, request)
+      const attentionId = subterminal?.parentTabId ?? tabId
       setPasswordAttentionTabIds((current) =>
-        current.includes(tabId) ? current : [...current, tabId]
+        current.includes(attentionId) ? current : [...current, attentionId]
       )
       passwordPromptBuffersRef.current.set(tabId, '')
 
@@ -3010,9 +3018,10 @@ function App({
     return undefined
   }, [sessionChatTab.agentLog, liveRunByLogId])
   const runningCommandTabId = findRunningPtyCommandTabId(sessionLiveRun?.steps, executionTerminalId)
+  const paneExecutionId = runningCommandTabId || executionTerminalId
   const terminalInputLocked = isTerminalPaneLocked({
     tabId: activeTabId,
-    executionTerminalId,
+    executionTerminalId: paneExecutionId,
     agentBusy: sessionChatTab.agentBusy
   })
 
@@ -3046,6 +3055,7 @@ function App({
     executeConnectionCommands,
     abortPostConnectionTasks,
     appendLog,
+    commandInterruptTabId: runningCommandTabId,
     shellExitedText: t.terminal.shellExited,
     failedToStartShellText: t.terminal.failedToStartShell,
     postLoginTaskAbortedText: t.terminal.postLoginTaskAborted
@@ -4627,14 +4637,25 @@ function App({
       passwordPromptsByTabRef.current.delete(tabId)
       passwordPromptOpenTabsRef.current.delete(tabId)
     }
+    for (const promptTabId of [...passwordPromptsByTabRef.current.keys()]) {
+      const parentTabId = parseSubterminalTabId(promptTabId)?.parentTabId
+      if (!parentTabId || !closedTabIds.includes(parentTabId)) continue
+      passwordPromptsByTabRef.current.delete(promptTabId)
+      passwordPromptOpenTabsRef.current.delete(promptTabId)
+    }
     if (closedTabIds.length > 0) {
       const closed = new Set(closedTabIds)
       setPasswordAttentionTabIds((current) => current.filter((id) => !closed.has(id)))
     }
 
+    const openPromptTabId = passwordPromptRequestRef.current?.tabId
+    const openPromptParent = openPromptTabId
+      ? parseSubterminalTabId(openPromptTabId)?.parentTabId
+      : undefined
     if (
-      passwordPromptRequestRef.current &&
-      closedTabIds.includes(passwordPromptRequestRef.current.tabId)
+      openPromptTabId &&
+      (closedTabIds.includes(openPromptTabId) ||
+        (openPromptParent ? closedTabIds.includes(openPromptParent) : false))
     ) {
       showNextPasswordPrompt()
     }
@@ -4695,9 +4716,12 @@ function App({
         ...run,
         error: stopText,
         elapsedMs: Date.now() - (run.startedAt ?? Date.now()),
-        steps: settleRunningToolStepsAsInterrupted(run.steps ?? [])
+        steps: settleRunningToolStepsAsInterrupted(closeStreamingOpenSteps(run.steps ?? []))
       }))
       const canceledRun = activeAgentRunRef.current.get(chatTabId)
+      if (canceledRun && typeof canceledRun.logId === 'number') {
+        updateLogEntryText(chatTabId, canceledRun.logId, buildFinishPersistText(canceledRun))
+      }
       void persistAgentRun({
         runId,
         tabId: chatTabId,
@@ -4776,7 +4800,7 @@ function App({
     rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
     pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
     setPasswordAttentionTabIds((current) =>
-      current.filter((id) => id !== passwordPromptRequest.tabId)
+      current.filter((id) => !passwordAttentionMatches(id, passwordPromptRequest.tabId))
     )
     setPasswordPromptValue('')
     setPasswordPromptError('')
@@ -4791,7 +4815,7 @@ function App({
       rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
       pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
       setPasswordAttentionTabIds((current) =>
-        current.filter((id) => id !== passwordPromptRequest.tabId)
+        current.filter((id) => !passwordAttentionMatches(id, passwordPromptRequest.tabId))
       )
     }
     setPasswordPromptValue('')
@@ -4823,23 +4847,37 @@ function App({
     })
   }
 
+  async function saveCommandWhitelistRules(rules: string[]): Promise<void> {
+    const unique = [...new Set(rules.map((rule) => rule.trim()).filter(Boolean))]
+    const nextText = unique.join('\n')
+    const previousText = commandWhitelistTextRef.current
+    commandWhitelistTextRef.current = nextText
+    setCommandWhitelistText(nextText)
+    try {
+      const nextConfig = await saveAgentConfig({
+        ...configRef.current,
+        commandWhitelist: unique
+      })
+      const savedText = (nextConfig.commandWhitelist ?? []).join('\n')
+      commandWhitelistTextRef.current = savedText
+      setCommandWhitelistText(savedText)
+    } catch (error) {
+      commandWhitelistTextRef.current = previousText
+      setCommandWhitelistText(previousText)
+      throw error
+    }
+  }
+
   async function addCommandToWhitelist(command: string): Promise<void> {
     const rule = suggestWhitelistRule(command)
     if (!rule) return
-    const existing = parseCommandWhitelist(commandWhitelistText)
+    const existing = parseCommandWhitelist(commandWhitelistTextRef.current)
     if (existing.some((item) => item.trim() === rule)) {
       toast.message(t.commandReview.addedToWhitelist)
       return
     }
-    const nextText = [...existing, rule].join('\n')
-    setCommandWhitelistText(nextText)
     try {
-      const nextConfig = await window.api.agent.saveConfig({
-        ...config,
-        commandWhitelist: parseCommandWhitelist(nextText)
-      })
-      setConfig(nextConfig)
-      setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
+      await saveCommandWhitelistRules([...existing, rule])
       toast.success(t.commandReview.addedToWhitelist)
     } catch (error) {
       notifyOperationError(t.commandReview.addToWhitelist, error)
@@ -8521,6 +8559,16 @@ function App({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label={t.settings.commandWhitelist}
+            title={t.settings.commandWhitelist}
+            onClick={() => setCommandWhitelistOpen(true)}
+          >
+            <ShieldCheckIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             className="w-auto min-w-8 gap-1 px-1.5"
             aria-label={`${t.app.language}: ${localeOptions.find((option) => option.value === locale)?.label ?? locale}`}
             title={localeOptions.find((option) => option.value === nextLocale(locale))?.label}
@@ -8531,7 +8579,6 @@ function App({
               {localeOptions.find((option) => option.value === locale)?.shortLabel}
             </span>
           </Button>
-          <ThemeSwitcher t={t} />
           <SettingsSheet
             open={sheetOpen}
             onOpenChange={(open) => {
@@ -8615,6 +8662,13 @@ function App({
       {mcpSheet}
       {historySheet}
       {wikiSheet}
+      <CommandWhitelistSheet
+        open={commandWhitelistOpen}
+        onOpenChange={setCommandWhitelistOpen}
+        t={t}
+        rules={parseCommandWhitelist(commandWhitelistText)}
+        onSave={saveCommandWhitelistRules}
+      />
       <CaptureDraftDialog
         open={Boolean(captureDialogJob)}
         kind={captureDialogJob?.kind ?? captureDialogKind ?? 'sop'}
@@ -8664,7 +8718,7 @@ function App({
             labelTabs={tabs}
             terminalPage={terminalPage}
             activeTabId={activeTabId}
-            executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
+            executionTerminalId={paneExecutionId}
             agentPending={activeAgentPending}
             attentionTabIds={attentionTabIds}
             activeTab={activeTab}
@@ -9567,6 +9621,11 @@ async function waitForPromptHostOrTimeout(
       clusterHostRegex: options?.clusterHostRegex
     }
   )
+}
+
+function passwordAttentionMatches(attentionId: string, promptTabId: string): boolean {
+  if (attentionId === promptTabId) return true
+  return parseSubterminalTabId(promptTabId)?.parentTabId === attentionId
 }
 
 function sendTerminalInput(value: string, tabId: string): void {

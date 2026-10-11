@@ -50,13 +50,15 @@ import { redactSensitiveText } from '../../shared/secret-redaction'
 import type { TerminalExecutionTarget } from '../../shared/agent-types'
 import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './graceful-teardown'
 import { createPendingCommandController } from './pending-command'
-import { recoverTimedOutSshSession } from './timeout-recovery'
+import { recoverSshSessionOnTargetPrompt, recoverTimedOutSshSession } from './timeout-recovery'
 import { buildTerminalExclusiveBusyResult } from './exclusive-lock'
 import {
   isPtyExecutionTabLocked,
   isTerminalInterruptPayload,
+  resolveCtrlCTabId,
   resolveUserCommandInterrupt,
-  shouldBlockTerminalUserInput
+  shouldBlockTerminalUserInput,
+  shouldDropTerminalUserWrite
 } from './input-lock'
 import { resolveTerminalWriteSource, shouldMarkManualSshOrigin } from './write-source'
 
@@ -483,20 +485,35 @@ export function executeCommandInTerminal(
     return Promise.resolve(drift)
   }
 
-  const state = connectionStates.get(key)
+  let state = connectionStates.get(key)
   if (state?.expectedHost) {
     const output = terminalOutputBuffers.get(key) ?? ''
-    const alignment = resolveGateAlignment(state, output, hostname())
+    const localHost = hostname()
+    const recovered = recoverSshSessionOnTargetPrompt(state, output, localHost)
+    if (recovered) {
+      setConnectionState(key, recovered)
+      state = recovered
+    }
+    const alignment = resolveGateAlignment(state, output, localHost)
     const phase = connectionPhase(state, alignment, true, restoringSessionKeys.has(key))
     if (phase !== 'ssh-ready') {
-      setConnectionState(key, {
+      const live = resolveSessionAlignment({
+        output,
+        expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
+        aliases: state.aliases,
+        clusterHostRegex: state.clusterHostRegex,
+        localHost
+      })
+      const blocked: ConnectionState = {
         ...state,
         alignment,
+        promptHost: live.promptHost ?? state.promptHost,
         ready: false,
         connectionFault: phase === 'ssh-lost' ? 'lost' : 'degraded'
-      })
+      }
+      setConnectionState(key, blocked)
       if (phase === 'ssh-degraded') degradedRecoveryOutput.set(key, '')
-      return Promise.resolve(unavailableSshTarget(normalizedCommand, state, phase, session))
+      return Promise.resolve(unavailableSshTarget(normalizedCommand, blocked, phase, session))
     }
   }
 
@@ -1496,7 +1513,12 @@ export function registerTerminalIpc(): void {
   ipcMain.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return { ok: false, interrupted: false, error: 'Missing tabId' }
-    const interrupted = interruptPendingTerminalCommands(event.sender.id, tabId)
+    const target =
+      resolveCtrlCTabId({
+        requestedTabId: tabId,
+        pendingTabIds: pendingCommandTabIds(event.sender.id)
+      }) || tabId
+    const interrupted = interruptPendingTerminalCommands(event.sender.id, target)
     return { ok: true, interrupted }
   })
 
@@ -1535,11 +1557,28 @@ export function registerTerminalIpc(): void {
       }
 
       if (isTerminalInterruptPayload(data)) {
-        interruptPendingTerminalCommands(event.sender.id, tabId)
+        const target =
+          resolveCtrlCTabId({
+            requestedTabId: tabId,
+            pendingTabIds: pendingCommandTabIds(event.sender.id)
+          }) || tabId
+        // Retargeting leaves the focused PTY untouched so an idle shell does not
+        // redraw its previous line.
+        interruptPendingTerminalCommands(event.sender.id, target)
         return
       }
 
-      if (isUserInputLocked(event.sender.id, tabId)) return
+      const pendingTabIds = pendingCommandTabIds(event.sender.id)
+      if (
+        shouldDropTerminalUserWrite({
+          writeSource,
+          hasPendingCommand: pendingTabIds.includes(tabId),
+          isAgentExecutionTab: isPtyExecutionTabLocked(tabId),
+          otherPaneHasPendingCommand: pendingTabIds.some((id) => id !== tabId)
+        })
+      ) {
+        return
+      }
 
       noteManualTerminalInput(
         getSessionKey(event.sender.id, tabId),
@@ -1670,6 +1709,14 @@ export function registerTerminalIpc(): void {
       }
       setConnectionState(key, withJump)
       state = withJump
+    }
+
+    if (state && key) {
+      const recovered = recoverSshSessionOnTargetPrompt(state, output, hostname())
+      if (recovered) {
+        setConnectionState(key, recovered)
+        state = recovered
+      }
     }
 
     // Live buffer only. After SSH drop / respawn the SSOT host is stale; a
@@ -2396,8 +2443,13 @@ function appendTerminalContext(key: string, data: string): void {
     }
   }
   if (!state?.expectedHost) return
-  if (!state.ready && state.connectionFault !== 'degraded') return
   const localHost = hostname()
+  if (state.connectionFault === 'lost') {
+    const recovered = recoverSshSessionOnTargetPrompt(state, output, localHost)
+    if (recovered) setConnectionState(key, recovered)
+    return
+  }
+  if (!state.ready && state.connectionFault !== 'degraded') return
   const sshClosed = detectSshClosedMessage(data)
   const closeIsSessionLoss = shouldTreatSshClosedAsSessionLoss(state, output, localHost, data)
   if (state.connectionFault === 'degraded' && degradedRecoveryOutput.has(key)) {
@@ -2787,6 +2839,17 @@ function isUsableTerminalTabId(tabId: string): boolean {
 
 function getSessionKey(senderId: number, tabId: string): string {
   return `${senderId}:${tabId}`
+}
+
+function pendingCommandTabIds(senderId: number): string[] {
+  const prefix = `${senderId}:`
+  const ids: string[] = []
+  for (const key of pendingCommandPromises.keys()) {
+    if (!key.startsWith(prefix)) continue
+    const tabId = key.slice(prefix.length)
+    if (tabId) ids.push(tabId)
+  }
+  return ids
 }
 
 function isUserInputLocked(senderId: number, tabId: string): boolean {

@@ -16,6 +16,7 @@ import {
   closeStreamingOpenSteps,
   closeStreamingThoughts,
   formatAgentRunDocumentCompact,
+  sameLiveRunView,
   syncActionsFromStructuredRun,
   toLiveRunView
 } from '@renderer/lib/agent-run-document'
@@ -158,12 +159,31 @@ export function useAgentRuns({
     [updateTab]
   )
 
-  const publishLiveRun = useCallback((run: AgentRunViewState): void => {
-    const slim = toLiveRunView(run)
-    setLiveRunByLogId((current) => {
-      if (current[slim.logId] === slim) return current
-      return { ...current, [slim.logId]: slim }
-    })
+  const publishDepthRef = useRef(0)
+  const deferredLiveRunRef = useRef<AgentRunViewState | null>(null)
+
+  const publishLiveRun = useCallback(function publishLiveRun(run: AgentRunViewState): void {
+    // setState from this flush can re-enter while React is still committing the
+    // chart. Coalesce that re-entry onto the next frame instead of nesting updates.
+    if (publishDepthRef.current > 0) {
+      deferredLiveRunRef.current = run
+      return
+    }
+    publishDepthRef.current += 1
+    try {
+      const slim = toLiveRunView(run)
+      setLiveRunByLogId((current) => {
+        const previous = current[slim.logId]
+        if (previous && sameLiveRunView(previous, slim)) return current
+        return { ...current, [slim.logId]: slim }
+      })
+    } finally {
+      publishDepthRef.current -= 1
+    }
+    const deferred = deferredLiveRunRef.current
+    if (!deferred) return
+    deferredLiveRunRef.current = null
+    window.requestAnimationFrame(() => publishLiveRun(deferred))
   }, [])
 
   const scheduleLiveFlush = useCallback(

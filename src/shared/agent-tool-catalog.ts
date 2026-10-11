@@ -69,6 +69,18 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     stateChanging: true
   },
   {
+    name: 'close_subterminal',
+    method: 'post',
+    path: 'pi://crescent/close_subterminal',
+    description:
+      'Close the docked subterminal and route subsequent bash commands back to the main terminal.',
+    source: 'built-in',
+    risk: 'medium',
+    requiresApproval: false,
+    external: false,
+    stateChanging: true
+  },
+  {
     name: 'subagent',
     method: 'post',
     path: 'pi://crescent/subagent',

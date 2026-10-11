@@ -1,5 +1,6 @@
 import { ArrowUpCircleIcon, BookTextIcon, CheckIcon, Loader2Icon } from 'lucide-react'
 
+import { ThemeSwitcher } from '@renderer/components/ThemeSwitcher'
 import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
@@ -130,19 +131,22 @@ export function AppFooter({
           <BookTextIcon className="size-3.5" aria-hidden="true" />
         </Button>
       </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        className="app-footer-action app-footer-pet"
-        data-enabled={whaleEnabled ? 'true' : 'false'}
-        aria-pressed={whaleEnabled}
-        aria-label={whaleLabel}
-        title={whaleLabel}
-        onClick={onToggleWhale}
-      >
-        <WhalePetPortrait className="size-4" />
-      </Button>
+      <span className="app-footer-cluster">
+        <ThemeSwitcher t={t} />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="app-footer-action app-footer-pet"
+          data-enabled={whaleEnabled ? 'true' : 'false'}
+          aria-pressed={whaleEnabled}
+          aria-label={whaleLabel}
+          title={whaleLabel}
+          onClick={onToggleWhale}
+        >
+          <WhalePetPortrait className="size-4" />
+        </Button>
+      </span>
     </footer>
   )
 }

@@ -45,7 +45,19 @@ export const ARCH_ROW_GAP = 40
 /** Outward stub from node border midpoints before the routed edge continues. */
 export const ARCH_PORT_GAP = 24
 
-/** Series palette for ```chart``` blocks — same hue order as architecture kind borders. */
-export const CHART_SERIES_COLORS: readonly string[] = ARCHITECTURE_KIND_ORDER.map(
+/** Vivid architecture borders first. Slate kinds stay last so a chart does not open on gray. */
+const CHART_KIND_ORDER: ArchitectureKind[] = [
+  'frontend',
+  'ingress',
+  'service',
+  'data',
+  'auth',
+  'queue',
+  'client',
+  'external'
+]
+
+/** Series palette for ```chart``` blocks — architecture kind borders, vivid hues first. */
+export const CHART_SERIES_COLORS: readonly string[] = CHART_KIND_ORDER.map(
   (kind) => ARCHITECTURE_KIND_TONE[kind].border
 )

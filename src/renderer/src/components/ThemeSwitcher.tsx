@@ -58,7 +58,8 @@ export function ThemeSwitcher({ t }: { t: Dictionary }): ReactElement {
         ref={triggerRef}
         type="button"
         variant="ghost"
-        size="icon-sm"
+        size="icon-xs"
+        className="app-footer-action"
         aria-label={t.app.themeSwitcher}
         title={t.app.themeSwitcher}
         aria-haspopup="menu"
@@ -69,12 +70,12 @@ export function ThemeSwitcher({ t }: { t: Dictionary }): ReactElement {
           if (!rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
         }}
       >
-        <PaletteIcon aria-hidden="true" />
+        <PaletteIcon aria-hidden="true" className="size-3.5" />
       </Button>
       <div
         id="app-theme-menu"
         hidden={!open}
-        className="absolute top-full right-0 z-50 mt-2 w-60 rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+        className="absolute right-0 bottom-full z-50 mb-2 w-60 rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
         role="group"
         aria-label={themeLabel}
       >

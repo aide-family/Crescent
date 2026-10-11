@@ -8,6 +8,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
   Pie,
@@ -84,7 +85,7 @@ export function ChartBlock({
   const inlineChartHostRef = useRef<HTMLDivElement | null>(null)
   const expandedChartHostRef = useRef<HTMLDivElement | null>(null)
   const reduceMotion = usePrefersReducedMotion()
-  const spec = closed ? parseChartSpec(code) : null
+  const spec = useMemo(() => (closed ? parseChartSpec(code) : null), [closed, code])
   const uiState = resolveMermaidBlockUiState({
     closed,
     streaming,
@@ -381,11 +382,11 @@ function ResultChart({
   const sliceConfig = useMemo(() => toSliceConfig(spec), [spec])
   const multiple = spec.series.length > 1
   const squareClass = tall
-    ? 'mx-auto aspect-square max-h-[min(70vh,520px)] w-full'
-    : 'mx-auto aspect-square max-h-[250px]'
+    ? 'aspect-auto h-[min(70vh,480px)] min-h-0 w-full min-w-0'
+    : 'aspect-auto h-[250px] min-h-0 w-full min-w-0'
   const cartesianClass = tall
-    ? 'aspect-auto h-[min(70vh,480px)] w-full'
-    : 'aspect-auto h-[200px] w-full'
+    ? 'aspect-auto h-[min(70vh,480px)] min-h-0 w-full min-w-0'
+    : 'aspect-auto h-[200px] min-h-0 w-full min-w-0'
 
   if (spec.type === 'pie') {
     return (
@@ -395,7 +396,11 @@ function ResultChart({
             cursor={false}
             content={<ChartTooltipContent hideLabel nameKey="slice" />}
           />
-          <Pie data={sliceRows} dataKey="value" nameKey="slice" isAnimationActive={!reduceMotion} />
+          <Pie data={sliceRows} dataKey="value" nameKey="slice" isAnimationActive={!reduceMotion}>
+            {sliceRows.map((row, index) => (
+              <Cell key={row.slice} fill={chartColor(index)} stroke={chartColor(index)} />
+            ))}
+          </Pie>
         </PieChart>
       </ChartContainer>
     )
@@ -409,7 +414,11 @@ function ResultChart({
             cursor={false}
             content={<ChartTooltipContent hideLabel nameKey="slice" />}
           />
-          <RadialBar dataKey="value" background isAnimationActive={!reduceMotion} />
+          <RadialBar dataKey="value" background isAnimationActive={!reduceMotion}>
+            {sliceRows.map((row, index) => (
+              <Cell key={row.slice} fill={chartColor(index)} stroke={chartColor(index)} />
+            ))}
+          </RadialBar>
         </RadialBarChart>
       </ChartContainer>
     )
@@ -425,11 +434,13 @@ function ResultChart({
           {multiple ? <ChartLegend content={<ChartLegendContent />} /> : null}
           {spec.series.map((_, index) => {
             const key = seriesKey(index)
+            const color = chartColor(index)
             return (
               <Radar
                 key={key}
                 dataKey={key}
-                fill={`var(--color-${key})`}
+                fill={color}
+                stroke={color}
                 fillOpacity={0.6}
                 isAnimationActive={!reduceMotion}
               />
@@ -467,7 +478,7 @@ function ResultChart({
           {legend}
           {spec.series.map((_, index) => {
             const key = seriesKey(index)
-            const color = `var(--color-${key})`
+            const color = chartColor(index)
             return (
               <Area
                 key={key}
@@ -500,7 +511,7 @@ function ResultChart({
                 key={key}
                 dataKey={key}
                 type="natural"
-                stroke={`var(--color-${key})`}
+                stroke={chartColor(index)}
                 strokeWidth={2}
                 dot={false}
                 isAnimationActive={!reduceMotion}
@@ -521,14 +532,26 @@ function ResultChart({
         {legend}
         {spec.series.map((_, index) => {
           const key = seriesKey(index)
+          const color = chartColor(index)
           return (
             <Bar
               key={key}
               dataKey={key}
-              fill={`var(--color-${key})`}
+              fill={color}
+              stroke={color}
               radius={8}
               isAnimationActive={!reduceMotion}
-            />
+            >
+              {multiple
+                ? null
+                : spec.categories.map((_, categoryIndex) => (
+                    <Cell
+                      key={`${key}-${categoryIndex}`}
+                      fill={chartColor(categoryIndex)}
+                      stroke={chartColor(categoryIndex)}
+                    />
+                  ))}
+            </Bar>
           )
         })}
       </BarChart>
@@ -579,7 +602,7 @@ function toSliceRows(spec: ChartSpec): SliceRow[] {
   return spec.categories.map((_, index) => ({
     slice: seriesKey(index),
     value: series.values[index] ?? 0,
-    fill: `var(--color-${seriesKey(index)})`
+    fill: chartColor(index)
   }))
 }
 

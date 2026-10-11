@@ -635,6 +635,7 @@ const zhCN = {
     copyCommand: '复制命令',
     autoApprovedShort: '已自动放行',
     agentCanceled: '已手动停止本次会话。',
+    agentAborted: '本次会话已中止。',
     systemRecoveryStopped: '连接中断，已停止排查并开始恢复。',
     gateInterruptStopped: '命令未注入：终端已离开目标环境（期望 {expected}，当前 {observed}）。',
     timeoutStopped: '操作超时，已停止本轮执行。可重试。',
@@ -940,7 +941,12 @@ const zhCN = {
     workbenchLayoutHint: '立即生效，下次打开沿用。',
     commandWhitelist: '命令白名单',
     commandWhitelistHint:
-      '一行一条规则。普通文本为精确匹配；末尾 * 表示前缀匹配；/.../ 表示正则匹配。命中的命令会跳过 AI 风险审核并直接执行。',
+      '一条规则一行。普通文本按规范化后的命令匹配；* 匹配一段参数；/.../ 表示正则。命中的命令跳过审核并直接执行。',
+    commandWhitelistEmpty: '还没有白名单规则。审批通过后可以加入，也可以在这里手动添加。',
+    commandWhitelistAdd: '添加',
+    commandWhitelistPlaceholder: '例如 kubectl get *',
+    commandWhitelistRemove: '删除这条规则',
+    commandWhitelistDuplicate: '这条规则已经在列表里',
     workspaceCwd: 'Agent 工作区',
     workspaceCwdHint:
       'Pi 的 read/write/edit 在此目录运行；bash 命令在可见终端面板执行。留空则使用 ~/.crescent/workspace。',

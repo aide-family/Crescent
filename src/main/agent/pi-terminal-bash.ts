@@ -23,6 +23,13 @@ import {
 } from '../terminal/session-health'
 import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
+import {
+  formatBashPaneEnvironment,
+  planBashRouteAfterCloseSubterminal,
+  shouldBlockRemoteSessionExit,
+  shouldBlockRemoteTaskOnLocalSubterminal,
+  shouldRedirectLocalSubterminalExit
+} from './subterminal-routing'
 import type { PiSdkFacade } from './pi-sdk'
 import type { AgentConfig, AgentEvent } from './types'
 
@@ -144,26 +151,47 @@ export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<
   return Boolean(fingerprint && failed.has(fingerprint))
 }
 
-const BARE_SESSION_EXIT_RE = /^(?:sudo\s+)?(?:exit|logout)(?:\s+-?\d+)?\s*$/i
-
-/**
- * Bare `exit` / `logout` (or trailing `; exit` / `&& exit`) peels nested SSH/kubectl
- * hops and can false-trigger host reconnect. Agent must not run these on remote panes.
- */
-export function isRemoteSessionExitCommand(command: string): boolean {
-  const trimmed = command.trim()
-  if (!trimmed) return false
-  const parts = trimmed.split(/(?:&&|\|\||;|\n|\r)/)
-  return parts.some((part) => BARE_SESSION_EXIT_RE.test(part.trim()))
+export {
+  shouldBlockRemoteSessionExit,
+  shouldBlockRemoteTaskOnLocalSubterminal,
+  shouldRedirectLocalSubterminalExit
 }
 
-export function shouldBlockRemoteSessionExit(input: {
-  command: string
-  isSsh?: boolean
-  parentConnectionId?: string
-}): boolean {
-  if (!input.isSsh && !input.parentConnectionId?.trim()) return false
-  return isRemoteSessionExitCommand(input.command)
+export function restoreSessionBashToMainTerminal(sessionKey: string): {
+  ok: boolean
+  alreadyOnMain: boolean
+  parentTabId?: string
+  closedTabId?: string
+  error?: string
+} {
+  const context = getPtyBashExecContext(sessionKey)
+  if (!context) {
+    return { ok: false, alreadyOnMain: false, error: 'No active agent terminal context.' }
+  }
+  const planned = planBashRouteAfterCloseSubterminal(context)
+  if (!planned.ok) {
+    return { ok: false, alreadyOnMain: false, error: planned.error }
+  }
+  if (planned.alreadyOnMain) {
+    return { ok: true, alreadyOnMain: true, parentTabId: planned.parentTabId }
+  }
+  const restored = updatePtyBashExecutionTabId(sessionKey, planned.parentTabId, {
+    isSsh: planned.isSsh,
+    connectionId: planned.connectionId
+  })
+  if (!restored) {
+    return {
+      ok: false,
+      alreadyOnMain: false,
+      error: 'Failed to restore bash to the main terminal.'
+    }
+  }
+  return {
+    ok: true,
+    alreadyOnMain: false,
+    parentTabId: planned.parentTabId,
+    closedTabId: planned.closedTabId
+  }
 }
 
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
@@ -333,7 +361,12 @@ export function createPtyBashToolDefinition(
           signal: combinedSignal
         })
 
-        const output =
+        const envLine = formatBashPaneEnvironment({
+          isSsh: context.isSsh,
+          cwd: result.cwd,
+          executionTabId: result.subterminalTabId || context.executionTabId
+        })
+        const body =
           result.code === 'SSH_TARGET_UNAVAILABLE'
             ? JSON.stringify({
                 ok: false,
@@ -348,20 +381,27 @@ export function createPtyBashToolDefinition(
                     : 'Stop querying this target until the operator reconnects or explicitly selects another target.'
               })
             : [result.output, result.error].filter(Boolean).join('\n')
+        const output = [envLine, body].filter(Boolean).join('\n')
         if (output) options.onData(Buffer.from(output.endsWith('\n') ? output : `${output}\n`))
 
-        if (combinedSignal?.aborted) throw new Error('Command interrupted.')
+        if (combinedSignal?.aborted) throw new Error([envLine, 'Command interrupted.'].join('\n'))
         if (!result.dispatched || result.interrupted || result.timedOut || result.terminalExited) {
           throw new Error(
-            result.error ||
-              (result.dispatched
-                ? 'Command completion could not be confirmed; verify the terminal before continuing.'
-                : 'Command was blocked before terminal dispatch.')
+            [
+              envLine,
+              result.error ||
+                (result.dispatched
+                  ? 'Command completion could not be confirmed; verify the terminal before continuing.'
+                  : 'Command was blocked before terminal dispatch.')
+            ].join('\n')
           )
         }
         if (result.exitCode === undefined) {
           throw new Error(
-            'Command completion could not be confirmed; verify the terminal before continuing.'
+            [
+              envLine,
+              'Command completion could not be confirmed; verify the terminal before continuing.'
+            ].join('\n')
           )
         }
         return { exitCode: result.exitCode }
@@ -433,6 +473,35 @@ export async function executeReviewedPtyCommand(input: {
     const message = zh
       ? '禁止在远程会话执行 exit/logout：会剥离子 hop 并触发整链重连。保持当前 shell；断线时由主机恢复连接，不要用 bash ssh 重连。'
       : 'Do not run exit/logout on a remote session — it peels nested hops and can trigger a full reconnect. Stay in the current shell; the host owns reconnect (do not bash ssh).'
+    return blocked(message)
+  }
+
+  if (
+    shouldBlockRemoteTaskOnLocalSubterminal({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      executionTabId,
+      parentConnectionId: context.parentConnectionId,
+      fromSubagent
+    })
+  ) {
+    const message = zh
+      ? '当前 bash 在从 SSH 主会话开出的本机子终端上，不能继续集群或远程命令（kubectl、kubeadm、helm、ssh、scp）。先调用 close_subterminal，再在主终端执行。'
+      : 'Bash is on a local subterminal opened from the SSH session. Do not continue cluster or remote commands here (kubectl, kubeadm, helm, ssh, scp). Call close_subterminal, then run them on the main terminal.'
+    return blocked(message)
+  }
+
+  if (
+    shouldRedirectLocalSubterminalExit({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      executionTabId,
+      fromSubagent
+    })
+  ) {
+    const message = zh
+      ? '当前是本机子终端。不要执行 exit/logout。跨环境步骤结束后调用 close_subterminal，bash 会回到主终端。'
+      : 'This is a local subterminal. Do not run exit/logout. When the cross-context step is done, call close_subterminal so bash returns to the main terminal.'
     return blocked(message)
   }
 

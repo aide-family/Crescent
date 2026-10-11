@@ -166,6 +166,7 @@ export function AgentRunTimeline({
                   step={step}
                   t={t}
                   collapsedByDefault={thinkingCollapsedByDefault}
+                  finished={runFinished}
                 />
               )
             }
@@ -507,15 +508,17 @@ const THOUGHT_PREVIEW_CHARS = 120
 function ThoughtStepRow({
   step,
   t,
-  collapsedByDefault
+  collapsedByDefault,
+  finished = false
 }: {
   step: Extract<AgentRunStep, { kind: 'thought' }>
   t: Dictionary
   collapsedByDefault: boolean
+  finished?: boolean
 }): React.JSX.Element | null {
   const text = clampAgentText(step.text.trim(), AGENT_RUN_STREAM_MAX_CHARS)
   if (!text) return null
-  const streaming = step.phase === 'streaming'
+  const streaming = step.phase === 'streaming' && !finished
   const needsCollapse = collapsedByDefault || (!streaming && text.length > THOUGHT_PREVIEW_CHARS)
 
   if (needsCollapse) {

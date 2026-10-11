@@ -677,6 +677,7 @@ const en = {
     copyCommand: 'Copy command',
     autoApprovedShort: 'Auto-allowed',
     agentCanceled: 'Agent run was stopped manually.',
+    agentAborted: 'The agent run was aborted.',
     systemRecoveryStopped: 'Connection interrupted; troubleshooting stopped and restore started.',
     gateInterruptStopped:
       'Command not injected: terminal left the target environment (expected {expected}, now {observed}).',
@@ -1009,7 +1010,13 @@ const en = {
     workbenchLayoutHint: 'Applies immediately and is restored the next time Crescent opens.',
     commandWhitelist: 'Command whitelist',
     commandWhitelistHint:
-      'One rule per line. Plain text is exact match; trailing * is prefix match; /.../ is regex match. Matching commands skip AI risk review and run directly.',
+      'One rule per entry. Plain text matches the normalized command; * matches a run of arguments; /.../ is a regular expression. Matching commands skip review and run directly.',
+    commandWhitelistEmpty:
+      'No whitelist rules yet. Add one after approving a command, or type a rule here.',
+    commandWhitelistAdd: 'Add',
+    commandWhitelistPlaceholder: 'e.g. kubectl get *',
+    commandWhitelistRemove: 'Remove this rule',
+    commandWhitelistDuplicate: 'This rule is already in the list',
     workspaceCwd: 'Agent workspace',
     workspaceCwdHint:
       'Pi read/write/edit tools run in this directory. Bash commands run in the visible terminal pane. Leave empty to use ~/.crescent/workspace.',

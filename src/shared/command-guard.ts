@@ -321,12 +321,34 @@ export function isStaticallyReadonly(cmd: string): boolean {
   return classifyByStaticRules(cmd) === 'low'
 }
 
+/** `$` and backticks expand outside single quotes. Awk `$1` inside `'...'` does not. */
+function hasUnquotedExpansion(raw: string): boolean {
+  let singleQuoted = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (singleQuoted) {
+      if (ch === "'") singleQuoted = false
+      continue
+    }
+    if (ch === "'") {
+      singleQuoted = true
+      continue
+    }
+    if (ch === '\\') {
+      i += 1
+      continue
+    }
+    if (ch === '$' || ch === '`') return true
+  }
+  return false
+}
+
 function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
   if (command.redirects.some((redirect) => redirect.kind === 'file')) {
     return { level: 'high', verb: '>' }
   }
 
-  if (['env', 'nohup', 'time'].includes(commandBasename(command.argv[0] ?? '')))
+  if (['nohup', 'time'].includes(commandBasename(command.argv[0] ?? '')))
     return { level: 'gray', verb: 'environment/wrapper' }
   let argv = stripWrappers(command.argv)
   if (argv[0] === '!') argv = argv.slice(1)
@@ -338,7 +360,7 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
     return classifyPeeledInner(argv)
   }
   if (argv0 === 'sudo') return classifyReadonlySudo(argv)
-  if (/[$`]/.test(command.raw) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(command.raw))
+  if (hasUnquotedExpansion(command.raw) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(command.raw))
     return { level: 'gray', verb: argv0 }
   if (SIMPLE_WRITE.has(argv0)) return { level: 'high', verb: argv0 }
 
@@ -346,8 +368,10 @@ function classifySimpleCommand(command: SimpleCommand): SimpleCommandRisk {
     const verb = firstKnownVerb(argv, KUBECTL_WRITE, KUBECTL_READ)
     if (verb === 'exec' || findVerbIndex(argv, 'exec') >= 0) {
       const inner = extractKubectlExecInner(argv)
-      if (!inner) return { level: 'gray', verb: 'kubectl exec' }
-      return classifyPeeledInner(inner)
+      if (!inner) return { level: 'high', verb: 'kubectl exec' }
+      const innerRisk = classifyPeeledInner(inner)
+      if (innerRisk.level === 'low') return innerRisk
+      return { level: 'high', verb: 'kubectl exec' }
     }
     if (verb && KUBECTL_WRITE.has(verb)) return { level: 'high', verb: `kubectl ${verb}` }
     if (
@@ -694,7 +718,8 @@ function hasUnsafeInspectionArguments(name: string, argv: string[]): boolean {
     )
   )
     return true
-  if (['env', 'printenv', 'awk', 'sed', 'yq'].includes(name)) return true
+  if (['sed', 'yq'].includes(name)) return true
+  if (name === 'awk' && args.some((arg) => /\bsystem\s*\(|\bgetline\b/.test(arg))) return true
   if (name === 'find' && args.some((arg) => ['-fprint', '-fprintf', '-fls'].includes(arg)))
     return true
   if (name === 'sort' && args.some((arg) => /^(-o|--output|--compress-program)/.test(arg)))

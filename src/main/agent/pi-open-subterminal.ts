@@ -19,12 +19,15 @@ import {
   getFailedSshSubterminalConnectionIds,
   getPtyBashExecContext,
   recordFailedSshSubterminalConnection,
+  restoreSessionBashToMainTerminal,
   updatePtyBashExecutionTabId
 } from './pi-terminal-bash'
+import { subterminalNameFromTabId } from './subterminal-routing'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
-  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
+  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。跨环境步骤结束后必须 close_subterminal，后续主任务命令回到主终端。',
+  '- 本机子终端只做客户端机器上的事。禁止在该 pane 上继续集群或远程命令（kubectl、kubeadm、helm、ssh、scp）；那些命令在 close_subterminal 之后的主终端执行。',
   '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。主机负责恢复主终端；在当前 pane 用 bash。',
   '- mode=ssh 只用于登录另一台已保存连接（不同 connectionId）；不要用子终端逃避当前连接的重连。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
@@ -417,8 +420,8 @@ export async function openAgentSubterminal(input: {
   }
   hintParts.push(
     mode === 'local'
-      ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts).'
-      : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands.'
+      ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts). When that step is done, call close_subterminal before any further main-task bash.'
+      : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands. When that step is done, call close_subterminal so bash returns to the main terminal.'
   )
   if (ready.error) hintParts.push(ready.error)
 
@@ -457,6 +460,7 @@ export async function createOpenSubterminalToolDefinition(
     promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
+      'When the cross-context step is done, call close_subterminal so later bash runs on the main terminal.',
       'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the host restores the main terminal.',
       'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
@@ -468,6 +472,92 @@ export async function createOpenSubterminalToolDefinition(
         params: params as OpenSubterminalParams,
         signal
       })
+      const text = JSON.stringify(result, null, 2)
+      return {
+        content: [{ type: 'text', text }],
+        details: result
+      }
+    }
+  })
+}
+
+export async function closeAgentSubterminal(input: {
+  sessionKey: string
+  webContents?: WebContents
+}): Promise<{
+  ok: boolean
+  parentTabId?: string
+  closedTabId?: string
+  hint?: string
+  error?: string
+}> {
+  const context = getPtyBashExecContext(input.sessionKey)
+  const webContents = input.webContents ?? context?.webContents
+  if (!context || !webContents || webContents.isDestroyed()) {
+    return {
+      ok: false,
+      error: 'No active agent terminal context. Start a run in a terminal session first.'
+    }
+  }
+
+  const restored = restoreSessionBashToMainTerminal(input.sessionKey)
+  if (!restored.ok) {
+    return { ok: false, error: restored.error || 'Failed to restore bash to the main terminal.' }
+  }
+  if (restored.alreadyOnMain) {
+    return {
+      ok: true,
+      parentTabId: restored.parentTabId,
+      hint: 'Bash is already on the main terminal. Continue the main task there.'
+    }
+  }
+
+  const closedTabId = restored.closedTabId
+  const parentTabId = restored.parentTabId
+  if (closedTabId && parentTabId) {
+    closeTemporarySubterminal(webContents, closedTabId)
+    safeWebContentsSend(webContents, 'agent:subagent-status', {
+      parentTabId,
+      tabId: closedTabId,
+      name: subterminalNameFromTabId(closedTabId),
+      agentName: 'agent',
+      agentStatus: 'done',
+      close: true
+    })
+  }
+
+  return {
+    ok: true,
+    parentTabId,
+    closedTabId,
+    hint: 'Closed the subterminal. Subsequent bash runs on the main terminal. Continue the main task there.'
+  }
+}
+
+export async function createCloseSubterminalToolDefinition(
+  pi: PiSdkFacade,
+  sessionKey: string
+): Promise<ReturnType<PiSdkFacade['defineTool']>> {
+  const parameters = Type.Object({})
+  return pi.defineTool({
+    name: 'close_subterminal',
+    label: 'Close subterminal',
+    description: [
+      'Close the docked subterminal this agent opened and route subsequent bash back to the main terminal.',
+      'Call this after cross-context work (local /etc/hosts, local files, or a one-off SSH pane) before any further main-task commands.',
+      'Do not use exit/logout to leave the pane.'
+    ].join(' '),
+    promptSnippet: 'close_subterminal — return bash to the main terminal and close the docked pane',
+    promptGuidelines: [
+      'After local hosts or other cross-context work, call close_subterminal before any further main-task bash.',
+      'Do not run kubectl, kubeadm, helm, ssh, or scp in a local subterminal opened from an SSH session.'
+    ],
+    parameters,
+    executionMode: 'sequential',
+    async execute(_toolCallId, _params, signal) {
+      const result = signal?.aborted
+        ? { ok: false, error: 'Agent run was canceled.' }
+        : await closeAgentSubterminal({ sessionKey })
       const text = JSON.stringify(result, null, 2)
       return {
         content: [{ type: 'text', text }],

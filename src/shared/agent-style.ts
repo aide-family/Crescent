@@ -11,11 +11,23 @@ export const TASK_SHAPED_OUTPUT_HEADER = '# Task-shaped output'
 /** Inspect/briefing tasks only. Never used for Q&A. */
 export const CLUSTER_HEALTH_REPORT_TEMPLATE = [
   '## 📊 集群健康报告',
-  '**❌ 异常服务**｜表格置顶：服务 / 命名空间 / 状态 / 原因',
-  '**🔧 修复建议**｜编号列表，每条可直接执行',
-  '**✅ 健康摘要**｜每命名空间一行',
-  '**概览**｜节点 / 版本 / 运行时间；内存、磁盘等数值对比用一张 chart 代码块（异常服务表保持表格）',
-  '**总体评价**｜≤2 句'
+  '最终回答只输出一次，顺序固定：总览 → 分项 → 修复建议 → 总结。先结论，后证据。',
+  '**总览**｜一行结论（健康 / 需处置 / 故障）+ 巡检范围（时间、目标）。',
+  '关键数字表：Pod 就绪、节点状态、告警、需处置项数；每格注明来自哪条命令。',
+  '总览保留这张表。可比数字画在对应分项里，不要全部堆成总览的一张柱状图。',
+  '**分项**｜每节都是：一句判断 + 表或图 + 数据佐证 + 一句分析。',
+  '- 异常与风险：表列为对象 / 位置 / 状态 / 证据 / 影响。没有异常时写明未发现，并给出排查命令的结果。',
+  '- 分域健康：按命名空间或子系统聚合，不逐个罗列健康 Pod。',
+  '- 资源与容量：图和短表分开。重启次数和百分比不得画在同一张图。',
+  '图表按证据形态选题，一种可比证据一张，整份最多四张。每张只用一个量纲。',
+  'bar 并列对比或排名；line 仅用于有时间点的变化；area 仅用于连续监控趋势；',
+  'pie 仅用于一条序列的占比，类目超过 8 个改回表格；radar 同一对象的多维对比；radial 类目 2–6 的环形对比。',
+  '没有对应序列就不要为了凑类型而画。',
+  '**🔧 修复建议**｜单独成行的标题，后接编号列表。',
+  '每条包含可执行命令，以及它依据的是哪一节证据。会丢数据的操作必须写明。',
+  '**总结**｜复述总览结论，不引入新事实。',
+  '分成必须处理、持续观察、无需处理，并写残余风险。每条都能指回前面的证据。',
+  '数字、表、图只能来自本轮工具输出。没有可比序列就写明没有可作图的数据，不要编造。'
 ].join('\n')
 
 const STYLE_CONTRACTS: Record<AgentStyle, string> = {
@@ -96,3 +108,24 @@ export function buildAgentStyleContract(style: AgentStyle = DEFAULT_AGENT_STYLE)
     TASK_SHAPED_OUTPUT_RULES
   ].join('\n')
 }
+
+const SUMMARY_REQUEST = /总结|汇总|报告|巡检|健康|\b(?:summarize|summary|report|briefing|health)\b/i
+
+/** Summary, report, inspection, and health requests. Ordinary Q&A stays prose. */
+export function isSummaryShapedRequest(input: string): boolean {
+  return SUMMARY_REQUEST.test(input)
+}
+
+export const SUMMARY_OUTPUT_CONTRACT = [
+  '# Summary output',
+  'This turn is a summary or report request. The closing answer overrides Working Style brevity, including 1–3 sentence finishes and the limit on the cluster health report.',
+  '- The final answer is a 总分 report: 总览, then 分项, then 总结. Lead with the conclusion.',
+  '- Each judgment is one sentence, then a table or chart, then the command evidence, then one sentence of analysis. Every claim must point at evidence from this turn.',
+  '- Non-cluster summaries use that same 总览 / 分项 / 总结 order. Do not use the cluster health report title unless the subject is cluster or host health.',
+  '- When the subject is cluster or host health, use the cluster health report template once at the end. Keep the heading **🔧 修复建议** on its own line, followed by a numbered list.',
+  '- Charts: at most four ```chart fences in the final answer, one per distinct comparable evidence. Each chart uses one unit. Do not mix percents with counts.',
+  '- Choose type from the evidence: bar for comparison or ranking; line only when time points exist; area only for a continuous monitoring trend; pie for one series of shares with at most 8 categories, otherwise a table; radar for several dimensions of one subject; radial for 2–6 ring categories. Do not add a chart only to use another type.',
+  '- Put each chart in the section whose evidence it shows. Do not stack every number into one overview bar chart. Categories, series, and values must come from tool output only.',
+  '- Do not invent chart data. If the evidence has no comparable numbers, write the report and state that there is no series to chart.',
+  '- Until the final answer, follow Working Style: no chart, architecture diagram, full table, or summary.'
+].join('\n')

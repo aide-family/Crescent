@@ -91,7 +91,13 @@ export function isSubagentProfileName(value: string): value is SubagentProfileNa
   return (SUBAGENT_PROFILE_NAMES as readonly string[]).includes(value)
 }
 
-const HOST_ONLY_TOOLS = new Set(['subagent', 'open_subterminal', 'create-skill', 'create-sop'])
+const HOST_ONLY_TOOLS = new Set([
+  'subagent',
+  'open_subterminal',
+  'close_subterminal',
+  'create-skill',
+  'create-sop'
+])
 const WRITER_TOOLS = new Set<SubagentToolName>(['edit', 'write'])
 
 export function childProfileOmitsHostTools(profile: SubagentProfile): boolean {
