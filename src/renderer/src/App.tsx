@@ -1,3 +1,11 @@
+import { BrainIcon } from 'lucide-react'
+import { handoffParentTab } from '@renderer/lib/handoff-target'
+import { BookMarkedIcon, FolderOpenIcon } from 'lucide-react'
+import {
+  resolveHandoffTarget,
+  handoffSourceIdentity,
+  type HandoffTarget
+} from '../../shared/handoff'
 import {
   agentClient,
   appClient,
@@ -211,6 +219,20 @@ import {
   type RunStopReason
 } from '../../shared/connection-state'
 import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
+const MemoryCenter = lazy(() =>
+  import('@renderer/components/MemoryCenter').then((module) => ({ default: module.MemoryCenter }))
+)
+const LocalDocumentsSheet = lazy(() =>
+  import('@renderer/components/LocalDocumentsSheet').then((module) => ({
+    default: module.LocalDocumentsSheet
+  }))
+)
+const CommandDirectorySheet = lazy(() =>
+  import('@renderer/components/CommandDirectorySheet').then((module) => ({
+    default: module.CommandDirectorySheet
+  }))
+)
+
 const SettingsSheet = lazy(() =>
   import('@renderer/components/SettingsSheet').then((module) => ({ default: module.SettingsSheet }))
 )
@@ -515,6 +537,9 @@ function App({
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
   const [importingOpenApi, setImportingOpenApi] = useState(false)
+  const [memoryCenterOpen, setMemoryCenterOpen] = useState(false)
+  const [localDocumentsOpen, setLocalDocumentsOpen] = useState(false)
+  const [commandDirectoryOpen, setCommandDirectoryOpen] = useState(false)
   const [connections, setConnections] = useState<ConnectionConfig[]>([])
 
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
@@ -1865,6 +1890,7 @@ function App({
           updateTab(targetTabId, (tab) => ({
             ...tab,
             terminalReady: true,
+            handoffBlocked: false,
             terminalExited: false,
             terminalStartError: undefined
           }))
@@ -2464,6 +2490,7 @@ function App({
 
   useEffect(() => {
     return agentClient.onCommandApprovalRequest((request) => {
+      if (request.runId.startsWith('catalog-')) return
       const targetId = request.chatTabId ?? request.tabId
       const alive =
         isApprovalTargetAlive(request.tabId, tabsRef.current) ||
@@ -3028,6 +3055,9 @@ function App({
       terminalMode: detail.terminalMode ?? 'pty',
       agentStyle: detail.agentStyle,
       executionMode: normalizeExecutionMode(detail.executionMode),
+      handoffBlocked: detail.handoffBlocked || (detail.isSsh && !detail.connectionId),
+      expectedTarget: detail.expectedTarget,
+      connectionOrigin: detail.connectionOrigin,
       terminalReady: false,
       terminalOutput: '',
       agentLog: restoredLogs
@@ -3684,6 +3714,8 @@ function App({
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
         executionMode: normalizeExecutionMode(currentTab.executionMode),
+        approvalPolicy: currentTab.approvalPolicy ?? 'manual',
+        mutationPolicy: currentTab.mutationPolicy ?? 'confirm',
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -4146,16 +4178,50 @@ function App({
   async function createHandoffConversation(
     sourceId: string,
     goal: string,
-    draft: string
+    draft: string,
+    target: HandoffTarget
   ): Promise<void> {
     if (!tabsRef.current.some((tab) => tab.id === sourceId)) throw new Error('Source closed')
+    const sourceChat = tabsRef.current.find((tab) => tab.id === sourceId)!
+    const source =
+      handoffParentTab(
+        tabsRef.current,
+        sourceId,
+        activeExecutionTabIdRef.current.get(sourceId),
+        activeTabIdRef.current
+      ) ?? sourceChat
+    const parentContext = await terminalClient.getContext(source.id)
+    const resolved = resolveHandoffTarget({
+      selection: target,
+      source: handoffSourceIdentity(source, parentContext),
+      connections: connectionsRef.current
+    })
     const nextTab = createTerminalTab({
       title: `${t.handoff.prefix}${goal.trim().replace(/\s+/g, ' ').slice(0, 48)}`,
-      providerId: config.providerId,
-      agentStyle: config.agentStyle,
-      isSsh: false,
-      agentInput: draft
+      providerId: source.providerId ?? config.providerId,
+      model: source.model,
+      agentStyle: source.agentStyle ?? config.agentStyle,
+      executionMode: normalizeExecutionMode(sourceChat.executionMode),
+      isSsh: resolved.isSsh,
+      connectionId: resolved.connectionId,
+      connectionName: resolved.connectionName,
+      handoffBlocked: resolved.blocked,
+      expectedTarget: resolved.isSsh
+        ? target === 'inherit'
+          ? (parentContext.expectedTarget ?? parentContext.promptHost)
+          : connectionsRef.current.find((item) => item.id === resolved.connectionId)?.host
+        : undefined,
+      connectionOrigin:
+        target === 'inherit'
+          ? parentContext.connectionOrigin
+          : resolved.isSsh
+            ? 'connection-card'
+            : 'manual-shell',
+      agentInput: `${draft}\n\n交接目标：${resolved.connectionName ?? (resolved.isSsh ? (parentContext.expectedTarget ?? '手动 SSH，待验证') : target === 'none' ? '仅资料，待选择目标' : '本机')}。审批不继承；先复核目标和状态。`
     })
+    const prepared = await terminalClient.prepareHandoff(source.id, nextTab.id, target)
+    if (!prepared.ok) throw new Error(prepared.error)
+
     // Existing storage contract saves tab metadata; composer text stays in memory.
     // Do not dismiss the editor or switch tabs until creation has been acknowledged.
     const saved = await storageClient.saveTabs(toStoredSessionTabs([...tabsRef.current, nextTab]))
@@ -4164,6 +4230,12 @@ function App({
       await storageClient.saveTabs(toStoredSessionTabs(tabsRef.current))
       throw new Error('Source closed')
     }
+    if (resolved.connectionId) {
+      const connection = connectionsRef.current.find((item) => item.id === resolved.connectionId)
+      if (!connection) throw new Error('Connection disappeared')
+      pendingSshRef.current.set(nextTab.id, connection)
+    }
+    setWorkbenchLayout('split')
     activateNewSession(nextTab)
     requestAnimationFrame(() => agentInputRef.current?.focus())
   }
@@ -4218,6 +4290,8 @@ function App({
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
         executionMode: normalizeExecutionMode(currentTab.executionMode),
+        approvalPolicy: currentTab.approvalPolicy ?? 'manual',
+        mutationPolicy: currentTab.mutationPolicy ?? 'confirm',
         isSsh: false
       })
       setTabs((current) => {
@@ -5308,7 +5382,9 @@ function App({
   }
 
   function exportLogEntryFullMarkdown(entry: AgentLogEntry): void {
-    void downloadMarkdown(entry.text, buildLogMarkdownFilename(entry), t)
+    void resolveLogEntryResultMarkdown(entry).then((value) =>
+      downloadMarkdown(value, buildLogMarkdownFilename(entry), t)
+    )
   }
 
   async function exportLogEntryTrace(entry: AgentLogEntry): Promise<void> {
@@ -5556,6 +5632,36 @@ function App({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label="记忆中心"
+            title="记忆中心"
+            onClick={() => setMemoryCenterOpen(true)}
+          >
+            <BrainIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="本地资料"
+            title="本地资料"
+            onClick={() => setLocalDocumentsOpen(true)}
+          >
+            <FolderOpenIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="命令手册"
+            title="命令手册"
+            onClick={() => setCommandDirectoryOpen(true)}
+          >
+            <BookMarkedIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             aria-label={t.wiki.title}
             title={t.wiki.title}
             onClick={() => setWikiSheetOpen(true)}
@@ -5678,6 +5784,9 @@ function App({
                 }
                 onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
                 onShowAgentThinkingChange={persistShowAgentThinking}
+                onCommandTimeoutsChange={(commandTimeouts) =>
+                  void persistAgentConfigPatch({ commandTimeouts })
+                }
                 onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
                 onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
                 onCommandWhitelistChange={(text) => {
@@ -5716,6 +5825,54 @@ function App({
       {skillOpen && <Suspense fallback={null}>{skillSheet}</Suspense>}
       {mcpOpen && <Suspense fallback={null}>{mcpSheet}</Suspense>}
       {historyOpen && <Suspense fallback={null}>{historySheet}</Suspense>}
+      {memoryCenterOpen && (
+        <Suspense fallback={null}>
+          <MemoryCenter
+            selection={{ providerId: activeProviderId, model: activeTabModelId }}
+            open={memoryCenterOpen}
+            onOpenChange={setMemoryCenterOpen}
+            onOpenHistory={async (tabId) => {
+              const item = (await storageClient.listSessionHistory(200)).find(
+                (entry) => entry.tabId === tabId
+              )
+              if (!item) throw new Error('来源会话已删除')
+              await openHistorySession(item)
+              setMemoryCenterOpen(false)
+            }}
+          />
+        </Suspense>
+      )}
+      {localDocumentsOpen && (
+        <Suspense fallback={null}>
+          <LocalDocumentsSheet
+            open={localDocumentsOpen}
+            onOpenChange={setLocalDocumentsOpen}
+            t={t}
+            onInsert={(text) =>
+              updateTab(sessionChatTab.id, (tab) => ({
+                ...tab,
+                agentInput: [tab.agentInput, text].filter(Boolean).join('\n\n')
+              }))
+            }
+          />
+        </Suspense>
+      )}
+      {commandDirectoryOpen && (
+        <Suspense fallback={null}>
+          <CommandDirectorySheet
+            open={commandDirectoryOpen}
+            onOpenChange={setCommandDirectoryOpen}
+            tabId={activeExecutionTabIdRef.current.get(sessionChatTab.id) ?? activeTab.id}
+            chatTabId={sessionChatTab.id}
+            connectionId={activeTab.connectionId}
+            executionMode={normalizeExecutionMode(sessionChatTab.executionMode)}
+            mutationPolicy={sessionChatTab.mutationPolicy ?? 'confirm'}
+            onInsert={(text) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, agentInput: text }))
+            }
+          />
+        </Suspense>
+      )}
       {wikiOpen && <Suspense fallback={null}>{wikiSheet}</Suspense>}
       <CaptureDraftDialog
         open={Boolean(captureDialogJob)}
@@ -5850,6 +6007,33 @@ function App({
         <HandoffDialog
           key={sessionChatTab.id}
           editor={handoff.editor}
+          sourceSessionKey={sessionChatTab.id}
+          sourcePaneId={
+            handoffParentTab(
+              tabs,
+              sessionChatTab.id,
+              executionTerminalByChatId[sessionChatTab.id],
+              activeTab.id
+            )?.id ?? sessionChatTab.id
+          }
+          connections={connections.filter((connection) => !isLocalConnection(connection))}
+          sourceTarget={
+            handoffParentTab(
+              tabs,
+              sessionChatTab.id,
+              executionTerminalByChatId[sessionChatTab.id],
+              activeTab.id
+            )?.connectionName ??
+            (handoffParentTab(
+              tabs,
+              sessionChatTab.id,
+              executionTerminalByChatId[sessionChatTab.id],
+              activeTab.id
+            )?.isSsh
+              ? '手动 SSH · 主终端'
+              : '本机 · 主终端')
+          }
+          onTarget={handoff.setTarget}
           title={getSessionDisplayTitle(sessionChatTab, tabs)}
           cwd={handoff.status?.cwd}
           model={config.model}
@@ -5888,12 +6072,28 @@ function App({
             onExecutionModeChange={(mode) =>
               updateTab(sessionChatTab.id, (tab) => ({ ...tab, executionMode: mode }))
             }
+            approvalPolicy={sessionChatTab.approvalPolicy ?? 'manual'}
+            mutationPolicy={sessionChatTab.mutationPolicy ?? 'confirm'}
+            onApprovalPolicyChange={(policy) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, approvalPolicy: policy }))
+            }
+            onVerifyHandoff={() =>
+              void (async () => {
+                const verified = await terminalClient.confirmLogin({ tabId: activeTab.id })
+                if (verified.ok && verified.ready)
+                  updateTab(sessionChatTab.id, (tab) => ({ ...tab, handoffBlocked: false }))
+                else toast.error(verified.error ?? '请先连接并确认交接目标；不会降级到本机。')
+              })()
+            }
+            onMutationPolicyChange={(policy) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, mutationPolicy: policy }))
+            }
             agentStyle={sessionAgentStyle}
             onAgentStyleChange={applyConversationStyle}
             thinkingCollapsedByDefault={
               !resolveShowAgentThinking(sessionAgentStyle, config.showAgentThinking)
             }
-            activeAgentPending={activeAgentPending}
+            activeAgentPending={activeAgentPending || Boolean(sessionChatTab.handoffBlocked)}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
               (workflow) => workflow.pinned !== false

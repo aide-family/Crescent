@@ -3,12 +3,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dictionary, Locale } from '@renderer/i18n'
 import type { AgentHandoffStatus } from '../../../shared/agent-types'
 import {
+  type HandoffTarget,
   HANDOFF_DRAFT_MAX,
   HANDOFF_GOAL_MAX,
   HANDOFF_RETRY_DELAY_MS
 } from '../../../shared/handoff'
 
 export interface HandoffEditor {
+  target: HandoffTarget
   open: boolean
   goal: string
   draft: string
@@ -22,6 +24,7 @@ export interface HandoffEditor {
 }
 
 const EMPTY: HandoffEditor = {
+  target: 'inherit',
   open: false,
   goal: '',
   draft: '',
@@ -37,7 +40,12 @@ export function useHandoff(input: {
   contextVersion: number
   locale: Locale
   t: Dictionary
-  createDraft: (sourceId: string, goal: string, draft: string) => Promise<void>
+  createDraft: (
+    sourceId: string,
+    goal: string,
+    draft: string,
+    target: HandoffTarget
+  ) => Promise<void>
 }) {
   const { tabId, busy, contextVersion, locale, t, createDraft } = input
   const editors = useRef<Record<string, HandoffEditor>>({})
@@ -181,7 +189,7 @@ export function useHandoff(input: {
         return
       }
       if (!liveTabs.current.has(sourceId)) return
-      await createDraft(sourceId, current.goal, current.draft)
+      await createDraft(sourceId, current.goal, current.draft, current.target)
       update(sourceId, { ...EMPTY })
     } catch {
       update(sourceId, { error: t.handoff.saveFailed })
@@ -201,6 +209,7 @@ export function useHandoff(input: {
       if (!disabledReason)
         update(tabId, { open: true, error: undefined, sourceRevision: status?.revision })
     },
+    setTarget: (target: HandoffTarget) => update(tabId, { target }),
     setGoal: (goal: string) => update(tabId, { goal }),
     setDraft: (draft: string) => update(tabId, { draft })
   }

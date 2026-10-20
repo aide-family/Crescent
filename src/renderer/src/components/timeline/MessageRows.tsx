@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { MessageInlineContent } from '@renderer/components/AgentReferenceBadges'
 import { MarkdownContent } from '@renderer/components/MarkdownContent'
 import type { Dictionary } from '@renderer/i18n'
@@ -17,62 +18,58 @@ export function ThoughtStepRow({
   t: Dictionary
   collapsedByDefault: boolean
 }): React.JSX.Element | null {
+  return (
+    <ThoughtContent
+      key={`${step.id}:${step.phase}:${collapsedByDefault}`}
+      step={step}
+      t={t}
+      collapsedByDefault={collapsedByDefault}
+    />
+  )
+}
+function ThoughtContent({
+  step,
+  t,
+  collapsedByDefault
+}: {
+  step: Extract<AgentRunStep, { kind: 'thought' }>
+  t: Dictionary
+  collapsedByDefault: boolean
+}): React.JSX.Element | null {
+  const streaming = step.phase === 'streaming'
+  const [expanded, setExpanded] = useState(streaming && !collapsedByDefault)
   const text = clampAgentText(step.text.trim(), AGENT_RUN_STREAM_MAX_CHARS)
   if (!text) return null
-  const streaming = step.phase === 'streaming'
-  const needsCollapse = collapsedByDefault || (!streaming && text.length > THOUGHT_PREVIEW_CHARS)
-
-  if (needsCollapse) {
-    return (
-      <details className="group min-w-0" open={collapsedByDefault ? undefined : true}>
-        <summary className="flex cursor-pointer select-none items-start gap-1.5 marker:content-none">
-          {streaming ? (
-            <Loader2Icon
-              className="mt-0.5 size-3 shrink-0 animate-spin text-muted-foreground"
-              aria-hidden="true"
-            />
-          ) : (
-            <ChevronRightIcon
-              className="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
-              aria-hidden="true"
-            />
-          )}
-          <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic">
-            <span className="mr-1.5 not-italic text-muted-foreground/70">
-              {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
-            </span>
-            <span className="group-open:hidden">
-              {collapsedByDefault && streaming
-                ? null
-                : `${text.slice(0, THOUGHT_PREVIEW_CHARS)}${text.length > THOUGHT_PREVIEW_CHARS ? '…' : ''}`}
-            </span>
-            <span className="hidden whitespace-pre-wrap break-words group-open:inline">{text}</span>
-          </span>
-        </summary>
-      </details>
-    )
-  }
-
   return (
-    <div className="flex items-start gap-1.5 min-w-0">
-      {streaming ? (
-        <Loader2Icon
-          className="mt-0.5 size-3 shrink-0 animate-spin text-muted-foreground"
-          aria-hidden="true"
-        />
-      ) : (
-        <span
-          className="mt-1 size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
-          aria-hidden="true"
-        />
-      )}
-      <div className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap break-words">
-        <span className="mr-1.5 not-italic text-muted-foreground/70">
+    <details className="group min-w-0" open={expanded}>
+      <summary
+        className="flex cursor-pointer select-none items-start gap-1.5 marker:content-none focus-visible:outline-2 focus-visible:outline-primary"
+        onClick={(event) => {
+          event.preventDefault()
+          setExpanded(!expanded)
+        }}
+      >
+        {streaming ? (
+          <Loader2Icon
+            className="mt-0.5 size-3 shrink-0 animate-spin text-muted-foreground"
+            aria-hidden="true"
+          />
+        ) : (
+          <ChevronRightIcon
+            className="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        )}
+        <span className="text-[12px] text-muted-foreground">
           {streaming ? t.input.thinkingProcessStreaming : t.input.thinkingProcessCompleted}
         </span>
-        {text}
-      </div>
-    </div>
+      </summary>
+      {expanded && (
+        <div className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-muted-foreground italic">
+          {text}
+        </div>
+      )}
+    </details>
   )
 }
 

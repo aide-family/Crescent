@@ -149,7 +149,7 @@ export function AgentRunTimeline({
               return (
                 <ThoughtStepRow
                   key={step.id}
-                  step={step}
+                  step={runFinished ? { ...step, phase: 'done' } : step}
                   t={t}
                   collapsedByDefault={thinkingCollapsedByDefault}
                 />

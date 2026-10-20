@@ -52,6 +52,18 @@ import type {
 } from '../../shared/execution-plan'
 
 export const agentApi = {
+  revisePlan: (value: {
+    requestId: string
+    digest: string
+    plan: unknown
+  }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('agent:revise-plan', value),
+  executionTarget: (
+    sessionKey: string,
+    tabId: string
+  ): Promise<import('../../shared/agent-types').TerminalExecutionTarget> =>
+    ipcRenderer.invoke('agent:execution-target', { sessionKey, tabId }),
+  returnToMain: (sessionKey: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent:return-to-main', sessionKey),
   getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
   getModels: (): Promise<AgentModelOption[]> => ipcRenderer.invoke('agent:get-models'),
   listSkills: (): Promise<AgentSkillOption[]> => ipcRenderer.invoke('agent:list-skills'),

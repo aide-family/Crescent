@@ -1,3 +1,8 @@
+import { CodeIntelligenceSettings } from './CodeIntelligenceSettings'
+import {
+  normalizeCommandTimeoutPolicy,
+  type CommandTimeoutPolicy
+} from '../../../shared/command-timeouts'
 import {
   AGENT_THINKING_LEVELS,
   normalizeThinkingLevel,
@@ -121,6 +126,7 @@ export interface SettingsSheetProps {
   onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
+  onCommandTimeoutsChange: (value: CommandTimeoutPolicy) => void
   onMaxActiveToolsChange: (value: number) => void
   onCommandWhitelistChange: (text: string) => void
   onCreateOpenApiProfile: () => void
@@ -178,6 +184,7 @@ export function SettingsSheet({
   onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
+  onCommandTimeoutsChange,
   onMaxActiveToolsChange: _onMaxActiveToolsChange,
   onCommandWhitelistChange: _onCommandWhitelistChange,
   onCreateOpenApiProfile: _onCreateOpenApiProfile,
@@ -234,6 +241,7 @@ export function SettingsSheet({
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
+            <CodeIntelligenceSettings />
             <div className="flex items-center justify-between gap-2">
               <p className="app-section-label">
                 {t.settings.providerList} · {config.providers.length}
@@ -548,6 +556,36 @@ export function SettingsSheet({
                 <FieldDescription>{t.settings.workbenchLayoutHint}</FieldDescription>
               </Field>
               <Field>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['startMs', 'idleMs', 'executionMs', 'approvalMs'] as const).map((key) => (
+                    <label key={key} className="space-y-1 text-xs">
+                      {
+                        {
+                          startMs: '启动告警（秒）',
+                          idleMs: '空闲告警（秒）',
+                          executionMs: '执行时限（秒）',
+                          approvalMs: '审批等待（秒）'
+                        }[key]
+                      }
+                      <Input
+                        type="number"
+                        value={normalizeCommandTimeoutPolicy(config.commandTimeouts)[key] / 1000}
+                        onChange={(event) =>
+                          onCommandTimeoutsChange(
+                            normalizeCommandTimeoutPolicy({
+                              ...config.commandTimeouts,
+                              [key]: Number(event.target.value) * 1000
+                            })
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <FieldDescription>
+                  超时只标记未知结果；不会自动 Ctrl+C 或重放变更。执行时限 60–600
+                  秒，可在运行中继续等待。
+                </FieldDescription>
                 <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>
                 <Input
                   id="workspace-cwd"

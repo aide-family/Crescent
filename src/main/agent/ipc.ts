@@ -1,3 +1,7 @@
+import { grantLocalDocumentPath } from '../local-document-ipc'
+import { getPtyBashExecContext, returnToMainTerminal } from './pi-terminal-bash'
+import { readTerminalExecutionTarget } from '../terminal/ipc'
+import { normalizeApprovalPolicy, normalizeMutationPolicy } from '../../shared/approval-policy'
 import { promises as fs } from 'fs'
 import {
   importOpenApiDocument,
@@ -12,7 +16,7 @@ import {
 import { publicAgentConfig, mergeAgentSecrets } from '../renderer-secrets'
 import { rendererIpc } from '../ipc-security'
 import { normalizeExecutionMode } from '../../shared/execution-plan'
-import { resolvePlanApproval, stopPlansForTab } from './change-plan'
+import { revisePendingPlan, resolvePlanApproval, stopPlansForTab } from './change-plan'
 import { basename, resolve } from 'path'
 
 import { BrowserWindow, dialog, type OpenDialogOptions, type WebContents } from 'electron'
@@ -111,6 +115,28 @@ const activeSkillInstalls = new Map<string, { cancel: () => void }>()
 const MAX_COMPACT_INSTRUCTIONS = 2_000
 
 export function registerAgentIpc(): void {
+  rendererIpc.handle('agent:revise-plan', (event, value: unknown) =>
+    revisePendingPlan(event.sender.id, value)
+  )
+  rendererIpc.handle(
+    'agent:execution-target',
+    (event, payload?: { sessionKey?: string; tabId?: string }) => {
+      if (typeof payload?.sessionKey !== 'string' || typeof payload.tabId !== 'string')
+        throw new Error('Invalid target request')
+      const context = getPtyBashExecContext(payload.sessionKey)
+      const tabId =
+        context?.webContents.id === event.sender.id ? context.executionTabId : payload.tabId
+      return readTerminalExecutionTarget(event.sender.id, tabId)
+    }
+  )
+  rendererIpc.handle('agent:return-to-main', (event, sessionKey: unknown) => {
+    if (
+      typeof sessionKey !== 'string' ||
+      getPtyBashExecContext(sessionKey)?.webContents.id !== event.sender.id
+    )
+      return { ok: false, error: 'No owned execution scope' }
+    return returnToMainTerminal(sessionKey)
+  })
   rendererIpc.handle('agent:get-config', () => {
     const start = traceStartup('ipc:agent:get-config')
     const config = readAgentConfig()
@@ -407,6 +433,7 @@ export function registerAgentIpc(): void {
     async (event, payload: { kind?: AgentPathReference['kind'] }) => {
       const kind = payload?.kind === 'directory' ? 'directory' : 'file'
       const selection = await pickAgentPathReference(event.sender, kind)
+      if (selection) await grantLocalDocumentPath(event.sender, selection.path)
       return selection
     }
   )
@@ -415,9 +442,14 @@ export function registerAgentIpc(): void {
     return importOpenApiDocument(event.sender)
   })
 
-  rendererIpc.handle('agent:save-pasted-attachment', async (_, payload: PastedAttachmentInput) => {
-    return savePastedAttachment(payload)
-  })
+  rendererIpc.handle(
+    'agent:save-pasted-attachment',
+    async (event, payload: PastedAttachmentInput) => {
+      const attachment = await savePastedAttachment(payload)
+      await grantLocalDocumentPath(event.sender, attachment.path)
+      return attachment
+    }
+  )
 
   rendererIpc.handle('agent:request-microphone-permission', async () => {
     return requestMicrophonePermission()
@@ -705,6 +737,8 @@ export function registerAgentIpc(): void {
       locale: payload?.locale,
       agentStyle: normalizeAgentStyle(payload?.agentStyle ?? agentConfig.agentStyle),
       executionMode: normalizeExecutionMode(payload?.executionMode),
+      approvalPolicy: normalizeApprovalPolicy(payload?.approvalPolicy),
+      mutationPolicy: normalizeMutationPolicy(payload?.mutationPolicy),
       activeWikiDocs,
       activeSkillDocs,
       emit: (agentEvent) => {

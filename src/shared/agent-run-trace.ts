@@ -34,9 +34,9 @@ export function buildAgentRunTrace(input: AgentRunTraceBuildInput): AgentRunTrac
     startedAt,
     finishedAt,
     elapsedMs: input.elapsedMs,
-    steps: (input.actions ?? []).map((action, index) =>
-      buildTraceStep(index + 1, action.title, action.detail)
-    ),
+    steps: (input.actions ?? [])
+      .filter((action) => !/^thinking$/i.test(action.title.trim()))
+      .map((action, index) => buildTraceStep(index + 1, action.title, action.detail)),
     resultSummary: truncateText(redactSensitiveText(input.result?.trim() ?? ''), MAX_RESULT_CHARS),
     error:
       truncateText(redactSensitiveText(input.error?.trim() ?? ''), MAX_RESULT_CHARS) || undefined
@@ -44,7 +44,11 @@ export function buildAgentRunTrace(input: AgentRunTraceBuildInput): AgentRunTrac
 }
 
 export function serializeAgentRunTrace(trace: AgentRunTrace): string {
-  return JSON.stringify(trace, null, 2)
+  return JSON.stringify(
+    { ...trace, steps: trace.steps.filter((step) => !/^thinking$/i.test(step.title.trim())) },
+    null,
+    2
+  )
 }
 
 export function parseAgentRunTrace(value: unknown): AgentRunTrace | undefined {

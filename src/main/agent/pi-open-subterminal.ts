@@ -1,3 +1,9 @@
+import { createHash } from 'node:crypto'
+import { requestCommandApproval } from './command-approval'
+import { publicConnection } from '../renderer-secrets'
+import { redactSensitiveText } from '../../shared/secret-redaction'
+import { normalizeCommandTimeoutPolicy } from '../../shared/command-timeouts'
+import { readTerminalPlanIdentity } from '../terminal/ipc'
 import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
@@ -19,7 +25,9 @@ import {
   getFailedSshSubterminalConnectionIds,
   getPtyBashExecContext,
   recordFailedSshSubterminalConnection,
-  updatePtyBashExecutionTabId
+  updatePtyBashExecutionTabId,
+  pushTemporaryExecutionTarget,
+  returnToMainTerminal
 } from './pi-terminal-bash'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
@@ -44,6 +52,7 @@ export interface OpenSubterminalParams {
   mode: OpenSubterminalMode
   name?: string
   connectionId?: string
+  temporary?: boolean
 }
 
 export interface AgentSubterminalOpenedPayload {
@@ -278,6 +287,7 @@ export async function openAgentSubterminal(input: {
   }
 
   const mode = input.params.mode
+  let requestedConnection: Awaited<ReturnType<typeof listConnections>>[number] | undefined
   const connectionId = input.params.connectionId?.trim()
   if (mode === 'ssh' && !connectionId) {
     const hint = await formatAvailableConnectionsHint()
@@ -297,6 +307,7 @@ export async function openAgentSubterminal(input: {
         error: `Unknown connectionId "${connectionId}". Available connections:\n${hint}`
       }
     }
+    requestedConnection = connection
     if (connection.source === 'local' || !connection.host) {
       return {
         ok: false,
@@ -341,6 +352,82 @@ export async function openAgentSubterminal(input: {
     })
   ) {
     return { ok: false, error: FAILED_SSH_SUBTERMINAL_RETRY_ERROR }
+  }
+
+  if (context.restorationRequired && mode === 'local' && rerouteParentBash)
+    return {
+      ok: false,
+      error:
+        'The parent SSH target must be explicitly restored or another SSH target selected. A new local pane cannot bypass that fence.'
+    }
+
+  if (requestedConnection) {
+    if (
+      context.mutationPolicy === 'manual-execution' &&
+      ((requestedConnection.actions?.length ?? 0) > 0 ||
+        requestedConnection.sshOptions?.some((option) => /ProxyCommand|LocalCommand/i.test(option)))
+    )
+      return {
+        ok: false,
+        error:
+          'Manual execution selected: saved login actions cannot be run by the Agent. Open/connect this environment manually.'
+      }
+    const parentIdentity = readTerminalPlanIdentity(webContents.id, parentTabId)
+    const digest = (value: typeof requestedConnection): string =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const reviewedDigest = digest(requestedConnection)
+    const view = publicConnection(requestedConnection)
+    const actions = (view.actions ?? []).map((action) => redactSensitiveText(action)).join('\n')
+    const decision = await requestCommandApproval({
+      webContents,
+      runId: context.runId,
+      tabId: context.executionTabId,
+      chatTabId: context.chatTabId,
+      locale: context.locale,
+      config: context.config,
+      signal: AbortSignal.any(
+        [input.signal, context.signal].filter((signal): signal is AbortSignal => Boolean(signal))
+      ),
+      timeoutMs: normalizeCommandTimeoutPolicy(context.config.commandTimeouts).approvalMs,
+      command: `Open SSH login scope: ${view.name} (${view.id})\nDestination: ${view.host}:${view.port ?? 22}\nUse the saved connection configuration. No ordinary Agent command is approved by this login confirmation.\nSaved login actions (credentials masked):\n${actions || '(none)'}`,
+      audit: {
+        summary: 'SSH login scope expansion requires human confirmation.',
+        operationReason:
+          'Confirm the destination and configured login sequence before creating a pane or sending credentials.',
+        risk: 'high',
+        requiresApproval: true,
+        riskPoints: [],
+        impactAnalysis: '',
+        recommendation: '',
+        source: 'rule',
+        elapsedMs: 0
+      }
+    })
+    if (
+      !decision.approved ||
+      input.signal?.aborted ||
+      context.signal?.aborted ||
+      webContents.isDestroyed()
+    )
+      return {
+        ok: false,
+        error:
+          'SSH login scope was rejected, expired or canceled. No pane created and no credentials sent.'
+      }
+    const current = (await listConnections({ forceRefreshSecrets: true })).find(
+      (connection) => connection.id === connectionId
+    )
+    if (
+      !current ||
+      digest(current) !== reviewedDigest ||
+      !parentIdentity ||
+      readTerminalPlanIdentity(webContents.id, parentTabId) !== parentIdentity
+    )
+      return {
+        ok: false,
+        error:
+          'Connection configuration or parent target changed during approval. Request a fresh review.'
+      }
   }
 
   const name =
@@ -405,10 +492,16 @@ export async function openAgentSubterminal(input: {
   }
 
   if (rerouteParentBash) {
-    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
+    if (mode === 'local' && input.params.temporary !== false)
+      pushTemporaryExecutionTarget(input.sessionKey)
+    const bound = updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
       isSsh: mode === 'ssh',
       connectionId: mode === 'ssh' ? connectionId : undefined
     })
+    if (!bound) {
+      closeTemporarySubterminal(webContents, opened.tabId)
+      return { ok: false, error: 'Subterminal target is not verified. Parent route unchanged.' }
+    }
   }
 
   const hintParts: string[] = []
@@ -448,13 +541,19 @@ export async function createOpenSubterminalToolDefinition(
     // other providers don't support anyOf/const patterns for string enums.
     mode: StringEnum(['local', 'ssh'] as const),
     name: Type.Optional(Type.String()),
-    connectionId: Type.Optional(Type.String())
+    connectionId: Type.Optional(Type.String()),
+    temporary: Type.Optional(
+      Type.Boolean({
+        description:
+          'Local route returns after one bash call; false keeps it until explicit return_to_main_terminal.'
+      })
+    )
   })
   return pi.defineTool({
     name: 'open_subterminal',
     label: 'Open subterminal',
     description: [
-      'Open a docked subterminal and route subsequent bash there.',
+      'Open a docked subterminal and route subsequent bash there. A new SSH login scope requires host-owned human confirmation even under safe-auto; subsequent mutations still require separate command/plan approval.',
       'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
       'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the host restores the main terminal).',
       'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
@@ -478,6 +577,28 @@ export async function createOpenSubterminalToolDefinition(
       return {
         content: [{ type: 'text', text }],
         details: result
+      }
+    }
+  })
+}
+
+export function createReturnToMainTerminalTool(
+  pi: PiSdkFacade,
+  sessionKey: string
+): ReturnType<PiSdkFacade['defineTool']> {
+  return pi.defineTool({
+    name: 'return_to_main_terminal',
+    label: 'Return to main terminal',
+    description:
+      'Restore the captured parent execution target after temporary work. Host verifies pane generation and connection identity; failure never falls back to local.',
+    parameters: Type.Object({}),
+    executionMode: 'sequential',
+    async execute() {
+      const result = returnToMainTerminal(sessionKey)
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        details: result,
+        isError: !result.ok
       }
     }
   })

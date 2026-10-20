@@ -1,3 +1,4 @@
+import { normalizeCommandTimeoutPolicy } from '../shared/command-timeouts'
 import { normalizeThinkingLevel, normalizeSamplingMap } from '../shared/agent-thinking'
 import { tokenizeSshOptions } from '../shared/ssh-options'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
@@ -62,6 +63,7 @@ export interface CrescentConfigFile {
   /** Local Markdown directory used by the Crescent knowledge base. */
   wikiDirectory?: string
   whaleMonitor?: WhaleMonitorConfig & { apiKey?: string }
+  whaleMonitorEndpointDefaultsMigrated?: boolean
   /** Soft default for connection routing after a successful SSH login. */
   lastUsedConnectionId?: string
   /** Favorite + manual order for custom and ssh-config hosts (ids only). */
@@ -457,6 +459,7 @@ export function normalizeAgentConfig(config: Partial<AgentConfig>): AgentConfig 
     providers,
     providerId: selection.providerId,
     model: selection.model,
+    commandTimeouts: normalizeCommandTimeoutPolicy(config.commandTimeouts),
     workspaceCwd: String(config.workspaceCwd ?? '').trim() || undefined,
     agentStyle: normalizeAgentStyle(config.agentStyle),
     thinkingLevel: normalizeThinkingLevel(config.thinkingLevel),
@@ -568,10 +571,22 @@ function normalizeAgentProviderModel(value: unknown): AgentProviderModelConfig {
 
 function normalizeConfigFile(value: unknown): CrescentConfigFile {
   const record = isRecord(value) ? value : {}
+  const whaleMonitorEndpointDefaultsMigrated =
+    record.whaleMonitorEndpointDefaultsMigrated === true
+  const whaleMonitor = normalizeWhaleMonitorConfig(record.whaleMonitor)
+  if (!whaleMonitorEndpointDefaultsMigrated) {
+    if (whaleMonitor.spendBaseUrl === 'https://dmxwg.intra.yiducloud.cn/litellm/spend/logs/self') {
+      whaleMonitor.spendBaseUrl = ''
+    }
+    if (whaleMonitor.modelsBaseUrl === 'http://nova.dmxwg.yiducloud.cn/litellm/v1/models') {
+      whaleMonitor.modelsBaseUrl = ''
+    }
+  }
 
   return {
     agent: normalizeAgentConfig(isRecord(record.agent) ? record.agent : {}),
-    whaleMonitor: normalizeWhaleMonitorConfig(record.whaleMonitor),
+    whaleMonitor,
+    whaleMonitorEndpointDefaultsMigrated: true,
     connections: Array.isArray(record.connections)
       ? record.connections.map(normalizeConnection).filter((connection) => connection.host)
       : [],
@@ -619,6 +634,7 @@ function normalizeWhaleMonitorConfig(value: unknown): WhaleMonitorConfig & { api
 
 function normalizeMonitorUrl(value: unknown, fallback: string): string {
   if (typeof value !== 'string') return fallback
+  if (!value.trim()) return ''
   try {
     const parsed = new URL(value.trim())
     if (

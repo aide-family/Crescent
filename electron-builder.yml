@@ -18,6 +18,9 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!node_modules/@tailwindcss/**/*'
+  # PDF.js is baked into the lazy renderer chunk and worker; no native canvas at runtime.
+  - '!node_modules/pdfjs-dist/**/*'
+  - '!node_modules/@napi-rs/canvas*/**/*'
   # Prefer node-pty N-API prebuilds over host-compiled build/ binaries.
   - '!node_modules/node-pty/build/**'
   - '!design/**/*'
@@ -55,8 +58,10 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
   extendInfo:
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.

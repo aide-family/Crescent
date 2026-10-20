@@ -149,22 +149,22 @@ npm run dev
 
 ### Build
 
+macOS delivery uses one **Universal** application, DMG and ZIP containing both x64 and arm64. Follow [the development and packaging rules](Document/DEVELOPMENT.md).
+
 ```bash
-# Windows (cross-packaging from macOS/Linux is supported via node-pty win32 prebuilds)
-npm run build:win
+# Local unsigned Universal package; runs all local gates, never publishes
+npm run build:mac:local
 
-# macOS
+# Universal package with separately configured signing / notarization
 npm run build:mac
-
-# Linux
-npm run build:linux
 ```
+
+The legacy Mac x64/arm64 command names also produce Universal packages. Windows adaptation is outside the current development and acceptance scope.
 
 Notes:
 
 - Packaging uses `node-pty` N-API prebuilds with `npmRebuild: false`, so macOS does not try to cross-compile Windows/Linux native modules.
 - Official releases build each platform on its native runner (see `.github/workflows/release.yml`).
-- If a local Windows NSIS build asks for Wine, use CI or install Wine first.
 
 After launch, configure an OpenAI-compatible model provider, select a model, and ask Crescent beside the terminal:
 

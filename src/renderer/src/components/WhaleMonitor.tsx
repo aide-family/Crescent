@@ -332,6 +332,14 @@ export function WhaleMonitor({
   const panelAlignsRight = bounds.x + 112 > window.innerWidth / 2
 
   const refreshUsage = async (): Promise<void> => {
+    if (!snapshot || !snapshot.settings.spendBaseUrl || !snapshot.settings.apiKeyConfigured) {
+      setError(
+        en
+          ? 'Set the spend endpoint and API key in settings first.'
+          : '请先在设置中填写用量端点和 API Key 并保存。'
+      )
+      return
+    }
     if (!range.startDate || !range.endDate || range.startDate > range.endDate) {
       setError(en ? 'Choose a valid date range.' : '请选择有效的日期区间。')
       return
@@ -358,6 +366,14 @@ export function WhaleMonitor({
   }
 
   const refreshModels = async (): Promise<void> => {
+    if (!snapshot || !snapshot.settings.modelsBaseUrl || !snapshot.settings.apiKeyConfigured) {
+      setError(
+        en
+          ? 'Set the models endpoint and API key in settings first.'
+          : '请先在设置中填写模型端点和 API Key 并保存。'
+      )
+      return
+    }
     setBusy(true)
     setError('')
     try {
@@ -371,6 +387,14 @@ export function WhaleMonitor({
   }
 
   const saveSettings = async (): Promise<void> => {
+    if (!endpointSpend.trim() || !endpointModels.trim()) {
+      setError(
+        en
+          ? 'Enter both endpoint URLs before saving.'
+          : '请先填写用量端点和模型端点，再保存设置。'
+      )
+      return
+    }
     const amount = Number(budgetText)
     if (!Number.isFinite(amount) || amount < 0) {
       setError(en ? 'Budget must be zero or greater.' : '额度必须是大于或等于 0 的数字。')
@@ -584,9 +608,10 @@ export function WhaleMonitor({
                 />
               </label>
               <label className="block space-y-1 text-xs">
-                <span>{en ? 'Spend endpoint' : '用量端点'}</span>
+                <span>{en ? 'Spend endpoint (required)' : '用量端点（必填）'}</span>
                 <input
                   className="h-8 w-full rounded border border-input bg-background px-2 text-xs"
+                  placeholder={en ? 'Enter the usage endpoint URL' : '请填写用量接口地址'}
                   value={endpointSpend}
                   onChange={(event) => setEndpointSpend(event.target.value)}
                 />
@@ -602,9 +627,10 @@ export function WhaleMonitor({
                 </label>
               )}
               <label className="block space-y-1 text-xs">
-                <span>{en ? 'Models endpoint' : '模型端点'}</span>
+                <span>{en ? 'Models endpoint (required)' : '模型端点（必填）'}</span>
                 <input
                   className="h-8 w-full rounded border border-input bg-background px-2 text-xs"
+                  placeholder={en ? 'Enter the models endpoint URL' : '请填写模型列表接口地址'}
                   value={endpointModels}
                   onChange={(event) => setEndpointModels(event.target.value)}
                 />

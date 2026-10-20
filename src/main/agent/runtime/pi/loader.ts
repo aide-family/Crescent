@@ -27,6 +27,9 @@ export type PiSdkFacade = Pick<
   | 'createAgentSession'
   | 'defineTool'
   | 'createBashToolDefinition'
+  | 'createEditToolDefinition'
+  | 'createWriteToolDefinition'
+  | 'withFileMutationQueue'
 >
 
 type PiModelRuntimeModule = Pick<PiCodingAgentModule, 'ModelRuntime'>
@@ -131,7 +134,25 @@ export function loadPiSdk(): Promise<PiSdkFacade> {
         SessionManager: sessionManager.SessionManager,
         createAgentSession: sdk.createAgentSession,
         defineTool: extensions.defineTool,
-        createBashToolDefinition: bashTools.createBashToolDefinition
+        createBashToolDefinition: bashTools.createBashToolDefinition,
+        createEditToolDefinition: (
+          await importPiSubpath<Pick<PiCodingAgentModule, 'createEditToolDefinition'>>(
+            'dist/core/tools/edit.js',
+            'pi-edit'
+          )
+        ).createEditToolDefinition,
+        createWriteToolDefinition: (
+          await importPiSubpath<Pick<PiCodingAgentModule, 'createWriteToolDefinition'>>(
+            'dist/core/tools/write.js',
+            'pi-write'
+          )
+        ).createWriteToolDefinition,
+        withFileMutationQueue: (
+          await importPiSubpath<Pick<PiCodingAgentModule, 'withFileMutationQueue'>>(
+            'dist/core/tools/file-mutation-queue.js',
+            'pi-file-queue'
+          )
+        ).withFileMutationQueue
       }
     })().catch((error) => {
       piSdkFacadePromise = undefined
@@ -188,3 +209,5 @@ export async function loadPiExperimentFactories(): Promise<
     createToolSearchExtension: search.createToolSearchExtension
   }
 }
+
+export type { ToolDefinition } from '@earendil-works/pi-coding-agent'

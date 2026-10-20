@@ -75,7 +75,11 @@ export function connectionPhase(
   hasSession: boolean,
   restoring: boolean
 ): ConnectionPhase {
-  if (!state?.expectedHost) return 'local-ready'
+  if (!state?.expectedHost) {
+    if (state?.manualSshActive)
+      return !hasSession ? 'ssh-lost' : state.ready ? 'ssh-ready' : 'ssh-connecting'
+    return 'local-ready'
+  }
   if (restoring) return 'ssh-restoring'
   if (!hasSession || alignment === 'drifted') return 'ssh-lost'
   if (state.connectionFault === 'lost') return 'ssh-lost'

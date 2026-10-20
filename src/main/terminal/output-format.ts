@@ -230,10 +230,14 @@ export function isAutomationControlOutput(value: string): boolean {
   const normalized = stripAnsi(value)
 
   return (
+    normalized.includes('__CRESCENT_DISPATCH_ACK_') ||
     normalized.includes('__CRESCENT_CMD_START_') ||
     normalized.includes('__CRESCENT_CMD_END_') ||
     normalized.includes('__crescent_script=$(mktemp') ||
     normalized.includes('__crescent_encoded=') ||
+    normalized.includes('__crescent_decoded=') ||
+    normalized.includes('eval "$__crescent_decoded"') ||
+    normalized.includes('unset __crescent_encoded __crescent_decoded') ||
     normalized.includes('__crescent_status=') ||
     normalized.includes('unset __crescent_status') ||
     /printf\s+['"]?\\n__CRESCENT_CMD_(START|END)_/.test(normalized) ||

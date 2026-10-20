@@ -22,6 +22,7 @@ export interface AgentConfig {
   agentStyle: AgentStyle
   /** When set, overrides the style default for showing the thinking block. */
   showAgentThinking?: boolean
+  commandTimeouts?: Partial<import('./command-timeouts').CommandTimeoutPolicy>
   /** Requested reasoning effort; the runtime clamps it to model capabilities. */
   thinkingLevel?: AgentThinkingLevel
   /** @deprecated Ignored; Pi owns the agent loop. Kept for config migration. */
@@ -275,6 +276,8 @@ export interface AgentRunInput {
   /** Run-scoped working style snapshot so a mid-run config change cannot mix styles. */
   agentStyle?: AgentStyle
   executionMode?: ExecutionMode
+  approvalPolicy?: import('./approval-policy').ApprovalPolicy
+  mutationPolicy?: import('./approval-policy').MutationPolicy
 }
 
 export interface AgentGenerateSopInput {
@@ -404,6 +407,7 @@ export interface AgentCommandResult {
 }
 
 export interface TerminalCommandResult {
+  outcome?: import('./command-outcome').CommandOutcome
   ok: boolean
   command: string
   mode?: 'pty' | 'pipe'
@@ -429,15 +433,15 @@ export interface TerminalCommandResult {
 export interface TerminalExecutionTarget {
   paneRole: 'main' | 'subterminal'
   paneId: string
-  owner?: string
-  executionMode: 'local' | 'ssh'
-  connectionName?: string
-  expectedTarget?: string
-}
-
-export interface TerminalExecutionTarget {
-  paneRole: 'main' | 'subterminal'
-  paneId: string
+  sessionGeneration?: number
+  connectionId?: string
+  connectionOrigin?: import('./connection-state').ConnectionOrigin
+  readiness?: {
+    hasSession: boolean
+    restoring: boolean
+    alignment: 'aligned' | 'drifted' | 'unknown'
+    ready: boolean
+  }
   owner?: string
   executionMode: 'local' | 'ssh'
   connectionName?: string
@@ -738,6 +742,9 @@ export interface StoredSessionTab {
   terminalMode?: 'pty' | 'pipe'
   agentStyle?: AgentStyle
   executionMode?: ExecutionMode
+  handoffBlocked?: boolean
+  expectedTarget?: string
+  connectionOrigin?: import('./connection-state').ConnectionOrigin
 }
 
 export interface StoredAgentLogEntry {

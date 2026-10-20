@@ -11,6 +11,9 @@ export interface SessionHistoryRow {
   connectionId?: string | null
   connectionName?: string | null
   isSsh: 0 | 1
+  handoffBlocked?: 0 | 1
+  expectedTarget?: string | null
+  connectionOrigin?: 'connection-card' | 'manual-shell' | 'special-ssh' | null
   terminalCwd?: string | null
   terminalMode?: 'pty' | 'pipe' | null
   updatedAt: string
@@ -116,6 +119,9 @@ export const sessionHistoryRow: RowSchema<SessionHistoryRow> = {
   connectionId: optional(text),
   connectionName: optional(text),
   isSsh: oneOf(0, 1),
+  handoffBlocked: optional(oneOf(0, 1)),
+  expectedTarget: optional(text),
+  connectionOrigin: optional(oneOf('connection-card', 'manual-shell', 'special-ssh')),
   terminalCwd: optional(text),
   terminalMode: optional(oneOf('pty', 'pipe')),
   updatedAt: text,

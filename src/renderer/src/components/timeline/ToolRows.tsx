@@ -1,3 +1,4 @@
+import { terminalClient } from '@renderer/clients'
 import { Button } from '@renderer/components/ui/button'
 import type { Dictionary } from '@renderer/i18n'
 import { AGENT_RUN_STREAM_MAX_CHARS, clampAgentText } from '@renderer/lib/agent-text-limits'
@@ -110,6 +111,15 @@ export function ToolCallRow({
                 {executionLabel}
               </button>
             )}
+            {running && !step.dispatchPending && isPtyCommand && step.tabId ? (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void terminalClient.continueWaiting(step.tabId!)}
+              >
+                继续等待 +120s
+              </Button>
+            ) : null}
             {running && !step.dispatchPending && isPtyCommand && onInterruptCommand ? (
               <Button
                 type="button"

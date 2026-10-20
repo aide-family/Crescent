@@ -1,10 +1,18 @@
+import { redactSensitiveText } from '../../shared/secret-redaction'
+import { normalizeCommandTimeoutPolicy } from '../../shared/command-timeouts'
 import { isStaticallyReadonly } from '../../shared/command-guard'
 import type { ExecutionMode } from '../../shared/execution-plan'
 import { planBlocksBash, clearPlansForRun } from './change-plan'
 import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 
-import { normalizeCommand } from '../../shared/command-guard'
+import { commandOutcome } from '../../shared/command-outcome'
+import {
+  canAutomaticallyApprove,
+  type ApprovalPolicy,
+  type MutationPolicy
+} from '../../shared/approval-policy'
+import { CommandFailures } from './command-failures'
 import { applyBatchOutputFormatting, planReadonlyBatch } from '../../shared/readonly-batch'
 import {
   executeCommandInTemporaryTerminal,
@@ -12,6 +20,7 @@ import {
   interruptAndAwaitPendingTerminalCommands,
   readTerminalSessionHealth,
   readTerminalExecutionTarget,
+  readTerminalPlanIdentity,
   registerMainTabLoginConfirmedHandler,
   resolveParentTerminalTabId,
   type TerminalCommandExecutionResult
@@ -37,6 +46,9 @@ export interface PtyBashExecContext {
   locale?: string
   config: AgentConfig
   executionMode?: ExecutionMode
+  approvalPolicy?: ApprovalPolicy
+  mutationPolicy?: MutationPolicy
+  readonlyGrant?: { identity: string; expiresAt: number }
   emit: (event: AgentEvent) => void
   signal?: AbortSignal
   /**
@@ -51,24 +63,11 @@ export interface PtyBashExecContext {
   parentConnectionId?: string
   /** True when this context belongs to a host-owned child subagent. */
   fromSubagent?: boolean
-  /** Fingerprints of commands that already failed in this run (normalized). */
-  failedFingerprints?: Set<string>
-}
-
-/** Run-scoped failed command fingerprints (shared across session context updates). */
-const failedFingerprintsByRunId = new Map<string, Set<string>>()
-
-export function getFailedCommandFingerprints(runId: string): Set<string> {
-  let set = failedFingerprintsByRunId.get(runId)
-  if (!set) {
-    set = new Set()
-    failedFingerprintsByRunId.set(runId, set)
-  }
-  return set
-}
-
-export function clearFailedCommandFingerprints(runId: string): void {
-  failedFingerprintsByRunId.delete(runId)
+  restorationRequired?: boolean
+  executionTargetIdentity?: string
+  failures?: CommandFailures
+  mainTarget?: { tabId: string; identity?: string; isSsh: boolean; connectionId?: string }
+  targetStack?: Array<{ tabId: string; identity?: string; isSsh: boolean; connectionId?: string }>
 }
 
 const failedSshSubterminalByRunId = new Map<string, Set<string>>()
@@ -139,11 +138,6 @@ export function shouldRestoreParentBashTab(input: {
   return resolveParentTerminalTabId(input.executionTabId) === input.parentTabId.trim()
 }
 
-/** Pure helper for tests: whether a normalized fingerprint is blocked. */
-export function shouldBlockFailedRetry(fingerprint: string, failed: ReadonlySet<string>): boolean {
-  return Boolean(fingerprint && failed.has(fingerprint))
-}
-
 const execContextBySessionKey = new Map<string, PtyBashExecContext>()
 
 registerPtyExecutionTabChecker((tabId) => {
@@ -155,10 +149,11 @@ registerPtyExecutionTabChecker((tabId) => {
   return false
 })
 
-export function restorePtyBashExecutionToParentTab(parentTabId: string): void {
+export function restorePtyBashExecutionToParentTab(parentTabId: string, ownerId?: number): void {
   const parent = parentTabId.trim()
   if (!parent) return
   for (const [sessionKey, context] of execContextBySessionKey.entries()) {
+    if (ownerId !== undefined && context.webContents.id !== ownerId) continue
     if (
       !shouldRestoreParentBashTab({
         fromSubagent: context.fromSubagent,
@@ -168,12 +163,17 @@ export function restorePtyBashExecutionToParentTab(parentTabId: string): void {
     ) {
       continue
     }
+    if (
+      !context.mainTarget?.identity ||
+      readTerminalPlanIdentity(context.webContents.id, parent) !== context.mainTarget.identity
+    )
+      continue
+    context.targetStack = []
+    context.executionTargetIdentity = context.mainTarget.identity
     context.executionTabId = parent
     context.subterminalName = undefined
-    if (context.parentConnectionId) {
-      context.isSsh = true
-      context.connectionId = context.parentConnectionId
-    }
+    context.isSsh = context.mainTarget.isSsh
+    context.connectionId = context.mainTarget.connectionId
     execContextBySessionKey.set(sessionKey, context)
   }
 }
@@ -181,7 +181,23 @@ export function restorePtyBashExecutionToParentTab(parentTabId: string): void {
 registerMainTabLoginConfirmedHandler(restorePtyBashExecutionToParentTab)
 
 export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecContext): void {
-  context.failedFingerprints = getFailedCommandFingerprints(context.runId)
+  context.executionTargetIdentity = readTerminalPlanIdentity(
+    context.webContents.id,
+    context.executionTabId
+  )
+  context.failures ??= new CommandFailures()
+  const parentTabId = resolveParentTerminalTabId(context.executionTabId)
+  const target = readTerminalExecutionTarget(context.webContents.id, parentTabId)
+  if (context.approvalPolicy === 'safe-auto') {
+    const identity = readTerminalPlanIdentity(context.webContents.id, context.executionTabId)
+    if (identity) context.readonlyGrant = { identity, expiresAt: Date.now() + 10 * 60000 }
+  }
+  context.mainTarget = {
+    tabId: parentTabId,
+    identity: readTerminalPlanIdentity(context.webContents.id, parentTabId),
+    isSsh: target.executionMode === 'ssh' || Boolean(context.isSsh),
+    connectionId: context.parentConnectionId ?? context.connectionId
+  }
   if (!context.parentConnectionId?.trim()) {
     context.parentConnectionId = context.isSsh ? context.connectionId?.trim() : undefined
   }
@@ -201,6 +217,10 @@ export function updatePtyBashExecutionTabId(
   if (!existing) return false
   const nextId = executionTabId.trim()
   if (!nextId) return false
+  const identity = readTerminalPlanIdentity(existing.webContents.id, nextId)
+  if (!identity) return false
+  existing.restorationRequired = false
+  existing.executionTargetIdentity = identity
   existing.executionTabId = nextId
   existing.subterminalName = undefined
   if (environment) {
@@ -209,6 +229,59 @@ export function updatePtyBashExecutionTabId(
   }
   execContextBySessionKey.set(sessionKey, existing)
   return true
+}
+
+export function returnToMainTerminal(sessionKey: string): { ok: boolean; error?: string } {
+  const context = getPtyBashExecContext(sessionKey)
+  const target = context?.mainTarget
+  if (!context || !target || context.fromSubagent)
+    return { ok: false, error: 'No parent execution target in this scope.' }
+  const current = readTerminalPlanIdentity(context.webContents.id, target.tabId)
+  if (!target.identity || current !== target.identity) {
+    context.restorationRequired = true
+    return {
+      ok: false,
+      error:
+        'Parent terminal is missing, replaced, or no longer verified. Select/reconnect the parent explicitly; no local fallback.'
+    }
+  }
+  updatePtyBashExecutionTabId(sessionKey, target.tabId, target)
+  context.targetStack = []
+  return { ok: true }
+}
+
+export function pushTemporaryExecutionTarget(sessionKey: string): void {
+  const context = getPtyBashExecContext(sessionKey)
+  if (!context || context.fromSubagent) return
+  const identity = readTerminalPlanIdentity(context.webContents.id, context.executionTabId)
+  const target = readTerminalExecutionTarget(context.webContents.id, context.executionTabId)
+  ;(context.targetStack ??= []).push({
+    tabId: context.executionTabId,
+    identity,
+    isSsh: target.executionMode === 'ssh',
+    connectionId: target.connectionId
+  })
+}
+export function restoreTemporaryExecutionTarget(sessionKey: string): {
+  ok: boolean
+  error?: string
+} {
+  const context = getPtyBashExecContext(sessionKey)
+  const target = context?.targetStack?.at(-1)
+  if (
+    !context ||
+    !target ||
+    !target.identity ||
+    readTerminalPlanIdentity(context.webContents.id, target.tabId) !== target.identity
+  )
+    return {
+      ok: false,
+      error:
+        'Temporary parent is unavailable or replaced; choose a verified target explicitly. No local fallback.'
+    }
+  updatePtyBashExecutionTabId(sessionKey, target.tabId, target)
+  context.targetStack!.pop()
+  return { ok: true }
 }
 
 export function bindPtyBashExecContextClone(input: {
@@ -224,10 +297,14 @@ export function bindPtyBashExecContextClone(input: {
   execContextBySessionKey.set(input.toSessionKey, {
     ...parent,
     executionTabId,
+    executionTargetIdentity: readTerminalPlanIdentity(parent.webContents.id, executionTabId),
     subterminalName: undefined,
     fromSubagent: Boolean(input.fromSubagent),
     // Child panes keep an independent failure set so siblings/parent are not blocked.
-    failedFingerprints: new Set()
+    restorationRequired: false,
+    failures: new CommandFailures(),
+    targetStack: [],
+    mainTarget: undefined
   })
   return true
 }
@@ -244,7 +321,6 @@ export function clearPtyBashExecContextsForRun(runId: string): void {
     execContextBySessionKey.delete(key)
   }
   clearPlansForRun(normalized)
-  clearFailedCommandFingerprints(normalized)
   clearFailedSshSubterminalConnectionIds(normalized)
 }
 
@@ -325,7 +401,28 @@ export function createPtyBashToolDefinition(
                     ? 'The command was not sent. Wait for a fresh prompt from the expected SSH target after Ctrl+C, then re-check terminal state before continuing.'
                     : 'Stop querying this target until the operator reconnects or explicitly selects another target.'
               })
-            : [result.output, result.error].filter(Boolean).join('\n')
+            : [
+                redactSensitiveText(result.output),
+                !result.ok
+                  ? JSON.stringify({
+                      outcome: commandOutcome(result),
+                      dispatched: Boolean(result.dispatched),
+                      exitCode: result.exitCode,
+                      exitCodeTrusted:
+                        result.exitCode !== undefined &&
+                        !result.timedOut &&
+                        !result.interrupted &&
+                        !result.terminalExited,
+                      safeToRepeat: isStaticallyReadonly(command),
+                      next: result.timedOut
+                        ? 'Wait for terminal completion or verify current state read-only; never replay mutations automatically.'
+                        : 'Review evidence and request a new approval for mutations.'
+                    })
+                  : '',
+                result.error
+              ]
+                .filter(Boolean)
+                .join('\n')
         if (output) options.onData(Buffer.from(output.endsWith('\n') ? output : `${output}\n`))
 
         if (combinedSignal?.aborted) throw new Error('Command interrupted.')
@@ -348,7 +445,13 @@ export function createPtyBashToolDefinition(
   })
   // Prefer sequential bash tool calls; exclusive per-tab lock in
   // executeCommandInTerminal remains the hard gate against same-pane conflicts.
-  return { ...tool, executionMode: 'sequential' }
+  return {
+    ...tool,
+    description:
+      tool.description +
+      ' Crescent bash executes on the host-bound terminal target, which may be SSH. Local read/edit/write use the client workspace independently. Local temporary routes return to the main target after one bash call.',
+    executionMode: 'sequential'
+  }
 }
 
 export async function executeReviewedPtyCommand(input: {
@@ -364,15 +467,25 @@ export async function executeReviewedPtyCommand(input: {
   const executableCommand = input.planGuard
     ? input.command
     : normalizeInteractivePrivilegeCommand(input.command)
-  const timeoutMs = normalizeTimeout(input.timeoutMs)
+  const policy = normalizeCommandTimeoutPolicy(context.config.commandTimeouts)
+  const timeoutMs = normalizeTimeout(input.timeoutMs ?? policy.executionMs)
   const executionTabId = context.executionTabId
   const fromSubagent = context.fromSubagent || undefined
-  const fingerprint = normalizeCommand(executableCommand)
-  const failed = context.failedFingerprints ?? getFailedCommandFingerprints(context.runId)
-  const zh = Boolean(context.locale?.toLowerCase().startsWith('zh'))
+  const targetBinding = readTerminalPlanIdentity(context.webContents.id, executionTabId)
+  const readonly = isStaticallyReadonly(executableCommand)
+  const failures = (context.failures ??= new CommandFailures())
+  const fingerprint = failures.key(executableCommand, targetBinding ?? executionTabId)
   const executionId = randomUUID()
-  const blocked = (error: string): TerminalCommandExecutionResult => {
-    const result = { ok: false, command: executableCommand, output: '', error }
+  const blocked = (
+    error: string,
+    outcome: 'blocked-before-dispatch' | 'approval-denied' = 'blocked-before-dispatch'
+  ): TerminalCommandExecutionResult => {
+    if (context.targetStack?.length) {
+      const restored = restoreTemporaryExecutionTarget(sessionKey)
+      context.restorationRequired = !restored.ok
+      if (!restored.ok) error += `\n${restored.error}`
+    }
+    const result = { ok: false, command: executableCommand, output: '', error, outcome }
     context.emit({
       type: 'command',
       phase: 'finished',
@@ -387,19 +500,26 @@ export async function executeReviewedPtyCommand(input: {
     return result
   }
 
-  if (shouldBlockFailedRetry(fingerprint, failed)) {
-    const message = zh
-      ? '该命令本轮已失败过一次，禁止原样重试。请分析 stderr 后换方案（不要再次提交相同命令以免重复审批）。'
-      : 'This command already failed once in this run. Do not retry it unchanged — analyze stderr and try a different approach (avoid re-triggering approval).'
+  if (context.restorationRequired)
+    return blocked(
+      'The temporary task ended but its parent target is unverified. Explicitly reconnect/select the main target; this command cannot run on the local child.'
+    )
+  if (!targetBinding || targetBinding !== context.executionTargetIdentity)
+    return blocked('Execution target is unavailable or unverified; no command was sent.')
+  const advice = failures.advice(fingerprint)
+  if (advice.message)
     context.emit({
       type: 'status',
-      message,
+      message: advice.message,
       runId: context.runId,
       tabId: executionTabId,
       fromSubagent
     })
-    return blocked(message)
-  }
+  if (advice.block) return blocked(advice.message!)
+  if (!readonly && context.mutationPolicy === 'manual-execution')
+    return blocked(
+      'Manual execution selected. Show the exact command and target to the user; the Agent cannot execute this mutation.'
+    )
 
   if (
     context.executionMode === 'planned' &&
@@ -428,6 +548,13 @@ export async function executeReviewedPtyCommand(input: {
       return result
     }
     try {
+      if (
+        context.executionTabId !== executionTabId ||
+        readTerminalPlanIdentity(context.webContents.id, executionTabId) !== targetBinding
+      )
+        throw new Error(
+          'Execution target changed during review/approval. Review again on the current target.'
+        )
       input.planGuard?.()
     } catch (cause) {
       return blocked(cause instanceof Error ? cause.message : String(cause))
@@ -478,30 +605,11 @@ export async function executeReviewedPtyCommand(input: {
             onDispatched
           )
 
-    let targetTabId = executionTabId
+    const targetTabId = executionTabId
     let result = await runOnTab(targetTabId)
-    const restore = shouldRestoreParentAfterMissingSession({
-      error: result.error,
-      executionTabId: targetTabId,
-      fromSubagent
-    })
-    if (!input.planGuard && !result.ok && restore.restore) {
-      updatePtyBashExecutionTabId(sessionKey, restore.parentTabId, {
-        isSsh: Boolean(context.parentConnectionId),
-        connectionId: context.parentConnectionId
-      })
-      context.emit({
-        type: 'status',
-        message: zh
-          ? '子终端已关闭，已回到主终端并重试该命令。不要再次 open_subterminal。'
-          : 'Subterminal closed; restored bash to the main terminal and retrying. Do not call open_subterminal again.',
-        runId: context.runId,
-        tabId: restore.parentTabId,
-        fromSubagent
-      })
-      targetTabId = restore.parentTabId
-      result = await runOnTab(targetTabId)
-    }
+    // A closed child never silently moves this command to a different machine.
+    if (!result.dispatched && isMissingTerminalSessionError(result.error))
+      result.error += ' Use return_to_main_terminal and review the command for that target.'
 
     if (!result.ok && isMissingTerminalSessionError(result.error)) {
       const parentTabId = resolveParentTerminalTabId(targetTabId)
@@ -517,15 +625,18 @@ export async function executeReviewedPtyCommand(input: {
       }
     }
 
-    // EnvGuard did not inject this command. A later verified prompt must not
-    // leave the command blocked as if it had failed on the remote host.
-    if (
-      result.dispatched &&
-      !result.ok &&
-      result.code !== 'SSH_TARGET_UNAVAILABLE' &&
-      fingerprint
-    ) {
-      failed.add(fingerprint)
+    failures.record(fingerprint, readonly, result)
+    result.outcome = commandOutcome(result)
+    if (context.targetStack?.length) {
+      const restored = restoreTemporaryExecutionTarget(sessionKey)
+      context.restorationRequired = !restored.ok
+      if (!restored.ok)
+        context.emit({
+          type: 'status',
+          message: restored.error!,
+          runId: context.runId,
+          tabId: executionTabId
+        })
     }
 
     const { formatted } = applyBatchOutputFormatting(batchPlan, result.output || '')
@@ -551,6 +662,7 @@ export async function executeReviewedPtyCommand(input: {
       command: executableCommand,
       result: {
         ok: formattedResult.ok,
+        outcome: formattedResult.outcome,
         command: executableCommand,
         mode: formattedResult.mode,
         cwd: formattedResult.cwd,
@@ -604,12 +716,28 @@ export async function executeReviewedPtyCommand(input: {
     userInput: context.userInput,
     terminalContext: context.terminalContext,
     locale: context.locale
-  })
+  }).catch(() => undefined)
+  if (!classified)
+    return blocked('Command review failed. Automatic approval is denied; no command was sent.')
+  const autoAllowed =
+    classified.level === 'low' &&
+    canAutomaticallyApprove(executableCommand, {
+      policy: context.approvalPolicy ?? 'manual',
+      grantValid: Boolean(
+        context.readonlyGrant &&
+        Date.now() < context.readonlyGrant.expiresAt &&
+        context.readonlyGrant.identity === targetBinding
+      )
+    })
 
   context.emit({
     type: 'command-review',
     command: executableCommand,
-    audit: classified.audit,
+    audit: {
+      ...classified.audit,
+      requiresApproval: !autoAllowed && !input.planGuard,
+      risk: autoAllowed ? 'low' : 'high'
+    },
     runId: context.runId,
     tabId: executionTabId,
     fromSubagent
@@ -617,13 +745,13 @@ export async function executeReviewedPtyCommand(input: {
 
   if (input.planGuard) return executeWithProgress()
 
-  if (classified.level === 'low') {
+  if (autoAllowed) {
     context.emit({
       type: 'status',
       message:
         classified.source === 'whitelist'
           ? `Command matched whitelist: ${classified.whitelistRule}`
-          : 'Command audit classified this as read-only inspection.',
+          : `Auto-approved by deterministic read-only policy (${context.approvalPolicy ?? 'manual'}), bound to this run, pane and generation.`,
       runId: context.runId,
       tabId: executionTabId,
       fromSubagent
@@ -637,8 +765,8 @@ export async function executeReviewedPtyCommand(input: {
     tabId: executionTabId,
     chatTabId: context.chatTabId,
     command: executableCommand,
-    timeoutMs,
-    audit: classified.audit,
+    timeoutMs: policy.approvalMs,
+    audit: { ...classified.audit, requiresApproval: true },
     signal: input.signal,
     locale: context.locale,
     config: context.config
@@ -661,7 +789,8 @@ export async function executeReviewedPtyCommand(input: {
         rejectionReason ? `User rejection reason: ${rejectionReason}` : ''
       ]
         .filter(Boolean)
-        .join('\n')
+        .join('\n'),
+      'approval-denied'
     )
   }
 
@@ -705,7 +834,7 @@ function normalizeInteractivePrivilegeCommand(command: string): string {
 
 function normalizeTimeout(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return 60_000
+    return 120_000
   }
   return Math.min(Math.max(Math.floor(timeoutMs), 1_000), 10 * 60_000)
 }

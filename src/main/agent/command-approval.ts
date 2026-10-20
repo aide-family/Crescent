@@ -144,6 +144,8 @@ export function requestCommandApproval(input: {
     const finish = (decision: CommandApprovalDecisionResult): void => {
       input.signal?.removeEventListener('abort', onAbort)
       input.webContents.removeListener('destroyed', onAbort)
+      input.webContents.removeListener('did-start-navigation', onAbort)
+      input.webContents.removeListener('render-process-gone', onAbort)
       resolve(decision)
     }
     const timeout = setTimeout(() => {
@@ -172,6 +174,8 @@ export function requestCommandApproval(input: {
     })
     input.signal?.addEventListener('abort', onAbort, { once: true })
     input.webContents.once('destroyed', onAbort)
+    input.webContents.once('did-start-navigation', onAbort)
+    input.webContents.once('render-process-gone', onAbort)
     if (input.signal?.aborted) {
       onAbort()
       return

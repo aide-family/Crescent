@@ -69,7 +69,11 @@ export function formatAgentRunDocument(run: AgentRunViewState, t: Dictionary): s
 
 /** Compact JSON-only document for in-memory / debounce persist (no markdown dual-write). */
 export function formatAgentRunDocumentCompact(run: AgentRunViewState): string {
-  const document = buildSerializedAgentRunDocument(run)
+  const document = buildSerializedAgentRunDocument({
+    ...run,
+    thinkingText: undefined,
+    steps: (run.steps ?? []).filter((step) => step.kind !== 'thought')
+  })
   return `${AGENT_RUN_DOCUMENT_MARKER}\n${JSON.stringify(document)}`
 }
 
@@ -365,11 +369,12 @@ export function deriveActionsFromRun(
 
 export function deriveActionsFromSteps(
   steps: AgentRunStep[],
-  thinkingText?: string
+  thinkingText?: string,
+  includeThinking = false
 ): AgentRunAction[] {
   const actions: AgentRunAction[] = []
   const hasThoughtSteps = steps.some((step) => step.kind === 'thought')
-  if (!hasThoughtSteps && thinkingText?.trim()) {
+  if (includeThinking && !hasThoughtSteps && thinkingText?.trim()) {
     actions.push({
       title: 'Thinking',
       detail: thinkingText.trim()
@@ -381,7 +386,7 @@ export function deriveActionsFromSteps(
       continue
     }
     if (step.kind === 'thought') {
-      if (!step.text.trim()) continue
+      if (!includeThinking || !step.text.trim()) continue
       actions.push({ title: 'Thinking', detail: step.text.trim() })
       continue
     }

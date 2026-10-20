@@ -59,16 +59,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS arm64
-            os: macos-latest
-            artifact_name: crescent-macos-arm64
-            platform: mac
-            arch_flags: --arm64
-          - name: macOS x64
-            os: macos-latest
-            artifact_name: crescent-macos-x64
-            platform: mac
-            arch_flags: --x64
           - name: macOS Universal
             os: macos-latest
             artifact_name: crescent-macos-universal
@@ -160,12 +150,12 @@ jobs:
             mac)
               if [[ "$MAC_SIGN" == "1" ]]; then
                 unset CSC_IDENTITY_AUTO_DISCOVERY || true
-                npx electron-builder --mac ${{ matrix.arch_flags }} --publish=never
+                npx electron-builder --mac --universal --publish=never
               else
                 # Keep CSC_LINK truly unset for unsigned builds.
                 unset CSC_LINK CSC_KEY_PASSWORD || true
                 export CSC_IDENTITY_AUTO_DISCOVERY=false
-                npx electron-builder --mac ${{ matrix.arch_flags }} \
+                npx electron-builder --mac --universal \
                   -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
               fi
               ;;

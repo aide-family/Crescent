@@ -65,6 +65,41 @@ export function resolvePlanApproval(ownerId: number, value: unknown): { ok: bool
   state.resolve = undefined
   return { ok: valid }
 }
+/** An operator edit rejects the old digest. The runtime must submit it as a new plan. */
+export function revisePendingPlan(
+  ownerId: number,
+  value: unknown
+): { ok: boolean; error?: string } {
+  const input = value as { requestId?: string; digest?: string; plan?: unknown }
+  const state = [...activePlans.values()].find((item) => item.request.id === input?.requestId)
+  if (
+    !state ||
+    state.host.ownerId !== ownerId ||
+    state.phase !== 'pending' ||
+    !state.resolve ||
+    state.request.binding.digest !== input.digest ||
+    !isBound(state)
+  )
+    return { ok: false, error: 'Plan approval is unavailable or expired.' }
+  try {
+    const plan = validateChangePlan(input.plan)
+    const serialized = JSON.stringify(plan)
+    if (Buffer.byteLength(serialized) > 24000)
+      throw new Error('Revised plan exceeds the 24 KiB tool-result budget; split the plan.')
+    state.resolve({
+      requestId: state.request.id,
+      digest: state.request.binding.digest,
+      approved: false,
+      approveRecovery: false,
+      note: `Operator revised the draft. Submit this exact plan for fresh preflight and a NEW human approval; no change is authorized by this edit:\n${serialized}`
+    })
+    state.resolve = undefined
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Invalid revised plan' }
+  }
+}
+
 export function stopPlansForTab(tabId: string, ownerId?: number): void {
   for (const state of activePlans.values()) {
     if (ownerId !== undefined && state.host.ownerId !== ownerId) continue
@@ -272,9 +307,14 @@ export async function submitAndExecutePlan(
         'rejected',
         `Plan rejected or approval expired. No changes executed. ${redactSensitiveText(decision?.note ?? '')}`
       )
-      return { ok: false, message: 'Plan rejected or expired. No changes executed.' }
+      return {
+        ok: false,
+        message: `Plan rejected or expired. No changes executed. ${redactSensitiveText(decision?.note ?? '')}`
+      }
     }
     requireBound(state)
+    // A new exact operator-approved plan may retry after its fresh preflight checks.
+    failedCommands.delete(host.runId)
     emit(
       state,
       'approved',

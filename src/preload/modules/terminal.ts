@@ -1,6 +1,14 @@
 import { ipcRenderer } from 'electron'
 
 export const terminalApi = {
+  prepareHandoff: (
+    sourceId: string,
+    tabId: string,
+    target: import('../../shared/handoff').HandoffTarget
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal:prepare-handoff', { sourceId, tabId, target }),
+  continueWaiting: (tabId: string, timeoutMs = 120000): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('terminal:continue-waiting', { tabId, timeoutMs }),
   start: (options?: {
     cols?: number
     rows?: number

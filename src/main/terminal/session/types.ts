@@ -27,6 +27,7 @@ export interface TerminalAutomationFilterState {
 }
 
 export interface TerminalCommandExecutionResult {
+  outcome?: import('../../../shared/command-outcome').CommandOutcome
   ok: boolean
   command: string
   mode?: 'pty' | 'pipe'

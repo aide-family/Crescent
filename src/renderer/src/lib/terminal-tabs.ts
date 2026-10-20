@@ -174,6 +174,11 @@ export interface AgentTerminalTab {
   /** Per-session working style; unset falls back to config.agentStyle. */
   agentStyle?: AgentStyle
   executionMode?: ExecutionMode
+  approvalPolicy?: import('../../../shared/approval-policy').ApprovalPolicy
+  mutationPolicy?: import('../../../shared/approval-policy').MutationPolicy
+  handoffBlocked?: boolean
+  expectedTarget?: string
+  connectionOrigin?: import('../../../shared/connection-state').ConnectionOrigin
   connectionId?: string
   connectionName?: string
   isSsh: boolean
@@ -315,6 +320,9 @@ export function createTerminalTab(input?: Partial<AgentTerminalTab>): AgentTermi
     model: input?.model,
     agentStyle: input?.agentStyle,
     executionMode: normalizeExecutionMode(input?.executionMode),
+    handoffBlocked: input?.handoffBlocked,
+    expectedTarget: input?.expectedTarget,
+    connectionOrigin: input?.connectionOrigin,
     connectionId: input?.connectionId,
     connectionName: input?.connectionName,
     isSsh: input?.isSsh ?? false,
@@ -421,7 +429,10 @@ export function toStoredSessionTabs(tabs: AgentTerminalTab[]): StoredSessionTab[
     terminalCwd: tab.terminalCwd,
     terminalMode: tab.terminalMode,
     executionMode: normalizeExecutionMode(tab.executionMode),
-    agentStyle: tab.agentStyle
+    agentStyle: tab.agentStyle,
+    handoffBlocked: tab.handoffBlocked,
+    expectedTarget: tab.expectedTarget,
+    connectionOrigin: tab.connectionOrigin
   }))
 }
 

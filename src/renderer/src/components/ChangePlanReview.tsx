@@ -5,6 +5,7 @@ import type {
   ChangePlanStep
 } from '../../../shared/execution-plan'
 import type { Dictionary } from '@renderer/i18n'
+import { Textarea } from './ui/textarea'
 import { Button } from './ui/button'
 import {
   Dialog,
@@ -59,6 +60,8 @@ export function ChangePlanReview({
   const [approveRecovery, setApproveRecovery] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [revisionText, setRevisionText] = useState('')
+  const [editing, setEditing] = useState(false)
   useEffect(() => {
     const offRequest = window.api.agent.onPlanApprovalRequest((request) => {
       setRequests((current) => ({ ...current, [request.id]: request }))
@@ -66,6 +69,7 @@ export function ChangePlanReview({
       setNote('')
       setApproveRecovery(false)
       setError('')
+      setEditing(false)
     })
     const offProgress = window.api.agent.onPlanProgress((progress) => {
       setEvents((current) => ({
@@ -214,6 +218,18 @@ export function ChangePlanReview({
               </label>
             )}
             {pending && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setRevisionText(JSON.stringify(plan, null, 2))
+                  setEditing(true)
+                }}
+              >
+                修改草案
+              </Button>
+            )}
+            {pending && (
               <label className="block">
                 {t.plan.note}
                 <textarea
@@ -235,6 +251,44 @@ export function ChangePlanReview({
             </section>
             {error && <p role="alert">{error}</p>}
           </div>
+          {pending && editing && (
+            <div className="space-y-2 px-4">
+              <p className="text-xs text-muted-foreground">
+                修改后撤销旧审批；主机重新校验，并要求新的人工批准。
+              </p>
+              <Textarea
+                aria-label="修改计划 JSON"
+                value={revisionText}
+                maxLength={48000}
+                onChange={(event) => setRevisionText(event.target.value)}
+                className="h-48 font-mono text-xs"
+              />
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true)
+                  void (async () => {
+                    try {
+                      const result = await window.api.agent.revisePlan({
+                        requestId: request.id,
+                        digest: request.binding.digest,
+                        plan: JSON.parse(revisionText)
+                      })
+                      if (!result.ok) setError(result.error ?? t.plan.expired)
+                      else setEditing(false)
+                    } catch (error) {
+                      setError(error instanceof Error ? error.message : t.plan.expired)
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                提交修改，重新审批
+              </Button>
+            </div>
+          )}
           <DialogFooter>
             {pending ? (
               <>

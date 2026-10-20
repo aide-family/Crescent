@@ -66,7 +66,7 @@ function rendererManualChunks(id: string): string | undefined {
   const normalized = posixId(id)
   // Keep optional surfaces and their media outside the initial UI chunk.
   if (
-    /\/components\/(WhaleMonitor|whale\/|WikiSheet|SkillManager|SettingsSheet|McpServersSheet|HistoryPanel)/.test(
+    /\/components\/(WhaleMonitor|whale\/|WikiSheet|SkillManager|SettingsSheet|McpServersSheet|HistoryPanel|CommandDirectorySheet|LocalDocumentsSheet|LocalPdfPreview|MemoryCenter|CodeIntelligenceSettings)/.test(
       normalized
     )
   ) {

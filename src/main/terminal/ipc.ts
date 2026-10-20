@@ -1,3 +1,8 @@
+import { readStoredExecutionIntent } from '../crescent-sqlite'
+import { createHash } from 'node:crypto'
+import { normalizeCommandTimeoutPolicy } from '../../shared/command-timeouts'
+import { readAgentConfig } from '../crescent-store'
+import { writeSystemLog } from '../logging'
 import { BrowserWindow, dialog, type OpenDialogOptions, type WebContents } from 'electron'
 import { homedir, hostname } from 'os'
 import { dirname, resolve } from 'path'
@@ -17,7 +22,7 @@ import {
   parseCommandBuffer,
   sanitizeCommand
 } from './output-format'
-import { createPtyScriptRunner } from './script-runner'
+import { createPtyScriptRunner, writePtyScript } from './script-runner'
 import { TerminalSessionManager } from './session/manager'
 import { createPipeSession } from './session/pipe-session'
 import { createPtySession } from './session/pty-session'
@@ -72,7 +77,6 @@ import {
   setConnectionExpectedHost,
   type ConnectionState
 } from '../../shared/connection-state'
-import { redactSensitiveText } from '../../shared/secret-redaction'
 import {
   extractSshDestinationHost,
   isIpv4Literal,
@@ -100,7 +104,8 @@ import {
   resolveUserCommandInterrupt,
   shouldBlockTerminalUserInput
 } from './input-lock'
-import { createPendingCommandController } from './pending-command'
+import { createPendingCommandController, type PendingCommandController } from './pending-command'
+import { hasLikelyShellPrompt } from './command-interrupt'
 import { resolveShellLaunchConfig } from './shell'
 import { recoverTimedOutSshSession } from './timeout-recovery'
 
@@ -136,14 +141,25 @@ export interface TemporarySubterminalSnapshot {
   error?: string
 }
 
+const handoffDataOnly = new Set<string>()
+const commandControllers = new Map<string, PendingCommandController>()
+const uncertainCommands = new Map<
+  string,
+  {
+    sessionId: number
+    startMarker: string
+    endMarker: string
+    buffer: string
+    interrupted: boolean
+  }
+>()
 let nextSessionId = 1
 
 const MAX_CONTEXT_BUFFER = 24_000
-const TERMINAL_COMMAND_TIMEOUT_MS = 60_000
+const TERMINAL_COMMAND_TIMEOUT_MS = 120_000
 const TERMINAL_COMMAND_MIN_TIMEOUT_MS = 5_000
 const TERMINAL_COMMAND_MAX_TIMEOUT_MS = 600_000
 const TERMINAL_COMMAND_INTERRUPT_GRACE_MS = 2_000
-const TERMINAL_COMMAND_START_TIMEOUT_MS = 8_000
 const TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS = 5_000
 /** Extra wait window while sudo/SSH/OTP secret prompts are visible for the user. */
 const TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS = 300_000
@@ -183,7 +199,10 @@ function noteManualTerminalInput(
           ...manual,
           connectionOrigin: 'manual-shell',
           monitorPolicy: 'manual',
-          manualSshActive: true
+          manualSshActive: true,
+          promptHost: undefined,
+          ready: false,
+          alignment: 'unknown'
         })
         sendIfAlive(webContents, tabId, key, 'terminal:connection-origin', {
           tabId,
@@ -207,9 +226,11 @@ function noteManualTerminalInput(
 
 export const MAX_TEMPORARY_SUBTERMINALS = 3
 
-let onMainTabLoginConfirmed: ((tabId: string) => void) | undefined
+let onMainTabLoginConfirmed: ((tabId: string, ownerId: number) => void) | undefined
 
-export function registerMainTabLoginConfirmedHandler(handler: (tabId: string) => void): void {
+export function registerMainTabLoginConfirmedHandler(
+  handler: (tabId: string, ownerId: number) => void
+): void {
   onMainTabLoginConfirmed = handler
 }
 
@@ -282,18 +303,6 @@ function setConnectionState(key: string, next: ConnectionState): void {
   connectionStates.set(key, next)
 }
 
-function markCommandTimeoutDegraded(key: string): void {
-  const state = connectionStates.get(key)
-  if (!state?.expectedHost || state.connectionFault === 'lost') return
-  setConnectionState(key, {
-    ...state,
-    alignment: 'unknown',
-    ready: false,
-    connectionFault: 'degraded'
-  })
-  degradedRecoveryOutput.set(key, '')
-}
-
 function getConnectionState(key: string, mode: ConnectionState['mode'] = 'none'): ConnectionState {
   const existing = connectionStates.get(key)
   if (existing) return existing
@@ -355,6 +364,15 @@ export function executeCommandInTerminal(
     })
   }
   const key = getSessionKey(senderId, normalizedTabId)
+  if (handoffDataOnly.has(key))
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      outcome: 'blocked-before-dispatch',
+      error:
+        'Data-only Handoff has no execution authorization. Select a target explicitly; no command was sent.'
+    })
   const session = sessions.get(key)
   const boundTarget = connectionStates.get(key)
   if (
@@ -388,6 +406,16 @@ export function executeCommandInTerminal(
     })
   }
 
+  if (Buffer.byteLength(normalizedCommand) > 128 * 1024)
+    return Promise.resolve({
+      ok: false,
+      command: '[oversized command]',
+      output: '',
+      outcome: 'blocked-before-dispatch',
+      error:
+        'Command exceeds the 128 KiB transport limit; split the investigation or use a reviewed transfer.'
+    })
+
   if (!normalizedCommand) {
     return Promise.resolve({
       ok: false,
@@ -399,6 +427,25 @@ export function executeCommandInTerminal(
     })
   }
 
+  const uncertain = uncertainCommands.get(key)
+  if (uncertain && uncertain.sessionId !== session.id) uncertainCommands.delete(key)
+  else if (uncertain)
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      outcome: 'blocked-before-dispatch',
+      error:
+        'Previous command completion is unknown. Wait for completion or manually interrupt and confirm the shell; no new command was sent.'
+    })
+  if (signal?.aborted)
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      outcome: 'blocked-before-dispatch',
+      interrupted: true
+    })
   if (pendingCommandPromises.has(key)) {
     return Promise.resolve(buildTerminalExclusiveBusyResult(normalizedCommand, session))
   }
@@ -431,6 +478,16 @@ export function executeCommandInTerminal(
     }
   }
 
+  if (process.platform === 'win32' && !/(?:bash|zsh|(?:^|[\\/])sh)(?:\.exe)?$/i.test(session.shell))
+    return Promise.resolve({
+      ok: false,
+      command: normalizedCommand,
+      output: '',
+      outcome: 'blocked-before-dispatch',
+      error:
+        'Automated sentinel execution requires a POSIX shell. Use a configured bash/sh terminal or execute manually in PowerShell/cmd; target and approval remain unchanged.'
+    })
+
   if (session.mode === 'pipe' && classifyPipeCommand(normalizedCommand) === 'interactive') {
     return Promise.resolve({
       ok: false,
@@ -447,6 +504,17 @@ export function executeCommandInTerminal(
   const startMarker = `__CRESCENT_CMD_START_${commandId}__`
   const endMarker = `__CRESCENT_CMD_END_${commandId}__`
 
+  const policy = normalizeCommandTimeoutPolicy(readAgentConfig().commandTimeouts)
+  const dispatchAt = Date.now()
+  let dispatchDeadline = dispatchAt + policy.executionMs
+  const targetHash = createHash('sha256')
+    .update(readTerminalPlanIdentity(senderId, normalizedTabId) ?? key)
+    .digest('hex')
+    .slice(0, 12)
+  const dispatchController = new AbortController()
+  const dispatchSignal = signal
+    ? AbortSignal.any([signal, dispatchController.signal])
+    : dispatchController.signal
   const pending = createPendingCommandController({
     command: normalizedCommand,
     mode: session.mode,
@@ -456,11 +524,25 @@ export function executeCommandInTerminal(
     timeoutMs: effectiveTimeoutMs,
     signal,
     interruptGraceMs: TERMINAL_COMMAND_INTERRUPT_GRACE_MS,
-    startTimeoutMs: TERMINAL_COMMAND_START_TIMEOUT_MS,
+    startTimeoutMs: policy.startMs,
+    idleTimeoutMs: policy.idleMs,
+    onPhase: (phase) =>
+      writeSystemLog(
+        'debug',
+        JSON.stringify({
+          commandId,
+          targetHash,
+          phase,
+          elapsedMs: Date.now() - dispatchAt,
+          inputBytes: Buffer.byteLength(normalizedCommand),
+          shell: session.shell.split(/[\\/]/).at(-1),
+          sessionGeneration: session.id
+        })
+      ),
     continuationPromptTimeoutMs: TERMINAL_COMMAND_CONTINUATION_PROMPT_TIMEOUT_MS,
     secretPromptTimeoutMs: TERMINAL_COMMAND_SECRET_PROMPT_TIMEOUT_MS,
     interruptSession: () => interruptCommandSession(key, session),
-    onTimeout: () => markCommandTimeoutDegraded(key),
+    deferDispatch: true,
     display: (message) => session.display(message),
     hasUnterminatedSecretPrompt,
     hasShellContinuationPrompt,
@@ -468,7 +550,14 @@ export function executeCommandInTerminal(
     extractPartialCommandOutput
   })
 
+  const continueWaiting = pending.continueWaiting
+  pending.continueWaiting = (ms = policy.executionMs) => {
+    dispatchDeadline = Date.now() + normalizeCommandTimeout(ms)
+    return continueWaiting(ms)
+  }
+  commandControllers.set(key, pending)
   const onData = (data: string): void => {
+    if (sessions.get(key)?.id !== session.id) return
     pending.onData(data)
   }
   const onExit = (event: TerminalExitNotification): void => {
@@ -492,6 +581,7 @@ export function executeCommandInTerminal(
   pendingCommandPromises.set(key, pending.promise)
 
   void pending.promise.finally(() => {
+    dispatchController.abort()
     if (pendingCommandPromises.get(key) === pending.promise) {
       pendingCommandPromises.delete(key)
     }
@@ -504,10 +594,20 @@ export function executeCommandInTerminal(
     const interrupts = terminalUserInterruptNotifiers.get(key)
     interrupts?.delete(onUserInterrupt)
     if (interrupts?.size === 0) terminalUserInterruptNotifiers.delete(key)
-    terminalAutomationFilterStates.delete(key)
+    if (commandControllers.get(key) === pending) commandControllers.delete(key)
+    if (sessions.get(key)?.id === session.id) terminalAutomationFilterStates.delete(key)
   })
 
   void pending.promise.then((result) => {
+    if (sessions.get(key)?.id !== session.id) return
+    if (result.timedOut || result.interrupted)
+      uncertainCommands.set(key, {
+        sessionId: session.id,
+        startMarker,
+        endMarker,
+        buffer: '',
+        interrupted: Boolean(result.interrupted)
+      })
     if (result.terminalExited) {
       const state = connectionStates.get(key)
       if (state?.expectedHost) {
@@ -523,6 +623,9 @@ export function executeCommandInTerminal(
     if (readableResult) session.display(readableResult)
   })
 
+  pending.markDispatching()
+  onDispatched?.()
+  session.display(formatReadableCommandInput(normalizedCommand))
   if (session.mode === 'pty') {
     terminalAutomationFilterStates.set(key, {
       startMarker,
@@ -530,16 +633,42 @@ export function executeCommandInTerminal(
       phase: 'before-start',
       pending: ''
     })
-    session.display(formatReadableCommandInput(normalizedCommand))
-    session.write(
-      createPtyScriptRunner(createCommandWrapper(normalizedCommand, startMarker, endMarker))
-    )
+    void writePtyScript({
+      payload: createPtyScriptRunner(
+        createCommandWrapper(normalizedCommand, startMarker, endMarker)
+      ),
+      write: session.write,
+      signal: dispatchSignal,
+      acknowledgementTimeoutMs: Math.max(60000, policy.startMs * 2),
+      dispatchDeadline: () => dispatchDeadline,
+      observeOutput: (listener) => {
+        const observers = terminalDataWaiters.get(key) ?? new Set<(data: string) => void>()
+        observers.add(listener)
+        terminalDataWaiters.set(key, observers)
+        return () => {
+          observers.delete(listener)
+          if (!observers.size && terminalDataWaiters.get(key) === observers)
+            terminalDataWaiters.delete(key)
+        }
+      },
+      isCurrent: () => sessions.get(key)?.id === session.id
+    })
+      .then(() => pending.markDispatched())
+      .catch((error) => {
+        if (signal?.aborted) pending.notifyUserInterrupt()
+        else
+          pending.failDispatch(
+            error instanceof Error ? error.message : 'Terminal transport is unconfirmed.'
+          )
+      })
   } else {
-    session.display(formatReadableCommandInput(normalizedCommand))
-    session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
+    try {
+      session.write(`${createCommandWrapper(normalizedCommand, startMarker, endMarker)}\n`)
+      pending.markDispatched()
+    } catch {
+      pending.onExit({ exitCode: 1 })
+    }
   }
-
-  onDispatched?.()
 
   return pending.promise.then((result) => ({ ...result, dispatched: true }))
 }
@@ -573,16 +702,25 @@ function unavailableSshTarget(
 /** Run-local binding; a new PTY, changed connection, cwd or login identity revokes plans. */
 export function readTerminalPlanIdentity(senderId: number, tabId: string): string | undefined {
   const key = getSessionKey(senderId, tabId)
+  if (handoffDataOnly.has(key)) return undefined
   const session = sessions.get(key)
   const state = connectionStates.get(key)
   const health = readTerminalSessionHealth(senderId, tabId)
   if (
     !session ||
     health.restoring ||
+    (state?.manualSshActive &&
+      (!state.promptHost || isLocalMachinePromptHost(state.promptHost, hostname()))) ||
     (state?.expectedHost && (!health.ready || health.alignment !== 'aligned'))
   )
     return undefined
   return JSON.stringify({
+    ownerId: senderId,
+    paneId: tabId,
+    shell: session.shell,
+    targetScope: state?.targetScope,
+    clusterHostRegex: state?.clusterHostRegex,
+    sshHopChain: state?.sshHopChain,
     sessionId: session.id,
     cwd: session.cwd,
     target: readTerminalExecutionTarget(senderId, tabId),
@@ -598,6 +736,10 @@ export function readTerminalExecutionTarget(
   return {
     paneRole: parseTemporarySubterminalTabId(tabId) ? 'subterminal' : 'main',
     paneId: tabId,
+    sessionGeneration: sessions.get(getSessionKey(senderId, tabId))?.id ?? 0,
+    connectionId: state?.connectionId,
+    connectionOrigin: state?.connectionOrigin,
+    readiness: readTerminalSessionHealth(senderId, tabId),
     owner: state?.owner ?? 'user',
     executionMode: state?.expectedHost || state?.manualSshActive ? 'ssh' : 'local',
     connectionName: state?.connectionName,
@@ -634,10 +776,14 @@ export function interruptPendingTerminalCommands(senderId: number, tabId?: strin
   const key = getSessionKey(senderId, normalizedTabId)
   const session = sessions.get(key)
   if (!session) return false
-  interruptCommandSession(key, session)
+  const uncertain = uncertainCommands.get(key)
+  if (uncertain) uncertain.interrupted = true
   clearTemporarySubterminalDetached(senderId, normalizedTabId)
   const notifiers = terminalUserInterruptNotifiers.get(key)
-  if (!notifiers || notifiers.size === 0) return false
+  if (!notifiers || notifiers.size === 0) {
+    interruptCommandSession(key, session)
+    return Boolean(uncertain)
+  }
   ;[...notifiers].forEach((notify) => notify())
   return true
 }
@@ -653,6 +799,8 @@ export async function interruptAndAwaitPendingTerminalCommands(
   const normalizedTabId = normalizeTabId(tabId)
   if (!normalizedTabId) return false
   const key = getSessionKey(senderId, normalizedTabId)
+  const uncertain = uncertainCommands.get(key)
+  if (uncertain) uncertain.interrupted = true
   const pending = pendingCommandPromises.get(key)
   const interrupted = interruptPendingTerminalCommands(senderId, normalizedTabId)
   if (pending) {
@@ -1093,6 +1241,84 @@ function extractLikelyLocalDirectory(command: string): string | undefined {
 
 export function registerTerminalIpc(): void {
   rendererIpc.handle(
+    'terminal:prepare-handoff',
+    async (event, payload?: { sourceId?: string; tabId?: string; target?: string }) => {
+      const sourceId = normalizeTabId(payload?.sourceId)
+      const tabId = normalizeTabId(payload?.tabId)
+      const selection = payload?.target
+      if (
+        !sourceId ||
+        !tabId ||
+        !isUsableTerminalTabId(tabId) ||
+        sourceId === tabId ||
+        sessions.has(getSessionKey(event.sender.id, tabId)) ||
+        typeof selection !== 'string'
+      )
+        return { ok: false, error: 'Invalid handoff target' }
+      const key = getSessionKey(event.sender.id, tabId)
+      if (selection === 'none') {
+        handoffDataOnly.add(key)
+        return { ok: true }
+      }
+      if (selection === 'local') {
+        handoffDataOnly.delete(key)
+        setSessionExpectedHost(key, null)
+        return { ok: true }
+      }
+      const source = connectionStates.get(
+        getSessionKey(event.sender.id, resolveParentTerminalTabId(sourceId))
+      )
+      const connectionId =
+        selection === 'inherit'
+          ? source?.connectionId
+          : selection.startsWith('connection:')
+            ? selection.slice(11)
+            : undefined
+      if (selection !== 'inherit' && !connectionId)
+        return { ok: false, error: 'Invalid environment selection' }
+      const saved = connectionId
+        ? (await listConnections()).find((item) => item.id === connectionId)
+        : undefined
+      if (connectionId && !saved) return { ok: false, error: 'Saved connection is missing' }
+      if (saved)
+        setSessionExpectedHost(key, saved.host, {
+          connectionId: saved.id,
+          connectionName: saved.name,
+          clusterHostRegex: saved.clusterHostRegex,
+          connectionOrigin: source?.connectionOrigin ?? 'connection-card'
+        })
+      else if (source?.manualSshActive || source?.expectedHost) {
+        const intendedHost = source.runtimeExpectedHost ?? source.expectedHost ?? source.promptHost
+        if (!intendedHost)
+          return {
+            ok: false,
+            error:
+              'Manual SSH source target is unverified. Select a saved environment or wait for the source prompt.'
+          }
+        setSessionExpectedHost(
+          key,
+          source.runtimeExpectedHost ?? source.expectedHost ?? source.promptHost,
+          { connectionOrigin: 'manual-shell' }
+        )
+      } else setSessionExpectedHost(key, null)
+      return { ok: true }
+    }
+  )
+  rendererIpc.handle(
+    'terminal:continue-waiting',
+    (event, payload?: { tabId?: string; timeoutMs?: number }) => {
+      const tabId = normalizeTabId(payload?.tabId)
+      const controller = tabId
+        ? commandControllers.get(getSessionKey(event.sender.id, tabId))
+        : undefined
+      return {
+        ok:
+          controller?.continueWaiting(normalizeCommandTimeout(payload?.timeoutMs ?? 120000)) ??
+          false
+      }
+    }
+  )
+  rendererIpc.handle(
     'terminal:start',
     async (
       event,
@@ -1106,6 +1332,24 @@ export function registerTerminalIpc(): void {
         )
       }
       const key = getSessionKey(senderId, tabId)
+      const intent = readStoredExecutionIntent(tabId)
+      if (!connectionStates.has(key) && intent) {
+        if (intent.blocked && !intent.isSsh) handoffDataOnly.add(key)
+        else if (intent.isSsh) {
+          const saved = intent.connectionId
+            ? (await listConnections()).find((item) => item.id === intent.connectionId)
+            : undefined
+          const expected = saved?.host ?? sanitizeExpectedTargetHost(intent.expectedTarget)
+          if (expected)
+            setSessionExpectedHost(key, expected, {
+              connectionId: saved?.id,
+              connectionName: saved?.name,
+              clusterHostRegex: saved?.clusterHostRegex,
+              connectionOrigin: intent.connectionOrigin ?? 'manual-shell'
+            })
+          else handoffDataOnly.add(key)
+        }
+      }
       stopSession(key)
 
       const launchConfig = resolveShellLaunchConfig()
@@ -1192,6 +1436,7 @@ export function registerTerminalIpc(): void {
           error: 'SSH connection identity does not match a saved connection.'
         }
       }
+      handoffDataOnly.delete(key)
       const actionHops = (savedConnection?.actions ?? [])
         .map(extractSshDestinationHost)
         .filter((hop): hop is string => Boolean(hop))
@@ -1358,7 +1603,7 @@ export function registerTerminalIpc(): void {
       }
       markTerminalSessionRestoring(event.sender.id, confirmTabId, false)
       if (!parseTemporarySubterminalTabId(confirmTabId)) {
-        onMainTabLoginConfirmed?.(confirmTabId)
+        onMainTabLoginConfirmed?.(confirmTabId, event.sender.id)
       }
       const state = connectionStates.get(key)
       return {
@@ -1643,7 +1888,7 @@ export function registerTerminalIpc(): void {
       `ready=${ready ? 'yes' : 'no'}`,
       `returnJump=${returnToJumpHost ? 'yes' : 'no'}`,
       `restoring=${tabId && key && restoringSessionKeys.has(key) ? 'yes' : 'no'}`,
-      `tail=${output.slice(-120).replace(/\n/g, '\\n')}`
+      `outputBytes=${Buffer.byteLength(output)}`
     )
 
     if (!tabId) {
@@ -1749,12 +1994,17 @@ export function registerTerminalIpc(): void {
 
 export function stopAllTerminalSessions(): void {
   for (const key of sessions.keys()) invalidateTerminalPlans(key)
+  handoffDataOnly.clear()
+  uncertainCommands.clear()
+  commandControllers.clear()
   sessionManager.clear()
   visibleTerminalEvents.flushAll()
 }
 
 function stopSession(key: string): void {
   invalidateTerminalPlans(key)
+  uncertainCommands.delete(key)
+  commandControllers.delete(key)
   sessionManager.stop(key)
   // Keep owner and connection identity across a soft restart, but clear liveness.
   invalidateConnectionSessionLiveness(key)
@@ -1822,7 +2072,7 @@ function detectEnvironmentDriftForSession(
     ready: state?.ready,
     alignment: state?.alignment,
     aliases: state?.aliases,
-    command: redactSensitiveText(command).slice(0, 200),
+    commandBytes: Buffer.byteLength(command),
     anchorHost
   })
 
@@ -2098,13 +2348,27 @@ function appendTerminalContext(key: string, data: string): void {
       signal?.kind === 'local' ||
       (signal?.kind === 'host' && isLocalMachinePromptHost(signal.host, hostname()))
     ) {
-      setConnectionState(key, { ...state, manualSshActive: false })
+      setConnectionState(key, {
+        ...state,
+        manualSshActive: false,
+        promptHost: signal.kind === 'host' ? signal.host : undefined,
+        ready: false,
+        alignment: 'unknown'
+      })
+    } else if (!pendingCommandPromises.has(key) && signal?.kind === 'host') {
+      setConnectionState(key, {
+        ...state,
+        promptHost: signal.host,
+        ready: true,
+        alignment: 'aligned'
+      })
     }
   }
   if (!state?.expectedHost) return
   if (!state.ready && state.connectionFault !== 'degraded') return
   const sshClosed =
-    /(?:connection to .+ closed|broken pipe|connection (?:timed out|reset by peer)|ssh: connect to host .+:)/i.test(
+    !pendingCommandPromises.has(key) &&
+    /^(?:Connection to [^\r\n]+ closed\.?|ssh: connect to host [^\r\n]+|client_loop: send disconnect: [^\r\n]+)[\r\n]*$/im.test(
       data
     )
   if (state.connectionFault === 'degraded' && degradedRecoveryOutput.has(key)) {
@@ -2171,6 +2435,19 @@ function sendIfAlive(
     const visiblePayload = filterAutomationControlOutput(key, payload)
     if (visiblePayload) sendVisibleTerminalData(webContents, tabId, key, visiblePayload)
 
+    const uncertain = uncertainCommands.get(key)
+    if (uncertain && sessions.get(key)?.id === uncertain.sessionId) {
+      uncertain.buffer = (uncertain.buffer + payload).slice(-64000)
+      if (
+        parseCommandBuffer(
+          `${uncertain.startMarker}\n${uncertain.buffer}`,
+          uncertain.startMarker,
+          uncertain.endMarker
+        ).done ||
+        (uncertain.interrupted && hasLikelyShellPrompt(uncertain.buffer))
+      )
+        uncertainCommands.delete(key)
+    }
     terminalDataWaiters.get(key)?.forEach((listener) => listener(payload))
     return
   }

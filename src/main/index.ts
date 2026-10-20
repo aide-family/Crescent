@@ -1,3 +1,6 @@
+import { registerKnowledgeIpc } from './knowledge-ipc'
+import { registerLocalDocumentIpc } from './local-document-ipc'
+import { registerCommandDirectoryIpc } from './command-directory'
 import { rendererIpc } from './ipc-security'
 import { app, BrowserWindow, clipboard, Notification, screen } from 'electron'
 import { join, resolve } from 'path'
@@ -283,6 +286,9 @@ app.whenReady().then(async () => {
   registerConnectionIpc()
   registerStorageIpc()
   registerTerminalIpc()
+  registerCommandDirectoryIpc()
+  registerLocalDocumentIpc()
+  registerKnowledgeIpc()
   registerWhaleMonitorIpc()
   registerUpdateIpc()
   stopAttachmentCleanup = startAttachmentCleanupScheduler()

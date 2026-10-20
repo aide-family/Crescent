@@ -142,6 +142,9 @@ export function initializeCrescentDatabase(): void {
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'session_tabs', 'agent_style', 'TEXT')
   ensureColumn(db, 'session_tabs', 'execution_mode', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'handoff_blocked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'session_tabs', 'expected_target', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'connection_origin', 'TEXT')
   ensureColumn(db, 'agent_logs', 'run_id', 'TEXT')
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
@@ -157,13 +160,44 @@ export function initializeCrescentDatabase(): void {
   `)
 }
 
+/** Main-only metadata read: restore execution intent before any PTY can be used. No logs/credentials. */
+export function readStoredExecutionIntent(tabId: string):
+  | {
+      isSsh: boolean
+      blocked: boolean
+      expectedTarget?: string
+      connectionId?: string
+      connectionOrigin?: import('../shared/connection-state').ConnectionOrigin
+    }
+  | undefined {
+  const row = getDatabase()
+    .prepare(
+      'SELECT is_ssh, handoff_blocked, expected_target, connection_id, connection_origin FROM session_tabs WHERE tab_id = ?'
+    )
+    .get(tabId)
+  if (!row) return undefined
+  if (![0, 1].includes(row.is_ssh as number) || ![0, 1].includes(row.handoff_blocked as number))
+    return { isSsh: false, blocked: true }
+  return {
+    isSsh: row.is_ssh === 1,
+    blocked: row.handoff_blocked === 1,
+    expectedTarget: typeof row.expected_target === 'string' ? row.expected_target : undefined,
+    connectionId: typeof row.connection_id === 'string' ? row.connection_id : undefined,
+    connectionOrigin: ['manual-shell', 'connection-card', 'special-ssh'].includes(
+      String(row.connection_origin)
+    )
+      ? (row.connection_origin as import('../shared/connection-state').ConnectionOrigin)
+      : undefined
+  }
+}
+
 export function saveSessionTabs(tabs: StoredSessionTab[]): void {
   const db = getDatabase()
   const now = new Date().toISOString()
   const statement = db.prepare(`
     INSERT INTO session_tabs (
-      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, execution_mode, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, execution_mode, handoff_blocked, expected_target, connection_origin, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id) DO UPDATE SET
       title = CASE
         WHEN session_tabs.title_locked = 1 THEN session_tabs.title
@@ -176,6 +210,9 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       terminal_mode = excluded.terminal_mode,
       agent_style = excluded.agent_style,
       execution_mode = excluded.execution_mode,
+      handoff_blocked = excluded.handoff_blocked,
+      expected_target = excluded.expected_target,
+      connection_origin = excluded.connection_origin,
       updated_at = excluded.updated_at
   `)
 
@@ -190,6 +227,9 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       tab.terminalMode ?? null,
       tab.agentStyle ?? null,
       normalizeExecutionMode(tab.executionMode),
+      tab.handoffBlocked ? 1 : 0,
+      tab.expectedTarget ?? null,
+      tab.connectionOrigin ?? null,
       now
     )
   }
@@ -687,6 +727,9 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
         tab.terminal_mode AS terminalMode,
         tab.agent_style AS agentStyle,
         tab.execution_mode AS executionMode,
+        tab.handoff_blocked AS handoffBlocked,
+        tab.expected_target AS expectedTarget,
+        tab.connection_origin AS connectionOrigin,
         tab.updated_at AS updatedAt,
         tab.summary AS summary,
         tab.title_locked AS titleLocked,
@@ -733,6 +776,9 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
     terminalMode: row.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(row.agentStyle),
     executionMode: normalizeExecutionMode(row.executionMode),
+    handoffBlocked: Boolean(row.handoffBlocked),
+    expectedTarget: row.expectedTarget ?? undefined,
+    connectionOrigin: row.connectionOrigin ?? undefined,
     updatedAt: row.updatedAt,
     summary: row.summary ?? undefined,
     lastMessage: row.lastMessage ?? undefined,
@@ -756,6 +802,9 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         terminal_mode AS terminalMode,
         agent_style AS agentStyle,
         execution_mode AS executionMode,
+        handoff_blocked AS handoffBlocked,
+        expected_target AS expectedTarget,
+        connection_origin AS connectionOrigin,
         summary,
         title_locked AS titleLocked,
         updated_at AS updatedAt
@@ -801,6 +850,9 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     terminalMode: tab.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(tab.agentStyle),
     executionMode: normalizeExecutionMode(tab.executionMode),
+    handoffBlocked: Boolean(tab.handoffBlocked),
+    expectedTarget: tab.expectedTarget ?? undefined,
+    connectionOrigin: tab.connectionOrigin ?? undefined,
     updatedAt: tab.updatedAt,
     summary: tab.summary ?? undefined,
     lastMessage: historyItem?.lastMessage,
@@ -877,6 +929,17 @@ export function countAgentLogs(tabId: string): number {
     .prepare(`SELECT COUNT(*) AS count FROM agent_logs WHERE tab_id = ?`)
     .get(normalizedTabId)
   return Number(row?.count ?? 0)
+}
+
+/** Revision metadata for edits anywhere in a conversation; no history text crosses IPC. */
+export function sessionKnowledgeRevision(tabId: string): string {
+  return JSON.stringify(
+    getDatabase()
+      .prepare(
+        'SELECT COUNT(*) AS count, MAX(log_id) AS lastId, MAX(updated_at) AS updatedAt, SUM(length(text)) AS characters FROM agent_logs WHERE tab_id=?'
+      )
+      .get(tabId)
+  )
 }
 
 export function deleteSessionHistory(tabId: string): boolean {

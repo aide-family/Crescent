@@ -38,7 +38,7 @@ export APPLE_API_ISSUER=...
 npm run build:mac
 ```
 
-`electron-builder.yml` already enables `hardenedRuntime`, entitlements, and `notarize: true`. Unsigned local builds use `npm run build:mac:unsigned`.
+`electron-builder.yml` already enables `hardenedRuntime`, entitlements, and `notarize: true`. Every Mac entry point builds **Universal** (x64 + arm64 in one application/DMG/ZIP), including the single Mac release-workflow job. Unsigned local builds use `npm run build:mac:unsigned` or `npm run build:mac:local`; neither signs, notarizes nor publishes. See [DEVELOPMENT.md](DEVELOPMENT.md) for the permanent packaging rule and offline procedure. Windows adaptation and acceptance are outside the current scope; the historical Windows signing reference below is not an active validation requirement.
 
 ### Verification
 

@@ -118,8 +118,11 @@ function validateEndpoint(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length > 2048) {
     throw new Error(`The ${label} endpoint URL is invalid.`)
   }
+  if (!value.trim()) {
+    throw new Error(`Enter the ${label} endpoint URL in whale monitor settings.`)
+  }
   try {
-    const url = new URL(value)
+    const url = new URL(value.trim())
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
       throw new Error('invalid')
     }
@@ -132,7 +135,7 @@ function validateEndpoint(value: unknown, label: string): string {
 export function startWhaleMonitorScheduler(): void {
   restartWhaleMonitorScheduler()
   const settings = readWhaleMonitorConfig()
-  if (settings.enabled && settings.apiKey) {
+  if (settings.enabled && settings.apiKey && settings.spendBaseUrl && settings.modelsBaseUrl) {
     const range = defaultDateRange(settings)
     void fetchUsage(range.startDate, range.endDate).then(broadcastSnapshot)
     void fetchModels().then(broadcastSnapshot)
@@ -149,7 +152,14 @@ export function stopWhaleMonitorScheduler(): void {
 function restartWhaleMonitorScheduler(): void {
   stopWhaleMonitorScheduler()
   const settings = readWhaleMonitorConfig()
-  if (!settings.enabled || !settings.apiKey) return
+  if (
+    !settings.enabled ||
+    !settings.apiKey ||
+    !settings.spendBaseUrl ||
+    !settings.modelsBaseUrl
+  ) {
+    return
+  }
   refreshTimer = setInterval(() => {
     const range = defaultDateRange(readWhaleMonitorConfig())
     void fetchUsage(range.startDate, range.endDate).then(broadcastSnapshot)

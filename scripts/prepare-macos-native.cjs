@@ -50,6 +50,10 @@ async function prepareEsbuildPackage(projectDir, version, arch) {
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
+    if (!restored && process.env.CRESCENT_OFFLINE_BUILD === '1')
+      throw new Error(
+        `Offline cache missing: esbuild ${version} darwin-${arch}; prepare the locked tarball before disconnecting.`
+      )
     if (!restored)
       await run('curl', [
         '--fail',
