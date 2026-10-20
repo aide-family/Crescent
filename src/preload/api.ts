@@ -8,6 +8,7 @@ import { connectionsApi } from './modules/connections'
 import { storageApi } from './modules/storage'
 import { updateApi } from './modules/update'
 import { whaleMonitorApi } from './modules/whaleMonitor'
+import { remoteFsApi } from './modules/remote-fs'
 
 export const api = {
   knowledge: knowledgeApi,
@@ -19,5 +20,6 @@ export const api = {
   connections: connectionsApi,
   storage: storageApi,
   update: updateApi,
-  whaleMonitor: whaleMonitorApi
+  whaleMonitor: whaleMonitorApi,
+  remoteFs: remoteFsApi
 }

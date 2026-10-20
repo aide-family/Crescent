@@ -25,6 +25,7 @@ import {
 } from './pi-model-runtime'
 import { loadPiAi, loadPiSdk, type PiSdkFacade } from './pi-sdk'
 import { buildLocalInstructionContext } from './instruction-files'
+import { resolveAgentSkillRoots } from './skills'
 import {
   bindPtyBashExecContextClone,
   clearPtyBashExecContext,
@@ -526,11 +527,16 @@ async function runChildPiSession(input: {
 
   const ptyBashTool = createPtyBashToolDefinition(pi, cwd, input.childSessionKey)
   const instructionContext = buildLocalInstructionContext()
+  const additionalSkillPaths = resolveAgentSkillRoots(parent.config.skillRoot, {
+    loadGlobalAgentSkills: Boolean(parent.config.loadGlobalAgentSkills)
+  })
   const resourceLoader = new pi.DefaultResourceLoader({
     cwd,
     agentDir,
     settingsManager,
+    additionalSkillPaths,
     noExtensions: true,
+    noSkills: true,
     systemPromptOverride: (base) =>
       buildInvariantAgentPrompt({
         base: [base ?? '', input.profile.systemPrompt].filter(Boolean).join('\n\n'),

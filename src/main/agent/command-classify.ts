@@ -53,9 +53,7 @@ export async function classifyCommand(
     const human =
       level === 'high'
         ? buildHighRiskHumanSummary(cmd, ctx.locale)
-        : isStaticallyReadonly(cmd)
-          ? buildReadOnlyHumanSummary(cmd, ctx.locale)
-          : audit.summary
+        : audit.summary.trim() || buildReadOnlyHumanSummary(cmd, ctx.locale)
     return {
       level,
       source: 'subagent',

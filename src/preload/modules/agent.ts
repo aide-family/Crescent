@@ -27,6 +27,9 @@ import type {
   AgentRunInput,
   AgentSkillInstallEvent,
   AgentSkillInstallResult,
+  AgentSkillFileContent,
+  AgentSkillFileEntry,
+  AgentSkillFileWriteResult,
   AgentSkillOption,
   AgentSkillSearchResult,
   AgentValidationResult,
@@ -97,6 +100,16 @@ export const agentApi = {
     ipcRenderer.invoke('agent:delete-skill', path),
   getSkillContent: (path: string): Promise<string> =>
     ipcRenderer.invoke('agent:get-skill-content', path),
+  listSkillFiles: (path: string): Promise<AgentSkillFileEntry[]> =>
+    ipcRenderer.invoke('agent:list-skill-files', path),
+  getSkillFile: (path: string, relativePath: string): Promise<AgentSkillFileContent> =>
+    ipcRenderer.invoke('agent:get-skill-file', path, relativePath),
+  writeSkillFile: (
+    path: string,
+    relativePath: string,
+    content: string
+  ): Promise<AgentSkillFileWriteResult> =>
+    ipcRenderer.invoke('agent:write-skill-file', path, relativePath, content),
   getCatalogSkillContent: (input: {
     installSource: string
     installSkill?: string

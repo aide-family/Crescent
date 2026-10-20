@@ -16,7 +16,11 @@ const props = defineProps<{
 
 const { lang } = useData()
 
-const isEnglish = computed(() => String(lang.value ?? '').toLowerCase().startsWith('en'))
+const isEnglish = computed(() =>
+  String(lang.value ?? '')
+    .toLowerCase()
+    .startsWith('en')
+)
 const labels = computed(() =>
   isEnglish.value
     ? { enlarge: 'Enlarge', close: 'Close', zoomIn: 'Zoom in', zoomOut: 'Zoom out' }
@@ -132,7 +136,12 @@ defineExpose({ openExpanded })
         </svg>
       </button>
     </div>
-    <div class="crescent-diagram-frame__canvas" role="img" :aria-label="title" @dblclick="openExpanded">
+    <div
+      class="crescent-diagram-frame__canvas"
+      role="img"
+      :aria-label="title"
+      @dblclick="openExpanded"
+    >
       <slot>
         <div v-if="html" v-html="html" />
       </slot>

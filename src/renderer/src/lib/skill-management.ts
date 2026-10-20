@@ -55,6 +55,71 @@ export function catalogSkillPageUrl(result: AgentSkillSearchResult): string {
   return `https://skills.sh/${source}/${skillId}`
 }
 
+export function skillFileLanguage(relativePath: string | undefined): string {
+  const name = relativePath?.split('/').pop()?.toLowerCase() ?? ''
+  if (!name || name === 'skill.md') return 'markdown'
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : ''
+  switch (ext) {
+    case 'md':
+    case 'markdown':
+    case 'mdx':
+      return 'markdown'
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+      return 'bash'
+    case 'py':
+      return 'python'
+    case 'ts':
+    case 'tsx':
+      return 'ts'
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'cjs':
+      return 'js'
+    case 'json':
+      return 'json'
+    case 'yml':
+    case 'yaml':
+      return 'yaml'
+    case 'toml':
+      return 'toml'
+    case 'go':
+      return 'go'
+    case 'rs':
+      return 'rust'
+    case 'rb':
+      return 'ruby'
+    case 'ps1':
+      return 'powershell'
+    case 'bat':
+    case 'cmd':
+      return 'batch'
+    case 'css':
+      return 'css'
+    case 'html':
+    case 'htm':
+      return 'html'
+    case 'xml':
+      return 'xml'
+    case 'sql':
+      return 'sql'
+    default:
+      return 'text'
+  }
+}
+
+export function isSkillMarkdownFile(relativePath: string | undefined): boolean {
+  return skillFileLanguage(relativePath) === 'markdown'
+}
+
+export function formatSkillFileAsMarkdownCode(relativePath: string, content: string): string {
+  const language = skillFileLanguage(relativePath)
+  const fence = '```'
+  return `${fence}${language}\n${content.replace(/\n$/, '')}\n${fence}\n`
+}
+
 function normalizeSkillSearchQuery(value: string): string {
   return value.toLowerCase().replace(/[\s"'`,.:;/\\|()[\]{}_-]+/g, '')
 }

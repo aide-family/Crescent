@@ -11,7 +11,6 @@ import {
 import { mcpToolAuthorizer } from './mcp-approval'
 import { createChangePlanTool } from './pi-change-plan'
 import { normalizeExecutionMode, type ExecutionMode } from '../../shared/execution-plan'
-import { homedir } from 'os'
 import { createHash } from 'node:crypto'
 import { writeSystemLog } from '../logging'
 import { buildHandoffContext, handoffSystemPrompt } from './handoff-context'
@@ -31,15 +30,12 @@ import type {
   AgentCancelHandoffInput,
   AgentHandoffStatus
 } from '../../shared/agent-types'
-import { resolve } from 'path'
 
 import type { WebContents } from 'electron'
 
 import { buildLocalInstructionContext } from './instruction-files'
 import { resolveHostedPromptResult } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
-import { getCrescentPiSkillsDir } from './pi-paths'
-import { GLOBAL_AGENT_SKILLS_TILDE } from '../crescent-paths'
 import {
   resolvePiModel,
   resolveThinkingLevelForModel,
@@ -56,6 +52,7 @@ import {
   setPtyBashExecContext
 } from './pi-terminal-bash'
 import {
+  createCloseSubterminalToolDefinition,
   createOpenSubterminalToolDefinition,
   createReturnToMainTerminalTool,
   OPEN_SUBTERMINAL_DISCIPLINE
@@ -67,12 +64,14 @@ import {
   SUBAGENT_DISCIPLINE
 } from './pi-subagent'
 import {
+  hostedSessionSkillProfile,
   hostedSessionToolProfile,
   needsModelChange,
   shouldReuseHostedSession
 } from './pi-host-policy'
 import { rejectPendingApprovalsForRun } from './command-approval'
 import { createCrescentSettingsManager } from './pi-packages'
+import { resolveAgentSkillRoots } from './skills'
 import {
   buildQuotaResetHint,
   classifyProviderError,
@@ -93,6 +92,7 @@ interface HostedSession {
   session: AgentSession
   cwd: string
   toolProfile: string
+  skillProfile: string
   immediateTools: string[]
   ownerId?: number
   handoffLastStarted?: number
@@ -846,7 +846,8 @@ async function ensureHostedSessionUnlocked(
   }
   const cwd = resolveAgentWorkspaceCwd(config)
   const toolProfile = hostedSessionToolProfile(config.mcpServers)
-  if (shouldReuseHostedSession(existing, { cwd, toolProfile })) {
+  const skillProfile = hostedSessionSkillProfile(config)
+  if (shouldReuseHostedSession(existing, { cwd, toolProfile, skillProfile })) {
     return existing as HostedSession
   }
   if (existing) {
@@ -888,6 +889,7 @@ async function ensureHostedSessionUnlocked(
   traceStartup('agent:resources-ready', resourceStart)
 
   const openSubterminalTool = await createOpenSubterminalToolDefinition(pi, sessionKey)
+  const closeSubterminalTool = await createCloseSubterminalToolDefinition(pi, sessionKey)
   const captureTools = await createCaptureToolDefinitions(pi, sessionKey)
   const subagentTool = await createSubagentToolDefinition(pi, sessionKey)
   const mcp = await loadMcpPiTools(pi, config.mcpServers, undefined, mcpToolAuthorizer(sessionKey))
@@ -897,6 +899,7 @@ async function ensureHostedSessionUnlocked(
     ptyBashTool,
     createChangePlanTool(pi, sessionKey),
     openSubterminalTool,
+    closeSubterminalTool,
     createReturnToMainTerminalTool(pi, sessionKey),
     subagentTool,
     ...captureTools,
@@ -923,6 +926,7 @@ async function ensureHostedSessionUnlocked(
     session,
     cwd,
     toolProfile,
+    skillProfile,
     immediateTools: session.getActiveToolNames().filter((name) => name !== 'submit_change_plan'),
     closeMcp: mcp.close
   }
@@ -951,15 +955,9 @@ async function disposeHostedSessionUnlocked(hosted: HostedSession): Promise<void
 }
 
 function collectSkillRoots(config: AgentConfig): string[] {
-  const roots = [getCrescentPiSkillsDir()]
-  const configured = config.skillRoot?.trim()
-  if (configured) {
-    roots.push(resolve(configured.replace(/^~(?=$|[/\\])/, homedir())))
-  }
-  if (config.loadGlobalAgentSkills) {
-    roots.push(resolve(GLOBAL_AGENT_SKILLS_TILDE.replace(/^~(?=$|[/\\])/, homedir())))
-  }
-  return [...new Set(roots)]
+  return resolveAgentSkillRoots(config.skillRoot, {
+    loadGlobalAgentSkills: Boolean(config.loadGlobalAgentSkills)
+  })
 }
 
 function hostedSessionHasMessages(session: AgentSession): boolean {

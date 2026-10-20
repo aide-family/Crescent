@@ -20,6 +20,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type AgentConfig,
+  type AgentSkillFileContent,
   type AgentSkillInstallEvent,
   type AgentSkillOption,
   type AgentSkillSearchResult
@@ -428,8 +429,17 @@ export function useSkillsController({
     setSkillInstallLogResultId(null)
     setSelectedSkillPreview({ skill, content: '' })
     try {
-      const content = await agentClient.getSkillContent(skill.path)
-      setSelectedSkillPreview({ skill, content })
+      const [content, files] = await Promise.all([
+        agentClient.getSkillContent(skill.path),
+        agentClient.listSkillFiles(skill.path)
+      ])
+      const firstFile = files.find((entry) => entry.kind === 'file' && entry.name === 'SKILL.md')
+      setSelectedSkillPreview({
+        skill,
+        content,
+        files,
+        selectedFilePath: firstFile?.relativePath
+      })
     } catch (error) {
       setSelectedSkillPreview(null)
       setSkillManageMessage({
@@ -438,6 +448,61 @@ export function useSkillsController({
       })
     } finally {
       setSkillPreviewLoadingPath(null)
+    }
+  }
+
+  async function selectSkillPreviewFile(relativePath: string): Promise<void> {
+    const preview = selectedSkillPreview
+    if (!preview) return
+    try {
+      const file: AgentSkillFileContent = await agentClient.getSkillFile(
+        preview.skill.path,
+        relativePath
+      )
+      if (!file.ok) throw new Error(file.error)
+      setSelectedSkillPreview((current) =>
+        current?.skill.path === preview.skill.path
+          ? {
+              ...current,
+              content: file.binary ? '' : (file.content ?? ''),
+              selectedFilePath: file.relativePath,
+              selectedFileBinary: file.binary,
+              selectedFileTruncated: 'truncated' in file ? file.truncated : false,
+              selectedFileError: undefined
+            }
+          : current
+      )
+    } catch (error) {
+      setSelectedSkillPreview((current) =>
+        current?.skill.path === preview.skill.path
+          ? { ...current, selectedFileError: error instanceof Error ? error.message : String(error) }
+          : current
+      )
+    }
+  }
+
+  async function saveSkillPreviewFile(
+    skill: AgentSkillOption,
+    relativePath: string,
+    content: string
+  ): Promise<boolean> {
+    try {
+      const result = await agentClient.writeSkillFile(skill.path, relativePath, content)
+      if (!result.ok) throw new Error(result.error)
+      setSkills(await agentClient.listSkills())
+      setSelectedSkillPreview((current) =>
+        current?.skill.path === skill.path
+          ? { ...current, skill: result.skill, content, selectedFilePath: relativePath }
+          : current
+      )
+      setSkillManageMessage({ type: 'success', text: 'Skill file saved.' })
+      return true
+    } catch (error) {
+      setSkillManageMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : String(error)
+      })
+      return false
     }
   }
 
@@ -543,6 +608,8 @@ export function useSkillsController({
     importSkillFromDisk,
     deleteSkill,
     previewSkill,
+    selectSkillPreviewFile,
+    saveSkillPreviewFile,
     previewCatalogSkill,
     removeSkillRef
   }

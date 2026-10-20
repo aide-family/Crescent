@@ -303,7 +303,7 @@ export function localizeAgentEventMessage(message: string, t: Dictionary): strin
     message === 'Agent run was canceled.' ||
     message === 'Canceled.'
   ) {
-    return t.input.agentCanceled
+    return t.input.agentAborted
   }
   if (/Agent is already processing/i.test(message)) {
     return t.input.agentAlreadyProcessing

@@ -4,6 +4,96 @@ import { isPasswordPromptLine } from './terminal-password-prompt'
 const PROMPT_HOST_SCAN_LINES = 40
 
 /**
+ * Lines as the terminal shows them. `\r` returns the cursor to column 0 and
+ * later text overwrites; erase-to-end (`CSI K`) drops the tail. Treating `\r`
+ * as a newline would turn a prompt redraw into a fake local line (`~$`, `$`,
+ * `➜  ~`) and look like the SSH session had already exited.
+ */
+export function visibleTerminalLines(output: string): string[] {
+  return output
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => renderTerminalLine(line).trim())
+}
+
+function renderTerminalLine(line: string): string {
+  const buffer: string[] = []
+  let column = 0
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (char === '\r') {
+      column = 0
+      continue
+    }
+
+    if (char === '\u001b') {
+      const next = line[index + 1]
+      if (next === '[') {
+        let cursor = index + 2
+        let params = ''
+        while (cursor < line.length) {
+          const code = line.charCodeAt(cursor)
+          if (code >= 64 && code <= 126) break
+          params += line[cursor]
+          cursor += 1
+        }
+        const command = line[cursor]
+        if (command === 'K') {
+          const mode = Number(params || '0')
+          if (mode === 2) {
+            buffer.length = 0
+            column = 0
+          } else if (mode === 1) {
+            for (let cell = 0; cell < column && cell < buffer.length; cell += 1) buffer[cell] = ' '
+          } else {
+            buffer.length = column
+          }
+        }
+        index = command ? cursor : cursor - 1
+        continue
+      }
+      if (next === ']') {
+        let cursor = index + 2
+        while (cursor < line.length) {
+          if (line[cursor] === '\u0007') break
+          if (line[cursor] === '\u001b' && line[cursor + 1] === '\\') {
+            cursor += 1
+            break
+          }
+          cursor += 1
+        }
+        index = cursor
+        continue
+      }
+      // Two-byte sequences such as ESC = (application keypad) and ESC ( B.
+      // Leaving the final byte in the line turns `➜  ~` into `➜  ~ =`.
+      const nextCode = next ? next.charCodeAt(0) : 0
+      if (nextCode >= 0x20 && nextCode <= 0x2f) {
+        let cursor = index + 2
+        while (cursor < line.length) {
+          const code = line.charCodeAt(cursor)
+          if (code >= 0x30 && code <= 0x7e) break
+          cursor += 1
+        }
+        index = cursor < line.length ? cursor : cursor - 1
+        continue
+      }
+      if (nextCode >= 0x30 && nextCode <= 0x7e) {
+        index += 1
+        continue
+      }
+      continue
+    }
+
+    buffer[column] = char
+    column += 1
+  }
+
+  return buffer.join('')
+}
+
+/**
  * Extract hostnames from recent shell prompt lines.
  * Supports: user@host:, [user@host …]#, [K8S-ADMIN] user@host:, root@host#
  */
@@ -12,7 +102,7 @@ export function extractRecentPromptHosts(
   maxLines = PROMPT_HOST_SCAN_LINES
 ): string[] {
   if (!output.trim()) return []
-  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const lines = visibleTerminalLines(output)
   const recent = lines.slice(-Math.max(1, maxLines))
   const hosts: string[] = []
   const seen = new Set<string>()
@@ -52,7 +142,7 @@ export function findNewestPromptSignal(
   maxLines = PROMPT_HOST_SCAN_LINES
 ): PromptSignal | undefined {
   if (!output.trim()) return undefined
-  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const lines = visibleTerminalLines(output)
   const recent = lines.slice(-Math.max(1, maxLines))
 
   for (let index = recent.length - 1; index >= 0; index -= 1) {
@@ -82,8 +172,10 @@ function isLocalPromptLine(line: string): boolean {
   // not a local prompt signal, and treating it as one would poison the
   // alignment/guard logic while the ssh login is still in progress.
   // A lone `#` is not local — remote root shells commonly use that PS1.
-  if (/^➜\s+\S+\s*$/.test(line)) return true
-  if (/^❯\s+\S+\s*$/.test(line)) return true
+  // A CR overwrite can leave a host tail (`➜  ~` + `moon:~$`). That is not
+  // the idle local prompt; `➜  ~` and `➜  ~/src` still are.
+  if (/^➜\s+\S+\s*$/.test(line) && !/[@:]/.test(line)) return true
+  if (/^❯\s+\S+\s*$/.test(line) && !/[@:]/.test(line)) return true
   if (/^[➜❯]\s*$/.test(line)) return true
   if (/^[%$]\s*$/.test(line)) return true
   // Home-dir-only PS1 after SSH drop (`~`, `~ %`, `~#`). A lone `#` is still remote root.
@@ -163,7 +255,7 @@ export function findEnvironmentDriftHost(
  */
 export function isLocalShellPromptVisible(output: string): boolean {
   if (!output.trim()) return false
-  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const lines = visibleTerminalLines(output)
   const recent = lines.slice(-Math.max(1, PROMPT_HOST_SCAN_LINES))
 
   for (const line of recent) {

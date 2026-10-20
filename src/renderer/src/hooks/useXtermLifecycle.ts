@@ -39,6 +39,8 @@ import type { ConnectionConfig } from '../../../shared/agent-types'
 interface UseXtermLifecycleInput {
   terminalVisible: boolean
   inputLocked?: boolean
+  /** Pane that is actually running the agent command. Ctrl+C targets this pane. */
+  commandInterruptTabId?: string
   activeTabId: string
   activeTabExists: boolean
   activeTabIdRef: MutableRefObject<string>
@@ -77,6 +79,7 @@ interface UseXtermLifecycleInput {
 export function useXtermLifecycle({
   terminalVisible,
   inputLocked = false,
+  commandInterruptTabId,
   activeTabId,
   activeTabExists,
   activeTabIdRef,
@@ -137,6 +140,7 @@ export function useXtermLifecycle({
   )
 
   const inputLockedRef = useRef(false)
+  const commandInterruptTabIdRef = useRef('')
 
   useEffect(() => {
     inputLockedRef.current = inputLocked
@@ -144,6 +148,10 @@ export function useXtermLifecycle({
     if (!terminal) return
     applyXtermInputLock(terminal, inputLocked)
   }, [inputLocked, terminalRef])
+
+  useEffect(() => {
+    commandInterruptTabIdRef.current = commandInterruptTabId?.trim() ?? ''
+  }, [commandInterruptTabId])
 
   useEffect(() => {
     if (!terminalVisible) return
@@ -181,8 +189,16 @@ export function useXtermLifecycle({
 
     const bootstrapFilter = createCrescentBootstrapFilter()
     const terminalDataDisposable = terminal.onData((data) => {
-      if (inputLockedRef.current && !isTerminalCtrlCData(data)) return
       if (!replayGate.shouldForwardInput()) return
+      if (isTerminalCtrlCData(data)) {
+        const running = commandInterruptTabIdRef.current
+        const focused = activeTabIdRef.current
+        if (running && running !== focused) {
+          void window.api.terminal.interrupt(running)
+          return
+        }
+      }
+      if (inputLockedRef.current && !isTerminalCtrlCData(data)) return
       scrollFollow.resetFollow()
       terminal.scrollToBottom()
       if (terminalModeRef.current === 'pipe') {

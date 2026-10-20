@@ -29,6 +29,7 @@ import {
   pushTemporaryExecutionTarget,
   returnToMainTerminal
 } from './pi-terminal-bash'
+import { subterminalNameFromTabId } from './subterminal-routing'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
@@ -602,6 +603,67 @@ export function createReturnToMainTerminalTool(
       const result = returnToMainTerminal(sessionKey)
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],
+        details: result,
+        isError: !result.ok
+      }
+    }
+  })
+}
+
+async function closeAgentSubterminal(sessionKey: string): Promise<{
+  ok: boolean
+  parentTabId?: string
+  closedTabId?: string
+  hint?: string
+  error?: string
+}> {
+  const context = getPtyBashExecContext(sessionKey)
+  const webContents = context?.webContents
+  if (!context || !webContents || webContents.isDestroyed()) {
+    return { ok: false, error: 'No active agent terminal context.' }
+  }
+  const closedTabId = context.executionTabId
+  const parentTabId = context.mainTarget?.tabId
+  if (!parentTabId || parentTabId === closedTabId) {
+    return { ok: true, parentTabId: parentTabId ?? closedTabId, hint: 'Bash is already on the main terminal.' }
+  }
+  const restored = returnToMainTerminal(sessionKey)
+  if (!restored.ok) return { ok: false, error: restored.error }
+  closeTemporarySubterminal(webContents, closedTabId)
+  safeWebContentsSend(webContents, 'agent:subagent-status', {
+    parentTabId,
+    tabId: closedTabId,
+    name: subterminalNameFromTabId(closedTabId),
+    agentName: 'agent',
+    agentStatus: 'done',
+    close: true
+  })
+  return {
+    ok: true,
+    parentTabId,
+    closedTabId,
+    hint: 'Closed the subterminal. Subsequent bash runs on the main terminal.'
+  }
+}
+
+export async function createCloseSubterminalToolDefinition(
+  pi: PiSdkFacade,
+  sessionKey: string
+): Promise<ReturnType<PiSdkFacade['defineTool']>> {
+  return pi.defineTool({
+    name: 'close_subterminal',
+    label: 'Close subterminal',
+    description: 'Close the current subterminal and route subsequent bash to the verified main terminal.',
+    promptSnippet: 'close_subterminal — return bash to the main terminal and close the subterminal',
+    promptGuidelines: ['After cross-context work, call close_subterminal before further main-task bash.'],
+    parameters: Type.Object({}),
+    executionMode: 'sequential',
+    async execute(_toolCallId, _params, signal) {
+      const result = signal?.aborted
+        ? { ok: false, error: 'Agent run was canceled.' }
+        : await closeAgentSubterminal(sessionKey)
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         details: result,
         isError: !result.ok
       }

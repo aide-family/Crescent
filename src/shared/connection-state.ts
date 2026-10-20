@@ -363,6 +363,8 @@ export function wasVerifiedOnTarget(state: ConnectionState): boolean {
  * treated as drift when the session was previously verified with a hostname
  * prompt (exit-to-local); unverified hostless prompts stay unknown.
  * Falling back to the jump box after a deeper runtime anchor is always drift.
+ * Nested remotes (kubectl-exec pods, peer hops) soft-align once the session
+ * was verified — they are not leave-target.
  */
 export function resolveGateAlignment(
   state: ConnectionState,
@@ -378,6 +380,16 @@ export function resolveGateAlignment(
   })
   if (resolved.promptHost === 'local-shell' && !wasVerifiedOnTarget(state)) return 'unknown'
   if (resolved.promptHost && isReturnToJumpHost(state, resolved.promptHost)) return 'drifted'
+  // Soft-align nested remotes after a verified login (pod hostname ≠ node FQDN).
+  if (
+    resolved.alignment === 'drifted' &&
+    resolved.promptHost &&
+    resolved.promptHost !== 'local-shell' &&
+    (wasVerifiedOnTarget(state) ||
+      Boolean(state.ready && (runtimeAnchorHost(state) || state.expectedHost)))
+  ) {
+    return 'aligned'
+  }
   return resolved.alignment
 }
 
@@ -402,6 +414,83 @@ export function isReturnToJumpHost(
   if (jump && isPromptHostAligned(observed, jump)) return true
   if (jumpPrompt && isPromptHostAligned(observed, jumpPrompt)) return true
   return false
+}
+
+/** Nested SSH/kubectl hop exits often print these even when the outer shell lives. */
+const SSH_CLOSED_MESSAGE_RE =
+  /(?:connection to .+ closed|broken pipe|connection (?:timed out|reset by peer)|ssh: connect to host .+:)/i
+
+export function detectSshClosedMessage(data: string): boolean {
+  return SSH_CLOSED_MESSAGE_RE.test(data)
+}
+
+/**
+ * Newest prompt is leave-target: laptop local-shell or fall-back onto the jump box.
+ * Used by stream EnvGuard so inner hop closes do not look like full SSH death.
+ */
+export function isStreamLeaveTarget(
+  state: ConnectionState,
+  output: string,
+  localHost?: string
+): boolean {
+  const resolved = resolveSessionAlignment({
+    output,
+    expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
+    aliases: state.aliases,
+    clusterHostRegex: state.clusterHostRegex,
+    localHost
+  })
+  if (resolved.promptHost === 'local-shell') return true
+  if (resolved.promptHost && isReturnToJumpHost(state, resolved.promptHost)) return true
+  return false
+}
+
+/**
+ * A blank Enter on an already-ready remote prompt reprints the same line.
+ * That redraw is not a disconnect. A real close in the same chunk still drifts.
+ */
+export function shouldEmitStreamEnvironmentDrift(input: {
+  leaveTarget: boolean
+  closeIsSessionLoss: boolean
+  blankEnterOnReadyRemote: boolean
+  chunk: string
+}): boolean {
+  if (input.blankEnterOnReadyRemote && !detectSshClosedMessage(input.chunk)) return false
+  return input.leaveTarget || input.closeIsSessionLoss
+}
+
+/**
+ * Cancel a reconnect when the live prompt is still a remote host.
+ * Leave-target (local shell or jump-box fallback) still reconnects.
+ */
+export function shouldCancelConnectionRestore(input: {
+  mode?: string
+  promptHost?: string
+  returnToJumpHost?: boolean
+}): boolean {
+  if (input.mode !== 'pty' && input.mode !== 'pipe') return false
+  if (!input.promptHost || input.promptHost === 'local-shell') return false
+  if (input.returnToJumpHost) return false
+  return true
+}
+
+/**
+ * Whether a stream chunk that matched {@link detectSshClosedMessage} should mark
+ * the session lost and emit environment-drift. Nested kubectl/SSH exits print
+ * "Connection to X closed" while the outer special-ssh shell is still alive —
+ * only leave-target prompts count as true session loss.
+ *
+ * @param output Full terminal buffer (for newest-prompt resolution).
+ * @param chunk Current stream chunk that already matched a close message.
+ */
+export function shouldTreatSshClosedAsSessionLoss(
+  state: ConnectionState,
+  output: string,
+  localHost?: string,
+  chunk: string = output
+): boolean {
+  if (!detectSshClosedMessage(chunk)) return false
+  return isStreamLeaveTarget(state, output, localHost)
 }
 
 /**

@@ -103,6 +103,7 @@ import { GRACEFUL_TEARDOWN_TIMEOUT_MS, listGracefulTeardownSteps } from './grace
 import {
   isPtyExecutionTabLocked,
   isTerminalInterruptPayload,
+  resolveCtrlCTabId,
   resolveUserCommandInterrupt,
   shouldBlockTerminalUserInput
 } from './input-lock'
@@ -536,7 +537,6 @@ export function executeCommandInTerminal(
   const commandId = `${Date.now()}_${Math.random().toString(36).slice(2)}`
   const startMarker = `__CRESCENT_CMD_START_${commandId}__`
   const endMarker = `__CRESCENT_CMD_END_${commandId}__`
-
   const policy = normalizeCommandTimeoutPolicy(readAgentConfig().commandTimeouts)
   const dispatchAt = Date.now()
   let dispatchDeadline = dispatchAt + policy.executionMs
@@ -1752,7 +1752,12 @@ export function registerTerminalIpc(): void {
   rendererIpc.handle('terminal:interrupt', (event, payload?: { tabId?: string }) => {
     const tabId = normalizeTabId(payload?.tabId)
     if (!tabId) return { ok: false, interrupted: false, error: 'Missing tabId' }
-    const interrupted = interruptPendingTerminalCommands(event.sender.id, tabId)
+    const target =
+      resolveCtrlCTabId({
+        requestedTabId: tabId,
+        pendingTabIds: pendingCommandTabIds(event.sender.id)
+      }) || tabId
+    const interrupted = interruptPendingTerminalCommands(event.sender.id, target)
     return { ok: true, interrupted }
   })
 
@@ -2584,6 +2589,17 @@ function isUsableTerminalTabId(tabId: string): boolean {
 
 function getSessionKey(senderId: number, tabId: string): string {
   return `${senderId}:${tabId}`
+}
+
+function pendingCommandTabIds(senderId: number): string[] {
+  const prefix = `${senderId}:`
+  const ids: string[] = []
+  for (const key of pendingCommandPromises.keys()) {
+    if (!key.startsWith(prefix)) continue
+    const tabId = key.slice(prefix.length)
+    if (tabId) ids.push(tabId)
+  }
+  return ids
 }
 
 function isUserInputLocked(senderId: number, tabId: string): boolean {

@@ -139,18 +139,31 @@ export function clampAgentRunEnvelopeText(
       if (maxFullSteps <= 0) break
     }
 
-    const resultBudget = Math.max(8_192, maxChars - 1_024)
-    const minimal = formatAgentRunDocumentCompact({
+    const resultBudget = Math.min(1_024, Math.max(256, maxChars - 512))
+    for (const textBudget of [512, 160, 48]) {
+      const minimal = formatAgentRunDocumentCompact({
+        logId: view.logId,
+        actions: [],
+        steps: narrativeStepsForClamp(view.steps ?? [], textBudget),
+        result: view.result?.trim() ? clampAgentText(view.result, resultBudget) : undefined,
+        error: view.error?.trim() ? clampAgentText(view.error, resultBudget) : undefined,
+        errorKind: view.errorKind,
+        elapsedMs: view.elapsedMs,
+        loginMeta: view.loginMeta
+      })
+      if (minimal.length <= maxChars) return minimal
+    }
+
+    const lastNarrative = narrativeStepsForClamp(view.steps ?? [], 48).slice(-1)
+    const lastMinimal = formatAgentRunDocumentCompact({
       logId: view.logId,
       actions: [],
-      steps: [],
-      result: view.result?.trim() ? clampAgentText(view.result, resultBudget) : undefined,
-      error: view.error?.trim() ? clampAgentText(view.error, resultBudget) : undefined,
+      steps: lastNarrative,
+      error: view.error?.trim() ? clampAgentText(view.error, 160) : undefined,
       errorKind: view.errorKind,
-      elapsedMs: view.elapsedMs,
-      loginMeta: view.loginMeta
+      elapsedMs: view.elapsedMs
     })
-    if (minimal.length <= maxChars) return minimal
+    if (lastMinimal.length <= maxChars) return lastMinimal
     return formatAgentRunDocumentParseStub()
   } catch {
     return formatAgentRunDocumentParseStub()
@@ -205,6 +218,45 @@ export function toLiveRunView(
     errorResetHint: run.errorResetHint,
     loginMeta: run.loginMeta
   }
+}
+
+/** True when a new slim view would not change the live timeline. */
+export function sameLiveRunView(left: AgentRunViewState, right: AgentRunViewState): boolean {
+  if (left === right) return true
+  return liveRunViewSignature(left) === liveRunViewSignature(right)
+}
+
+function liveRunViewSignature(run: AgentRunViewState): string {
+  return JSON.stringify({
+    logId: run.logId,
+    runId: run.runId,
+    startedAt: run.startedAt,
+    elapsedMs: run.elapsedMs,
+    thinkingText: run.thinkingText,
+    result: run.result,
+    error: run.error,
+    errorKind: run.errorKind,
+    errorProvider: run.errorProvider,
+    errorResetHint: run.errorResetHint,
+    steps: run.steps,
+    loginMeta: run.loginMeta
+  })
+}
+
+/** Keep thought and message text when the envelope must shrink. Streaming steps are closed. */
+function narrativeStepsForClamp(steps: AgentRunStep[], textBudget: number): AgentRunStep[] {
+  return steps.flatMap((step) => {
+    if (step.kind !== 'thought' && step.kind !== 'message') return []
+    const text = step.text.trim()
+    if (!text) return []
+    return [
+      {
+        ...step,
+        phase: 'done' as const,
+        text: clampAgentText(text, textBudget)
+      }
+    ]
+  })
 }
 
 function stubOlderStep(step: AgentRunStep): AgentRunStep {

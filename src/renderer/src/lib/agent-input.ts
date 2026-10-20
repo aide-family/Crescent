@@ -32,6 +32,13 @@ export function isContinueIntent(value: string): boolean {
 }
 
 export function isExplicitReconnectRequest(value: string): boolean {
+  const normalized = value
+    .trim()
+    .replace(/^[.!?。！？\s]+|[.!?。！？\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+  // Bare short forms only as the whole utterance (not 「数据恢复」).
+  if (/^(?:恢复|restore)$/i.test(normalized)) return true
+
   return (
     // 重连 / 重新连接 / 恢复连接 / 再连一次 / 重试连接 / 重试当前连接 / 重试 ssh 登录
     /重连|重新连接|恢复连接|恢复\s*(?:ssh\s*)?(?:登录|连接)|再连(?:一次|一下)?|重试\s*(?:ssh\s*)?(?:登录|连接)|重试当前\s*连接/.test(

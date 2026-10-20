@@ -38,6 +38,17 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     stateChanging: true
   },
   {
+    name: 'submit_change_plan',
+    method: 'post',
+    path: 'pi://crescent/submit_change_plan',
+    description: 'Review an exact target-bound plan, then execute approved steps once in order.',
+    source: 'built-in',
+    risk: 'high',
+    requiresApproval: true,
+    external: true,
+    stateChanging: true
+  },
+  {
     name: 'read',
     method: 'get',
     path: 'pi://workspace/read',

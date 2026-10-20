@@ -14,10 +14,9 @@ function ArchEdgeComponent({
   const dashed = data?.dashed === true
   const animate = data?.animate === true && !dashed
   const label = data?.label
-  const points = data?.points ?? []
-  const mid = points.length >= 2 ? points[Math.floor(points.length / 2)]! : null
-  const labelX = mid?.x ?? 0
-  const labelY = mid?.y ?? 0
+  const labelX = data?.labelX
+  const labelY = data?.labelY
+  const hasLabelAnchor = labelX !== undefined && labelY !== undefined
 
   return (
     <>
@@ -35,7 +34,7 @@ function ArchEdgeComponent({
           ...(dashed ? { strokeDasharray: '6 6' } : {})
         }}
       />
-      {label && mid ? (
+      {label && hasLabelAnchor ? (
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan pointer-events-none absolute rounded px-1.5 py-0.5 font-mono text-[10px] leading-none"

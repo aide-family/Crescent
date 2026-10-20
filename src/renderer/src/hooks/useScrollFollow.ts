@@ -58,35 +58,23 @@ export function useScrollFollow(
     const el = containerRef.current
     if (!el) return
 
-    const observedNodes = new Set<Element>()
-
-    const observeNode = (node: Element): void => {
-      if (observedNodes.has(node)) return
-      observedNodes.add(node)
-      resizeObserver.observe(node)
-    }
-
-    const observeSubtree = (root: Element): void => {
-      observeNode(root)
-      for (const child of root.children) {
-        observeSubtree(child)
-      }
-    }
-
-    const resizeObserver = new ResizeObserver(() => followNow(false))
-    observeSubtree(el)
-
-    let mutationFrame: number | null = null
-    const mutationObserver = new MutationObserver(() => {
-      if (mutationFrame != null) return
-      mutationFrame = window.requestAnimationFrame(() => {
-        mutationFrame = null
-        for (const node of observedNodes) {
-          if (!el.contains(node)) observedNodes.delete(node)
-        }
-        observeSubtree(el)
+    let followFrame: number | null = null
+    const scheduleFollow = (): void => {
+      if (followFrame != null) return
+      followFrame = window.requestAnimationFrame(() => {
+        followFrame = null
         followNow(false)
       })
+    }
+
+    // Watch the scrollport only. Observing every chart node re-enters Recharts'
+    // ResizeObserver on each live-run update and nests setState until React aborts.
+    const resizeObserver = new ResizeObserver(() => scheduleFollow())
+    resizeObserver.observe(el)
+
+    const mutationObserver = new MutationObserver((records) => {
+      if (records.every(isChartInternalMutation)) return
+      scheduleFollow()
     })
     mutationObserver.observe(el, { childList: true, subtree: true })
 
@@ -96,20 +84,27 @@ export function useScrollFollow(
     }
 
     el.addEventListener('scroll', handleScroll, { passive: true })
-    followNow(forceFollow)
 
     return () => {
       el.removeEventListener('scroll', handleScroll)
-      if (mutationFrame != null) {
-        window.cancelAnimationFrame(mutationFrame)
+      if (followFrame != null) {
+        window.cancelAnimationFrame(followFrame)
       }
       mutationObserver.disconnect()
       resizeObserver.disconnect()
-      observedNodes.clear()
     }
-    // followSignals + forceFollow drive re-follow when content or policy changes.
+  }, [containerRef, followNow, thresholdPx])
+
+  useEffect(() => {
+    followNow(forceFollow)
+    // followSignals drive a follow without rebuilding observers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerRef, followNow, forceFollow, thresholdPx, ...followSignals])
+  }, [followNow, forceFollow, ...followSignals])
 
   return { followNow, isFollowing }
+}
+
+function isChartInternalMutation(record: MutationRecord): boolean {
+  const node = record.target instanceof Element ? record.target : record.target.parentElement
+  return Boolean(node?.closest('[data-slot="chart"]'))
 }

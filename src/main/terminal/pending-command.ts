@@ -27,6 +27,7 @@ export interface CreatePendingCommandControllerInput {
   signal?: AbortSignal
   interruptGraceMs?: number
   ctrlCConfirmMs?: number
+  /** Idle wait for start marker; re-armed on PTY progress before start. */
   startTimeoutMs?: number
   idleTimeoutMs?: number
   continuationPromptTimeoutMs?: number

@@ -5,28 +5,43 @@
  */
 
 import { hostedMcpToolFingerprint } from '../../shared/mcp-servers'
-import type { AgentMcpServerConfig } from '../../shared/agent-types'
+import type { AgentConfig, AgentMcpServerConfig } from '../../shared/agent-types'
 
 export const HOSTED_SESSION_TOOL_PROFILE = 'pty-targets-scoped-files-approval-v2'
 
 export interface HostedSessionSnapshot {
   cwd: string
   toolProfile: string
+  skillProfile: string
 }
 
 export function hostedSessionToolProfile(mcpServers: AgentMcpServerConfig[] = []): string {
   return `${HOSTED_SESSION_TOOL_PROFILE}:mcp:${hostedMcpToolFingerprint(mcpServers)}`
 }
 
+/** Fingerprint skill roots so checkbox / skillRoot changes recreate the session. */
+export function hostedSessionSkillProfile(
+  config: Pick<AgentConfig, 'skillRoot' | 'loadGlobalAgentSkills'>
+): string {
+  const skillRoot = config.skillRoot?.trim() || '~/.crescent/skills'
+  const loadGlobal = Boolean(config.loadGlobalAgentSkills)
+  return `skills:${skillRoot}:global:${loadGlobal ? '1' : '0'}`
+}
+
 /**
- * A hosted session is reused only when its tool profile and workspace cwd are
- * unchanged; otherwise pi-host disposes and recreates it.
+ * A hosted session is reused only when its tool profile, skill profile, and
+ * workspace cwd are unchanged; otherwise pi-host disposes and recreates it.
  */
 export function shouldReuseHostedSession(
   existing: HostedSessionSnapshot | undefined,
-  next: { cwd: string; toolProfile: string }
+  next: { cwd: string; toolProfile: string; skillProfile: string }
 ): boolean {
-  return Boolean(existing && existing.toolProfile === next.toolProfile && existing.cwd === next.cwd)
+  return Boolean(
+    existing &&
+    existing.toolProfile === next.toolProfile &&
+    existing.skillProfile === next.skillProfile &&
+    existing.cwd === next.cwd
+  )
 }
 
 /**

@@ -133,9 +133,9 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
       ? atMention.connection
       : findDirectlyMentionedConnection(message, connections)
 
-  // Reconnect (retry / re-login / password changed). A uniquely named
-  // connection wins over the current tab's binding; otherwise reconnect the
-  // current tab's configured SSH. Do not dump every saved connection as a
+  // Reconnect (retry / re-login / password changed / bare「恢复」). A uniquely
+  // named connection wins over the current tab's binding; otherwise reconnect
+  // the current tab's configured SSH. Do not dump every saved connection as a
   // picker, and never retry a different host than the one the user named.
   if (
     isExplicitConnectionRequest(message) &&
@@ -157,6 +157,13 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
           !isPasswordChangedReconnectRequest(message) &&
           !isConnectionOnlyRequest(message, connection)
       }
+    }
+    return {
+      targetTabId: activeTabId,
+      action: 'clarify',
+      label: activeLabel,
+      reason: 'explicit-reconnect-no-target',
+      clarifyOptions: buildClarifyOptions(connections, activeTab?.connectionId)
     }
   }
 

@@ -16,6 +16,7 @@ import {
   whaleMonitorClient
 } from '@renderer/clients'
 import { ChangePlanReview } from '@renderer/components/ChangePlanReview'
+import { CommandWhitelistSheet } from '@renderer/components/CommandWhitelistSheet'
 import { useAgentController } from '@renderer/hooks/useAgentController'
 import { useCaptureController } from '@renderer/hooks/useCaptureController'
 import { useHistoryController } from '@renderer/hooks/useHistoryController'
@@ -60,14 +61,17 @@ import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import {
+  ArrowUpCircleIcon,
   ArrowLeftRightIcon,
   BookOpenIcon,
   BotIcon,
   HistoryIcon,
   LanguagesIcon,
+  Loader2Icon,
   MessageSquareIcon,
   PlugIcon,
   ServerIcon,
+  ShieldCheckIcon,
   SettingsIcon
 } from 'lucide-react'
 import {
@@ -161,6 +165,8 @@ import {
   WIKI_MIN_PREVIEW_WIDTH,
   WIKI_SHEET_SELECTED_FIXED_WIDTH,
   buildModelSelectionValue,
+  clampSkillDetailWidth,
+  getDefaultSkillDetailWidth,
   isLocalConnection,
   parseModelSelectionValue,
   resolveOpsConnectionId
@@ -209,11 +215,13 @@ import {
 } from '@renderer/lib/connection-name-conflict'
 import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
 import { findRunningPtyCommandTabId, isTerminalPaneLocked } from '@renderer/lib/terminal-lock'
+import { parseSubterminalTabId } from '@renderer/lib/terminal-text'
 import { isAgentProviderEnabled } from '../../shared/agent-providers'
 import {
   appendRunStatusStep,
   classifyPipeCommand,
   resolveRunStopReason,
+  shouldCancelConnectionRestore,
   type RunStopReason
 } from '../../shared/connection-state'
 import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
@@ -352,6 +360,7 @@ import {
   type StoredSessionHistoryItem,
   type WikiDocumentSummary
 } from '../../shared/agent-types'
+import type { AppUpdateStatusEvent } from '../../shared/update-types'
 import {
   collectAttentionTabIds,
   normalizeAttentionClickedPayload,
@@ -374,6 +383,11 @@ import { isSshCommandLine, resolveFinalSshTarget } from '../../shared/ssh-destin
 /** Settle copy for run stops: only a real user stop shows "manually stopped". */
 
 /** Subterminals live under the parent tab; resolve their terminal state. */
+
+const ServerFilesSheet = lazy(async () => {
+  const mod = await import('@renderer/components/ServerFilesSheet')
+  return { default: mod.ServerFilesSheet }
+})
 
 function App({
   recoveryMode = 'none',
@@ -427,6 +441,10 @@ function App({
     startX: number
     startWidth: number
   } | null>(null)
+  const skillSheetResizeRef = useRef<{
+    startX: number
+    startWidth: number
+  } | null>(null)
   const pendingSshRef = useRef(new Map<string, ConnectionConfig>())
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const pendingPostLoginSupplementsRef = useRef(new Map<string, string[]>())
@@ -476,6 +494,11 @@ function App({
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
+  const [commandWhitelistOpen, setCommandWhitelistOpen] = useState(false)
+  const [skillFileSaving, setSkillFileSaving] = useState(false)
+  const [skillDetailWidth, setSkillDetailWidth] = useState(() => getDefaultSkillDetailWidth())
+  const [appVersion, setAppVersion] = useState('')
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent>({ state: 'idle' })
   const configRef = useRef(config)
   const commandWhitelistTextRef = useRef(commandWhitelistText)
 
@@ -574,6 +597,7 @@ function App({
     x: number
     y: number
   } | null>(null)
+  const [serverFilesConnectionId, setServerFilesConnectionId] = useState<string | null>(null)
   const {
     updateTab,
     updateSubterminalOutput,
@@ -743,6 +767,8 @@ function App({
     importSkillFromDisk,
     deleteSkill,
     previewSkill,
+    selectSkillPreviewFile,
+    saveSkillPreviewFile,
     previewCatalogSkill,
     removeSkillRef
   } = useSkillsController({
@@ -2004,7 +2030,12 @@ function App({
   ])
 
   useEffect(() => {
+    let cancelled = false
+    void updateClient.getVersion().then((result) => {
+      if (!cancelled) setAppVersion(result.version)
+    })
     const unsubscribe = updateClient.onStatus((event) => {
+      setAppUpdateStatus(event)
       if (event.state === 'downloaded' && event.installerPath) {
         toast.success(t.app.updateSaved)
       }
@@ -2013,6 +2044,7 @@ function App({
       void updateClient.check()
     }
     return () => {
+      cancelled = true
       unsubscribe()
     }
   }, [t.app.updateSaved])
@@ -2122,6 +2154,16 @@ function App({
         return
       }
 
+      const skillSheetResize = skillSheetResizeRef.current
+      if (skillSheetResize) {
+        // Detail pane right edge: drag rightward to widen content preview (Wiki parity).
+        const nextWidth = clampSkillDetailWidth(
+          skillSheetResize.startWidth + (event.clientX - skillSheetResize.startX)
+        )
+        setSkillDetailWidth(nextWidth)
+        return
+      }
+
       const subterminalResize = subterminalResizeRef.current
       if (subterminalResize) {
         const deltaPercent = ((event.clientX - subterminalResize.startX) / window.innerWidth) * 100
@@ -2154,6 +2196,7 @@ function App({
       subterminalResizeRef.current = null
       subterminalHeightResizeRef.current = null
       wikiSheetResizeRef.current = null
+      skillSheetResizeRef.current = null
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       if (resized) window.requestAnimationFrame(() => syncActiveTerminalSize())
@@ -2600,9 +2643,10 @@ function App({
     return undefined
   }, [sessionChatTab.agentLog, liveRunByLogId])
   const runningCommandTabId = findRunningPtyCommandTabId(sessionLiveRun?.steps, executionTerminalId)
+  const paneExecutionId = runningCommandTabId || executionTerminalId
   const terminalInputLocked = isTerminalPaneLocked({
     tabId: activeTabId,
-    executionTerminalId,
+    executionTerminalId: paneExecutionId,
     agentBusy: sessionChatTab.agentBusy
   })
 
@@ -2636,6 +2680,7 @@ function App({
     executeConnectionCommands,
     abortPostConnectionTasks,
     appendLog,
+    commandInterruptTabId: runningCommandTabId,
     shellExitedText: t.terminal.shellExited,
     failedToStartShellText: t.terminal.failedToStartShell,
     postLoginTaskAbortedText: t.terminal.postLoginTaskAborted
@@ -3220,14 +3265,25 @@ function App({
       passwordPromptsByTabRef.current.delete(tabId)
       passwordPromptOpenTabsRef.current.delete(tabId)
     }
+    for (const promptTabId of [...passwordPromptsByTabRef.current.keys()]) {
+      const parentTabId = parseSubterminalTabId(promptTabId)?.parentTabId
+      if (!parentTabId || !closedTabIds.includes(parentTabId)) continue
+      passwordPromptsByTabRef.current.delete(promptTabId)
+      passwordPromptOpenTabsRef.current.delete(promptTabId)
+    }
     if (closedTabIds.length > 0) {
       const closed = new Set(closedTabIds)
       setPasswordAttentionTabIds((current) => current.filter((id) => !closed.has(id)))
     }
 
+    const openPromptTabId = passwordPromptRequestRef.current?.tabId
+    const openPromptParent = openPromptTabId
+      ? parseSubterminalTabId(openPromptTabId)?.parentTabId
+      : undefined
     if (
-      passwordPromptRequestRef.current &&
-      closedTabIds.includes(passwordPromptRequestRef.current.tabId)
+      openPromptTabId &&
+      (closedTabIds.includes(openPromptTabId) ||
+        (openPromptParent ? closedTabIds.includes(openPromptParent) : false))
     ) {
       showNextPasswordPrompt()
     }
@@ -3288,9 +3344,12 @@ function App({
         ...run,
         error: stopText,
         elapsedMs: Date.now() - (run.startedAt ?? Date.now()),
-        steps: settleRunningToolStepsAsInterrupted(run.steps ?? [])
+        steps: settleRunningToolStepsAsInterrupted(closeStreamingOpenSteps(run.steps ?? []))
       }))
       const canceledRun = activeAgentRunRef.current.get(chatTabId)
+      if (canceledRun && typeof canceledRun.logId === 'number') {
+        updateLogEntryText(chatTabId, canceledRun.logId, buildFinishPersistText(canceledRun))
+      }
       void persistAgentRun({
         runId,
         tabId: chatTabId,
@@ -3374,20 +3433,39 @@ function App({
     })
   }
 
+  async function saveCommandWhitelistRules(rules: string[]): Promise<void> {
+    const unique = [...new Set(rules.map((rule) => rule.trim()).filter(Boolean))]
+    const nextText = unique.join('\n')
+    const previousText = commandWhitelistTextRef.current
+    commandWhitelistTextRef.current = nextText
+    setCommandWhitelistText(nextText)
+    try {
+      const nextConfig = await saveAgentConfig({
+        ...configRef.current,
+        commandWhitelist: unique
+      })
+      const savedText = (nextConfig.commandWhitelist ?? []).join('\n')
+      commandWhitelistTextRef.current = savedText
+      setCommandWhitelistText(savedText)
+    } catch (error) {
+      commandWhitelistTextRef.current = previousText
+      setCommandWhitelistText(previousText)
+      throw error
+    }
+  }
+
   async function addCommandToWhitelist(command: string): Promise<void> {
     const rule = suggestWhitelistRule(command)
     if (!rule) return
-    const existing = parseCommandWhitelist(commandWhitelistText)
+    const existing = parseCommandWhitelist(commandWhitelistTextRef.current)
     if (existing.some((item) => item.trim() === rule)) {
       toast.message(t.commandReview.addedToWhitelist)
       return
     }
-    const nextText = [...existing, rule].join('\n')
-    setCommandWhitelistText(nextText)
     try {
       const nextConfig = await agentClient.saveConfig({
         ...config,
-        commandWhitelist: parseCommandWhitelist(nextText)
+        commandWhitelist: [...existing, rule]
       })
       setConfig(nextConfig)
       setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
@@ -3409,6 +3487,16 @@ function App({
     const context = await terminalClient.getContext(tabId)
     if (context.mode !== 'none' && context.alignment === 'aligned' && !context.restoring) {
       connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
+      return true
+    }
+    if (
+      shouldCancelConnectionRestore({
+        mode: context.mode,
+        promptHost: context.promptHost,
+        returnToJumpHost: context.returnToJumpHost
+      })
+    ) {
+      connTrace('restore-cancel', `tab=${tabId}`, 'still on remote')
       return true
     }
 
@@ -5308,6 +5396,19 @@ function App({
     await downloadJson(serializeAgentSessionTrace(bundle), buildSessionTraceFilename(), t)
   }
 
+  async function saveSkillPreviewFileFromSheet(
+    skill: AgentSkillOption,
+    relativePath: string,
+    content: string
+  ): Promise<boolean> {
+    setSkillFileSaving(true)
+    try {
+      return await saveSkillPreviewFile(skill, relativePath, content)
+    } finally {
+      setSkillFileSaving(false)
+    }
+  }
+
   const skillSheet = (
     <SkillManager
       open={skillOpen}
@@ -5334,6 +5435,8 @@ function App({
       skillInstallLogStatuses={skillInstallLogStatuses}
       skillInstallLogResultId={skillInstallLogResultId}
       installedSkillNames={installedSkillNames}
+      skillDetailWidth={skillDetailWidth}
+      skillFileSaving={skillFileSaving}
       onSkillRootChange={(value) => updateConfig('skillRoot', value)}
       onSaveSkillRoot={() => void saveSkillRoot()}
       onLoadGlobalAgentSkillsChange={(checked) => {
@@ -5353,9 +5456,19 @@ function App({
       onDeleteSkill={(skill) => void deleteSkill(skill)}
       onPreviewSkill={(skill) => void previewSkill(skill)}
       onPreviewCatalogSkill={(result) => void previewCatalogSkill(result)}
+      onSelectSkillPreviewFile={(relativePath) => void selectSkillPreviewFile(relativePath)}
+      onSaveSkillFile={(skill, relativePath, content) =>
+        saveSkillPreviewFileFromSheet(skill, relativePath, content)
+      }
       onDeleteSkillInstallLog={deleteSkillInstallLog}
       onSelectedSkillPreviewChange={setSelectedSkillPreview}
-      onSkillInstallLogResultIdChange={setSkillInstallLogResultId}
+      onSkillInstallLogResultIdChange={(resultId) => {
+        if (resultId) setSkillDetailWidth(getDefaultSkillDetailWidth())
+        setSkillInstallLogResultId(resultId)
+      }}
+      onStartDetailResize={(startX, startWidth) => {
+        skillSheetResizeRef.current = { startX, startWidth }
+      }}
     />
   )
 
@@ -5564,6 +5677,16 @@ function App({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label={t.settings.commandWhitelist}
+            title={t.settings.commandWhitelist}
+            onClick={() => setCommandWhitelistOpen(true)}
+          >
+            <ShieldCheckIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             className="w-auto min-w-8 gap-1 px-1.5"
             aria-label={`${t.app.language}: ${localeOptions.find((option) => option.value === locale)?.label ?? locale}`}
             title={localeOptions.find((option) => option.value === nextLocale(locale))?.label}
@@ -5601,6 +5724,57 @@ function App({
             <WhalePetPortrait />
           </Button>
           <ThemeSwitcher t={t} />
+          {appUpdateStatus.state === 'available' ||
+          appUpdateStatus.state === 'downloading' ||
+          (appUpdateStatus.state === 'downloaded' && appUpdateStatus.installerPath) ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={appUpdateStatus.state === 'downloading'}
+              aria-label={
+                appUpdateStatus.state === 'downloading'
+                  ? t.app.updateDownloading.replace(
+                      '{percent}',
+                      String(Math.round(appUpdateStatus.percent))
+                    )
+                  : appUpdateStatus.state === 'downloaded'
+                    ? t.app.updateSaved
+                    : t.app.downloadInstaller.replace('{version}', appUpdateStatus.version)
+              }
+              title={`v${appVersion} · ${
+                appUpdateStatus.state === 'downloading'
+                  ? t.app.updateDownloading.replace(
+                      '{percent}',
+                      String(Math.round(appUpdateStatus.percent))
+                    )
+                  : appUpdateStatus.state === 'downloaded'
+                    ? t.app.updateSaved
+                    : t.app.updateAvailable.replace('{version}', appUpdateStatus.version)
+              }`}
+              onClick={() => {
+                setAppUpdateStatus({
+                  state: 'downloading',
+                  percent: 0,
+                  bytesPerSecond: 0,
+                  transferred: 0,
+                  total: 0
+                })
+                void updateClient.downloadInstaller().then((result) => {
+                  if (result.ok) return
+                  const message = result.error || t.settings.updateDownloadFailed
+                  toast.error(message)
+                  setAppUpdateStatus({ state: 'error', message })
+                })
+              }}
+            >
+              {appUpdateStatus.state === 'downloading' ? (
+                <Loader2Icon className="animate-spin" aria-hidden="true" />
+              ) : (
+                <ArrowUpCircleIcon aria-hidden="true" />
+              )}
+            </Button>
+          ) : null}
           <Button
             id="settings-trigger"
             variant="ghost"
@@ -5801,7 +5975,7 @@ function App({
             labelTabs={tabs}
             terminalPage={terminalPage}
             activeTabId={activeTabId}
-            executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
+            executionTerminalId={paneExecutionId}
             agentPending={activeAgentPending}
             attentionTabIds={attentionTabIds}
             activeTab={activeTab}
@@ -5829,6 +6003,21 @@ function App({
             onCloseTab={closeTab}
             onCloseOtherTabs={closeOtherTabs}
             onCloseAllTabs={closeAllTabs}
+            onBrowseFiles={(tabId) => {
+              setTabMenu(null)
+              const topTab = tabsRef.current.find((item) => item.id === tabId)
+              if (topTab?.connectionId) {
+                setServerFilesConnectionId(topTab.connectionId)
+                return
+              }
+              const sub = resolveSubterminalTabState(tabsRef.current, tabId)
+              if (!sub) return
+              const parent = tabsRef.current.find((item) => item.id === sub.parentTabId)
+              const child = parent?.subTerminals.find((item) => item.id === tabId)
+              const connectionId = child?.connectionId
+              if (!connectionId) return
+              setServerFilesConnectionId(connectionId)
+            }}
             onConnectionQueryChange={setConnectionSearchQuery}
             onShowConnectionList={showConnectionList}
             onConnect={connectFromConnectionCard}
@@ -6207,6 +6396,11 @@ function App({
           void openConnectionInSubterminal(connection)
           setConnectionModalOpen(false)
         }}
+        onBrowseFiles={(connection) => {
+          if (connection.source === 'local') return
+          setServerFilesConnectionId(connection.id)
+          setConnectionModalOpen(false)
+        }}
         onCopyConnection={(connection) => void copyConnection(connection)}
         onDuplicateConnection={duplicateConnection}
         onEditConnection={editConnection}
@@ -6239,6 +6433,28 @@ function App({
             overwriteExistingId: connectionNameConflict.existingId
           })
         }}
+      />
+      <Suspense fallback={null}>
+        <ServerFilesSheet
+          open={Boolean(serverFilesConnectionId)}
+          onOpenChange={(open) => {
+            if (!open) setServerFilesConnectionId(null)
+          }}
+          connection={
+            serverFilesConnectionId
+              ? (displayConnections.find((item) => item.id === serverFilesConnectionId) ?? null)
+              : null
+          }
+          formatConnectionTarget={formatConnectionTarget}
+          t={t}
+        />
+      </Suspense>
+      <CommandWhitelistSheet
+        open={commandWhitelistOpen}
+        onOpenChange={setCommandWhitelistOpen}
+        t={t}
+        rules={config.commandWhitelist ?? []}
+        onSave={saveCommandWhitelistRules}
       />
       <CloseTabsConfirmModal
         request={closeTabsConfirmRequest}

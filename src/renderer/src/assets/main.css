@@ -137,8 +137,10 @@
 }
 
 .app-frame {
+  min-width: 0;
   padding: 0;
   gap: 0;
+  overflow: hidden;
 }
 
 .app-terminal-pane,
@@ -150,6 +152,7 @@
 }
 
 .app-terminal-pane {
+  min-width: 0;
   background: var(--app-terminal);
 }
 
@@ -252,7 +255,7 @@
 
 .terminal-canvas,
 .subterminal-canvas {
-  padding: 12px;
+  overflow: hidden;
 }
 
 .terminal-canvas {
@@ -593,10 +596,6 @@
   box-shadow: none;
 }
 
-.app-sheet-detail {
-  max-width: min(52vw, 680px);
-}
-
 .app-document-panel article {
   color: color-mix(in srgb, var(--foreground) 94%, var(--muted-foreground));
 }
@@ -807,6 +806,22 @@
   color: inherit;
 }
 
+/* Shiki token colors on Crescent markdown canvas (transparent theme bg). */
+.app-code-panel-body pre.shiki {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  font: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  overflow: visible;
+}
+
+.app-code-panel-body pre.shiki code {
+  font: inherit;
+  white-space: inherit;
+}
+
 .app-mermaid-expanded {
   background: var(--app-markdown-canvas);
 }
@@ -984,8 +999,11 @@
   }
 }
 
-.xterm {
+.terminal-canvas .xterm,
+.subterminal-canvas .xterm {
+  width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 .xterm .xterm-viewport {

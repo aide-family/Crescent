@@ -34,11 +34,9 @@ export function extractResultSuggestions(resultMarkdown: string): string[] {
       continue
     }
 
-    // Leaving the suggestions section when another major heading appears
-    if (inSection && /^(#{1,6}\s+|(\*\*)?(❌|✅|概览|总体评价|异常服务|健康摘要))/.test(line)) {
-      break
-    }
-    if (inSection && /^#{1,6}\s+/.test(line)) {
+    // Leaving the suggestions section when another major heading appears.
+    // 总览 / 分项 / 总结 follow 修复建议 in the health-report skeleton.
+    if (inSection && endsSuggestionSection(line)) {
       break
     }
 
@@ -71,6 +69,15 @@ export function extractResultSuggestions(resultMarkdown: string): string[] {
   }
 
   return items
+}
+
+const SUGGESTION_SECTION_END =
+  /^(?:#{1,6}\s+|(?:\*\*)?(?:❌|✅)?\s*)(?:总览|分项|总结|概览|总体评价|异常与风险|异常服务|分域健康|资源与容量|健康摘要)/
+
+function endsSuggestionSection(line: string): boolean {
+  if (/^#{1,6}\s+/.test(line)) return true
+  if (/^(?:\*\*)?(?:❌|✅)/.test(line)) return true
+  return SUGGESTION_SECTION_END.test(line)
 }
 
 function isConnectionClarifyPrompt(text: string): boolean {

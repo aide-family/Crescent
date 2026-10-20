@@ -79,7 +79,9 @@ function rendererManualChunks(id: string): string | undefined {
     normalized.includes('/src/renderer/src/components/ChartBlock') ||
     normalized.includes('/src/renderer/src/components/ui/chart') ||
     normalized.includes('/src/renderer/src/components/ArchitectureBlock') ||
-    normalized.includes('/src/renderer/src/components/architecture/')
+    normalized.includes('/src/renderer/src/components/architecture/') ||
+    normalized.includes('/src/renderer/src/components/ServerFilesSheet') ||
+    normalized.includes('/src/renderer/src/components/RemoteFileCodePreview')
   ) {
     return undefined
   }
@@ -122,7 +124,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        external: ['node-pty', ...piPackages],
+        external: ['node-pty', 'ssh2', ...piPackages],
         output: {
           // Keep shared helpers out of index.js so dynamically imported agent/ipc
           // does not create a circular require back into the main entry.

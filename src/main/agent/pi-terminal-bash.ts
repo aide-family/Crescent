@@ -32,6 +32,11 @@ import {
 } from '../terminal/session-health'
 import { classifyCommand } from './command-classify'
 import { requestCommandApproval } from './command-approval'
+import {
+  shouldBlockRemoteSessionExit,
+  shouldBlockRemoteTaskOnLocalSubterminal,
+  shouldRedirectLocalSubterminalExit
+} from './subterminal-routing'
 import type { PiSdkFacade } from './pi-sdk'
 import type { AgentConfig, AgentEvent } from './types'
 
@@ -523,6 +528,36 @@ export async function executeReviewedPtyCommand(input: {
     )
   if (!targetBinding || targetBinding !== context.executionTargetIdentity)
     return blocked('Execution target is unavailable or unverified; no command was sent.')
+  if (
+    shouldBlockRemoteSessionExit({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      parentConnectionId: context.parentConnectionId
+    })
+  ) {
+    return blocked('Do not run exit/logout in a remote session. Keep the shell open for host-managed recovery.')
+  }
+  if (
+    shouldBlockRemoteTaskOnLocalSubterminal({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      executionTabId,
+      parentConnectionId: context.parentConnectionId,
+      fromSubagent
+    })
+  ) {
+    return blocked('Run remote or cluster commands on the SSH main terminal; this local subterminal is for client-machine work.')
+  }
+  if (
+    shouldRedirectLocalSubterminalExit({
+      command: executableCommand,
+      isSsh: context.isSsh,
+      executionTabId,
+      fromSubagent
+    })
+  ) {
+    return blocked('Do not exit a local subterminal. Call close_subterminal to return bash to the main terminal.')
+  }
   const advice = failures.advice(fingerprint)
   if (advice.message)
     context.emit({

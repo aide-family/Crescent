@@ -33,6 +33,8 @@ export type ArchEdgeData = {
   /** Precomputed orthogonal path in flow absolute coordinates (avoids node cards). */
   path: string
   points: Array<{ x: number; y: number }>
+  labelX?: number
+  labelY?: number
 }
 
 export type ArchitectureFlowGraph = {
@@ -116,7 +118,9 @@ function toFlowEdge(edge: ArchitectureLayoutEdge, themeId: AppThemeId): Edge {
       animate: !edge.dashed,
       ...(edge.label ? { label: edge.label } : {}),
       path: edge.d,
-      points: edge.points
+      points: edge.points,
+      ...(edge.labelX !== undefined ? { labelX: edge.labelX } : {}),
+      ...(edge.labelY !== undefined ? { labelY: edge.labelY } : {})
     } satisfies ArchEdgeData,
     markerEnd: {
       type: MarkerType.ArrowClosed,

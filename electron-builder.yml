@@ -29,6 +29,9 @@ asarUnpack:
   - resources/**
   # node-pty loads native binaries from prebuilds/<platform>-<arch> at runtime.
   - '**/node-pty/prebuilds/**'
+  # ssh2 optional native crypto / cpu-features bindings.
+  - '**/ssh2/lib/protocol/crypto/**'
+  - '**/cpu-features/**'
   # Pi is ESM-only and loaded via dynamic import(); keep it outside asar.
   - '**/@earendil-works/**'
   # MCP SDK is ESM-first and loaded via dynamic import().

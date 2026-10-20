@@ -46,6 +46,7 @@ export function TerminalPane({
   onCloseTab,
   onCloseOtherTabs,
   onCloseAllTabs,
+  onBrowseFiles,
   onConnectionQueryChange,
   onShowConnectionList,
   onConnect,
@@ -99,6 +100,7 @@ export function TerminalPane({
   onCloseTab: (tabId: string) => void
   onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: (tabId: string) => void
+  onBrowseFiles?: (tabId: string) => void
   onConnectionQueryChange: (query: string) => void
   onShowConnectionList: () => void
   onConnect: (connection: ConnectionConfig) => void
@@ -144,7 +146,7 @@ export function TerminalPane({
 
   return (
     <div
-      className="app-terminal-pane flex min-h-0 flex-col"
+      className="app-terminal-pane flex min-h-0 min-w-0 flex-col"
       style={{ width: fillWidth ? '100%' : `${widthPercent}%` }}
     >
       <TerminalTabBar
@@ -163,6 +165,7 @@ export function TerminalPane({
         onCloseTab={onCloseTab}
         onCloseOtherTabs={onCloseOtherTabs}
         onCloseAllTabs={onCloseAllTabs}
+        onBrowseFiles={onBrowseFiles}
       />
       <div className="flex min-h-0 flex-1 flex-col">
         {terminalTabs.length === 0 ? (
