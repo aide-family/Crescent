@@ -1,6 +1,6 @@
 /** Structured error when the main pane is dead or the host is restoring it. */
 export const MAIN_TERMINAL_RESTORING_ERROR =
-  'Main terminal is restoring. Do not open_subterminal or subagent for this connection. Retry bash on the current pane after reconnect.'
+  'Main terminal is unavailable or restoring. Do not open_subterminal or subagent for this connection. The operator must reconnect and verify this pane before bash can continue; never replay the original request.'
 
 export interface MainTerminalHealth {
   hasSession: boolean

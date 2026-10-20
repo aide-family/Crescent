@@ -164,6 +164,12 @@ export function restorePtyBashExecutionToParentTab(parentTabId: string, ownerId?
       continue
     }
     if (
+      context.executionTabId !== parent &&
+      readTerminalPlanIdentity(context.webContents.id, context.executionTabId) ===
+        context.executionTargetIdentity
+    )
+      continue
+    if (
       !context.mainTarget?.identity ||
       readTerminalPlanIdentity(context.webContents.id, parent) !== context.mainTarget.identity
     )
@@ -186,6 +192,9 @@ export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecCo
     context.executionTabId
   )
   context.failures ??= new CommandFailures()
+  const currentTarget = readTerminalExecutionTarget(context.webContents.id, context.executionTabId)
+  context.isSsh = currentTarget.executionMode === 'ssh'
+  context.connectionId = currentTarget.connectionId
   const parentTabId = resolveParentTerminalTabId(context.executionTabId)
   const target = readTerminalExecutionTarget(context.webContents.id, parentTabId)
   if (context.approvalPolicy === 'safe-auto') {
@@ -195,8 +204,8 @@ export function setPtyBashExecContext(sessionKey: string, context: PtyBashExecCo
   context.mainTarget = {
     tabId: parentTabId,
     identity: readTerminalPlanIdentity(context.webContents.id, parentTabId),
-    isSsh: target.executionMode === 'ssh' || Boolean(context.isSsh),
-    connectionId: context.parentConnectionId ?? context.connectionId
+    isSsh: target.executionMode === 'ssh',
+    connectionId: target.connectionId
   }
   if (!context.parentConnectionId?.trim()) {
     context.parentConnectionId = context.isSsh ? context.connectionId?.trim() : undefined
@@ -218,14 +227,19 @@ export function updatePtyBashExecutionTabId(
   const nextId = executionTabId.trim()
   if (!nextId) return false
   const identity = readTerminalPlanIdentity(existing.webContents.id, nextId)
-  if (!identity) return false
+  const authoritative = readTerminalExecutionTarget(existing.webContents.id, nextId)
+  if (
+    !identity ||
+    (environment && Boolean(environment.isSsh) !== (authoritative.executionMode === 'ssh'))
+  )
+    return false
   existing.restorationRequired = false
   existing.executionTargetIdentity = identity
   existing.executionTabId = nextId
   existing.subterminalName = undefined
   if (environment) {
-    existing.isSsh = Boolean(environment.isSsh)
-    existing.connectionId = environment.isSsh ? environment.connectionId?.trim() : undefined
+    existing.isSsh = authoritative.executionMode === 'ssh'
+    existing.connectionId = authoritative.connectionId
   }
   execContextBySessionKey.set(sessionKey, existing)
   return true
@@ -294,8 +308,11 @@ export function bindPtyBashExecContextClone(input: {
   if (!parent) return false
   const executionTabId = input.executionTabId.trim()
   if (!executionTabId || !input.toSessionKey.trim()) return false
+  const target = readTerminalExecutionTarget(parent.webContents.id, executionTabId)
   execContextBySessionKey.set(input.toSessionKey, {
     ...parent,
+    isSsh: target.executionMode === 'ssh',
+    connectionId: target.connectionId,
     executionTabId,
     executionTargetIdentity: readTerminalPlanIdentity(parent.webContents.id, executionTabId),
     subterminalName: undefined,
@@ -449,7 +466,7 @@ export function createPtyBashToolDefinition(
     ...tool,
     description:
       tool.description +
-      ' Crescent bash executes on the host-bound terminal target, which may be SSH. Local read/edit/write use the client workspace independently. Local temporary routes return to the main target after one bash call.',
+      ' Crescent bash executes on the host-bound terminal target, which may be SSH. Local read/edit/write use the client workspace independently. The selected terminal remains bound across commands. Only an explicitly requested temporary=true visit returns after one bash call.',
     executionMode: 'sequential'
   }
 }
@@ -622,6 +639,29 @@ export async function executeReviewedPtyCommand(input: {
           hasSession: health.hasSession,
           restoring: health.restoring
         })
+      }
+    }
+
+    const updatedIdentity = readTerminalPlanIdentity(context.webContents.id, targetTabId)
+    if (
+      result.dispatched &&
+      updatedIdentity &&
+      targetBinding &&
+      context.executionTabId === targetTabId &&
+      updatedIdentity !== targetBinding
+    ) {
+      // Our own confirmed cd updates cwd without changing the machine or PTY.
+      try {
+        const before = JSON.parse(targetBinding)
+        const after = JSON.parse(updatedIdentity)
+        delete before.cwd
+        delete after.cwd
+        if (JSON.stringify(before) === JSON.stringify(after)) {
+          context.executionTargetIdentity = updatedIdentity
+          context.readonlyGrant = undefined
+        }
+      } catch {
+        /* Opaque bindings are never refreshed without proof. */
       }
     }
 

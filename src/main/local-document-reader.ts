@@ -1,6 +1,8 @@
+import { localDocumentError } from './local-document-errors'
 import { constants } from 'node:fs'
 import { open, realpath, lstat, opendir } from 'node:fs/promises'
 import { resolve, relative, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { redactSensitiveText } from '../shared/secret-redaction'
 import {
   LOCAL_DOCUMENT_MAX_BYTES,
@@ -22,7 +24,36 @@ function within(root: string, path: string): boolean {
 /** All paths are canonicalized against explicitly granted roots. Final symlinks/devices are rejected. */
 export class LocalDocumentReader {
   constructor(private readonly roots: string[]) {}
+  async resolvePath(path: string, workspace: string): Promise<string> {
+    const expanded = path.replace(/^~(?=$|[/\\])/, homedir())
+    const primary = resolve(workspace, expanded)
+    try {
+      return await this.authorize(primary)
+    } catch (error) {
+      if (isAbsolute(expanded) || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const matches: string[] = []
+    for (const root of this.roots) {
+      try {
+        matches.push(await this.authorize(resolve(root, expanded)))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    const unique = [...new Set(matches)]
+    if (unique.length === 1) return unique[0]
+    if (unique.length > 1)
+      throw new Error('Ambiguous document path; use the absolute path of the selected directory')
+    return this.authorize(primary)
+  }
   async authorize(path: string): Promise<string> {
+    try {
+      return await this.authorizePath(path)
+    } catch (error) {
+      throw localDocumentError(error)
+    }
+  }
+  private async authorizePath(path: string): Promise<string> {
     if (typeof path !== 'string' || !path || path.length > 4096 || path.includes('\0'))
       throw new Error('Invalid document path')
     const absolute = resolve(path)
@@ -32,12 +63,22 @@ export class LocalDocumentReader {
     if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))
       throw new Error('Symlinks and special files are not supported')
     const canonical = await realpath(absolute)
-    const roots = await Promise.all(this.roots.map((root) => realpath(root)))
+    const candidates = await Promise.allSettled(this.roots.map((root) => realpath(root)))
+    const roots = candidates.flatMap((candidate) =>
+      candidate.status === 'fulfilled' ? [candidate.value] : []
+    )
     if (sensitiveDocumentPath(canonical) || !roots.some((root) => within(root, canonical)))
       throw new Error('Document path is outside the authorized roots')
     return canonical
   }
   async list(path: string, signal?: AbortSignal): Promise<LocalDocumentNode[]> {
+    try {
+      return await this.listDirectory(path, signal)
+    } catch (error) {
+      throw localDocumentError(error)
+    }
+  }
+  private async listDirectory(path: string, signal?: AbortSignal): Promise<LocalDocumentNode[]> {
     const canonical = await this.authorize(path)
     const directory = await opendir(canonical)
     const nodes: LocalDocumentNode[] = []
@@ -80,6 +121,17 @@ export class LocalDocumentReader {
     }
   }
   async read(
+    input: LocalDocumentRequest,
+    signal?: AbortSignal,
+    internalOptions?: { rawForIndex: true }
+  ): Promise<LocalDocumentPage> {
+    try {
+      return await this.readText(input, signal, internalOptions)
+    } catch (error) {
+      throw localDocumentError(error)
+    }
+  }
+  private async readText(
     input: LocalDocumentRequest,
     signal?: AbortSignal,
     internalOptions?: { rawForIndex: true }

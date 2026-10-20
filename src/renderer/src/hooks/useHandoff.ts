@@ -191,8 +191,8 @@ export function useHandoff(input: {
       if (!liveTabs.current.has(sourceId)) return
       await createDraft(sourceId, current.goal, current.draft, current.target)
       update(sourceId, { ...EMPTY })
-    } catch {
-      update(sourceId, { error: t.handoff.saveFailed })
+    } catch (error) {
+      update(sourceId, { error: error instanceof Error ? error.message : t.handoff.saveFailed })
     } finally {
       update(sourceId, { creating: false })
     }

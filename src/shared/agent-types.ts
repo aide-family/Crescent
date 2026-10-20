@@ -430,7 +430,20 @@ export interface TerminalCommandResult {
   dispatched?: boolean
 }
 
+export type TerminalActivity =
+  | 'shell-ready'
+  | 'command-running'
+  | 'interactive-application'
+  | 'awaiting-input'
+  | 'interrupted'
+  | 'completion-unknown'
+  | 'session-exited'
+
 export interface TerminalExecutionTarget {
+  activity?: TerminalActivity
+  cwd?: string
+  shell?: string
+  sshHops?: import('./connection-state').SshHop[]
   paneRole: 'main' | 'subterminal'
   paneId: string
   sessionGeneration?: number

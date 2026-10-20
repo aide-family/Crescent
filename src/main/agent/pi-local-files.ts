@@ -1,3 +1,4 @@
+import { localDocumentError } from '../local-document-errors'
 import { normalizeCommandTimeoutPolicy } from '../../shared/command-timeouts'
 import { Type, type TSchema } from 'typebox'
 import { resolve, dirname, basename } from 'node:path'
@@ -15,7 +16,7 @@ export function createLocalFileTools(pi: PiSdkFacade, cwd: string, sessionKey: s
     name: 'read',
     label: 'Read local document',
     description:
-      'Read/search local client documents only, independently of the SSH bash target. Authorized workspace/selected roots only; bounded UTF-8/UTF-16 lines with citations. Reject secrets, symlinks and binaries. Never auto-upload an entire large file.',
+      'Read/list/search local client files and directories (absolute paths or workspace-relative paths; ~ means the client home) only, independently of the SSH bash target. Authorized workspace/selected roots only; bounded UTF-8/UTF-16 lines with citations. Reject secrets, symlinks and binaries. Never auto-upload an entire large file.',
     parameters: Type.Object({
       path: Type.String({ maxLength: 4096 }),
       offset: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000000 })),
@@ -28,14 +29,34 @@ export function createLocalFileTools(pi: PiSdkFacade, cwd: string, sessionKey: s
       if (!context || context.webContents.isDestroyed())
         throw new Error('No active local document scope')
       const reader = await localDocumentReaderForOwner(context.webContents.id, cwd)
-      const result = await reader.read({ ...params, path: resolve(cwd, params.path) }, signal)
+      let result
+      try {
+        const path = await reader.resolvePath(params.path, cwd)
+        if ((await lstat(path)).isDirectory()) {
+          const entries = await reader.list(path, signal)
+          let hasMore = entries.length === 200
+          while (Buffer.byteLength(JSON.stringify({ path, entries })) > 45000 && entries.length) {
+            entries.pop()
+            hasMore = true
+          }
+          return {
+            content: [
+              { type: 'text', text: JSON.stringify({ path, entries, limit: 200, hasMore }) }
+            ],
+            details: { path, directory: true, hasMore }
+          }
+        }
+        result = await reader.read({ ...params, path }, signal)
+      } catch (error) {
+        throw localDocumentError(error)
+      }
       while (Buffer.byteLength(JSON.stringify(result)) > 50000 && result.lines.length) {
         result.lines.pop()
         result.hasMore = true
       }
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],
-        details: { path: result.path, hasMore: result.hasMore }
+        details: { path: result.path, directory: false, hasMore: result.hasMore }
       }
     }
   })

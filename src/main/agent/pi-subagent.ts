@@ -7,7 +7,8 @@ import {
   closeTemporarySubterminal,
   listTemporarySubterminalNames,
   MAX_TEMPORARY_SUBTERMINALS,
-  readTerminalSessionHealth
+  readTerminalSessionHealth,
+  readTerminalExecutionTarget
 } from '../terminal/ipc'
 import {
   MAIN_TERMINAL_RESTORING_ERROR,
@@ -412,13 +413,22 @@ async function runChildSubagent(input: {
     }
   }
 
-  const mode = parent.isSsh && parent.connectionId ? 'ssh' : 'local'
+  const target = readTerminalExecutionTarget(parent.webContents.id, parent.executionTabId)
+  if (target.executionMode === 'ssh' && (!target.connectionId || (target.sshHops?.length ?? 0) > 1))
+    return {
+      agent: profile.name,
+      pane: input.paneName,
+      ok: false,
+      error:
+        'Current SSH target has no independent saved login route. Select a saved target explicitly; subagent cannot fall back to a local shell or the original host.'
+    }
+  const mode = target.executionMode
   const opened = await openAgentSubterminal({
     sessionKey: input.parentSessionKey,
     params: {
       mode,
       name: input.paneName,
-      connectionId: mode === 'ssh' ? parent.connectionId : undefined
+      connectionId: mode === 'ssh' ? target.connectionId : undefined
     },
     signal: input.signal,
     rerouteParentBash: false,

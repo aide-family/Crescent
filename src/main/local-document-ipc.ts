@@ -5,16 +5,24 @@ import { LocalDocumentReader, sensitiveDocumentPath } from './local-document-rea
 import type { LocalDocumentRequest } from '../shared/local-documents'
 import { readAgentConfig } from './crescent-store'
 import { resolveAgentWorkspaceCwd } from './agent/pi-cwd'
+import { localDocumentError } from './local-document-errors'
 const grants = new Map<number, Set<string>>()
 const pending = new Map<string, AbortController>()
 export async function localDocumentReaderForOwner(
   ownerId: number,
   workspace?: string
 ): Promise<LocalDocumentReader> {
-  return new LocalDocumentReader([
-    workspace ?? resolveAgentWorkspaceCwd(readAgentConfig()),
-    ...(grants.get(ownerId) ?? [])
-  ])
+  const selected = [...(grants.get(ownerId) ?? [])]
+  try {
+    return new LocalDocumentReader([
+      workspace ?? resolveAgentWorkspaceCwd(readAgentConfig()),
+      ...selected
+    ])
+  } catch (error) {
+    // A stale/inaccessible workspace must not revoke the window's selected directories.
+    if (selected.length) return new LocalDocumentReader(selected)
+    throw localDocumentError(error)
+  }
 }
 export async function grantLocalDocumentPath(
   owner: WebContents,

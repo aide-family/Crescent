@@ -34,7 +34,7 @@ export function validHandoffInput(value: unknown): value is AgentGenerateHandoff
 }
 
 export type HandoffTarget = 'inherit' | 'local' | 'none' | `connection:${string}`
-/** Inherit the persistent parent, never a temporary local child. */
+/** Resolve the explicitly selected source pane, using main-process context when available. */
 export function resolveHandoffTarget(input: {
   selection: HandoffTarget
   source: { isSsh?: boolean; connectionId?: string; connectionName?: string }
@@ -65,16 +65,20 @@ export function handoffSourceIdentity(
     connectionOrigin?: string
     expectedTarget?: string
     promptHost?: string
+    connectionId?: string
+    connectionName?: string
   }
 ) {
   const manual =
     context.connectionOrigin === 'manual-shell' &&
     (context.executionMode === 'ssh' || context.manualSshActive)
+  if (context.executionMode === 'local')
+    return { isSsh: false, connectionId: undefined, connectionName: undefined }
   return {
     isSsh: Boolean(source.isSsh || context.executionMode === 'ssh'),
-    connectionId: manual ? undefined : source.connectionId,
+    connectionId: manual ? undefined : (context.connectionId ?? source.connectionId),
     connectionName: manual
       ? (context.expectedTarget ?? context.promptHost ?? 'Manual SSH')
-      : source.connectionName
+      : (context.connectionName ?? source.connectionName)
   }
 }

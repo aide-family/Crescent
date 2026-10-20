@@ -34,6 +34,9 @@ export const terminalApi = {
   getContext: (
     tabId?: string
   ): Promise<{
+    activity?: import('../../shared/agent-types').TerminalActivity
+    sessionGeneration?: number
+    sshHops?: import('../../shared/connection-state').SshHop[]
     mode: 'pty' | 'pipe' | 'none'
     pid?: number
     cwd: string

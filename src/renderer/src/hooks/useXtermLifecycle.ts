@@ -257,26 +257,39 @@ export function useXtermLifecycle({
         return
       }
 
-      // SSH/login died mid-automation — fall back to a local shell instead of
-      // immediately re-running the failed connection (which leaves input dead).
-      if (reconnectPolicy === 'local-fallback') {
-        automatedLoginTabsRef.current.delete(event.tabId)
-        passwordPromptBuffersRef.current.set(event.tabId, '')
-        const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+      const exitedTab = tabsRef.current.find((candidate) => candidate.id === event.tabId)
+      if (exitedTab?.isSsh || exitedTab?.connectionId) {
+        pendingSshRef.current.delete(event.tabId)
         abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
-        appendLog(
-          {
-            kind: 'error',
-            text: `${shellExitedText} ${event.exitCode}.`
-          },
-          chatTabId
-        )
-        skipConnectionReconnectRef.current.add(event.tabId)
-        void restoreTerminalSessionRef.current?.(event.tabId)
         return
       }
 
-      void restoreTerminalSessionRef.current?.(event.tabId)
+      // The main process also knows manual SSH hops that have no saved connection ID.
+      void terminalClient
+        .getContext(event.tabId)
+        .then((context) => {
+          if (context.executionMode === 'ssh' || context.expectedHost || context.manualSshActive) {
+            pendingSshRef.current.delete(event.tabId)
+            abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+            return
+          }
+          if (reconnectPolicy === 'local-fallback') {
+            automatedLoginTabsRef.current.delete(event.tabId)
+            passwordPromptBuffersRef.current.set(event.tabId, '')
+            const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+            abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+            appendLog({ kind: 'error', text: `${shellExitedText} ${event.exitCode}.` }, chatTabId)
+            skipConnectionReconnectRef.current.add(event.tabId)
+          }
+          // Do not replace a pane that the operator has already reconnected meanwhile.
+          const latest = tabsRef.current.find((candidate) => candidate.id === event.tabId)
+          if (latest && !latest.sessionId && context.mode === 'none')
+            void restoreTerminalSessionRef.current?.(event.tabId)
+        })
+        .catch(() => {
+          // An unavailable identity is not permission to create a local replacement.
+          abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+        })
     })
 
     const startShell = async (): Promise<void> => {

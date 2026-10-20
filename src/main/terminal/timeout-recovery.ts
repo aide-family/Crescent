@@ -3,7 +3,7 @@ import {
   runtimeAnchorHost,
   type ConnectionState
 } from '../../shared/connection-state'
-import { hasLikelyShellPrompt } from './command-interrupt'
+import { TerminalExecutionState } from './execution-state'
 
 /** A timeout alone does not prove SSH was lost. Require a fresh target prompt. */
 export function recoverTimedOutSshSession(
@@ -12,13 +12,12 @@ export function recoverTimedOutSshSession(
   localHost?: string
 ): ConnectionState | undefined {
   if (state.connectionFault !== 'degraded' || !state.expectedHost) return undefined
-  // An echoed command can contain user@host; only a completed shell prompt
-  // after the timeout is proof that the interactive shell is usable again.
-  // eslint-disable-next-line no-control-regex
-  if (!hasLikelyShellPrompt(freshOutput.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, ''))) return undefined
+  const activity = new TerminalExecutionState()
+  const evidence = activity.consume(freshOutput)
+  if (!evidence.shellReady || activity.alternateScreen) return undefined
 
   const observed = resolveSessionAlignment({
-    output: freshOutput,
+    output: activity.promptText,
     expectedHost: runtimeAnchorHost(state) ?? state.expectedHost,
     aliases: state.aliases,
     clusterHostRegex: state.clusterHostRegex,

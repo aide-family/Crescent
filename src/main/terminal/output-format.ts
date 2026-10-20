@@ -17,7 +17,7 @@ export function createCommandWrapper(
     `printf '\\n${startMarker}\\n'`,
     command,
     '__crescent_status=$?',
-    `printf '\\n${endMarker}:%s\\n' "$__crescent_status"`,
+    `printf '\\n${endMarker}:%s:%s\\n' "$__crescent_status" "$(printf %s "$PWD" | base64 | tr -d '\\r\\n')"`,
     'unset __crescent_status'
   ].join('\n')
 }
@@ -26,7 +26,7 @@ export function parseCommandBuffer(
   buffer: string,
   startMarker: string,
   endMarker: string
-): { done: boolean; exitCode?: number; output: string } {
+): { done: boolean; exitCode?: number; cwd?: string; output: string } {
   const normalized = stripAnsi(buffer).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const startIndex = normalized.indexOf(startMarker)
   const endIndex = normalized.indexOf(endMarker)
@@ -35,12 +35,13 @@ export function parseCommandBuffer(
 
   const statusMatch = normalized
     .slice(endIndex)
-    .match(new RegExp(`${escapeRegExp(endMarker)}:(\\d+)`))
+    .match(new RegExp(`${escapeRegExp(endMarker)}:(\\d+)(?::([A-Za-z0-9+/=]+))?\\n`))
   if (!statusMatch) return { done: false, output: '' }
 
   return {
     done: true,
     exitCode: Number(statusMatch[1]),
+    cwd: statusMatch[2] ? Buffer.from(statusMatch[2], 'base64').toString('utf8') : undefined,
     output: removeAutomationNoise(
       normalized.slice(startIndex + startMarker.length, endIndex)
     ).trim()

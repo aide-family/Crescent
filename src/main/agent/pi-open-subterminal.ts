@@ -33,7 +33,7 @@ import {
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
   '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
-  '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。主机负责恢复主终端；在当前 pane 用 bash。',
+  '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。请操作员通过重连入口恢复并验证当前主终端后再用 bash；禁止自动重放原任务。',
   '- mode=ssh 只用于登录另一台已保存连接（不同 connectionId）；不要用子终端逃避当前连接的重连。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
@@ -221,7 +221,7 @@ export function resolveOpenSubterminalParentTabId(executionTabId: string): strin
 export { MAIN_TERMINAL_RESTORING_ERROR }
 
 export const SAME_CONNECTION_SUBTERMINAL_ERROR =
-  'Do not open_subterminal for the current session SSH connection. The host restores the main terminal; retry bash on the current pane after reconnect. Use mode=ssh only with a different saved connectionId.'
+  'Do not open_subterminal for the current session SSH connection. Ask the operator to reconnect and verify the main terminal explicitly; do not replay the original request. Use mode=ssh only with a different saved connectionId.'
 
 export const FAILED_SSH_SUBTERMINAL_RETRY_ERROR =
   'SSH subterminal login to this connection already failed in this run. Do not open another pane. Wait for the host to restore the main terminal, then retry bash there.'
@@ -492,7 +492,7 @@ export async function openAgentSubterminal(input: {
   }
 
   if (rerouteParentBash) {
-    if (mode === 'local' && input.params.temporary !== false)
+    if (mode === 'local' && input.params.temporary === true)
       pushTemporaryExecutionTarget(input.sessionKey)
     const bound = updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
       isSsh: mode === 'ssh',
@@ -518,6 +518,11 @@ export async function openAgentSubterminal(input: {
     mode === 'local'
       ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts).'
       : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands.'
+  )
+  hintParts.push(
+    input.params.temporary === true && mode === 'local'
+      ? 'Explicit single-command visit: return to the previous target after this bash call.'
+      : 'This target stays selected until you explicitly switch or return_to_main_terminal.'
   )
   if (ready.error) hintParts.push(ready.error)
 
@@ -545,7 +550,7 @@ export async function createOpenSubterminalToolDefinition(
     temporary: Type.Optional(
       Type.Boolean({
         description:
-          'Local route returns after one bash call; false keeps it until explicit return_to_main_terminal.'
+          'Default false: keep the selected local target for all subsequent commands until explicit return_to_main_terminal. Set true only for an explicitly requested single-command visit.'
       })
     )
   })
@@ -555,14 +560,14 @@ export async function createOpenSubterminalToolDefinition(
     description: [
       'Open a docked subterminal and route subsequent bash there. A new SSH login scope requires host-owned human confirmation even under safe-auto; subsequent mutations still require separate command/plan approval.',
       'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
-      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the host restores the main terminal).',
+      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the operator reconnects and verifies the main terminal).',
       'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
       'Do not only analyze — call this tool then execute.'
     ].join(' '),
     promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
-      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the host restores the main terminal.',
+      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the operator must explicitly reconnect and verify the main terminal.',
       'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
     parameters,

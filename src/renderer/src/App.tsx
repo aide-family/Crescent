@@ -213,9 +213,7 @@ import { isAgentProviderEnabled } from '../../shared/agent-providers'
 import {
   appendRunStatusStep,
   classifyPipeCommand,
-  recordRecoveryAttempt,
   resolveRunStopReason,
-  shouldAttemptRecovery,
   type RunStopReason
 } from '../../shared/connection-state'
 import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
@@ -433,12 +431,6 @@ function App({
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const pendingPostLoginSupplementsRef = useRef(new Map<string, string[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
-  const recoveryBudgetByTabRef = useRef(
-    new Map<
-      string,
-      { driftKey?: string; attempts: number; windowStartAt: number; inFlight: boolean }
-    >()
-  )
   const ptyRetryTriedRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
@@ -1953,137 +1945,22 @@ function App({
   })
 
   useEffect(() => {
-    return terminalClient.onConnectionOrigin(({ tabId }) => {
-      updateTab(tabId, (current) => ({
-        ...current,
-        connectionId: undefined,
-        connectionName: undefined,
-        isSsh: false
-      }))
-    })
-  }, [updateTab])
-
-  useEffect(() => {
     return terminalClient.onEnvironmentDrift((event) => {
-      // Main only emits for true session breaks (exit-to-local / jump-box
-      // fall-back). Peer hops are re-anchored in-process and never reach here.
-      // Recover + re-run the interrupted agent input on the restored target.
-
+      // Drift is an execution fence. The operator chooses reconnection; never replay a run.
       const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
-      const driftKey = event.driftKey ?? `${event.expectedHost}|${event.observedHost}`
-      const budget = recoveryBudgetByTabRef.current.get(chatTabId) ?? {
-        attempts: 0,
-        windowStartAt: Date.now(),
-        inFlight: false
-      }
-      if (budget.inFlight) return
-      budget.inFlight = true
-      recoveryBudgetByTabRef.current.set(chatTabId, budget)
-
-      void (async () => {
-        const observedLabel =
-          event.observedHost === 'local-shell' ? t.terminal.localShellLabel : event.observedHost
-        const message = t.terminal.terminalEnvironmentDrift
-          .replace('{expected}', event.expectedHost)
-          .replace('{observed}', observedLabel ?? '')
-        appendSystemToRunOrLog(chatTabId, message)
-
-        // Stop the agent run with the SYSTEM settle copy (never "manually
-        // stopped") and remember the original input so recovery can continue it.
-        const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
-        const runInput = activeRunInputRef.current.get(chatTabId)
-        const activeRun = activeAgentRunRef.current.get(chatTabId)
-        const reuseRun =
-          activeRun && activeRun.runId && activeRunIdRef.current.get(chatTabId)
-            ? { logId: activeRun.logId, runId: activeRun.runId }
-            : undefined
-        if (chatTab?.agentBusy || activeRunIdRef.current.has(chatTabId)) {
-          await stopAgentRunRef.current?.(chatTabId, {
-            reason: 'system-recovery',
-            expectedHost: event.expectedHost,
-            observedHost: event.observedHost
-          })
-        }
-
-        // Recovery brakes: same drift event <= 1 attempt; 60s window <= 2.
-        const decision = shouldAttemptRecovery(
-          {
-            alignment: 'drifted',
-            ready: false,
-            expectedHost: event.expectedHost,
-            aliases: [],
-            recovery: {
-              driftKey: budget.driftKey,
-              attempts: budget.attempts,
-              windowStartAt: budget.windowStartAt
-            }
-          },
-          driftKey
-        )
-        if (!decision.allowed) {
-          budget.inFlight = false
-          if (decision.reason !== 'aligned') {
-            appendSystemToRunOrLog(chatTabId, t.terminal.terminalRecoveryCapReached)
-            updateConnectionAttempt(chatTabId, (state) =>
-              markConnectionFailed(state, { reason: t.terminal.terminalRecoveryCapReached })
-            )
-          }
-          return
-        }
-
-        const recorded = recordRecoveryAttempt(
-          {
-            alignment: 'drifted',
-            ready: false,
-            expectedHost: event.expectedHost,
-            aliases: [],
-            recovery: {
-              driftKey: budget.driftKey,
-              attempts: budget.attempts,
-              windowStartAt: budget.windowStartAt
-            }
-          },
-          driftKey
-        )
-        budget.driftKey = recorded.recovery?.driftKey
-        budget.attempts = recorded.recovery?.attempts ?? 1
-        budget.windowStartAt = recorded.recovery?.windowStartAt ?? Date.now()
-
-        const restored = await restoreTerminalSessionRef.current?.(event.tabId)
-        budget.inFlight = false
-
-        if (restored) {
-          recoveryBudgetByTabRef.current.delete(chatTabId)
-          if (runInput && reuseRun) {
-            // Single continuation owner: drop stale post-login tasks and never
-            // double-run when another run already took over this chat.
-            postConnectionTasksRef.current.delete(event.tabId)
-            const currentRunId = activeRunIdRef.current.get(chatTabId)
-            if (currentRunId && currentRunId !== reuseRun.runId) return
-            appendSystemToRunOrLog(
-              chatTabId,
-              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
-            )
-            const terminalTab = tabsRef.current.find((tab) => tab.id === event.tabId)
-            await runAgentConversationRef.current?.(
-              runInput,
-              event.tabId,
-              terminalTab?.connectionId,
-              runInput,
-              false,
-              activeRun?.startedAt ?? Date.now(),
-              { chatTabId, reuseRun }
-            )
-          } else if (runInput) {
-            appendSystemToRunOrLog(
-              chatTabId,
-              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
-            )
-          }
-        }
-      })()
+      appendSystemToRunOrLog(
+        chatTabId,
+        `${t.terminal.terminalEnvironmentDrift.replace('{expected}', event.expectedHost).replace('{observed}', event.observedHost ?? '')} 请确认终端状态，必要时使用重连入口；原任务不会自动重放。`
+      )
+      postConnectionTasksRef.current.delete(event.tabId)
+      activeRunInputRef.current.delete(chatTabId)
+      void stopAgentRunRef.current?.(chatTabId, {
+        reason: 'gate-interrupt',
+        expectedHost: event.expectedHost,
+        observedHost: event.observedHost
+      })
     })
-  }, [appendSystemToRunOrLog, t, updateConnectionAttempt])
+  }, [appendSystemToRunOrLog, t])
 
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
@@ -4190,7 +4067,8 @@ function App({
         activeExecutionTabIdRef.current.get(sourceId),
         activeTabIdRef.current
       ) ?? sourceChat
-    const parentContext = await terminalClient.getContext(source.id)
+    const sourcePaneId = activeExecutionTabIdRef.current.get(sourceId) ?? source.id
+    const parentContext = await terminalClient.getContext(sourcePaneId)
     const resolved = resolveHandoffTarget({
       selection: target,
       source: handoffSourceIdentity(source, parentContext),
@@ -4219,7 +4097,7 @@ function App({
             : 'manual-shell',
       agentInput: `${draft}\n\n交接目标：${resolved.connectionName ?? (resolved.isSsh ? (parentContext.expectedTarget ?? '手动 SSH，待验证') : target === 'none' ? '仅资料，待选择目标' : '本机')}。审批不继承；先复核目标和状态。`
     })
-    const prepared = await terminalClient.prepareHandoff(source.id, nextTab.id, target)
+    const prepared = await terminalClient.prepareHandoff(sourcePaneId, nextTab.id, target)
     if (!prepared.ok) throw new Error(prepared.error)
 
     // Existing storage contract saves tab metadata; composer text stays in memory.
@@ -6008,31 +5886,9 @@ function App({
           key={sessionChatTab.id}
           editor={handoff.editor}
           sourceSessionKey={sessionChatTab.id}
-          sourcePaneId={
-            handoffParentTab(
-              tabs,
-              sessionChatTab.id,
-              executionTerminalByChatId[sessionChatTab.id],
-              activeTab.id
-            )?.id ?? sessionChatTab.id
-          }
+          sourcePaneId={executionTerminalByChatId[sessionChatTab.id] ?? sessionChatTab.id}
           connections={connections.filter((connection) => !isLocalConnection(connection))}
-          sourceTarget={
-            handoffParentTab(
-              tabs,
-              sessionChatTab.id,
-              executionTerminalByChatId[sessionChatTab.id],
-              activeTab.id
-            )?.connectionName ??
-            (handoffParentTab(
-              tabs,
-              sessionChatTab.id,
-              executionTerminalByChatId[sessionChatTab.id],
-              activeTab.id
-            )?.isSsh
-              ? '手动 SSH · 主终端'
-              : '本机 · 主终端')
-          }
+          sourceTarget="当前绑定的执行终端（以主进程确认结果为准）"
           onTarget={handoff.setTarget}
           title={getSessionDisplayTitle(sessionChatTab, tabs)}
           cwd={handoff.status?.cwd}

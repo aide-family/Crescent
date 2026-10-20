@@ -1,8 +1,3 @@
-import {
-  TERMINAL_CTRL_C_CONFIRM_MS,
-  detectsTerminalCtrlC,
-  hasLikelyShellPrompt
-} from './command-interrupt'
 import type { CommandOutcome } from '../../shared/command-outcome'
 
 export interface PendingCommandResult {
@@ -39,6 +34,7 @@ export interface CreatePendingCommandControllerInput {
   deferDispatch?: boolean
   interruptSession: () => void
   onTimeout?: () => void
+  onSettled?: (result: PendingCommandResult) => void
   display?: (message: string) => void
   onPhase?: (phase: string) => void
   hasUnterminatedSecretPrompt?: (buffer: string) => boolean
@@ -47,7 +43,7 @@ export interface CreatePendingCommandControllerInput {
     buffer: string,
     startMarker: string,
     endMarker: string
-  ) => { done: boolean; exitCode?: number; output: string }
+  ) => { done: boolean; exitCode?: number; cwd?: string; output: string }
   extractPartialCommandOutput: (buffer: string, startMarker: string) => string
   timers?: PendingCommandTimers
 }
@@ -100,14 +96,16 @@ export function createPendingCommandController(
     settled = true
     for (const name of handles.keys()) clear(name)
     input.signal?.removeEventListener('abort', onAbort)
-    resolve({
+    const final: PendingCommandResult = {
       ok: false,
       command: input.command,
       mode: input.mode,
       cwd: input.cwd,
       output: input.extractPartialCommandOutput(buffer, input.startMarker),
       ...result
-    })
+    }
+    input.onSettled?.(final)
+    resolve(final)
   }
   function deadline(): void {
     input.onTimeout?.()
@@ -162,12 +160,12 @@ export function createPendingCommandController(
   }
   function onAbort(): void {
     if (settled) return
-    if (dispatched) input.interruptSession()
     settle({
       interrupted: true,
       outcome: dispatched ? 'user-cancelled' : 'blocked-before-dispatch',
       error: 'Canceled by user/run. Verify terminal state before repeating a mutation.'
     })
+    if (dispatched) input.interruptSession()
   }
   function onData(data: string): void {
     if (settled) return
@@ -186,17 +184,10 @@ export function createPendingCommandController(
       settle({
         ok: parsed.exitCode === 0,
         exitCode: parsed.exitCode,
+        cwd: parsed.cwd ?? input.cwd,
         output: parsed.output,
         outcome: parsed.exitCode === 0 ? 'completed' : 'confirmed-exit-nonzero'
       })
-      return
-    }
-    if (detectsTerminalCtrlC(data)) {
-      if (hasLikelyShellPrompt(buffer)) settle({ interrupted: true, outcome: 'user-cancelled' })
-      else
-        arm('ctrlc', input.ctrlCConfirmMs ?? TERMINAL_CTRL_C_CONFIRM_MS, () =>
-          settle({ interrupted: true, outcome: 'user-cancelled' })
-        )
       return
     }
     const secret = Boolean(input.hasUnterminatedSecretPrompt?.(buffer))

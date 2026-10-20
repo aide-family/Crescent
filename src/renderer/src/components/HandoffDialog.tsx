@@ -70,7 +70,7 @@ export function HandoffDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 space-y-3 overflow-y-auto px-4 text-xs">
-          <p className="text-muted-foreground">源主终端：{sourceTarget}</p>
+          <p className="text-muted-foreground">源执行终端：{sourceTarget}</p>
           <ExecutionTargetChip sessionKey={sourceSessionKey} tabId={sourcePaneId} />
           <label className="block space-y-1">
             <span>交接执行环境</span>
@@ -80,7 +80,7 @@ export function HandoffDialog({
               disabled={busy}
               onChange={(event) => onTarget(event.target.value as HandoffEditor['target'])}
             >
-              <option value="inherit">沿用主终端连接（需重新验证）</option>
+              <option value="inherit">沿用当前执行终端（需重新验证）</option>
               {connections.map((connection) => (
                 <option key={connection.id} value={`connection:${connection.id}`}>
                   {connection.name}
