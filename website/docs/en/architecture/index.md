@@ -6,7 +6,7 @@ Crescent is an Electron, React, and TypeScript desktop workbench. The Agent shou
 
 <ArchitectureDiagram name="usage-en" />
 
-Process boundaries, IPC, and the current refactoring order live in [docs/ARCHITECTURE.md](https://github.com/aide-family/Crescent/blob/main/docs/ARCHITECTURE.md). That file is the engineering note. This page describes the relationship you see while using the app.
+Process boundaries, IPC, and the current refactoring order live in [Document/ARCHITECTURE.md](https://github.com/aide-family/Crescent/blob/main/Document/ARCHITECTURE.md). That file is the engineering note. This page describes the relationship you see while using the app.
 
 ## System architecture {#system}
 

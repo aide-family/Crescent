@@ -1,3 +1,4 @@
+import { ExecutionTargetChip } from './ExecutionTargetChip'
 import { useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Textarea } from '@renderer/components/ui/textarea'
@@ -14,6 +15,11 @@ import type { HandoffEditor } from '@renderer/hooks/useHandoff'
 import { HANDOFF_DRAFT_MAX, HANDOFF_GOAL_MAX } from '../../../shared/handoff'
 
 export function HandoffDialog({
+  connections,
+  sourceTarget,
+  sourcePaneId,
+  sourceSessionKey,
+  onTarget,
   editor,
   title,
   cwd,
@@ -25,6 +31,11 @@ export function HandoffDialog({
   onClose,
   onConfirm
 }: {
+  connections: Array<{ id: string; name: string }>
+  sourceTarget: string
+  sourcePaneId: string
+  sourceSessionKey: string
+  onTarget: (target: import('../../../shared/handoff').HandoffTarget) => void
   editor: HandoffEditor
   title: string
   cwd?: string
@@ -59,6 +70,29 @@ export function HandoffDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 space-y-3 overflow-y-auto px-4 text-xs">
+          <p className="text-muted-foreground">源执行终端：{sourceTarget}</p>
+          <ExecutionTargetChip sessionKey={sourceSessionKey} tabId={sourcePaneId} />
+          <label className="block space-y-1">
+            <span>交接执行环境</span>
+            <select
+              className="w-full rounded border border-border bg-background p-2"
+              value={editor.target}
+              disabled={busy}
+              onChange={(event) => onTarget(event.target.value as HandoffEditor['target'])}
+            >
+              <option value="inherit">沿用当前执行终端（需重新验证）</option>
+              {connections.map((connection) => (
+                <option key={connection.id} value={`connection:${connection.id}`}>
+                  {connection.name}
+                </option>
+              ))}
+              <option value="local">本机</option>
+              <option value="none">暂不连接（仅资料）</option>
+            </select>
+          </label>
+          {editor.target !== 'inherit' && (
+            <p className="text-amber-600">目标改变；审批不继承，连接就绪后才能执行。</p>
+          )}
           <label className="block space-y-1">
             <span>{t.handoff.goal}</span>
             <Textarea

@@ -2,6 +2,41 @@ import type { ToolCatalogEntry } from './agent-types'
 
 /** Pi coding-agent built-in tools exposed by Crescent after the Pi migration. */
 export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
+  ...['code_search', 'symbol_lookup', 'dependency_trace', 'impact_analysis', 'memory_search'].map(
+    (name): ToolCatalogEntry => ({
+      name,
+      method: 'get',
+      path: `pi://crescent/${name}`,
+      description: 'Read local code index or approved historical memory with bounded evidence.',
+      source: 'built-in',
+      risk: 'low',
+      requiresApproval: false,
+      external: false,
+      stateChanging: false
+    })
+  ),
+  {
+    name: 'return_to_main_terminal',
+    method: 'post',
+    path: 'pi://crescent/return_to_main_terminal',
+    description: 'Restore the verified parent execution target.',
+    source: 'built-in',
+    risk: 'low',
+    requiresApproval: false,
+    external: false,
+    stateChanging: false
+  },
+  {
+    name: 'submit_change_plan',
+    method: 'post',
+    path: 'pi://crescent/submit_change_plan',
+    description: 'Review an exact target-bound plan, then execute approved steps once in order.',
+    source: 'built-in',
+    risk: 'high',
+    requiresApproval: true,
+    external: true,
+    stateChanging: true
+  },
   {
     name: 'submit_change_plan',
     method: 'post',
@@ -31,7 +66,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     description: 'Write a file in the agent workspace cwd.',
     source: 'built-in',
     risk: 'medium',
-    requiresApproval: false,
+    requiresApproval: true,
     external: false,
     stateChanging: true
   },
@@ -42,7 +77,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     description: 'Edit an existing file in the agent workspace cwd.',
     source: 'built-in',
     risk: 'medium',
-    requiresApproval: false,
+    requiresApproval: true,
     external: false,
     stateChanging: true
   },
@@ -50,7 +85,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'bash',
     method: 'post',
     path: 'pi://workspace/bash',
-    description: 'Run a local bash command in the agent workspace cwd.',
+    description: 'Execute on the host-bound terminal target (local or SSH).',
     source: 'built-in',
     risk: 'high',
     requiresApproval: false,
@@ -64,19 +99,7 @@ export const BUILT_IN_TOOL_CATALOG: ToolCatalogEntry[] = [
     description: 'Open a docked local or SSH subterminal and route subsequent bash commands there.',
     source: 'built-in',
     risk: 'medium',
-    requiresApproval: false,
-    external: false,
-    stateChanging: true
-  },
-  {
-    name: 'close_subterminal',
-    method: 'post',
-    path: 'pi://crescent/close_subterminal',
-    description:
-      'Close the docked subterminal and route subsequent bash commands back to the main terminal.',
-    source: 'built-in',
-    risk: 'medium',
-    requiresApproval: false,
+    requiresApproval: true,
     external: false,
     stateChanging: true
   },

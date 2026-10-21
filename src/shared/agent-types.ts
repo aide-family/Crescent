@@ -1,3 +1,4 @@
+import type { AgentThinkingLevel, AgentSamplingMap } from './agent-thinking'
 import type { ExecutionMode } from './execution-plan'
 import type { AgentStyle } from './agent-style'
 import type { SystemLogLevel } from './log-levels'
@@ -21,11 +22,14 @@ export interface AgentConfig {
   agentStyle: AgentStyle
   /** When set, overrides the style default for showing the thinking block. */
   showAgentThinking?: boolean
+  commandTimeouts?: Partial<import('./command-timeouts').CommandTimeoutPolicy>
+  /** Requested reasoning effort; the runtime clamps it to model capabilities. */
+  thinkingLevel?: AgentThinkingLevel
   /** @deprecated Ignored; Pi owns the agent loop. Kept for config migration. */
   agentMode: AgentMode
   /** @deprecated Ignored after Pi migration. */
   maxActiveTools: number
-  /** @deprecated Agent no longer drives terminal commands. */
+  /** Legacy command whitelist; mutations still require the host approval policy. */
   commandWhitelist: string[]
   /** @deprecated OpenAPI tools removed from agent loop; retained for settings migration. */
   openApiProfiles: AgentOpenApiProfile[]
@@ -97,6 +101,8 @@ export interface AgentProviderConfig {
 }
 
 export interface AgentProviderModelConfig {
+  /** Optional provider-specific sampling overrides by reasoning effort. */
+  samplingParamsByThinkingLevel?: AgentSamplingMap
   id: string
   name?: string
   reasoning?: boolean
@@ -270,6 +276,8 @@ export interface AgentRunInput {
   /** Run-scoped working style snapshot so a mid-run config change cannot mix styles. */
   agentStyle?: AgentStyle
   executionMode?: ExecutionMode
+  approvalPolicy?: import('./approval-policy').ApprovalPolicy
+  mutationPolicy?: import('./approval-policy').MutationPolicy
 }
 
 export interface AgentGenerateSopInput {
@@ -399,6 +407,7 @@ export interface AgentCommandResult {
 }
 
 export interface TerminalCommandResult {
+  outcome?: import('./command-outcome').CommandOutcome
   ok: boolean
   command: string
   mode?: 'pty' | 'pipe'
@@ -421,18 +430,31 @@ export interface TerminalCommandResult {
   dispatched?: boolean
 }
 
-export interface TerminalExecutionTarget {
-  paneRole: 'main' | 'subterminal'
-  paneId: string
-  owner?: string
-  executionMode: 'local' | 'ssh'
-  connectionName?: string
-  expectedTarget?: string
-}
+export type TerminalActivity =
+  | 'shell-ready'
+  | 'command-running'
+  | 'interactive-application'
+  | 'awaiting-input'
+  | 'interrupted'
+  | 'completion-unknown'
+  | 'session-exited'
 
 export interface TerminalExecutionTarget {
+  activity?: TerminalActivity
+  cwd?: string
+  shell?: string
+  sshHops?: import('./connection-state').SshHop[]
   paneRole: 'main' | 'subterminal'
   paneId: string
+  sessionGeneration?: number
+  connectionId?: string
+  connectionOrigin?: import('./connection-state').ConnectionOrigin
+  readiness?: {
+    hasSession: boolean
+    restoring: boolean
+    alignment: 'aligned' | 'drifted' | 'unknown'
+    ready: boolean
+  }
   owner?: string
   executionMode: 'local' | 'ssh'
   connectionName?: string
@@ -753,6 +775,9 @@ export interface StoredSessionTab {
   terminalMode?: 'pty' | 'pipe'
   agentStyle?: AgentStyle
   executionMode?: ExecutionMode
+  handoffBlocked?: boolean
+  expectedTarget?: string
+  connectionOrigin?: import('./connection-state').ConnectionOrigin
 }
 
 export interface StoredAgentLogEntry {

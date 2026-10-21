@@ -1,10 +1,13 @@
+import { terminalClient } from '@renderer/clients'
+import { readAppTheme, subscribeAppTheme } from '@renderer/lib/app-theme'
+import { getAppTerminalTheme } from '@renderer/lib/theme-definitions'
 import { useCallback, useEffect, useRef, type MutableRefObject, type RefObject } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 
 import { formatPipePrompt } from '../lib/app-shell'
 import { resolveConnectionReconnectPolicy } from '../lib/connection-automation-policy'
-import { appTerminalTheme, APP_TERMINAL_TYPOGRAPHY } from '../lib/design-system'
+import { APP_TERMINAL_TYPOGRAPHY } from '../lib/design-system'
 import {
   applyTerminalConvertEol,
   fitAndSyncPty,
@@ -167,7 +170,10 @@ export function useXtermLifecycle({
       fontFamily: APP_TERMINAL_TYPOGRAPHY.fontFamily,
       fontSize: APP_TERMINAL_TYPOGRAPHY.fontSize,
       lineHeight: APP_TERMINAL_TYPOGRAPHY.lineHeight,
-      theme: appTerminalTheme
+      theme: getAppTerminalTheme(readAppTheme())
+    })
+    const stopTheme = subscribeAppTheme(() => {
+      terminal.options.theme = getAppTerminalTheme(readAppTheme())
     })
     const fitAddon = new FitAddon()
 
@@ -200,20 +206,15 @@ export function useXtermLifecycle({
         return
       }
 
-      window.api.terminal.write(data, activeTabIdRef.current)
+      terminalClient.write(data, activeTabIdRef.current)
     })
     attachLockedCtrlCHandler(
       terminal,
       () => inputLockedRef.current && replayGate.shouldForwardInput(),
       () => {
-        const running = commandInterruptTabIdRef.current
-        const focused = activeTabIdRef.current
-        const target = running && running !== focused ? running : focused
-        if (target === focused) {
-          scrollFollow.resetFollow()
-          terminal.scrollToBottom()
-        }
-        window.api.terminal.interrupt(target)
+        scrollFollow.resetFollow()
+        terminal.scrollToBottom()
+        terminalClient.interrupt(activeTabIdRef.current)
       }
     )
 
@@ -222,7 +223,7 @@ export function useXtermLifecycle({
       : filterCrescentBootstrapOutput(readTerminalOutputRing(tab.id))
     hydrateXtermFromHistory(terminal, history, scrollFollow, () => replayGate.release())
 
-    const stopTerminalData = window.api.terminal.onData((event) => {
+    const stopTerminalData = terminalClient.onData((event) => {
       const subterminal = parseSubterminalTabId(event.tabId)
       if (subterminal) return
 
@@ -233,7 +234,7 @@ export function useXtermLifecycle({
         writeXtermAndFollow(terminal, filtered, scrollFollow)
       }
     })
-    const stopTerminalPrompt = window.api.terminal.onPrompt(({ tabId, cwd, prompt }) => {
+    const stopTerminalPrompt = terminalClient.onPrompt(({ tabId, cwd, prompt }) => {
       const subterminal = parseSubterminalTabId(tabId)
       if (subterminal) {
         updateSubterminalCwd(subterminal.parentTabId, subterminal.name, tabId, cwd)
@@ -247,7 +248,7 @@ export function useXtermLifecycle({
         writeXtermAndFollow(terminal, `\r\n${pipePromptRef.current}`, scrollFollow)
       }
     })
-    const stopTerminalExit = window.api.terminal.onExit((event) => {
+    const stopTerminalExit = terminalClient.onExit((event) => {
       const subterminal = parseSubterminalTabId(event.tabId)
       if (subterminal) {
         updateSubterminalStatus(subterminal.parentTabId, subterminal.name, event.tabId, 'exited')
@@ -272,26 +273,39 @@ export function useXtermLifecycle({
         return
       }
 
-      // SSH/login died mid-automation — fall back to a local shell instead of
-      // immediately re-running the failed connection (which leaves input dead).
-      if (reconnectPolicy === 'local-fallback') {
-        automatedLoginTabsRef.current.delete(event.tabId)
-        passwordPromptBuffersRef.current.set(event.tabId, '')
-        const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+      const exitedTab = tabsRef.current.find((candidate) => candidate.id === event.tabId)
+      if (exitedTab?.isSsh || exitedTab?.connectionId) {
+        pendingSshRef.current.delete(event.tabId)
         abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
-        appendLog(
-          {
-            kind: 'error',
-            text: `${shellExitedText} ${event.exitCode}.`
-          },
-          chatTabId
-        )
-        skipConnectionReconnectRef.current.add(event.tabId)
-        void restoreTerminalSessionRef.current?.(event.tabId)
         return
       }
 
-      void restoreTerminalSessionRef.current?.(event.tabId)
+      // The main process also knows manual SSH hops that have no saved connection ID.
+      void terminalClient
+        .getContext(event.tabId)
+        .then((context) => {
+          if (context.executionMode === 'ssh' || context.expectedHost || context.manualSshActive) {
+            pendingSshRef.current.delete(event.tabId)
+            abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+            return
+          }
+          if (reconnectPolicy === 'local-fallback') {
+            automatedLoginTabsRef.current.delete(event.tabId)
+            passwordPromptBuffersRef.current.set(event.tabId, '')
+            const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
+            abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+            appendLog({ kind: 'error', text: `${shellExitedText} ${event.exitCode}.` }, chatTabId)
+            skipConnectionReconnectRef.current.add(event.tabId)
+          }
+          // Do not replace a pane that the operator has already reconnected meanwhile.
+          const latest = tabsRef.current.find((candidate) => candidate.id === event.tabId)
+          if (latest && !latest.sessionId && context.mode === 'none')
+            void restoreTerminalSessionRef.current?.(event.tabId)
+        })
+        .catch(() => {
+          // An unavailable identity is not permission to create a local replacement.
+          abortPostConnectionTasks(event.tabId, postLoginTaskAbortedText)
+        })
     })
 
     const startShell = async (): Promise<void> => {
@@ -319,7 +333,7 @@ export function useXtermLifecycle({
           `lifecycle-startShell tab=${tab.id} pending=${Boolean(pendingSshRef.current.get(tab.id))}`
         )
       }
-      let session = await window.api.terminal.start({
+      let session = await terminalClient.start({
         cols,
         rows,
         tabId: tab.id
@@ -329,14 +343,16 @@ export function useXtermLifecycle({
       // on the fallback so transient PTY failures self-heal.
       if (session.mode === 'pipe' && !ptyRetryTriedRef.current.has(tab.id)) {
         ptyRetryTriedRef.current.add(tab.id)
-        window.api.terminal.stop(tab.id)
-        session = await window.api.terminal.start({
+        terminalClient.stop(tab.id)
+        session = await terminalClient.start({
           cols,
           rows,
           tabId: tab.id
         })
       }
 
+      if (!performance.getEntriesByName('crescent:first-terminal-ready').length)
+        performance.mark('crescent:first-terminal-ready')
       terminalSessionIdRef.current = session.sessionId
       terminalModeRef.current = session.mode
       applyTerminalConvertEol(terminal, session.mode)
@@ -395,6 +411,7 @@ export function useXtermLifecycle({
       stopTerminalPrompt()
       stopTerminalExit()
       terminalSessionIdRef.current = null
+      stopTheme()
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null

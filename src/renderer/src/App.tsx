@@ -1,10 +1,83 @@
-import { normalizeExecutionMode } from '../../shared/execution-plan'
-import { ChangePlanReview } from '@renderer/components/ChangePlanReview'
+import { BrainIcon } from 'lucide-react'
+import { handoffParentTab } from '@renderer/lib/handoff-target'
+import { BookMarkedIcon, FolderOpenIcon } from 'lucide-react'
 import {
-  FormEvent,
+  resolveHandoffTarget,
+  handoffSourceIdentity,
+  type HandoffTarget
+} from '../../shared/handoff'
+import {
+  agentClient,
+  appClient,
+  connectionsClient,
+  storageClient,
+  terminalClient,
+  updateClient,
+  whaleMonitorClient
+} from '@renderer/clients'
+import { ChangePlanReview } from '@renderer/components/ChangePlanReview'
+import { CommandWhitelistSheet } from '@renderer/components/CommandWhitelistSheet'
+import { useAgentController } from '@renderer/hooks/useAgentController'
+import { useCaptureController } from '@renderer/hooks/useCaptureController'
+import { useHistoryController } from '@renderer/hooks/useHistoryController'
+import { useOpsFeedback } from '@renderer/hooks/useOpsFeedback'
+import { usePasswordPrompt } from '@renderer/hooks/usePasswordPrompt'
+import { useProviderController } from '@renderer/hooks/useProviderController'
+import { useSessionPersistence } from '@renderer/hooks/useSessionPersistence'
+import { useSkillsController } from '@renderer/hooks/useSkillsController'
+import { useWikiController } from '@renderer/hooks/useWikiController'
+import { useWorkbenchLayout } from '@renderer/hooks/useWorkbenchLayout'
+import {
+  CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
+  CONNECTION_SPAWN_TIMEOUT_MS,
+  PostConnectionTask,
+  ReuseAgentRun,
+  buildLogMarkdownFilename,
+  buildLogTraceFilename,
+  buildSessionTraceFilename,
+  emptyConfig,
+  emptyLocalTab,
+  emptyMcpServer,
+  emptyProvider,
+  getSelectedTextWithinLog,
+  initialTerminalTab,
+  isApprovalTargetAlive,
+  isComposingInput,
+  resolvePastedFileReference,
+  resolveSubterminalTabState,
+  settleAgentCancel,
+  settleStopText,
+  sleep,
+  waitForPromptHostOrTimeout,
+  waitForTerminalReadyForAgent
+} from '@renderer/lib/app-controller-support'
+import {
+  connTrace,
+  runConnectionCommandSequence,
+  runConnectionLoginActionSequence
+} from '@renderer/lib/connection-login-runtime'
+import { deferAfterFirstPaint } from '@renderer/lib/defer-after-paint'
+import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
+import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import {
+  ArrowUpCircleIcon,
+  ArrowLeftRightIcon,
+  BookOpenIcon,
+  BotIcon,
+  HistoryIcon,
+  LanguagesIcon,
+  Loader2Icon,
+  MessageSquareIcon,
+  PlugIcon,
+  ServerIcon,
+  ShieldCheckIcon,
+  SettingsIcon
+} from 'lucide-react'
+import {
   KeyboardEvent,
-  lazy,
   Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -13,65 +86,23 @@ import {
   type ClipboardEvent as ReactClipboardEvent
 } from 'react'
 import { flushSync } from 'react-dom'
-import { FitAddon } from '@xterm/addon-fit'
-import { Terminal } from '@xterm/xterm'
-import {
-  ArrowLeftRightIcon,
-  BookOpenIcon,
-  BotIcon,
-  HistoryIcon,
-  LanguagesIcon,
-  MessageSquareIcon,
-  PlugIcon,
-  ServerIcon,
-  ShieldCheckIcon
-} from 'lucide-react'
-import { toast, Toaster } from 'sonner'
-import { deferAfterFirstPaint } from '@renderer/lib/defer-after-paint'
-import { TOAST_INTERVENTION_DURATION_MS } from '@renderer/lib/toast-policy'
+import { Toaster, toast } from 'sonner'
+import { normalizeExecutionMode } from '../../shared/execution-plan'
 
-import { HandoffDialog } from '@renderer/components/HandoffDialog'
-import { useHandoff } from '@renderer/hooks/useHandoff'
 import { AgentPanel } from '@renderer/components/AgentPanel'
-import { type ComposerInputHandle } from '@renderer/components/ComposerEditor'
-import {
-  CloseTabsConfirmModal,
-  type CloseTabsConfirmRequest,
-  type PasswordPromptRequest
-} from '@renderer/components/AppModals'
-import { AppFooter } from '@renderer/components/AppFooter'
-import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
-import {
-  extractResultMarkdown,
-  resolveFullAgentResultMarkdown
-} from '@renderer/lib/agent-run-markdown'
-import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
-import { SettingsSheet } from '@renderer/components/SettingsSheet'
-import { McpServersSheet } from '@renderer/components/McpServersSheet'
-import { CommandWhitelistSheet } from '@renderer/components/CommandWhitelistSheet'
-import { ProductLogo } from '@renderer/components/ProductLogo'
-import {
-  type SkillInstallLogStatus,
-  type SkillManageMessage
-} from '@renderer/components/StatusIndicators'
-import { TerminalPane } from '@renderer/components/TerminalPane'
-import { HistoryPanel } from '@renderer/components/HistoryPanel'
-import { OnboardingModal } from '@renderer/components/OnboardingModal'
-import { SkillManager, type SkillPreviewState } from '@renderer/components/SkillManager'
-import { WikiSheet } from '@renderer/components/WikiSheet'
-import { WhaleMonitor } from '@renderer/components/WhaleMonitor'
+import { CloseTabsConfirmModal, type CloseTabsConfirmRequest } from '@renderer/components/AppModals'
 import { CaptureDraftDialog } from '@renderer/components/CaptureDraftDialog'
+import { type ComposerInputHandle } from '@renderer/components/ComposerEditor'
+import { ConnectionManagerModal } from '@renderer/components/ConnectionManagerModal'
+import { HandoffDialog } from '@renderer/components/HandoffDialog'
+import { OnboardingModal } from '@renderer/components/OnboardingModal'
+import { ProductLogo } from '@renderer/components/ProductLogo'
+import { type SkillManageMessage } from '@renderer/components/StatusIndicators'
+import { TerminalPane } from '@renderer/components/TerminalPane'
+import { ThemeSwitcher } from '@renderer/components/ThemeSwitcher'
 import { Button } from '@renderer/components/ui/button'
-import {
-  dictionaries,
-  localeOptions,
-  nextLocale,
-  resolveInitialLocale,
-  type Dictionary,
-  type Locale
-} from '@renderer/i18n'
+import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import { useAgentRuns } from '@renderer/hooks/useAgentRuns'
-import { useScrollFollow } from '@renderer/hooks/useScrollFollow'
 import {
   connectionToForm,
   createEmptyConnectionForm,
@@ -79,184 +110,158 @@ import {
   normalizeConnectionInputForSave,
   useConnections
 } from '@renderer/hooks/useConnections'
+import { useHandoff } from '@renderer/hooks/useHandoff'
+import { useScrollFollow } from '@renderer/hooks/useScrollFollow'
 import { useSettings } from '@renderer/hooks/useSettings'
+import { useTerminalOutputRing } from '@renderer/hooks/useTerminalOutputRing'
+import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import {
   planCloseTabPromotion,
   reassignSessionRootOnClose,
   useTerminalTabs
 } from '@renderer/hooks/useTerminalTabs'
-import { useTerminalSessions } from '@renderer/hooks/useTerminalSessions'
 import { useXtermLifecycle } from '@renderer/hooks/useXtermLifecycle'
-import { useTerminalOutputRing } from '@renderer/hooks/useTerminalOutputRing'
-import { findRunningPtyCommandTabId, isTerminalPaneLocked } from '@renderer/lib/terminal-lock'
+import {
+  dictionaries,
+  localeOptions,
+  nextLocale,
+  resolveInitialLocale,
+  type Locale
+} from '@renderer/i18n'
+import {
+  buildAvailableToolRefs,
+  flattenProviderModels,
+  formatProviderModels,
+  parseCommandWhitelist
+} from '@renderer/lib/agent-config'
+import { localizeAgentEventMessage } from '@renderer/lib/agent-event-formatters'
+import {
+  addUniquePathRef,
+  addUniqueSkillRef,
+  addUniqueToolRef,
+  addUniqueWikiRef,
+  buildPostLoginAgentInput
+} from '@renderer/lib/agent-input'
 import {
   AGENT_LOG_SOFT_LIMIT,
   appendElapsedFooter,
   connectionFailureMarkers,
-  formatAgentRunMarkdown,
   hydrateStoredAgentLog,
   isConnectionFailureLog,
   trimAgentLogEntries
 } from '@renderer/lib/agent-log'
-import { resolveSuccessfulAgentResult } from '@renderer/lib/agent-run-finalize'
+import { decodeUserMessageText } from '@renderer/lib/agent-message-refs'
 import { buildFinishPersistText, closeStreamingOpenSteps } from '@renderer/lib/agent-run-document'
-import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
-import { suggestWhitelistRule } from '@renderer/lib/command-whitelist'
+import {
+  extractResultMarkdown,
+  resolveFullAgentResultMarkdown
+} from '@renderer/lib/agent-run-markdown'
 import {
   buildTraceFromAgentLogEntry,
   buildTraceFromAgentRunView,
   formatTraceExport
 } from '@renderer/lib/agent-run-trace-export'
 import {
-  buildAvailableToolRefs,
-  flattenProviderModels,
-  formatProviderModels,
-  parseCommandWhitelist,
-  parseProviderModels
-} from '@renderer/lib/agent-config'
-import {
-  CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
-  PANE_ORDER_STORAGE_KEY,
-  WORKBENCH_LAYOUT_STORAGE_KEY,
-  formatPipePrompt,
-  hasConfiguredModelSelection,
-  isWorkbenchLayout,
-  persistWorkbenchLayout,
-  resolveInitialPaneOrder,
-  resolveInitialWorkbenchLayout,
-  revealChatFromTerminalLayout,
-  type PaneOrder,
-  type WorkbenchLayout
-} from '@renderer/lib/app-shell'
-import {
-  appendRunStatusStep,
-  classifyPipeCommand,
-  recordRecoveryAttempt,
-  resolveRunStopReason,
-  shouldAttemptRecovery,
-  shouldCancelConnectionRestore,
-  type RunStopReason
-} from '../../shared/connection-state'
-import {
   WIKI_MIN_PREVIEW_WIDTH,
-  WIKI_REFRESH_MIN_LOADING_MS,
   WIKI_SHEET_SELECTED_FIXED_WIDTH,
   buildModelSelectionValue,
   clampSkillDetailWidth,
   getDefaultSkillDetailWidth,
-  getDefaultWikiPreviewWidth,
   isLocalConnection,
   parseModelSelectionValue,
-  resolveOpsConnectionId,
-  wait
+  resolveOpsConnectionId
 } from '@renderer/lib/app-runtime'
 import {
-  addUniquePathRef,
-  addUniqueSkillRef,
-  addUniqueToolRef,
-  addUniqueWikiRef,
-  buildAgentInputWithReferences,
-  buildCurrentTerminalAgentInput,
-  buildPostLoginAgentInput,
-  buildRecentConversationContext,
-  buildResumeAgentInput,
-  formatVisibleInputWithReferences,
-  hasUsableCurrentTerminal,
-  isContinueIntent,
-  isExplicitConnectionRequest,
-  isExplicitNonTerminalAgentRequest,
-  isExplicitReconnectRequest,
-  isPasswordChangedReconnectRequest
-} from '@renderer/lib/agent-input'
-import { decodeUserMessageText, snapshotMessageReferences } from '@renderer/lib/agent-message-refs'
+  PANE_ORDER_STORAGE_KEY,
+  formatPipePrompt,
+  hasConfiguredModelSelection,
+  revealChatFromTerminalLayout,
+  type WorkbenchLayout
+} from '@renderer/lib/app-shell'
+import {
+  captureReadyLogsForTab,
+  findCaptureJob,
+  hiddenCaptureReadyLogIds,
+  visibleCaptureDraftPins
+} from '@renderer/lib/capture-draft-ui'
+import { suggestWhitelistRule } from '@renderer/lib/command-whitelist'
 import {
   caretAfterProgrammaticValueChange,
   collectComposerRefIds,
   formatComposerRefToken,
-  hasComposerRefTokens,
   insertComposerRefTokenAt,
   removeComposerRefToken,
   stripComposerRefTokens
 } from '@renderer/lib/composer-ref-tokens'
 import {
-  capturePinIsActionable,
-  captureReadyLogText,
-  captureReadyLogsForTab,
-  createCaptureDraftJob,
-  createCaptureGenerateQueue,
-  findCaptureJob,
-  hiddenCaptureReadyLogIds,
-  jobHasContent,
-  patchCaptureJob,
-  removeCaptureJob,
-  upsertCaptureJob,
-  visibleCaptureDraftPins,
-  type CaptureDraftFields,
-  type CaptureDraftJob
-} from '@renderer/lib/capture-draft-ui'
-import {
-  buildCaptureSummary,
-  buildSessionCaptureSummary,
-  collectLiveCaptureTraces,
-  hasCaptureableContent,
-  historyLogsToCaptureEntries,
-  type CaptureLogEntry
-} from '@renderer/lib/sop-summary'
-import { hasExplicitLocalWorkIntent } from '../../shared/agent-local-intent'
-import {
-  ConnectionLoginQueue,
-  ConnectionLoginQueueTimeout,
-  clusterLoginQueueKey
-} from '@renderer/lib/connection-login-queue'
-import { isAgentProviderEnabled, selectEnabledAgentProvider } from '../../shared/agent-providers'
-import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
-import {
   buildConnectionCommands,
-  buildConnectionLoginActions,
   createCustomConnectionId,
-  formatConnectionActionLog,
-  formatConnectionActionSkippedLog,
-  isPasswordEnvVarMissing,
-  looksLikeCommand,
-  mergeConnectionInput,
   hasLiveTerminalSession,
+  isPasswordEnvVarMissing,
+  mergeConnectionInput,
   resolveRemainingConnectionCommands,
   shouldSkipReuseRelogin,
   stripStoredPassword,
   toConnectionClipboardPayload
 } from '@renderer/lib/connection-commands'
 import {
+  ConnectionLoginQueue,
+  ConnectionLoginQueueTimeout,
+  clusterLoginQueueKey
+} from '@renderer/lib/connection-login-queue'
+import {
   applyConnectionNameOverwrite,
   findCustomConnectionNameConflict
 } from '@renderer/lib/connection-name-conflict'
+import { settleRunningToolStepsAsInterrupted } from '@renderer/lib/settle-interrupted-tool-steps'
+import { findRunningPtyCommandTabId, isTerminalPaneLocked } from '@renderer/lib/terminal-lock'
+import { parseSubterminalTabId } from '@renderer/lib/terminal-text'
+import { isAgentProviderEnabled } from '../../shared/agent-providers'
 import {
-  LOGIN_ACTION_CONSUMED_TIMEOUT_MS,
-  LOGIN_TYPE_READY_TIMEOUT_MS,
-  resolveLoginActionConsumed,
-  resolveLoginTypeReady,
-  shouldSkipSecretOnHost,
-  waitForLoginActionConsumed,
-  waitForLoginTypeReady,
-  type LoginActionWaitDeps,
-  type LoginStepConsumed,
-  type LoginTypeReady
-} from '@renderer/lib/login-action-wait'
-import {
-  formatConnectionAutomationFailure,
-  shouldDrainPostConnectionTasks
-} from '@renderer/lib/connection-automation-policy'
-import { formatConnectionTarget } from '@renderer/lib/connections'
-import {
-  formatSuggestionsForInput,
-  isActiveLoggedInTerminal,
-  isLeaveTargetDrift,
-  prioritizeClarifyOptions,
-  routeConnection,
-  formatConnectionClarifyOptions,
-  resolveConnectionClarifyConfirm,
-  routeForcedConnection,
-  type ConnectionClarifyConfirmPayload
-} from '@renderer/lib/connection-route'
+  appendRunStatusStep,
+  classifyPipeCommand,
+  resolveRunStopReason,
+  shouldCancelConnectionRestore,
+  type RunStopReason
+} from '../../shared/connection-state'
+import { findNewestPromptSignal, isPromptHostAligned } from '../../shared/terminal-prompt-host'
+const MemoryCenter = lazy(() =>
+  import('@renderer/components/MemoryCenter').then((module) => ({ default: module.MemoryCenter }))
+)
+const LocalDocumentsSheet = lazy(() =>
+  import('@renderer/components/LocalDocumentsSheet').then((module) => ({
+    default: module.LocalDocumentsSheet
+  }))
+)
+const CommandDirectorySheet = lazy(() =>
+  import('@renderer/components/CommandDirectorySheet').then((module) => ({
+    default: module.CommandDirectorySheet
+  }))
+)
+
+const SettingsSheet = lazy(() =>
+  import('@renderer/components/SettingsSheet').then((module) => ({ default: module.SettingsSheet }))
+)
+const McpServersSheet = lazy(() =>
+  import('@renderer/components/McpServersSheet').then((module) => ({
+    default: module.McpServersSheet
+  }))
+)
+const HistoryPanel = lazy(() =>
+  import('@renderer/components/HistoryPanel').then((module) => ({ default: module.HistoryPanel }))
+)
+const SkillManager = lazy(() =>
+  import('@renderer/components/SkillManager').then((module) => ({ default: module.SkillManager }))
+)
+const WikiSheet = lazy(() =>
+  import('@renderer/components/WikiSheet').then((module) => ({ default: module.WikiSheet }))
+)
+const WhaleMonitor = lazy(() =>
+  import('@renderer/components/WhaleMonitor').then((module) => ({ default: module.WhaleMonitor }))
+)
+
+import { mergePostLoginSupplements, resolveLoginContinuation } from '@renderer/lib/busy-supplement'
+import { isComposerNewlineEnter, isComposerSubmitEnter } from '@renderer/lib/composer-newline'
 import {
   beginConnectionRetry,
   canAttemptConnection,
@@ -266,35 +271,17 @@ import {
   shouldAppendSwitchedEntry,
   type ConnectionAttemptState
 } from '@renderer/lib/connection-attempt'
-import { runWithTimeout } from '@renderer/lib/with-timeout'
-import { isIpv4Literal, waitForRemotePrompt } from '@renderer/lib/prompt-host-wait'
-import { ensureLocalTerminalStarted } from '@renderer/lib/ensure-local-terminal'
-import { applyTerminalConvertEol, fitAndSyncPty } from '@renderer/lib/pipe-terminal'
 import {
-  buildBusySupplementArtifacts,
-  mergePostLoginSupplements,
-  resolveLoginContinuation
-} from '@renderer/lib/busy-supplement'
-import { wrapSteerSupplementPayload } from '../../shared/runtime-supplement'
-import { isSshCommandLine, resolveFinalSshTarget } from '../../shared/ssh-destination'
+  formatConnectionAutomationFailure,
+  shouldDrainPostConnectionTasks
+} from '@renderer/lib/connection-automation-policy'
 import {
-  buildTerminalNotReadyClarifyOptions,
-  CLARIFY_MANUAL_CONTINUE_ID,
-  isRemoteExecutionTab,
-  isTerminalSnapshotReadyForAgent,
-  resolveTerminalReadyGateOutcome,
-  TERMINAL_READY_WAIT_MS
-} from '@renderer/lib/terminal-ready-gate'
-import {
-  createPendingAttentionNotifier,
-  summarizeNotificationBody
-} from '@renderer/lib/pending-attention-notify'
-import {
-  collectAttentionTabIds,
-  normalizeAttentionClickedPayload,
-  pendingApprovalTabIdsFromRuns,
-  resolveAttentionJumpTabId
-} from '../../shared/attention-notify'
+  formatSuggestionsForInput,
+  resolveConnectionClarifyConfirm,
+  type ConnectionClarifyConfirmPayload
+} from '@renderer/lib/connection-route'
+import { formatConnectionTarget } from '@renderer/lib/connections'
+import { dismissOnboarding, shouldShowOnboarding } from '@renderer/lib/onboarding'
 import {
   copyFeedback,
   copyText,
@@ -302,40 +289,9 @@ import {
   downloadMarkdown,
   notifyOperationError
 } from '@renderer/lib/operation-feedback'
-import {
-  buildInstalledSkillNameSet,
-  buildSkillInstallCommand,
-  catalogSkillPageUrl,
-  filterLocalSkills
-} from '@renderer/lib/skill-management'
-import {
-  extractPasswordPromptLine,
-  isTerminalCurrentlyAtPasswordPrompt,
-  parseSubterminalTabId
-} from '@renderer/lib/terminal-text'
-import { decideRootPasswordAutofill } from '@renderer/lib/root-password-autofill'
-import {
-  createTerminalTab,
-  toStoredSessionTabs,
-  getNextTerminalTitle,
-  getSessionChatTab,
-  getSessionDisplayTitle,
-  getSessionGroupId,
-  getSessionTerminals,
-  isReservedTerminalTabId,
-  resolveConnectTargetTab,
-  resolveSessionChatTabId,
-  resolveSessionAgentStyle,
-  resolveTabModelSelection,
-  retainSettledClarification,
-  type AgentLogEntry,
-  type AgentLogEntryInput,
-  type AgentRunStep,
-  type AgentRunViewState,
-  type AgentTerminalTab,
-  type AgentToolReference
-} from '@renderer/lib/terminal-tabs'
-import { filterWikiDocuments, upsertWikiSummary } from '@renderer/lib/wiki'
+import { createPendingAttentionNotifier } from '@renderer/lib/pending-attention-notify'
+import { applyTerminalConvertEol, fitAndSyncPty } from '@renderer/lib/pipe-terminal'
+import { isIpv4Literal } from '@renderer/lib/prompt-host-wait'
 import {
   buildConnectionSlashCommand,
   buildMcpSlashCommand,
@@ -357,37 +313,28 @@ import {
   matchesStyleSlashCommand,
   matchesToolSlashCommand,
   matchesWikiSlashCommand,
-  parseCompactSlashCommand,
   replaceSlashCommandInput,
   type SlashCommandOption
 } from '@renderer/lib/slash-commands'
-import { isComposerNewlineEnter, isComposerSubmitEnter } from '@renderer/lib/composer-newline'
-import { isImeKeyEvent } from '@renderer/lib/ime-safe-value'
 import {
-  CAPTURE_BACKGROUND_TIMEOUT_MS,
-  type AgentConfig,
-  type AgentMcpServerConfig,
-  type AgentModelOption,
-  type AgentOpenApiProfile,
-  type AgentPathReference,
-  type AgentProviderConfig,
-  type AgentSkillInstallEvent,
-  type AgentSkillSearchResult,
-  type AgentValidationResult,
-  type AgentSkillOption,
-  type AgentWikiReference,
-  type CaptureKind,
-  type AgentConnectionIntentResult,
-  type ConnectionConfig,
-  type ConnectionInput,
-  type LocalInstructionDocument,
-  type StoredAgentRun,
-  type StoredSessionHistoryItem,
-  type WikiDirectoryInfo,
-  type WikiDocument,
-  type WikiDocumentSummary
-} from '../../shared/agent-types'
-import { addSessionTokenUsage, EMPTY_SESSION_TOKEN_USAGE } from '../../shared/session-token-usage'
+  createTerminalTab,
+  getNextTerminalTitle,
+  getSessionChatTab,
+  getSessionDisplayTitle,
+  getSessionGroupId,
+  getSessionTerminals,
+  isReservedTerminalTabId,
+  resolveConnectTargetTab,
+  resolveSessionAgentStyle,
+  resolveSessionChatTabId,
+  toStoredSessionTabs,
+  type AgentLogEntry,
+  type AgentRunStep,
+  type AgentRunViewState,
+  type AgentTerminalTab,
+  type AgentToolReference
+} from '@renderer/lib/terminal-tabs'
+import { runWithTimeout } from '@renderer/lib/with-timeout'
 import {
   buildAgentSessionTrace,
   serializeAgentSessionTrace
@@ -398,133 +345,44 @@ import {
   type AgentStyle
 } from '../../shared/agent-style'
 import {
+  type AgentConfig,
+  type AgentConnectionIntentResult,
+  type AgentModelOption,
+  type AgentOpenApiProfile,
+  type AgentPathReference,
+  type AgentSkillOption,
+  type AgentValidationResult,
+  type AgentWikiReference,
+  type ConnectionConfig,
+  type ConnectionInput,
+  type LocalInstructionDocument,
+  type StoredAgentRun,
+  type StoredSessionHistoryItem,
+  type WikiDocumentSummary
+} from '../../shared/agent-types'
+import type { AppUpdateStatusEvent } from '../../shared/update-types'
+import {
+  collectAttentionTabIds,
+  normalizeAttentionClickedPayload,
+  pendingApprovalTabIdsFromRuns,
+  resolveAttentionJumpTabId
+} from '../../shared/attention-notify'
+import {
   createEmptyOpenApiProfile,
-  updateOpenApiProfileInConfig,
   resolveActiveOpenApiProfile,
+  updateOpenApiProfileInConfig,
   withActiveOpenApiProfile
 } from '../../shared/openapi-profiles'
-import {
-  createExampleOpenApiProfile,
-  dismissOnboarding,
-  shouldShowOnboarding
-} from '@renderer/lib/onboarding'
-import { parseCaptureIntent } from '../../shared/capture-intent'
-import { mergeCaptureTraces } from '../../shared/capture-transcript'
-import type { AppUpdateStatusEvent } from '../../shared/update-types'
-
-const emptyConfig: AgentConfig = {
-  providers: [],
-  providerId: undefined,
-  model: '',
-  agentStyle: 'concise',
-  agentMode: 'react',
-  maxActiveTools: 5,
-  commandWhitelist: [],
-  openApiProfiles: [],
-  openApiProfileId: undefined,
-  openApiBaseUrl: '',
-  openApiDocument: '',
-  openApiTimeoutMs: 30_000,
-  openApiMaxRetries: 2,
-  openApiRetryBackoffMs: 300,
-  skillRoot: '~/.crescent/skills',
-  loadGlobalAgentSkills: false,
-  mcpServers: []
-}
-const emptyProvider: AgentProviderConfig = {
-  id: '',
-  name: '',
-  baseUrl: '',
-  apiKey: '',
-  enabled: true,
-  models: []
-}
-const emptyMcpServer: AgentMcpServerConfig = {
-  id: '',
-  name: '',
-  transport: 'stdio',
-  command: '',
-  args: [],
-  env: {},
-  enabled: true
-}
-
-interface ReuseAgentRun {
-  logId: number
-  runId: string
-}
-
-interface PostConnectionTask {
-  input: string
-  displayInput: string
-  conversationContext?: string
-  connection: ConnectionConfig
-  appendUserLog: boolean
-  startedAt: number
-  reuseRun?: ReuseAgentRun
-  activeWikiIds?: string[]
-  activeSkillPaths?: string[]
-}
-
-const initialTerminalTab = createTerminalTab({ title: 'Terminal' })
-const emptyLocalTab = createTerminalTab({ title: 'Terminal' })
+import { EMPTY_SESSION_TOKEN_USAGE, addSessionTokenUsage } from '../../shared/session-token-usage'
+import { isSshCommandLine, resolveFinalSshTarget } from '../../shared/ssh-destination'
 
 /** Hard timeout for PTY spawn during reconnect (configurable). */
-const CONNECTION_SPAWN_TIMEOUT_MS = 10_000
-/** Hard timeout for the whole login automation (spawn + actions + password wait). */
-const CONNECTION_LOGIN_TOTAL_TIMEOUT_MS = 90_000
-/** Fresh shells can take several seconds to source user startup files. */
-const CONNECTION_SHELL_READY_TIMEOUT_MS = 15_000
 
-/** CRESCENT_DEBUG_CONN=1 enables [conn-trace] logs in the renderer too. */
-function connTrace(...parts: unknown[]): void {
-  // Renderer has no Node globals under context isolation; typeof guard keeps
-  // this safe in both dev server and packaged app.
-  if (typeof process === 'undefined' || process.env?.CRESCENT_DEBUG_CONN !== '1') return
-  console.info('[conn-trace]', ...parts)
-}
+/** Hard timeout for the whole login automation (spawn + actions + password wait). */
 
 /** Settle copy for run stops: only a real user stop shows "manually stopped". */
-function settleStopText(
-  reason: RunStopReason,
-  t: Dictionary,
-  options: { expectedHost?: string; observedHost?: string } = {}
-): string {
-  const observedLabel =
-    options.observedHost === 'local-shell' ? t.terminal.localShellLabel : options.observedHost
-  switch (reason) {
-    case 'user':
-      return t.input.agentCanceled
-    case 'gate-interrupt':
-      return t.input.gateInterruptStopped
-        .replace('{expected}', options.expectedHost ?? '')
-        .replace('{observed}', observedLabel ?? '')
-    case 'timeout':
-      return t.input.timeoutStopped
-    case 'system-recovery':
-      return t.input.systemRecoveryStopped
-    default:
-      return t.input.systemRecoveryStopped
-  }
-}
 
 /** Subterminals live under the parent tab; resolve their terminal state. */
-function resolveSubterminalTabState(
-  tabs: AgentTerminalTab[],
-  tabId: string
-): { parentTabId: string; name: string; terminalMode?: 'pty' | 'pipe' } | undefined {
-  const marker = '::subterminal::'
-  const markerIndex = tabId.indexOf(marker)
-  if (markerIndex === -1) return undefined
-  const parentTabId = tabId.slice(0, markerIndex)
-  const name = decodeURIComponent(tabId.slice(markerIndex + marker.length))
-  const parent = tabs.find((tab) => tab.id === parentTabId)
-  return {
-    parentTabId,
-    name,
-    terminalMode: parent?.subTerminals.find((sub) => sub.id === tabId)?.terminalMode
-  }
-}
 
 const ServerFilesSheet = lazy(async () => {
   const mod = await import('@renderer/components/ServerFilesSheet')
@@ -533,7 +391,7 @@ const ServerFilesSheet = lazy(async () => {
 
 function App({
   recoveryMode = 'none',
-  initialWorkbenchLayout = null
+  initialWorkbenchLayout
 }: {
   recoveryMode?: 'none' | 'pending'
   initialWorkbenchLayout?: WorkbenchLayout | null
@@ -557,13 +415,12 @@ function App({
   const [executionTerminalByChatId, setExecutionTerminalByChatId] = useState<
     Record<string, string>
   >({})
-  const passwordPromptsByTabRef = useRef(new Map<string, PasswordPromptRequest>())
-  const [passwordAttentionTabIds, setPasswordAttentionTabIds] = useState<string[]>([])
+
   const validationRequestRef = useRef(0)
   const nextLogIdRef = useRef(1)
   const agentLogRef = useRef<HTMLDivElement | null>(null)
   const agentInputRef = useRef<ComposerInputHandle | null>(null)
-  const passwordPromptInputRef = useRef<HTMLInputElement | null>(null)
+
   const slashCommandListRef = useRef<HTMLDivElement | null>(null)
   const activeTabIdRef = useRef(initialTerminalTab.id)
   const tabsRef = useRef<AgentTerminalTab[]>([])
@@ -592,12 +449,6 @@ function App({
   const postConnectionTasksRef = useRef(new Map<string, PostConnectionTask[]>())
   const pendingPostLoginSupplementsRef = useRef(new Map<string, string[]>())
   const reconnectingTabsRef = useRef(new Set<string>())
-  const recoveryBudgetByTabRef = useRef(
-    new Map<
-      string,
-      { driftKey?: string; attempts: number; windowStartAt: number; inFlight: boolean }
-    >()
-  )
   const ptyRetryTriedRef = useRef(new Set<string>())
   const suppressTerminalReconnectRef = useRef(new Set<string>())
   const automatedLoginTabsRef = useRef(new Set<string>())
@@ -612,11 +463,7 @@ function App({
       ) => void | Promise<void>)
     | null
   >(null)
-  const passwordPromptBuffersRef = useRef(new Map<string, string>())
-  const passwordPromptOpenTabsRef = useRef(new Set<string>())
-  const rootPasswordAutoSubmittedTabsRef = useRef(new Set<string>())
-  const passwordPromptRequestRef = useRef<PasswordPromptRequest | null>(null)
-  const passwordFocusTabIdRef = useRef<string | null>(null)
+
   const showConnectionListRef = useRef<() => void>(() => {})
   const openNewConnectionFormRef = useRef<() => void>(() => {})
   const runAgentConversationRef = useRef<
@@ -643,59 +490,36 @@ function App({
   /** Last pure-login run logId per chat tab, so a subterminal fallback success
    *  can rewrite an already-finalized (failed) login card to success. */
   const lastLoginRunLogIdRef = useRef(new Map<string, number>())
-  const skillInstallResultIdsRef = useRef(new Map<string, string>())
-  const skillInstallNamesRef = useRef(new Map<string, string>())
+
   const splitDragRef = useRef(false)
   const [config, setConfig] = useState<AgentConfig>(emptyConfig)
   const [commandWhitelistText, setCommandWhitelistText] = useState('')
+  const [commandWhitelistOpen, setCommandWhitelistOpen] = useState(false)
+  const [skillFileSaving, setSkillFileSaving] = useState(false)
+  const [skillDetailWidth, setSkillDetailWidth] = useState(() => getDefaultSkillDetailWidth())
+  const [appVersion, setAppVersion] = useState('')
+  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent>({ state: 'idle' })
   const configRef = useRef(config)
   const commandWhitelistTextRef = useRef(commandWhitelistText)
-  const workspaceCwdSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingWorkspaceCwdRef = useRef<string | null>(null)
+
   const [providerModelsText, setProviderModelsText] = useState(
     formatProviderModels(emptyConfig.providers[0]?.models ?? [])
   )
   const [models, setModels] = useState<AgentModelOption[]>([])
-  const [skills, setSkills] = useState<AgentSkillOption[]>([])
-  const [localSkillSearchQuery, setLocalSkillSearchQuery] = useState('')
-  const [skillSearchQuery, setSkillSearchQuery] = useState('')
-  const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillSearchResult[]>([])
-  const [skillSearchLoading, setSkillSearchLoading] = useState(false)
-  const [skillDeletingPath, setSkillDeletingPath] = useState<string | null>(null)
-  const [copiedSkillCommandId, setCopiedSkillCommandId] = useState<string | null>(null)
-  const [skillManageMessage, setSkillManageMessage] = useState<SkillManageMessage | null>(null)
-  const [skillInstallIds, setSkillInstallIds] = useState<Record<string, string>>({})
-  const [skillInstallLogs, setSkillInstallLogs] = useState<Record<string, string>>({})
-  const [skillInstallLogNames, setSkillInstallLogNames] = useState<Record<string, string>>({})
-  const [skillInstallLogStatuses, setSkillInstallLogStatuses] = useState<
-    Record<string, SkillInstallLogStatus>
-  >({})
-  const [skillInstallLogCreatedAt, setSkillInstallLogCreatedAt] = useState<Record<string, number>>(
-    {}
-  )
-  const [skillInstallLogResultId, setSkillInstallLogResultId] = useState<string | null>(null)
-  const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillPreviewState | null>(null)
-  const [skillPreviewLoadingPath, setSkillPreviewLoadingPath] = useState<string | null>(null)
-  const [copiedSkillInstallLogId, setCopiedSkillInstallLogId] = useState<string | null>(null)
-  const [skillInstallCancelingIds, setSkillInstallCancelingIds] = useState<Record<string, boolean>>(
-    {}
-  )
+
   const [instructionFiles, setInstructionFiles] = useState<LocalInstructionDocument[]>([])
   const [selectedInstructionName, setSelectedInstructionName] = useState('IDENTITY.md')
   const [instructionContent, setInstructionContent] = useState('')
   const [instructionSaved, setInstructionSaved] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [commandWhitelistOpen, setCommandWhitelistOpen] = useState(false)
-  const [whaleEnabled, setWhaleEnabled] = useState(true)
-  const [skillOpen, setSkillOpen] = useState(false)
+  const [whaleEnabled, setWhaleEnabled] = useState(false)
+
   const [onboardingOpen, setOnboardingOpen] = useState(() => shouldShowOnboarding())
   const [mcpOpen, setMcpOpen] = useState(false)
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
   const [openApiEditorOpen, setOpenApiEditorOpen] = useState(false)
   const [instructionEditorOpen, setInstructionEditorOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyError, setHistoryError] = useState<string | null>(null)
+
   const [loadingEarlierLogs, setLoadingEarlierLogs] = useState(false)
   const [earlierLogsError, setEarlierLogsError] = useState<string | null>(null)
   const [hasEarlierLogs, setHasEarlierLogs] = useState(false)
@@ -707,35 +531,7 @@ function App({
   >({})
   const lastProcessedFailureEntryRef = useRef(new Map<string, number>())
   const retryInFlightRef = useRef(new Set<string>())
-  const [opsFeedbackByLogId, setOpsFeedbackByLogId] = useState<Record<number, 'like' | 'dislike'>>(
-    {}
-  )
-  const [opsFeedbackBusyLogId, setOpsFeedbackBusyLogId] = useState<number | null>(null)
-  const [savingSopLogId, setSavingSopLogId] = useState<number | null>(null)
-  const [savingHistorySkillTabId, setSavingHistorySkillTabId] = useState<string | null>(null)
-  const [captureJobs, setCaptureJobs] = useState<CaptureDraftJob[]>([])
-  const [captureDialogKind, setCaptureDialogKind] = useState<CaptureKind | null>(null)
-  const captureJobsRef = useRef<CaptureDraftJob[]>([])
-  const captureJobIdRef = useRef(0)
-  const captureGenerateQueueRef = useRef(createCaptureGenerateQueue())
-  const startCaptureFromCurrentSessionRef = useRef<
-    (
-      kind: CaptureKind,
-      scope: 'turn' | 'session',
-      seedText?: string,
-      tabId?: string
-    ) => Promise<void>
-  >(async () => undefined)
 
-  function setCaptureJobsSync(
-    updater: CaptureDraftJob[] | ((current: CaptureDraftJob[]) => CaptureDraftJob[])
-  ): void {
-    setCaptureJobs((current) => {
-      const next = typeof updater === 'function' ? updater(current) : updater
-      captureJobsRef.current = next
-      return next
-    })
-  }
   const [sessionUsageBaselineByTabId, setSessionUsageBaselineByTabId] = useState<
     Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
   >({})
@@ -751,41 +547,16 @@ function App({
   const liveRunUsageRef = useRef(
     new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
   )
-  const [appVersion, setAppVersion] = useState('')
-  const [appUpdateStatus, setAppUpdateStatus] = useState<AppUpdateStatusEvent | { state: 'idle' }>({
-    state: 'idle'
-  })
-  const [historyItems, setHistoryItems] = useState<StoredSessionHistoryItem[]>([])
-  const [historyTitleEditingId, setHistoryTitleEditingId] = useState<string | null>(null)
-  const [historyTitleDraft, setHistoryTitleDraft] = useState('')
-  const [historyTitleSavingId, setHistoryTitleSavingId] = useState<string | null>(null)
-  const [wikiOpen, setWikiOpen] = useState(false)
-  const [wikiLoading, setWikiLoading] = useState(false)
-  const [wikiDocumentLoadingId, setWikiDocumentLoadingId] = useState<string | null>(null)
-  const [wikiDocuments, setWikiDocuments] = useState<WikiDocumentSummary[]>([])
-  const [wikiDirectory, setWikiDirectory] = useState<WikiDirectoryInfo | null>(null)
-  const [wikiDirectoryChanging, setWikiDirectoryChanging] = useState(false)
-  const [selectedWikiDocument, setSelectedWikiDocument] = useState<WikiDocument | null>(null)
-  const [wikiSearchQuery, setWikiSearchQuery] = useState('')
-  const [wikiEditing, setWikiEditing] = useState(false)
-  const [wikiEditContent, setWikiEditContent] = useState('')
-  const [wikiSaving, setWikiSaving] = useState(false)
-  const [wikiDeletingId, setWikiDeletingId] = useState<string | null>(null)
-  const [wikiMessage, setWikiMessage] = useState<SkillManageMessage | null>(null)
-  const [wikiPreviewWidth, setWikiPreviewWidth] = useState(620)
-  const [skillDetailWidth, setSkillDetailWidth] = useState(() => getDefaultSkillDetailWidth())
-  const [skillFileSaving, setSkillFileSaving] = useState(false)
-  const [savingHistoryWikiTabId, setSavingHistoryWikiTabId] = useState<string | null>(null)
+
   const [saved, setSaved] = useState(false)
   const [validation, setValidation] = useState<AgentValidationResult | undefined>()
   const [validating, setValidating] = useState(false)
   const [importingOpenApi, setImportingOpenApi] = useState(false)
+  const [memoryCenterOpen, setMemoryCenterOpen] = useState(false)
+  const [localDocumentsOpen, setLocalDocumentsOpen] = useState(false)
+  const [commandDirectoryOpen, setCommandDirectoryOpen] = useState(false)
   const [connections, setConnections] = useState<ConnectionConfig[]>([])
-  const [passwordPromptRequest, setPasswordPromptRequest] = useState<PasswordPromptRequest | null>(
-    null
-  )
-  const [passwordPromptValue, setPasswordPromptValue] = useState('')
-  const [passwordPromptError, setPasswordPromptError] = useState('')
+
   const [connectionModalOpen, setConnectionModalOpen] = useState(false)
   const [connectionSearchQuery, setConnectionSearchQuery] = useState('')
   const [selectedConnectionId, setSelectedConnectionId] = useState('')
@@ -805,28 +576,16 @@ function App({
   } | null>(null)
   const [connectionActionBusy, setConnectionActionBusy] = useState(false)
   const connectionActionBusyRef = useRef(false)
-  const [terminalPanePercent, setTerminalPanePercent] = useState(65)
-  const [subterminalPanelHeight, setSubterminalPanelHeight] = useState(256)
-  const [subterminalCollapsed, setSubterminalCollapsed] = useState(false)
+
   // First-open shows the terminal and keeps the chat area hidden; the chat can
   // be summoned from the right-edge rail or the layout toggle.
-  const [workbenchLayout, setWorkbenchLayout] = useState<WorkbenchLayout>(() =>
-    resolveInitialWorkbenchLayout(initialWorkbenchLayout)
-  )
-  const persistAndSetWorkbenchLayout = useCallback((layout: WorkbenchLayout) => {
-    persistWorkbenchLayout(layout)
-    void window.api.app.setWorkbenchLayout(layout)
-    setWorkbenchLayout(layout)
-  }, [])
-  const [paneOrder, setPaneOrder] = useState<PaneOrder>(() => resolveInitialPaneOrder())
+
   const [terminalPage, setTerminalPage] = useState<'terminal' | 'connections'>('terminal')
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [composerCaret, setComposerCaret] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
-  const [closeTerminalConfirmEnabled, setCloseTerminalConfirmEnabled] = useState(
-    () => localStorage.getItem(CLOSE_TERMINAL_CONFIRM_STORAGE_KEY) !== 'false'
-  )
+
   const [closeTabsConfirmRequest, setCloseTabsConfirmRequest] =
     useState<CloseTabsConfirmRequest | null>(null)
   const [settingsProviderId, setSettingsProviderId] = useState('')
@@ -850,6 +609,101 @@ function App({
     resizeSubterminalPair
   } = useTerminalSessions({ tabsRef, setTabs })
   const t = dictionaries[locale]
+
+  const {
+    terminalPanePercent,
+    setTerminalPanePercent,
+    subterminalPanelHeight,
+    setSubterminalPanelHeight,
+    subterminalCollapsed,
+    setSubterminalCollapsed,
+    workbenchLayout,
+    setWorkbenchLayout,
+    persistAndSetWorkbenchLayout,
+    paneOrder,
+    setPaneOrder,
+    closeTerminalConfirmEnabled,
+    setCloseTerminalConfirmEnabled
+  } = useWorkbenchLayout({ initialWorkbenchLayout })
+
+  const {
+    passwordPromptsByTabRef,
+    passwordAttentionTabIds,
+    setPasswordAttentionTabIds,
+    passwordPromptInputRef,
+    passwordPromptBuffersRef,
+    passwordPromptOpenTabsRef,
+    passwordPromptRequestRef,
+    passwordPromptRequest,
+    setPasswordPromptRequest,
+    passwordPromptValue,
+    setPasswordPromptValue,
+    passwordPromptError,
+    setPasswordPromptError,
+    submitPasswordPrompt,
+    cancelPasswordPrompt,
+    showNextPasswordPrompt
+  } = usePasswordPrompt({
+    agentInputRef,
+    automatedLoginTabsRef,
+    tabsRef,
+    connectionsRef,
+    pendingAttentionNotifierRef,
+    t,
+    activeTabIdRef
+  })
+
+  const {
+    historyOpen,
+    setHistoryOpen,
+    historyLoading,
+    historyError,
+    historyItems,
+    setHistoryItems,
+    historyTitleEditingId,
+    historyTitleDraft,
+    setHistoryTitleDraft,
+    historyTitleSavingId,
+    refreshSessionHistory,
+    setHistorySheetOpen,
+    startRenameHistorySession,
+    cancelRenameHistorySession,
+    saveHistorySessionTitle,
+    deleteHistorySession
+  } = useHistoryController({ t, setTabs })
+
+  const {
+    wikiOpen,
+    wikiLoading,
+    wikiDocumentLoadingId,
+    wikiDocuments,
+    setWikiDocuments,
+    wikiDirectory,
+    wikiDirectoryChanging,
+    selectedWikiDocument,
+    setSelectedWikiDocument,
+    wikiSearchQuery,
+    setWikiSearchQuery,
+    wikiEditing,
+    setWikiEditing,
+    wikiEditContent,
+    setWikiEditContent,
+    wikiSaving,
+    wikiDeletingId,
+    wikiMessage,
+    setWikiMessage,
+    wikiPreviewWidth,
+    setWikiPreviewWidth,
+    filteredWikiDocuments,
+    refreshWikiDocuments,
+    chooseWikiDirectory,
+    resetWikiDirectory,
+    setWikiSheetOpen,
+    openWikiDocument,
+    saveWikiEdits,
+    deleteWikiDocument
+  } = useWikiController({ t })
+
   const {
     activeTab,
     sessionChatTab,
@@ -874,6 +728,67 @@ function App({
     localTerminalTitle: t.connections.localTerminal,
     providerId: config.providerId
   })
+
+  const {
+    skills,
+    setSkills,
+    localSkillSearchQuery,
+    setLocalSkillSearchQuery,
+    skillSearchQuery,
+    setSkillSearchQuery,
+    skillSearchResults,
+    skillSearchLoading,
+    skillDeletingPath,
+    copiedSkillCommandId,
+    skillManageMessage,
+    skillInstallIds,
+    skillInstallLogs,
+    skillInstallLogNames,
+    skillInstallLogStatuses,
+    skillInstallLogResultId,
+    setSkillInstallLogResultId,
+    selectedSkillPreview,
+    setSelectedSkillPreview,
+    skillPreviewLoadingPath,
+    copiedSkillInstallLogId,
+    skillInstallCancelingIds,
+    skillOpen,
+    setSkillOpen,
+    filteredLocalSkills,
+    installedSkillNames,
+    saveSkillRoot,
+    refreshSkills,
+    searchSkills,
+    installSkill,
+    cancelSkillInstall,
+    deleteSkillInstallLog,
+    copySkillInstallCommand,
+    copySelectedSkillInstallLog,
+    importSkillFromDisk,
+    deleteSkill,
+    previewSkill,
+    selectSkillPreviewFile,
+    saveSkillPreviewFile,
+    previewCatalogSkill,
+    removeSkillRef
+  } = useSkillsController({
+    saveAgentConfig,
+    config,
+    commandWhitelistText,
+    t,
+    setConfig,
+    updateTab,
+    sessionChatTab,
+    applyComposerInput
+  })
+
+  const {
+    opsFeedbackByLogId,
+    setOpsFeedbackByLogId,
+    opsFeedbackBusyLogId,
+    submitOpsFeedbackForEntry
+  } = useOpsFeedback({ activeAgentRunRef, tabsRef, activeTab, activeTabIdRef, t })
+
   const handoff = useHandoff({
     tabId: sessionChatTab.id,
     tabIds: tabs.map((tab) => tab.id),
@@ -890,24 +805,6 @@ function App({
     liveSessionUsageByTabId[sessionChatTab.id] ?? EMPTY_SESSION_TOKEN_USAGE
   )
   const sessionContextUsage = liveContextUsageByTabId[sessionChatTab.id]
-  const captureDialogJob =
-    captureDialogKind == null
-      ? undefined
-      : findCaptureJob(captureJobs, {
-          kind: captureDialogKind,
-          tabId: sessionChatTab.id
-        })
-  const capturePins = visibleCaptureDraftPins({
-    jobs: captureJobs,
-    activeTabId: sessionChatTab.id,
-    agentBusy: sessionChatTab.agentBusy
-  })
-  const captureReadyLogs = captureReadyLogsForTab(captureJobs, sessionChatTab.id)
-  const hiddenReadyLogIds = hiddenCaptureReadyLogIds({
-    jobs: captureJobs,
-    activeTabId: sessionChatTab.id,
-    agentBusy: sessionChatTab.agentBusy
-  })
 
   useEffect(() => {
     const connectionId = resolveOpsConnectionId(
@@ -921,8 +818,8 @@ function App({
     let cancelled = false
     void (async () => {
       const [records, runs] = await Promise.all([
-        window.api.storage.listOpsFeedback({ connectionId, limit: 40 }),
-        window.api.storage.listAgentRuns({ tabId: sessionChatTab.id, limit: 40 })
+        storageClient.listOpsFeedback({ connectionId, limit: 40 }),
+        storageClient.listAgentRuns({ tabId: sessionChatTab.id, limit: 40 })
       ])
       if (cancelled || records.length === 0) return
 
@@ -957,13 +854,14 @@ function App({
     sessionChatTab.connectionId,
     sessionChatTab.id,
     sessionTerminals,
+    setOpsFeedbackByLogId,
     t
   ])
 
   useEffect(() => {
     const tabId = sessionChatTab.id
     let cancelled = false
-    void window.api.storage.getSessionTokenUsage(tabId).then((usage) => {
+    void storageClient.getSessionTokenUsage(tabId).then((usage) => {
       if (cancelled) return
       setSessionUsageBaselineByTabId((current) => ({ ...current, [tabId]: usage }))
     })
@@ -975,7 +873,7 @@ function App({
   useEffect(() => {
     let cancelled = false
     const chatTabId = sessionChatTab.id
-    void window.api.storage.countAgentLogs(chatTabId).then((count) => {
+    void storageClient.countAgentLogs(chatTabId).then((count) => {
       if (cancelled) return
       setHasEarlierLogs(count > sessionChatTab.agentLog.length)
     })
@@ -994,7 +892,7 @@ function App({
     setLoadingEarlierLogs(true)
     setEarlierLogsError(null)
     try {
-      const rows = await window.api.storage.listAgentLogs({
+      const rows = await storageClient.listAgentLogs({
         tabId: chatTabId,
         beforeLogId: Number.isFinite(oldestId) ? oldestId : undefined,
         limit: 40
@@ -1015,7 +913,7 @@ function App({
         const merged = trimAgentLogEntries([...hydrated, ...tab.agentLog], AGENT_LOG_SOFT_LIMIT)
         return { ...tab, agentLog: merged }
       })
-      const total = await window.api.storage.countAgentLogs(chatTabId)
+      const total = await storageClient.countAgentLogs(chatTabId)
       const nextLen =
         tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog.length ??
         sessionChatTab.agentLog.length + hydrated.length
@@ -1105,6 +1003,57 @@ function App({
     updateTab,
     t
   })
+  const {
+    savingSopLogId,
+    savingHistorySkillTabId,
+    captureJobs,
+    captureDialogKind,
+    setCaptureDialogKind,
+    savingHistoryWikiTabId,
+    startCaptureFromCurrentSession,
+    saveAgentTurnAsWikiSop,
+    saveHistorySessionToWiki,
+    saveHistorySessionToSkill,
+    patchDialogCaptureJob,
+    refineCaptureDraft,
+    commitCaptureDraft,
+    openCaptureDraft
+  } = useCaptureController({
+    tabsRef,
+    activeTabIdRef,
+    locale,
+    t,
+    appendLog,
+    liveRunByLogId,
+    sessionChatTab,
+    setWikiDocuments,
+    setSelectedWikiDocument,
+    setWikiEditContent,
+    setWikiEditing,
+    setWikiPreviewWidth,
+    setWikiMessage,
+    setSkills,
+    updateTab,
+    agentInputRef
+  })
+  const captureDialogJob =
+    captureDialogKind == null
+      ? undefined
+      : findCaptureJob(captureJobs, {
+          kind: captureDialogKind,
+          tabId: sessionChatTab.id
+        })
+  const capturePins = visibleCaptureDraftPins({
+    jobs: captureJobs,
+    activeTabId: sessionChatTab.id,
+    agentBusy: sessionChatTab.agentBusy
+  })
+  const captureReadyLogs = captureReadyLogsForTab(captureJobs, sessionChatTab.id)
+  const hiddenReadyLogIds = hiddenCaptureReadyLogIds({
+    jobs: captureJobs,
+    activeTabId: sessionChatTab.id,
+    agentBusy: sessionChatTab.agentBusy
+  })
   const { modelOptions, visibleModels, settingsProvider } = useSettings({
     config,
     models,
@@ -1129,16 +1078,61 @@ function App({
   const activeModel = visibleModels.find(
     (model) => model.id === activeTabModelId && model.providerId === activeProviderId
   )
+  const {
+    validateConfig,
+    applyDefaultModel,
+    updateSettingsProvider,
+    updateSettingsProviderModels,
+    toggleProviderDetails,
+    toggleProviderEnabled,
+    createProvider,
+    deleteSettingsProvider,
+    updateSettingsMcpServers,
+    saveMcpServers
+  } = useProviderController({
+    config,
+    validationRequestRef,
+    setValidating,
+    setValidation,
+    modelOptions,
+    setConfig,
+    saveAgentConfig,
+    settingsProviderId,
+    settingsProvider,
+    setSettingsProviderId,
+    setProviderModelsText,
+    setOpenApiEditorOpen,
+    setInstructionEditorOpen,
+    setProviderEditorOpen,
+    t,
+    commandWhitelistText,
+    setSaved
+  })
+  const {
+    persistAgentConfigPatch,
+    saveConfig,
+    persistAgentStyle,
+    persistShowAgentThinking,
+    scheduleWorkspaceCwdPersist,
+    flushWorkspaceCwdPersist
+  } = useSessionPersistence({
+    setSaved,
+    configRef,
+    commandWhitelistTextRef,
+    setConfig,
+    setValidation,
+    saveAgentConfig,
+    validateConfig,
+    updateConfig
+  })
+
   const activeModelSelectionValue = buildModelSelectionValue(activeProviderId, activeTabModelId)
   const availableToolRefs = useMemo(() => buildAvailableToolRefs(validation), [validation])
   const mcpToolRefs = useMemo(
     () => availableToolRefs.filter((tool) => tool.source === 'mcp'),
     [availableToolRefs]
   )
-  const filteredWikiDocuments = useMemo(
-    () => filterWikiDocuments(wikiDocuments, wikiSearchQuery),
-    [wikiDocuments, wikiSearchQuery]
-  )
+
   const selectedInstructionFile = instructionFiles.find(
     (file) => file.name === selectedInstructionName
   )
@@ -1231,109 +1225,6 @@ function App({
     )
     selectedItem?.scrollIntoView({ block: 'nearest' })
   }, [selectedSlashCommandIndex, slashCommandOptions.length, slashMenuVisible])
-
-  const filteredLocalSkills = useMemo(
-    () => filterLocalSkills(skills, localSkillSearchQuery),
-    [localSkillSearchQuery, skills]
-  )
-  const installedSkillNames = useMemo(() => buildInstalledSkillNameSet(skills), [skills])
-
-  const refreshSessionHistory = useCallback(async (): Promise<void> => {
-    setHistoryLoading(true)
-    setHistoryError(null)
-    try {
-      const items = await window.api.storage.listSessionHistory(100)
-      setHistoryItems(items)
-    } catch {
-      setHistoryError(t.history.loadFailed)
-    } finally {
-      setHistoryLoading(false)
-    }
-  }, [t.history.loadFailed])
-
-  function setHistorySheetOpen(open: boolean): void {
-    setHistoryOpen(open)
-    if (open) void refreshSessionHistory()
-  }
-
-  const refreshWikiDocuments = useCallback(async (): Promise<boolean> => {
-    const startedAt = Date.now()
-    setWikiLoading(true)
-    let succeeded = false
-    try {
-      const [documents, directory] = await Promise.all([
-        window.api.agent.listWikiDocuments(),
-        window.api.agent.getWikiDirectory()
-      ])
-      setWikiDocuments(documents)
-      setWikiDirectory(directory)
-      succeeded = true
-      setSelectedWikiDocument((current) =>
-        current && documents.some((document) => document.id === current.id) ? current : null
-      )
-    } catch (error) {
-      setWikiMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      const elapsed = Date.now() - startedAt
-      if (elapsed < WIKI_REFRESH_MIN_LOADING_MS) {
-        await wait(WIKI_REFRESH_MIN_LOADING_MS - elapsed)
-      }
-      setWikiLoading(false)
-    }
-    return succeeded
-  }, [])
-
-  async function chooseWikiDirectory(): Promise<void> {
-    setWikiDirectoryChanging(true)
-    try {
-      const result = await window.api.agent.chooseWikiDirectory()
-      if (!result.ok) return
-      setWikiDirectory(result.directory)
-      setSelectedWikiDocument(null)
-      setWikiEditing(false)
-      if (!(await refreshWikiDocuments())) return
-      setWikiMessage({
-        type: 'success',
-        text: `${t.wiki.directoryChanged}: ${result.directory.path}`
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setWikiMessage({ type: 'error', text: `${t.wiki.directoryChangeFailed}: ${message}` })
-    } finally {
-      setWikiDirectoryChanging(false)
-    }
-  }
-
-  async function resetWikiDirectory(): Promise<void> {
-    setWikiDirectoryChanging(true)
-    try {
-      const directory = await window.api.agent.resetWikiDirectory()
-      setWikiDirectory(directory)
-      setSelectedWikiDocument(null)
-      setWikiEditing(false)
-      if (!(await refreshWikiDocuments())) return
-      setWikiMessage({ type: 'success', text: `${t.wiki.directoryChanged}: ${directory.path}` })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setWikiMessage({ type: 'error', text: `${t.wiki.directoryChangeFailed}: ${message}` })
-    } finally {
-      setWikiDirectoryChanging(false)
-    }
-  }
-
-  function setWikiSheetOpen(open: boolean): void {
-    setWikiOpen(open)
-    if (open) {
-      setWikiEditing(false)
-      setWikiMessage(null)
-      void refreshWikiDocuments()
-    }
-  }
-
-  runAgentConversationRef.current = runAgentConversation
 
   const abortPostConnectionTasks = useCallback(
     (targetTabId: string, reason: string): void => {
@@ -1672,7 +1563,7 @@ function App({
       skipConnectionReconnectRef.current.delete(targetTabId)
       let resolvedConnection = connection
       try {
-        const refreshed = await window.api.connections.resolve(connection.id)
+        const refreshed = await connectionsClient.resolve(connection.id)
         if (refreshed) {
           resolvedConnection = mergeConnectionInput(refreshed, connection)
           setConnections((current) =>
@@ -1688,7 +1579,7 @@ function App({
         ? stripStoredPassword(resolvedConnection)
         : resolvedConnection
 
-      const liveContext = await window.api.terminal.getContext(targetTabId)
+      const liveContext = await terminalClient.getContext(targetTabId)
       const remaining = resolveRemainingConnectionCommands(loginConnection, {
         promptHost: liveContext.promptHost,
         alignment: liveContext.alignment ?? liveContext.sessionAligned,
@@ -1719,7 +1610,7 @@ function App({
 
       if (commands.length === 0) {
         if (liveContext.promptHost && liveContext.promptHost !== 'local-shell') {
-          await window.api.terminal.confirmLogin({
+          await terminalClient.confirmLogin({
             tabId: targetTabId,
             expectedTargetHost: resolveFinalSshTarget(
               buildConnectionCommands(loginConnection),
@@ -1773,7 +1664,7 @@ function App({
         // Bind the selected host before sending SSH. Match the 1.0.11 flow:
         // validating a saved-connection identity here must not silently stop
         // the login before the SSH command reaches the terminal.
-        const targetBinding = await window.api.terminal.setExpectedHost({
+        const targetBinding = await terminalClient.setExpectedHost({
           tabId: targetTabId,
           host: resolvedConnection.host,
           connectionId: resolvedConnection.id,
@@ -1830,7 +1721,7 @@ function App({
           // `sww` reports “Switched to context” before it finishes opening the
           // cluster shell. Do not confirm the earlier jump-host prompt during
           // that gap; wait for a different remote prompt from the cluster.
-          const hopContext = await window.api.terminal.getContext(targetTabId)
+          const hopContext = await terminalClient.getContext(targetTabId)
           const jumpPromptHost =
             hopContext.jumpPromptHost ??
             (hopContext.promptHost !== 'local-shell' ? hopContext.promptHost : undefined)
@@ -1865,7 +1756,7 @@ function App({
         // otherwise confirm-login anchors the wrong runtime environment.
         const lastAction = commands.length > 0 ? commands[commands.length - 1] : undefined
         const lastActionIsSsh = Boolean(lastAction && isSshCommandLine(lastAction))
-        const preConfirm = await window.api.terminal.getContext(targetTabId)
+        const preConfirm = await terminalClient.getContext(targetTabId)
         const fullCommands = buildConnectionCommands(loginConnection)
         const jumpPromptHost = preConfirm.jumpPromptHost ?? liveContext.jumpPromptHost
         // A configured login action may intentionally hop from the SSH jump
@@ -1911,7 +1802,7 @@ function App({
           abortPostConnectionTasks(targetTabId, t.terminal.postLoginTaskAborted)
           return false
         }
-        const verified = await window.api.terminal.confirmLogin({
+        const verified = await terminalClient.confirmLogin({
           tabId: targetTabId,
           expectedTargetHost: finalTargetHost,
           jumpPromptHost: previousHost
@@ -1949,6 +1840,7 @@ function App({
       appendLog,
       appendStatusToActiveRunOrLog,
       appendSystemToRunOrLog,
+      passwordPromptBuffersRef,
       t,
       updateConnectionAttempt,
       updateTab
@@ -1973,7 +1865,7 @@ function App({
           key,
           async () => {
             // Closing a queued card must cancel it, not connect in a removed tab.
-            const context = await window.api.terminal.getContext(targetTabId)
+            const context = await terminalClient.getContext(targetTabId)
             if (context.mode === 'none') return false
             return executeConnectionAutomationNow(connection, targetTabId, includeSshCommand)
           },
@@ -2016,6 +1908,7 @@ function App({
           updateTab(targetTabId, (tab) => ({
             ...tab,
             terminalReady: true,
+            handoffBlocked: false,
             terminalExited: false,
             terminalStartError: undefined
           }))
@@ -2078,161 +1971,36 @@ function App({
   })
 
   useEffect(() => {
-    return window.api.terminal.onEnvironmentDrift((event) => {
-      // Main only emits for true session breaks (exit-to-local / jump-box
-      // fall-back). Peer hops are re-anchored in-process and never reach here.
-      // Recover + re-run the interrupted agent input on the restored target.
-
+    return terminalClient.onEnvironmentDrift((event) => {
+      // Drift is an execution fence. The operator chooses reconnection; never replay a run.
       const chatTabId = resolveSessionChatTabId(tabsRef.current, event.tabId)
-      const driftKey = event.driftKey ?? `${event.expectedHost}|${event.observedHost}`
-      const budget = recoveryBudgetByTabRef.current.get(chatTabId) ?? {
-        attempts: 0,
-        windowStartAt: Date.now(),
-        inFlight: false
-      }
-      if (budget.inFlight) return
-      budget.inFlight = true
-      recoveryBudgetByTabRef.current.set(chatTabId, budget)
-
-      void (async () => {
-        const observedLabel =
-          event.observedHost === 'local-shell' ? t.terminal.localShellLabel : event.observedHost
-        const message = t.terminal.terminalEnvironmentDrift
-          .replace('{expected}', event.expectedHost)
-          .replace('{observed}', observedLabel ?? '')
-        appendSystemToRunOrLog(chatTabId, message)
-
-        // Stop the agent run with the SYSTEM settle copy (never "manually
-        // stopped") and remember the original input so recovery can continue it.
-        const chatTab = tabsRef.current.find((tab) => tab.id === chatTabId)
-        const runInput = activeRunInputRef.current.get(chatTabId)
-        const activeRun = activeAgentRunRef.current.get(chatTabId)
-        const reuseRun =
-          activeRun && activeRun.runId && activeRunIdRef.current.get(chatTabId)
-            ? { logId: activeRun.logId, runId: activeRun.runId }
-            : undefined
-        if (chatTab?.agentBusy || activeRunIdRef.current.has(chatTabId)) {
-          await stopAgentRunRef.current?.(chatTabId, {
-            reason: 'system-recovery',
-            expectedHost: event.expectedHost,
-            observedHost: event.observedHost
-          })
-        }
-
-        // Recovery brakes: same drift event <= 1 attempt; 60s window <= 2.
-        const decision = shouldAttemptRecovery(
-          {
-            alignment: 'drifted',
-            ready: false,
-            expectedHost: event.expectedHost,
-            aliases: [],
-            recovery: {
-              driftKey: budget.driftKey,
-              attempts: budget.attempts,
-              windowStartAt: budget.windowStartAt
-            }
-          },
-          driftKey
-        )
-        if (!decision.allowed) {
-          budget.inFlight = false
-          if (decision.reason !== 'aligned') {
-            appendSystemToRunOrLog(chatTabId, t.terminal.terminalRecoveryCapReached)
-            updateConnectionAttempt(chatTabId, (state) =>
-              markConnectionFailed(state, { reason: t.terminal.terminalRecoveryCapReached })
-            )
-          }
-          return
-        }
-
-        const recorded = recordRecoveryAttempt(
-          {
-            alignment: 'drifted',
-            ready: false,
-            expectedHost: event.expectedHost,
-            aliases: [],
-            recovery: {
-              driftKey: budget.driftKey,
-              attempts: budget.attempts,
-              windowStartAt: budget.windowStartAt
-            }
-          },
-          driftKey
-        )
-        budget.driftKey = recorded.recovery?.driftKey
-        budget.attempts = recorded.recovery?.attempts ?? 1
-        budget.windowStartAt = recorded.recovery?.windowStartAt ?? Date.now()
-
-        const restored = await restoreTerminalSessionRef.current?.(event.tabId)
-        budget.inFlight = false
-
-        if (restored) {
-          recoveryBudgetByTabRef.current.delete(chatTabId)
-          if (runInput && reuseRun) {
-            // Single continuation owner: drop stale post-login tasks and never
-            // double-run when another run already took over this chat.
-            postConnectionTasksRef.current.delete(event.tabId)
-            const currentRunId = activeRunIdRef.current.get(chatTabId)
-            if (currentRunId && currentRunId !== reuseRun.runId) return
-            appendSystemToRunOrLog(
-              chatTabId,
-              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
-            )
-            const terminalTab = tabsRef.current.find((tab) => tab.id === event.tabId)
-            await runAgentConversationRef.current?.(
-              runInput,
-              event.tabId,
-              terminalTab?.connectionId,
-              runInput,
-              false,
-              activeRun?.startedAt ?? Date.now(),
-              { chatTabId, reuseRun }
-            )
-          } else if (runInput) {
-            appendSystemToRunOrLog(
-              chatTabId,
-              t.terminal.terminalConnectionRecovered.replace('{input}', runInput)
-            )
-          }
-        }
-      })()
+      appendSystemToRunOrLog(
+        chatTabId,
+        `${t.terminal.terminalEnvironmentDrift.replace('{expected}', event.expectedHost).replace('{observed}', event.observedHost ?? '')} 请确认终端状态，必要时使用重连入口；原任务不会自动重放。`
+      )
+      postConnectionTasksRef.current.delete(event.tabId)
+      activeRunInputRef.current.delete(chatTabId)
+      void stopAgentRunRef.current?.(chatTabId, {
+        reason: 'gate-interrupt',
+        expectedHost: event.expectedHost,
+        observedHost: event.observedHost
+      })
     })
-  }, [appendSystemToRunOrLog, t, updateConnectionAttempt])
-
-  useEffect(() => {
-    if (!passwordPromptRequest) {
-      passwordFocusTabIdRef.current = null
-      return
-    }
-
-    passwordPromptRequestRef.current = passwordPromptRequest
-    if (passwordFocusTabIdRef.current === passwordPromptRequest.tabId) return
-    passwordFocusTabIdRef.current = passwordPromptRequest.tabId
-    agentInputRef.current?.blur()
-    const focused = document.activeElement
-    if (focused instanceof HTMLElement && focused.closest('.app-composer-body')) {
-      focused.blur()
-    }
-    window.requestAnimationFrame(() => {
-      const input = passwordPromptInputRef.current
-      if (!input || document.activeElement === input) return
-      input.focus()
-    })
-  }, [passwordPromptRequest])
+  }, [appendSystemToRunOrLog, t])
 
   useEffect(() => {
     localStorage.setItem('crescent.locale', locale)
-    void window.api.app.setLocale(locale)
+    void appClient.setLocale(locale)
   }, [locale])
 
   useEffect(() => {
-    return window.api.app.onOpenSettings(() => {
+    return appClient.onOpenSettings(() => {
       setSheetOpen(true)
     })
   }, [])
 
   useEffect(() => {
-    return window.api.app.onAttentionClicked((raw) => {
+    return appClient.onAttentionClicked((raw) => {
       const target = normalizeAttentionClickedPayload(raw)
       const jumpTabId = resolveAttentionJumpTabId(
         target,
@@ -2252,21 +2020,28 @@ function App({
         setPasswordPromptRequest(passwordRequest)
       }
     })
-  }, [selectSessionTab])
+  }, [
+    passwordPromptRequestRef,
+    passwordPromptsByTabRef,
+    selectSessionTab,
+    setPasswordPromptError,
+    setPasswordPromptRequest,
+    setPasswordPromptValue
+  ])
 
   useEffect(() => {
     let cancelled = false
-    void window.api.update.getVersion().then((result) => {
+    void updateClient.getVersion().then((result) => {
       if (!cancelled) setAppVersion(result.version)
     })
-    const unsubscribe = window.api.update.onStatus((event) => {
+    const unsubscribe = updateClient.onStatus((event) => {
       setAppUpdateStatus(event)
       if (event.state === 'downloaded' && event.installerPath) {
         toast.success(t.app.updateSaved)
       }
     })
     if (!import.meta.env.DEV) {
-      void window.api.update.check()
+      void updateClient.check()
     }
     return () => {
       cancelled = true
@@ -2296,39 +2071,12 @@ function App({
   }, [workbenchLayout, syncActiveTerminalSize])
 
   useEffect(() => {
-    if (isWorkbenchLayout(initialWorkbenchLayout)) {
-      persistWorkbenchLayout(initialWorkbenchLayout)
-      return
-    }
-    const cached = localStorage.getItem(WORKBENCH_LAYOUT_STORAGE_KEY)
-    if (isWorkbenchLayout(cached)) {
-      void window.api.app.setWorkbenchLayout(cached)
-    }
-  }, [initialWorkbenchLayout])
-
-  useEffect(() => {
-    localStorage.setItem(
-      CLOSE_TERMINAL_CONFIRM_STORAGE_KEY,
-      closeTerminalConfirmEnabled ? 'true' : 'false'
-    )
-  }, [closeTerminalConfirmEnabled])
-
-  useEffect(() => {
     configRef.current = config
   }, [config])
 
   useEffect(() => {
     commandWhitelistTextRef.current = commandWhitelistText
   }, [commandWhitelistText])
-
-  useEffect(() => {
-    return () => {
-      if (workspaceCwdSaveTimerRef.current) {
-        clearTimeout(workspaceCwdSaveTimerRef.current)
-        workspaceCwdSaveTimerRef.current = null
-      }
-    }
-  }, [])
 
   useEffect(() => {
     const handleConnectionShortcut = (event: globalThis.KeyboardEvent): void => {
@@ -2371,99 +2119,6 @@ function App({
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [tabMenu])
-
-  const maybeRequestTerminalPassword = useCallback(
-    (tabId: string, data: string): void => {
-      const nextBuffer = `${passwordPromptBuffersRef.current.get(tabId) ?? ''}${data}`.slice(-4000)
-      passwordPromptBuffersRef.current.set(tabId, nextBuffer)
-
-      const promptLine = extractPasswordPromptLine(nextBuffer)
-      if (!promptLine) {
-        rootPasswordAutoSubmittedTabsRef.current.delete(tabId)
-        return
-      }
-      if (automatedLoginTabsRef.current.has(tabId)) {
-        passwordPromptBuffersRef.current.set(tabId, '')
-        return
-      }
-      if (
-        passwordPromptsByTabRef.current.has(tabId) ||
-        passwordPromptOpenTabsRef.current.has(tabId)
-      ) {
-        return
-      }
-
-      const subterminal = parseSubterminalTabId(tabId)
-      const tab =
-        tabsRef.current.find((current) => current.id === tabId) ??
-        (subterminal
-          ? tabsRef.current.find((current) => current.id === subterminal.parentTabId)
-          : undefined)
-      if (!tab) return
-
-      const connection = tab.connectionId
-        ? connectionsRef.current.find((item) => item.id === tab.connectionId)
-        : undefined
-      const autofill = decideRootPasswordAutofill({
-        rootPassword: connection?.rootPassword,
-        alreadyAttempted: rootPasswordAutoSubmittedTabsRef.current.has(tabId),
-        isAutomatedLogin: false,
-        promptLine
-      })
-      if (autofill.action === 'auto-submit') {
-        rootPasswordAutoSubmittedTabsRef.current.add(tabId)
-        passwordPromptBuffersRef.current.set(tabId, '')
-        sendTerminalInput(autofill.password, tabId)
-        return
-      }
-
-      passwordPromptOpenTabsRef.current.add(tabId)
-      const request = {
-        tabId,
-        title: subterminal ? `${tab.title} · ${subterminal.name}` : tab.title,
-        prompt: promptLine
-      }
-      passwordPromptsByTabRef.current.set(tabId, request)
-      const attentionId = subterminal?.parentTabId ?? tabId
-      setPasswordAttentionTabIds((current) =>
-        current.includes(attentionId) ? current : [...current, attentionId]
-      )
-      passwordPromptBuffersRef.current.set(tabId, '')
-
-      const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
-      if (!passwordPromptRequestRef.current) {
-        passwordPromptRequestRef.current = request
-        setPasswordPromptValue('')
-        setPasswordPromptError('')
-        setPasswordPromptRequest(request)
-        pendingAttentionNotifierRef.current.notifyIfUnfocused(
-          `password:${tabId}`,
-          t.notifications.passwordTitle,
-          t.notifications.passwordBody,
-          { tabId, chatTabId }
-        )
-        return
-      }
-
-      const activeSession = resolveSessionChatTabId(
-        tabsRef.current,
-        passwordPromptRequestRef.current.tabId
-      )
-      const requestSession = chatTabId
-      // Prefer keeping the currently shown prompt; queue others by tab until it closes.
-      if (activeSession === requestSession && passwordPromptRequestRef.current.tabId === tabId) {
-        passwordPromptRequestRef.current = request
-        setPasswordPromptRequest(request)
-      }
-    },
-    [t]
-  )
-
-  useEffect(() => {
-    return window.api.terminal.onData((event) => {
-      maybeRequestTerminalPassword(event.tabId, event.data)
-    })
-  }, [maybeRequestTerminalPassword])
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent): void => {
@@ -2559,7 +2214,14 @@ function App({
       window.removeEventListener('blur', handlePointerUp)
       handlePointerUp()
     }
-  }, [paneOrder, resizeSubterminalPair, syncActiveTerminalSize])
+  }, [
+    paneOrder,
+    resizeSubterminalPair,
+    setSubterminalPanelHeight,
+    setTerminalPanePercent,
+    setWikiPreviewWidth,
+    syncActiveTerminalSize
+  ])
 
   const writeLine = useCallback((text: string): void => {
     terminalRef.current?.writeln(text.replace(/\n/g, '\r\n'))
@@ -2568,7 +2230,7 @@ function App({
   useEffect(() => {
     if (!isConnectionSlashQuery(slashCommandQuery)) return
 
-    void window.api.connections
+    void connectionsClient
       .list()
       .then(setConnections)
       .catch((error) => {
@@ -2579,7 +2241,7 @@ function App({
   useEffect(() => {
     if (!isWikiSlashQuery(slashCommandQuery)) return
 
-    void window.api.agent
+    void agentClient
       .listWikiDocuments()
       .then(setWikiDocuments)
       .catch((error) => {
@@ -2588,14 +2250,14 @@ function App({
           text: error instanceof Error ? error.message : String(error)
         })
       })
-  }, [slashCommandQuery])
+  }, [setWikiDocuments, setWikiMessage, slashCommandQuery])
 
   useEffect(() => {
     document.documentElement.classList.add('dark')
 
     let cancelled = false
 
-    window.api.agent
+    agentClient
       .getConfig()
       .then((nextConfig) => {
         if (cancelled) return
@@ -2615,7 +2277,7 @@ function App({
         deferAfterFirstPaint(() => {
           if (cancelled) return
 
-          window.api.agent
+          agentClient
             .getModels()
             .then((models) => {
               if (cancelled) return
@@ -2631,7 +2293,7 @@ function App({
               validationRequestRef.current = requestId
               setValidating(true)
               setValidation(undefined)
-              void window.api.agent
+              void agentClient
                 .validateConfig(nextConfig)
                 .then((result) => {
                   if (validationRequestRef.current === requestId) setValidation(result)
@@ -2644,14 +2306,14 @@ function App({
               writeLine(`\x1b[31m${failedToLoadModelsText}: ${String(error)}\x1b[0m`)
             })
 
-          void window.api.agent
+          void agentClient
             .listSkills()
             .then(setSkills)
             .catch(() => {
               setSkills([])
               toast.error(catalogLoadFailedText.replace('{resource}', 'skills'))
             })
-          void window.api.agent
+          void agentClient
             .listInstructionFiles()
             .then((files) => {
               setInstructionFiles(files)
@@ -2669,7 +2331,7 @@ function App({
         writeLine(`\x1b[31m${failedToLoadConfigText}: ${String(error)}\x1b[0m`)
       })
 
-    window.api.connections
+    connectionsClient
       .list()
       .then((items) => {
         if (cancelled) return
@@ -2687,11 +2349,12 @@ function App({
     failedToLoadConfigText,
     failedToLoadConnectionsText,
     failedToLoadModelsText,
+    setSkills,
     writeLine
   ])
 
   useEffect(() => {
-    const unsubscribe = window.api.agent.onEvent((event) => {
+    const unsubscribe = agentClient.onEvent((event) => {
       const eventTabId = event.tabId ?? activeTabIdRef.current
       const chatTabId = resolveSessionChatTabId(tabsRef.current, eventTabId)
       const visibleRunId =
@@ -2746,13 +2409,14 @@ function App({
   }, [appendAgentEvent, appendSystemToRunOrLog, t])
 
   useEffect(() => {
-    return window.api.agent.onCommandApprovalRequest((request) => {
+    return agentClient.onCommandApprovalRequest((request) => {
+      if (request.runId.startsWith('catalog-')) return
       const targetId = request.chatTabId ?? request.tabId
       const alive =
         isApprovalTargetAlive(request.tabId, tabsRef.current) ||
         isApprovalTargetAlive(request.chatTabId, tabsRef.current)
       if (!alive) {
-        void window.api.agent.resolveCommandApproval({
+        void agentClient.resolveCommandApproval({
           requestId: request.id,
           approved: false,
           rejectionReason: t.commandReview.sessionClosedRejection
@@ -2776,7 +2440,7 @@ function App({
   }, [attachApprovalRequest, t.commandReview.sessionClosedRejection, t.notifications])
 
   useEffect(() => {
-    return window.api.agent.onCommandApprovalPurpose((payload) => {
+    return agentClient.onCommandApprovalPurpose((payload) => {
       for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {
         if (run.runId !== payload.runId) continue
         applyApprovalPurpose(chatTabId, payload.requestId, payload.purpose)
@@ -2785,12 +2449,12 @@ function App({
   }, [applyApprovalPurpose])
 
   useEffect(() => {
-    return window.api.agent.onSubterminalOpened((payload) => {
+    return agentClient.onSubterminalOpened((payload) => {
       void (async () => {
         const chatTabId =
           payload.chatTabId?.trim() || resolveSessionChatTabId(tabsRef.current, payload.parentTabId)
         if (chatTabId && activeRunCanceledRef.current.has(chatTabId)) {
-          void window.api.agent.ackSubterminalOpened({
+          void agentClient.ackSubterminalOpened({
             tabId: payload.tabId,
             ok: false,
             error: 'Agent run was canceled.'
@@ -2818,26 +2482,26 @@ function App({
         setSubterminalCollapsed(false)
 
         if (alreadyReady || payload.mode !== 'ssh' || !payload.connectionId) {
-          void window.api.agent.ackSubterminalOpened({ tabId: payload.tabId, ok: true })
+          void agentClient.ackSubterminalOpened({ tabId: payload.tabId, ok: true })
           return
         }
 
         try {
           if (chatTabId && activeRunCanceledRef.current.has(chatTabId)) {
-            void window.api.agent.ackSubterminalOpened({
+            void agentClient.ackSubterminalOpened({
               tabId: payload.tabId,
               ok: false,
               error: 'Agent run was canceled.'
             })
             return
           }
-          const refreshed = await window.api.connections.resolve(payload.connectionId)
+          const refreshed = await connectionsClient.resolve(payload.connectionId)
           const fallback = connectionsRef.current.find((item) => item.id === payload.connectionId)
           const connection = refreshed
             ? mergeConnectionInput(refreshed, fallback ?? refreshed)
             : fallback
           if (!connection || isLocalConnection(connection)) {
-            void window.api.agent.ackSubterminalOpened({
+            void agentClient.ackSubterminalOpened({
               tabId: payload.tabId,
               ok: false,
               error: `Connection ${payload.connectionId} not found or is local-only.`
@@ -2852,7 +2516,7 @@ function App({
             executeConnectionAutomation(connection, payload.tabId, true),
             CONNECTION_LOGIN_TOTAL_TIMEOUT_MS,
             () => {
-              void window.api.agent.ackSubterminalOpened({
+              void agentClient.ackSubterminalOpened({
                 tabId: payload.tabId,
                 ok: false,
                 error: timeoutMessage
@@ -2862,7 +2526,7 @@ function App({
           if (ok === true) {
             connTrace('subterminal-ssh-ok', `tab=${payload.tabId}`, `parent=${payload.parentTabId}`)
           }
-          void window.api.agent.ackSubterminalOpened({
+          void agentClient.ackSubterminalOpened({
             tabId: payload.tabId,
             ok: ok === true,
             error:
@@ -2873,7 +2537,7 @@ function App({
                   : 'SSH login automation failed.'
           })
         } catch (error) {
-          void window.api.agent.ackSubterminalOpened({
+          void agentClient.ackSubterminalOpened({
             tabId: payload.tabId,
             ok: false,
             error: error instanceof Error ? error.message : String(error)
@@ -2881,10 +2545,10 @@ function App({
         }
       })()
     })
-  }, [ensureSubterminal, executeConnectionAutomation, t])
+  }, [ensureSubterminal, executeConnectionAutomation, setSubterminalCollapsed, t])
 
   useEffect(() => {
-    return window.api.agent.onSubagentStatus((payload) => {
+    return agentClient.onSubagentStatus((payload) => {
       if (payload.close) {
         closeSubterminal(payload.parentTabId, payload.tabId)
         return
@@ -2899,7 +2563,7 @@ function App({
   }, [closeSubterminal, ensureSubterminal])
 
   useEffect(() => {
-    return window.api.agent.onCommandApprovalDismiss((payload) => {
+    return agentClient.onCommandApprovalDismiss((payload) => {
       pendingAttentionNotifierRef.current.clear(`approval:${payload.requestId}`)
       for (const [chatTabId, run] of activeAgentRunRef.current.entries()) {
         if (run.runId !== payload.runId) continue
@@ -2921,24 +2585,7 @@ function App({
   }, [resolveApprovalStep, t.commandReview.sessionClosedRejection])
 
   useEffect(() => {
-    return window.api.agent.onSkillInstallEvent((event) => {
-      handleSkillInstallEvent(event)
-    })
-  })
-
-  useEffect(() => {
-    return window.api.agent.onCaptureRequested((payload) => {
-      void startCaptureFromCurrentSessionRef.current(
-        payload.kind === 'skill' ? 'skill' : 'sop',
-        payload.scope === 'turn' ? 'turn' : 'session',
-        payload.seedText ?? '',
-        payload.chatTabId
-      )
-    })
-  }, [])
-
-  useEffect(() => {
-    return window.api.storage.onSessionSummaryUpdated((event) => {
+    return storageClient.onSessionSummaryUpdated((event) => {
       setHistoryItems((current) =>
         current.map((item) =>
           item.tabId === event.tabId
@@ -2947,29 +2594,7 @@ function App({
         )
       )
     })
-  }, [])
-
-  useEffect(() => {
-    pruneExpiredSkillInstallLogs()
-
-    const now = Date.now()
-    const nextExpirationDelay = Object.entries(skillInstallLogCreatedAt)
-      .filter(([resultId]) => !skillInstallIds[resultId])
-      .map(([, createdAt]) => createdAt + 24 * 60 * 60 * 1000 - now)
-      .filter((delay) => delay > 0)
-      .sort((left, right) => left - right)[0]
-
-    if (!nextExpirationDelay) return undefined
-
-    const timeout = window.setTimeout(
-      () => pruneExpiredSkillInstallLogs(),
-      Math.max(1000, nextExpirationDelay)
-    )
-
-    return () => window.clearTimeout(timeout)
-    // Rebuild this timer only when the tracked log state changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skillInstallIds, skillInstallLogCreatedAt])
+  }, [setHistoryItems])
 
   const activeLiveRun = useMemo(() => {
     const entries = activeTab?.agentLog ?? []
@@ -3069,7 +2694,7 @@ function App({
     let cancelled = false
     void (async () => {
       try {
-        const session = await window.api.terminal.start({
+        const session = await terminalClient.start({
           cols: 80,
           rows: 24,
           tabId: tab.id
@@ -3106,91 +2731,8 @@ function App({
     }
   }, [activeTabId, updateTab])
 
-  function flashSettingsSaved(): void {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1400)
-  }
-
-  async function persistAgentConfigPatch(patch: Partial<AgentConfig>): Promise<AgentConfig> {
-    const optimisticConfig = {
-      ...configRef.current,
-      ...patch,
-      commandWhitelist: parseCommandWhitelist(commandWhitelistTextRef.current)
-    }
-    setConfig(optimisticConfig)
-    setValidation(undefined)
-    const nextConfig = await saveAgentConfig(optimisticConfig)
-    flashSettingsSaved()
-    void validateConfig(nextConfig)
-    return nextConfig
-  }
-
-  async function saveConfig(): Promise<void> {
-    await persistAgentConfigPatch({})
-  }
-
-  function persistAgentStyle(style: AgentStyle): void {
-    void persistAgentConfigPatch({ agentStyle: style })
-  }
-
-  function persistShowAgentThinking(value: boolean | undefined): void {
-    void persistAgentConfigPatch({ showAgentThinking: value })
-  }
-
-  function scheduleWorkspaceCwdPersist(value: string): void {
-    updateConfig('workspaceCwd', value.trim() || undefined)
-    pendingWorkspaceCwdRef.current = value
-    if (workspaceCwdSaveTimerRef.current) {
-      clearTimeout(workspaceCwdSaveTimerRef.current)
-    }
-    workspaceCwdSaveTimerRef.current = setTimeout(() => {
-      workspaceCwdSaveTimerRef.current = null
-      const pending = pendingWorkspaceCwdRef.current
-      pendingWorkspaceCwdRef.current = null
-      if (pending === null) return
-      void persistAgentConfigPatch({ workspaceCwd: pending.trim() || undefined })
-    }, 400)
-  }
-
-  function flushWorkspaceCwdPersist(): void {
-    if (workspaceCwdSaveTimerRef.current) {
-      clearTimeout(workspaceCwdSaveTimerRef.current)
-      workspaceCwdSaveTimerRef.current = null
-    }
-    const pending = pendingWorkspaceCwdRef.current
-    if (pending === null) return
-    pendingWorkspaceCwdRef.current = null
-    void persistAgentConfigPatch({ workspaceCwd: pending.trim() || undefined })
-  }
-
-  async function saveSkillRoot(): Promise<void> {
-    try {
-      const nextConfig = await saveAgentConfig({
-        ...config,
-        skillRoot: config.skillRoot.trim() || '~/.crescent/skills',
-        commandWhitelist: parseCommandWhitelist(commandWhitelistText)
-      })
-      setSkillManageMessage({ type: 'success', text: t.settings.skillDirectorySaved })
-      const nextSkills = await window.api.agent.listSkills()
-      setSkills(nextSkills)
-      const allowedPaths = new Set(nextSkills.map((skill) => skill.path))
-      setTabs((current) =>
-        current.map((tab) => ({
-          ...tab,
-          skillRefs: (tab.skillRefs ?? []).filter((skill) => allowedPaths.has(skill.path))
-        }))
-      )
-      setConfig(nextConfig)
-    } catch (error) {
-      setSkillManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
   async function saveInstructionFile(): Promise<void> {
-    const savedFile = await window.api.agent.saveInstructionFile({
+    const savedFile = await agentClient.saveInstructionFile({
       name: selectedInstructionName,
       content: instructionContent
     })
@@ -3222,15 +2764,6 @@ function App({
     setInstructionEditorOpen(true)
   }
 
-  async function refreshSkills(): Promise<void> {
-    try {
-      setSkills(await window.api.agent.listSkills())
-      setSkillManageMessage({ type: 'success', text: t.settings.skillsRefreshed })
-    } catch (error) {
-      setSkillManageMessage({ type: 'error', text: String(error) })
-    }
-  }
-
   async function reloadApplicationRuntime(): Promise<void> {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     updateTab(chatTabId, (tab) => applyComposerInput(tab, ''))
@@ -3238,8 +2771,8 @@ function App({
     setSlashCommandOpen(false)
     const loadingToast = toast.loading(t.input.slashReload)
     try {
-      const result = await window.api.agent.reloadRuntime({ sessionKey: chatTabId })
-      const nextConfig = await window.api.agent.getConfig()
+      const result = await agentClient.reloadRuntime({ sessionKey: chatTabId })
+      const nextConfig = await agentClient.getConfig()
       setConfig(nextConfig)
       setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
       setModels(flattenProviderModels(nextConfig.providers))
@@ -3256,19 +2789,15 @@ function App({
         }
       }
       const [nextSkills, nextWiki, nextFiles, nextConnections, nextModels] = await Promise.all([
-        loadCatalog('skills', () => window.api.agent.listSkills(), [] as AgentSkillOption[]),
-        loadCatalog(
-          'wiki',
-          () => window.api.agent.listWikiDocuments(),
-          [] as WikiDocumentSummary[]
-        ),
+        loadCatalog('skills', () => agentClient.listSkills(), [] as AgentSkillOption[]),
+        loadCatalog('wiki', () => agentClient.listWikiDocuments(), [] as WikiDocumentSummary[]),
         loadCatalog(
           'instruction files',
-          () => window.api.agent.listInstructionFiles(),
+          () => agentClient.listInstructionFiles(),
           [] as LocalInstructionDocument[]
         ),
-        loadCatalog('connections', () => window.api.connections.list(), [] as ConnectionConfig[]),
-        loadCatalog('models', () => window.api.agent.getModels(), [] as AgentModelOption[])
+        loadCatalog('connections', () => connectionsClient.list(), [] as ConnectionConfig[]),
+        loadCatalog('models', () => agentClient.getModels(), [] as AgentModelOption[])
       ])
       setSkills(nextSkills)
       setWikiDocuments(nextWiki)
@@ -3279,7 +2808,7 @@ function App({
         const requestId = validationRequestRef.current + 1
         validationRequestRef.current = requestId
         setValidating(true)
-        void window.api.agent
+        void agentClient
           .validateConfig(nextConfig)
           .then((validationResult) => {
             if (validationRequestRef.current === requestId) setValidation(validationResult)
@@ -3314,7 +2843,7 @@ function App({
     setContextCompactingByTabId((current) => ({ ...current, [chatTabId]: true }))
     const loadingToast = toast.loading(t.input.slashCompact)
     try {
-      const result = await window.api.agent.compact({
+      const result = await agentClient.compact({
         sessionKey: chatTabId,
         tabId: chatTabId,
         instructions,
@@ -3342,454 +2871,8 @@ function App({
     }
   }
 
-  async function searchSkills(): Promise<void> {
-    const query = skillSearchQuery.trim()
-    if (!query) return
-
-    setSkillSearchLoading(true)
-    setSkillManageMessage({ type: 'info', text: t.settings.skillsSearching })
-    try {
-      const results = await window.api.agent.searchSkills(query)
-      setSkillSearchResults(results)
-      setSkillManageMessage(
-        results.length
-          ? { type: 'success', text: t.settings.skillsSearchComplete }
-          : { type: 'info', text: t.settings.skillsNoResults }
-      )
-    } catch (error) {
-      setSkillManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setSkillSearchLoading(false)
-    }
-  }
-
-  async function installSkill(result: AgentSkillSearchResult): Promise<void> {
-    if (skillInstallIds[result.id]) {
-      setSkillInstallLogResultId((current) => (current === result.id ? null : result.id))
-      return
-    }
-
-    setSkillInstallLogNames((current) => ({ ...current, [result.id]: result.name }))
-    setSkillInstallLogCreatedAt((current) => ({ ...current, [result.id]: Date.now() }))
-    setSkillInstallLogStatuses((current) => ({ ...current, [result.id]: 'running' }))
-    setSkillInstallLogs((current) => ({
-      ...current,
-      [result.id]: `${buildSkillInstallCommand(result)}\n\n`
-    }))
-    setSkillManageMessage({
-      type: 'info',
-      text: `${t.settings.skillInstalling}: ${result.name}`
-    })
-    try {
-      const response = await window.api.agent.startSkillInstall({
-        installSource: result.installSource,
-        installSkill: result.installSkill
-      })
-
-      skillInstallResultIdsRef.current.set(response.installId, result.id)
-      skillInstallNamesRef.current.set(response.installId, result.name)
-      setSkillInstallIds((current) => ({ ...current, [result.id]: response.installId }))
-      setSkillInstallLogResultId(result.id)
-    } catch (error) {
-      setSkillManageMessage({
-        type: 'error',
-        text: `${t.settings.skillInstallFailed}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      })
-      setSkillInstallIds((current) => {
-        const next = { ...current }
-        delete next[result.id]
-        return next
-      })
-      setSkillInstallLogStatuses((current) => ({ ...current, [result.id]: 'error' }))
-    }
-  }
-
-  async function cancelSkillInstall(resultId: string): Promise<void> {
-    const installId = skillInstallIds[resultId]
-    if (!installId) return
-
-    setSkillInstallCancelingIds((current) => ({ ...current, [resultId]: true }))
-    try {
-      await window.api.agent.cancelSkillInstall(installId)
-    } finally {
-      setSkillInstallCancelingIds((current) => {
-        const next = { ...current }
-        delete next[resultId]
-        return next
-      })
-    }
-  }
-
-  function handleSkillInstallEvent(event: AgentSkillInstallEvent): void {
-    const resultId = skillInstallResultIdsRef.current.get(event.installId)
-    if (!resultId) return
-
-    if (event.type === 'log') {
-      setSkillInstallLogs((current) => ({
-        ...current,
-        [resultId]: `${current[resultId] ?? ''}${event.data}`
-      }))
-      return
-    }
-
-    const skillName = skillInstallNamesRef.current.get(event.installId) ?? resultId
-    skillInstallResultIdsRef.current.delete(event.installId)
-    skillInstallNamesRef.current.delete(event.installId)
-    setSkillInstallIds((current) => {
-      const next = { ...current }
-      delete next[resultId]
-      return next
-    })
-    setSkillInstallCancelingIds((current) => {
-      const next = { ...current }
-      delete next[resultId]
-      return next
-    })
-
-    if (event.type === 'done') {
-      setSkills(event.result.skills)
-      setSkillInstallLogStatuses((current) => ({ ...current, [resultId]: 'success' }))
-      setSkillInstallLogs((current) => ({
-        ...current,
-        [resultId]: `${current[resultId] ?? ''}\n${t.settings.skillInstalled}: ${skillName}\n`
-      }))
-      setSkillManageMessage({
-        type: 'success',
-        text: [
-          `${t.settings.skillInstalled}: ${skillName}`,
-          event.result.fallbackInstalledAll && event.result.requestedSkill
-            ? `${t.settings.skillFallbackInstalledAll}: ${event.result.requestedSkill}`
-            : ''
-        ]
-          .filter(Boolean)
-          .join('\n\n')
-      })
-      return
-    }
-
-    setSkillInstallLogStatuses((current) => ({ ...current, [resultId]: 'error' }))
-    setSkillInstallLogs((current) => ({
-      ...current,
-      [resultId]: `${current[resultId] ?? ''}\n${event.error}\n`
-    }))
-    setSkillManageMessage({
-      type: event.canceled ? 'info' : 'error',
-      text: event.canceled
-        ? `${t.settings.skillInstallCanceled}: ${skillName}`
-        : `${t.settings.skillInstallFailed}: ${event.error}`
-    })
-  }
-
-  function deleteSkillInstallLog(resultId: string): void {
-    const installId = skillInstallIds[resultId]
-    if (installId) void window.api.agent.cancelSkillInstall(installId)
-
-    skillInstallResultIdsRef.current.forEach((mappedResultId, activeInstallId) => {
-      if (mappedResultId === resultId) {
-        skillInstallResultIdsRef.current.delete(activeInstallId)
-        skillInstallNamesRef.current.delete(activeInstallId)
-      }
-    })
-    setSkillInstallIds((current) => omitRecordKey(current, resultId))
-    setSkillInstallLogs((current) => omitRecordKey(current, resultId))
-    setSkillInstallLogNames((current) => omitRecordKey(current, resultId))
-    setSkillInstallLogStatuses((current) => omitRecordKey(current, resultId))
-    setSkillInstallLogCreatedAt((current) => omitRecordKey(current, resultId))
-    setSkillInstallCancelingIds((current) => omitRecordKey(current, resultId))
-    setSkillInstallLogResultId((current) => {
-      if (current !== resultId) return current
-
-      const nextIds = Object.keys(skillInstallLogs).filter((id) => id !== resultId)
-      return nextIds[0] ?? null
-    })
-  }
-
-  function pruneExpiredSkillInstallLogs(): void {
-    const now = Date.now()
-    const expiredIds = Object.entries(skillInstallLogCreatedAt)
-      .filter(
-        ([resultId, createdAt]) =>
-          !skillInstallIds[resultId] && now - createdAt > 24 * 60 * 60 * 1000
-      )
-      .map(([resultId]) => resultId)
-
-    for (const resultId of expiredIds) deleteSkillInstallLog(resultId)
-  }
-
-  async function copySkillInstallCommand(result: AgentSkillSearchResult): Promise<void> {
-    await copyText(buildSkillInstallCommand(result), copyFeedback(t))
-    setCopiedSkillCommandId(result.id)
-    window.setTimeout(() => {
-      setCopiedSkillCommandId((current) => (current === result.id ? null : current))
-    }, 1400)
-  }
-
-  async function copySelectedSkillInstallLog(): Promise<void> {
-    if (!skillInstallLogResultId) return
-
-    const selectedText = window.getSelection()?.toString().trim()
-    const text = selectedText || skillInstallLogs[skillInstallLogResultId] || ''
-    if (!text) return
-
-    await copyText(text, copyFeedback(t))
-    setCopiedSkillInstallLogId(skillInstallLogResultId)
-    window.setTimeout(() => {
-      setCopiedSkillInstallLogId((current) =>
-        current === skillInstallLogResultId ? null : current
-      )
-    }, 1400)
-  }
-
-  async function importSkillFromDisk(options?: {
-    sourcePath?: string
-    overwrite?: boolean
-  }): Promise<void> {
-    try {
-      const result = await window.api.agent.importSkill(options)
-      if (result.canceled) return
-      if (result.conflict && result.sourcePath) {
-        const names = (result.existingNames ?? []).join('\n')
-        if (
-          !window.confirm(
-            t.settings.skillImportOverwriteConfirm.replace('{names}', names || result.sourcePath)
-          )
-        ) {
-          return
-        }
-        await importSkillFromDisk({ sourcePath: result.sourcePath, overwrite: true })
-        return
-      }
-      if (!result.ok) {
-        setSkillManageMessage({
-          type: 'error',
-          text: result.error || t.settings.skillImportFailed
-        })
-        return
-      }
-      setSkills(result.skills ?? (await window.api.agent.listSkills()))
-      const imported = result.imported?.filter(Boolean).join(', ')
-      setSkillManageMessage({
-        type: 'success',
-        text: imported ? `${t.settings.skillImported}: ${imported}` : t.settings.skillImported
-      })
-    } catch (error) {
-      setSkillManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  async function deleteSkill(skill: AgentSkillOption): Promise<void> {
-    if (!skill.removable) return
-    if (!window.confirm(`${t.confirm.deleteSkill}\n\n${skill.name}`)) return
-
-    setSkillDeletingPath(skill.path)
-    setSkillManageMessage({ type: 'info', text: `${t.settings.skillDeleting}: ${skill.name}` })
-    try {
-      setSkills(await window.api.agent.deleteSkill(skill.path))
-      setSkillManageMessage({ type: 'success', text: `${t.settings.skillDeleted}: ${skill.name}` })
-    } catch (error) {
-      setSkillManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setSkillDeletingPath(null)
-    }
-  }
-
-  async function previewSkill(skill: AgentSkillOption): Promise<void> {
-    setSkillDetailWidth(getDefaultSkillDetailWidth())
-    setSkillPreviewLoadingPath(skill.path)
-    setSkillManageMessage(null)
-    setSkillInstallLogResultId(null)
-    setSelectedSkillPreview({
-      skill,
-      content: '',
-      selectedFilePath: 'SKILL.md',
-      files: []
-    })
-    try {
-      const [content, files] = await Promise.all([
-        window.api.agent.getSkillContent(skill.path),
-        window.api.agent.listSkillFiles(skill.path).catch(() => [])
-      ])
-      setSelectedSkillPreview({
-        skill,
-        content,
-        files,
-        selectedFilePath: 'SKILL.md'
-      })
-    } catch (error) {
-      setSelectedSkillPreview(null)
-      setSkillManageMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setSkillPreviewLoadingPath(null)
-    }
-  }
-
-  async function selectSkillPreviewFile(relativePath: string): Promise<void> {
-    const current = selectedSkillPreview
-    if (!current || current.catalogResultId || current.selectedFilePath === relativePath) return
-
-    setSkillPreviewLoadingPath(current.skill.path)
-    setSelectedSkillPreview({
-      ...current,
-      selectedFilePath: relativePath,
-      content: '',
-      selectedFileBinary: false,
-      selectedFileTruncated: false,
-      selectedFileError: undefined
-    })
-    try {
-      const result = await window.api.agent.getSkillFile(current.skill.path, relativePath)
-      setSelectedSkillPreview((preview) => {
-        if (!preview || preview.skill.path !== current.skill.path) return preview
-        if (preview.selectedFilePath !== relativePath) return preview
-        if (!result.ok) {
-          return {
-            ...preview,
-            content: '',
-            selectedFileError: result.error || t.settings.skillPreviewFileFailed,
-            selectedFileBinary: false,
-            selectedFileTruncated: false
-          }
-        }
-        if (result.binary) {
-          return {
-            ...preview,
-            content: '',
-            selectedFileBinary: true,
-            selectedFileTruncated: false,
-            selectedFileError: undefined
-          }
-        }
-        return {
-          ...preview,
-          content: result.content,
-          selectedFileBinary: false,
-          selectedFileTruncated: Boolean(result.truncated),
-          selectedFileError: undefined
-        }
-      })
-    } catch (error) {
-      setSelectedSkillPreview((preview) =>
-        preview && preview.skill.path === current.skill.path
-          ? {
-              ...preview,
-              content: '',
-              selectedFileError:
-                error instanceof Error ? error.message : t.settings.skillPreviewFileFailed,
-              selectedFileBinary: false,
-              selectedFileTruncated: false
-            }
-          : preview
-      )
-    } finally {
-      setSkillPreviewLoadingPath((path) => (path === current.skill.path ? null : path))
-    }
-  }
-
-  async function saveSkillPreviewFile(
-    skill: AgentSkillOption,
-    relativePath: string,
-    content: string
-  ): Promise<boolean> {
-    setSkillFileSaving(true)
-    setSkillManageMessage(null)
-    try {
-      const result = await window.api.agent.writeSkillFile(skill.path, relativePath, content)
-      if (!result.ok) {
-        setSkillManageMessage({
-          type: 'error',
-          text: result.error || t.settings.skillFileSaveFailed
-        })
-        toast.error(result.error || t.settings.skillFileSaveFailed)
-        return false
-      }
-
-      const nextSkills = await window.api.agent.listSkills()
-      setSkills(nextSkills)
-      const refreshed = nextSkills.find((item) => item.path === result.skill.path) ?? result.skill
-      setSelectedSkillPreview((preview) =>
-        preview && preview.skill.path === skill.path
-          ? {
-              ...preview,
-              skill: refreshed,
-              content,
-              selectedFilePath: relativePath,
-              selectedFileBinary: false,
-              selectedFileTruncated: false,
-              selectedFileError: undefined
-            }
-          : preview
-      )
-      setSkillManageMessage({ type: 'success', text: t.settings.skillFileSaved })
-      toast.success(t.settings.skillFileSaved)
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t.settings.skillFileSaveFailed
-      setSkillManageMessage({ type: 'error', text: message })
-      toast.error(message)
-      return false
-    } finally {
-      setSkillFileSaving(false)
-    }
-  }
-
-  async function previewCatalogSkill(result: AgentSkillSearchResult): Promise<void> {
-    setSkillDetailWidth(getDefaultSkillDetailWidth())
-    const skill: AgentSkillOption = {
-      id: result.id,
-      name: result.name,
-      description: result.description,
-      path: catalogSkillPageUrl(result),
-      source: result.source,
-      removable: true
-    }
-    setSkillPreviewLoadingPath(result.id)
-    setSkillManageMessage(null)
-    setSkillInstallLogResultId(null)
-    setSelectedSkillPreview({ skill, content: '', catalogResultId: result.id })
-    try {
-      const content = await window.api.agent.getCatalogSkillContent({
-        installSource: result.installSource,
-        installSkill: result.installSkill,
-        name: result.name
-      })
-      setSelectedSkillPreview((current) =>
-        current?.catalogResultId === result.id
-          ? { skill, content, catalogResultId: result.id }
-          : current
-      )
-    } catch (error) {
-      setSelectedSkillPreview((current) =>
-        current?.catalogResultId === result.id
-          ? {
-              skill,
-              content: `${t.settings.skillCatalogPreviewFailed}\n\n${
-                error instanceof Error ? error.message : String(error)
-              }`,
-              catalogResultId: result.id
-            }
-          : current
-      )
-    } finally {
-      setSkillPreviewLoadingPath((current) => (current === result.id ? null : current))
-    }
-  }
-
   async function saveAgentConfig(nextConfigInput: AgentConfig): Promise<AgentConfig> {
-    const nextConfig = await window.api.agent.saveConfig(nextConfigInput)
+    const nextConfig = await agentClient.saveConfig(nextConfigInput)
     setConfig(nextConfig)
     setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
     setModels(flattenProviderModels(nextConfig.providers))
@@ -3807,9 +2890,9 @@ function App({
 
   async function toggleWhaleMonitor(): Promise<void> {
     try {
-      const current = await window.api.whaleMonitor.getSnapshot()
-      const enabled = !current.settings.enabled
-      await window.api.whaleMonitor.saveSettings({ ...current.settings, enabled })
+      const current = await whaleMonitorClient.getSnapshot()
+      const enabled = !whaleEnabled
+      await whaleMonitorClient.saveSettings({ ...current.settings, enabled })
       setWhaleEnabled(enabled)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -3858,7 +2941,7 @@ function App({
   }
 
   async function openHistorySession(item: StoredSessionHistoryItem): Promise<void> {
-    const detail = await window.api.storage.getSessionHistory(item.tabId)
+    const detail = await storageClient.getSessionHistory(item.tabId)
     if (!detail) return
 
     const connection = detail.connectionId
@@ -3894,6 +2977,9 @@ function App({
       terminalMode: detail.terminalMode ?? 'pty',
       agentStyle: detail.agentStyle,
       executionMode: normalizeExecutionMode(detail.executionMode),
+      handoffBlocked: detail.handoffBlocked || (detail.isSsh && !detail.connectionId),
+      expectedTarget: detail.expectedTarget,
+      connectionOrigin: detail.connectionOrigin,
       terminalReady: false,
       terminalOutput: '',
       agentLog: restoredLogs
@@ -3922,7 +3008,7 @@ function App({
     let cancelled = false
     void (async () => {
       try {
-        const items = await window.api.storage.listSessionHistory(1)
+        const items = await storageClient.listSessionHistory(1)
         if (cancelled) return
         const latest = items[0]
         if (latest) {
@@ -3935,7 +3021,7 @@ function App({
         console.error('[renderer-recovery] failed to restore session', error)
       } finally {
         if (!cancelled) {
-          void window.api.app.clearRendererRecovery()
+          void appClient.clearRendererRecovery()
         }
       }
     })()
@@ -3946,435 +3032,11 @@ function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recoveryMode])
 
-  async function generateCaptureDraftFromSummary(input: {
-    kind: CaptureKind
-    summary: string
-    draft?: string
-    notes?: string
-    refining?: boolean
-  }): Promise<void> {
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    const refining = Boolean(input.refining)
-    const existing = findCaptureJob(captureJobsRef.current, {
-      kind: input.kind,
-      tabId: chatTabId
-    })
-    if (refining) {
-      if (!existing || !existing.content.trim()) return
-    }
-
-    const jobId = refining && existing ? existing.jobId : String(++captureJobIdRef.current)
-    if (refining) {
-      setCaptureJobsSync((current) =>
-        patchCaptureJob(current, jobId, {
-          generating: false,
-          refining: true,
-          error: null,
-          conflict: false,
-          summary: input.summary
-        })
-      )
-    } else {
-      setCaptureJobsSync((current) =>
-        upsertCaptureJob(
-          current,
-          createCaptureDraftJob({
-            jobId,
-            kind: input.kind,
-            tabId: chatTabId,
-            summary: input.summary
-          })
-        )
-      )
-    }
-
-    await captureGenerateQueueRef.current.enqueue(async () => {
-      if (!findCaptureJob(captureJobsRef.current, { jobId })) return
-      try {
-        const generated = await window.api.agent.generateCaptureDraft({
-          kind: input.kind,
-          summary: input.summary,
-          locale,
-          draft: input.draft,
-          notes: input.notes,
-          timeoutMs: CAPTURE_BACKGROUND_TIMEOUT_MS
-        })
-        if (!findCaptureJob(captureJobsRef.current, { jobId })) return
-        if (!generated.ok || !generated.content?.trim()) {
-          throw new Error(generated.error || t.capture.failed)
-        }
-        const readyLogId = refining
-          ? (existing?.readyLogId ?? null)
-          : appendLog({ kind: 'status', text: captureReadyLogText(input.kind, t) }, chatTabId)
-        setCaptureJobsSync((current) => {
-          const live = findCaptureJob(current, { jobId })
-          return patchCaptureJob(current, jobId, {
-            title: generated.title ?? live?.title ?? '',
-            content: generated.content ?? '',
-            skillName: generated.skillName ?? live?.skillName ?? '',
-            generating: false,
-            refining: false,
-            phase: 'ready',
-            readyLogId,
-            error: null
-          })
-        })
-        if (!refining) toast.success(t.capture.generated)
-      } catch (error) {
-        if (!findCaptureJob(captureJobsRef.current, { jobId })) return
-        const message = error instanceof Error ? error.message : String(error)
-        setCaptureJobsSync((current) => {
-          const live = findCaptureJob(current, { jobId })
-          if (!live) return current
-          const keepContent = jobHasContent(live)
-          return patchCaptureJob(current, jobId, {
-            generating: false,
-            refining: false,
-            phase: keepContent ? 'ready' : 'error',
-            error: `${t.capture.failed}: ${message}`
-          })
-        })
-        toast.error(`${t.capture.failed}: ${message}`, { duration: TOAST_INTERVENTION_DURATION_MS })
-      }
-    })
-  }
-
-  async function startCaptureFromCurrentSession(
-    kind: CaptureKind,
-    scope: 'turn' | 'session',
-    seedText = '',
-    tabId?: string
-  ): Promise<void> {
-    const chatTabId =
-      tabId?.trim() || resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    const memoryLog = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
-    let log: CaptureLogEntry[] = memoryLog.map((entry) => ({
-      id: entry.id,
-      kind: entry.kind,
-      text: entry.text
-    }))
-    let runs: StoredAgentRun[] = []
-    try {
-      const [history, storedRuns] = await Promise.all([
-        window.api.storage.getSessionHistory(chatTabId),
-        window.api.storage.listAllAgentRuns(chatTabId)
-      ])
-      runs = storedRuns
-      if ((history?.logs.length ?? 0) > memoryLog.length) {
-        log = historyLogsToCaptureEntries(history!.logs)
-      }
-    } catch {
-      // Use the in-memory log when SQLite is unavailable.
-    }
-
-    const liveTraces = collectLiveCaptureTraces({
-      log,
-      tabId: chatTabId,
-      liveRunByLogId
-    })
-    const traces = mergeCaptureTraces(
-      buildAgentSessionTrace({
-        tabId: chatTabId,
-        title: getSessionDisplayTitle(sessionChatTab, tabsRef.current, activeTabIdRef.current),
-        runs
-      }).runs,
-      liveTraces
-    )
-    const entry = [...log].reverse().find((item) => item.kind === 'assistant')
-    const summary = buildSessionCaptureSummary({
-      traces,
-      log,
-      entry,
-      liveRun: entry ? liveRunByLogId[entry.id] : undefined,
-      scope,
-      seedText,
-      t
-    })
-    if (!hasCaptureableContent({ log, seedText }) && !summary.trim()) {
-      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
-      return
-    }
-    void generateCaptureDraftFromSummary({ kind, summary })
-  }
-  startCaptureFromCurrentSessionRef.current = startCaptureFromCurrentSession
-
-  async function saveAgentTurnAsWikiSop(entry: AgentLogEntry): Promise<void> {
-    if (savingSopLogId === entry.id) return
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    const log = tabsRef.current.find((tab) => tab.id === chatTabId)?.agentLog ?? []
-    if (!hasCaptureableContent({ log })) {
-      toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
-      return
-    }
-    setSavingSopLogId(entry.id)
-    try {
-      const summary = buildCaptureSummary({
-        log,
-        entry,
-        liveRun: liveRunByLogId[entry.id],
-        scope: 'turn',
-        t
-      })
-      void generateCaptureDraftFromSummary({ kind: 'sop', summary })
-    } finally {
-      setSavingSopLogId(null)
-    }
-  }
-
-  async function saveHistorySessionToCapture(
-    item: StoredSessionHistoryItem,
-    kind: CaptureKind
-  ): Promise<void> {
-    if (kind === 'skill') setSavingHistorySkillTabId(item.tabId)
-    else setSavingHistoryWikiTabId(item.tabId)
-    try {
-      const [detail, runs] = await Promise.all([
-        window.api.storage.getSessionHistory(item.tabId),
-        window.api.storage.listAllAgentRuns(item.tabId)
-      ])
-      if (!detail) return
-      const log = historyLogsToCaptureEntries(detail.logs)
-      const traces = buildAgentSessionTrace({
-        tabId: item.tabId,
-        title: detail.title,
-        runs
-      }).runs
-      const summary = buildSessionCaptureSummary({
-        traces,
-        log,
-        scope: 'session',
-        seedText: detail.title,
-        t
-      })
-      if (!hasCaptureableContent({ log, seedText: detail.title }) && !summary.trim()) {
-        toast.error(t.capture.empty, { duration: TOAST_INTERVENTION_DURATION_MS })
-        return
-      }
-      void generateCaptureDraftFromSummary({ kind, summary })
-    } catch (error) {
-      toast.error(
-        `${t.capture.failed}: ${error instanceof Error ? error.message : String(error)}`,
-        { duration: TOAST_INTERVENTION_DURATION_MS }
-      )
-    } finally {
-      setSavingHistoryWikiTabId(null)
-      setSavingHistorySkillTabId(null)
-    }
-  }
-
-  async function saveHistorySessionToWiki(item: StoredSessionHistoryItem): Promise<void> {
-    await saveHistorySessionToCapture(item, 'sop')
-  }
-
-  async function saveHistorySessionToSkill(item: StoredSessionHistoryItem): Promise<void> {
-    await saveHistorySessionToCapture(item, 'skill')
-  }
-
-  function dialogCaptureJob(): CaptureDraftJob | undefined {
-    if (captureDialogKind == null) return undefined
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    return findCaptureJob(captureJobsRef.current, {
-      kind: captureDialogKind,
-      tabId: chatTabId
-    })
-  }
-
-  function patchDialogCaptureJob(patch: Partial<CaptureDraftJob>): void {
-    const job = dialogCaptureJob()
-    if (!job) return
-    setCaptureJobsSync((current) => patchCaptureJob(current, job.jobId, patch))
-  }
-
-  async function refineCaptureDraft(fields: CaptureDraftFields): Promise<void> {
-    const job = dialogCaptureJob()
-    if (!job || !job.summary.trim() || !fields.content.trim()) return
-    patchDialogCaptureJob(fields)
-    await generateCaptureDraftFromSummary({
-      kind: job.kind,
-      summary: job.summary,
-      draft: fields.content,
-      notes: fields.notes,
-      refining: true
-    })
-  }
-
-  async function commitCaptureDraft(fields: CaptureDraftFields): Promise<void> {
-    const job = dialogCaptureJob()
-    if (!job || !fields.content.trim() || job.committing) return
-    patchDialogCaptureJob(fields)
-    setCaptureJobsSync((current) =>
-      patchCaptureJob(current, job.jobId, { committing: true, error: null })
-    )
-    try {
-      const result = await window.api.agent.commitCaptureDraft({
-        kind: job.kind,
-        title: fields.title,
-        content: fields.content,
-        skillName: fields.skillName,
-        overwrite: job.overwrite
-      })
-      if (result.conflict) {
-        setCaptureJobsSync((current) =>
-          patchCaptureJob(current, job.jobId, {
-            committing: false,
-            conflict: true,
-            error: t.capture.conflict
-          })
-        )
-        return
-      }
-      if (!result.ok) {
-        throw new Error(result.error || t.wiki.saveFailed)
-      }
-      if (result.document) {
-        setWikiDocuments((current) => upsertWikiSummary(current, result.document!))
-        setSelectedWikiDocument(result.document)
-        setWikiEditContent(result.document.content)
-        setWikiEditing(true)
-        setWikiPreviewWidth(getDefaultWikiPreviewWidth())
-        setWikiMessage({ type: 'success', text: `${t.capture.savedSop}: ${result.document.title}` })
-        toast.success(`${t.capture.savedSop}: ${result.document.title}`)
-      }
-      if (result.skill) {
-        setSkills(await window.api.agent.listSkills())
-        updateTab(sessionChatTab.id, (tab) => ({
-          ...tab,
-          skillRefs: addUniqueSkillRef(tab.skillRefs, result.skill!)
-        }))
-        toast.success(`${t.capture.savedSkill}: ${result.skill.name}`)
-      }
-      setCaptureJobsSync((current) => removeCaptureJob(current, job.jobId))
-      setCaptureDialogKind(null)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setCaptureJobsSync((current) =>
-        patchCaptureJob(current, job.jobId, { committing: false, error: message })
-      )
-      toast.error(message, { duration: TOAST_INTERVENTION_DURATION_MS })
-    }
-  }
-
-  function startRenameHistorySession(item: StoredSessionHistoryItem): void {
-    setHistoryTitleEditingId(item.tabId)
-    setHistoryTitleDraft(item.title)
-  }
-
-  function cancelRenameHistorySession(): void {
-    setHistoryTitleEditingId(null)
-    setHistoryTitleDraft('')
-  }
-
-  async function saveHistorySessionTitle(item: StoredSessionHistoryItem): Promise<void> {
-    const nextTitle = historyTitleDraft.trim()
-    if (!nextTitle) return
-
-    setHistoryTitleSavingId(item.tabId)
-    try {
-      const result = await window.api.storage.renameSessionHistory({
-        tabId: item.tabId,
-        title: nextTitle
-      })
-      if (!result.ok) return
-
-      setHistoryItems((current) =>
-        current.map((candidate) =>
-          candidate.tabId === item.tabId ? { ...candidate, title: nextTitle } : candidate
-        )
-      )
-      setTabs((current) =>
-        current.map((tab) => (tab.id === item.tabId ? { ...tab, title: nextTitle } : tab))
-      )
-      cancelRenameHistorySession()
-    } finally {
-      setHistoryTitleSavingId(null)
-    }
-  }
-
-  async function openWikiDocument(document: WikiDocumentSummary): Promise<void> {
-    setWikiDocumentLoadingId(document.id)
-    setWikiEditing(false)
-    setWikiMessage(null)
-    try {
-      const detail = (await window.api.agent.getWikiDocument(document.id)) ?? null
-      setSelectedWikiDocument(detail)
-      setWikiEditContent(detail?.content ?? '')
-      if (detail) setWikiPreviewWidth(getDefaultWikiPreviewWidth())
-    } catch (error) {
-      setWikiMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setWikiDocumentLoadingId(null)
-    }
-  }
-
-  async function saveWikiEdits(): Promise<void> {
-    if (!selectedWikiDocument) return
-
-    setWikiSaving(true)
-    setWikiMessage(null)
-    try {
-      const document = await window.api.agent.saveWikiDocument({
-        id: selectedWikiDocument.id,
-        title: selectedWikiDocument.title,
-        content: wikiEditContent
-      })
-      setSelectedWikiDocument(document)
-      setWikiEditContent(document.content)
-      setWikiDocuments((current) => upsertWikiSummary(current, document))
-      setWikiEditing(false)
-      setWikiMessage({ type: 'success', text: `${t.wiki.saved}: ${document.title}` })
-    } catch (error) {
-      setWikiMessage({
-        type: 'error',
-        text: `${t.wiki.saveFailed}: ${error instanceof Error ? error.message : String(error)}`
-      })
-    } finally {
-      setWikiSaving(false)
-    }
-  }
-
-  async function deleteWikiDocument(): Promise<void> {
-    if (!selectedWikiDocument) return
-    if (!window.confirm(`${t.confirm.deleteWikiDocument}\n\n${selectedWikiDocument.title}`)) return
-
-    setWikiDeletingId(selectedWikiDocument.id)
-    setWikiMessage(null)
-    try {
-      const deleted = await window.api.agent.deleteWikiDocument(selectedWikiDocument.id)
-      if (!deleted.ok) throw new Error(t.wiki.deleteFailed)
-
-      const deletedTitle = selectedWikiDocument.title
-      setWikiDocuments((current) =>
-        current.filter((document) => document.id !== selectedWikiDocument.id)
-      )
-      setSelectedWikiDocument(null)
-      setWikiEditContent('')
-      setWikiEditing(false)
-      setWikiMessage({ type: 'success', text: `${t.wiki.deleted}: ${deletedTitle}` })
-    } catch (error) {
-      setWikiMessage({
-        type: 'error',
-        text: `${t.wiki.deleteFailed}: ${error instanceof Error ? error.message : String(error)}`
-      })
-    } finally {
-      setWikiDeletingId(null)
-    }
-  }
-
-  async function deleteHistorySession(item: StoredSessionHistoryItem): Promise<void> {
-    if (!window.confirm(`${t.confirm.deleteHistory}\n\n${item.title}`)) return
-
-    await window.api.storage.deleteSessionHistory(item.tabId)
-    setHistoryItems((current) => current.filter((candidate) => candidate.tabId !== item.tabId))
-  }
-
   async function findConnectionById(id: string): Promise<ConnectionConfig | undefined> {
     let candidates = connections
 
     try {
-      candidates = await window.api.connections.list()
+      candidates = await connectionsClient.list()
       setConnections(candidates)
     } catch {
       candidates = connections
@@ -4383,24 +3045,10 @@ function App({
     return candidates.find((connection) => connection.id === id)
   }
 
-  async function validateConfig(nextConfigInput = config): Promise<void> {
-    const requestId = validationRequestRef.current + 1
-    validationRequestRef.current = requestId
-    setValidating(true)
-    setValidation(undefined)
-
-    try {
-      const result = await window.api.agent.validateConfig(nextConfigInput)
-      if (validationRequestRef.current === requestId) setValidation(result)
-    } finally {
-      if (validationRequestRef.current === requestId) setValidating(false)
-    }
-  }
-
   async function importOpenApiDocument(): Promise<void> {
     setImportingOpenApi(true)
     try {
-      const result = await window.api.agent.importOpenApiDocument()
+      const result = await agentClient.importOpenApiDocument()
       if (!result.ok || !result.path) return
       patchActiveOpenApiProfile({ document: result.path })
     } finally {
@@ -4502,26 +3150,6 @@ function App({
       return updateOpenApiProfileInConfig(next, profileId, patch)
     })
     setValidation(undefined)
-  }
-
-  async function applyDefaultModel(selection: string): Promise<void> {
-    const parsed = parseModelSelectionValue(selection)
-    const selectedModel =
-      modelOptions.find(
-        (model) => model.providerId === parsed.providerId && model.id === parsed.model
-      ) ?? modelOptions.find((model) => model.id === parsed.model)
-    if (!selectedModel) return
-
-    const optimisticConfig = {
-      ...config,
-      providerId: selectedModel.providerId,
-      model: selectedModel.id
-    }
-
-    setConfig(optimisticConfig)
-    setValidation(undefined)
-    const nextConfig = await saveAgentConfig(optimisticConfig)
-    void validateConfig(nextConfig)
   }
 
   async function persistModelSelection(
@@ -4633,7 +3261,7 @@ function App({
 
   function rejectApprovalsForClosedTabs(closedTabIds: string[]): void {
     for (const tabId of closedTabIds) {
-      void window.api.agent.rejectApprovalsForTab(tabId)
+      void agentClient.rejectApprovalsForTab(tabId)
       passwordPromptsByTabRef.current.delete(tabId)
       passwordPromptOpenTabsRef.current.delete(tabId)
     }
@@ -4663,7 +3291,7 @@ function App({
 
   function persistAgentRun(run: StoredAgentRun): void {
     const live = liveRunUsageRef.current.get(run.runId)
-    void window.api.storage
+    void storageClient
       .saveAgentRun({
         ...run,
         inputTokens: run.inputTokens ?? live?.input,
@@ -4673,7 +3301,7 @@ function App({
       })
       .then(async () => {
         if (run.status === 'running') return
-        const totals = await window.api.storage.getSessionTokenUsage(run.tabId)
+        const totals = await storageClient.getSessionTokenUsage(run.tabId)
         liveRunUsageRef.current.delete(run.runId)
         setSessionUsageBaselineByTabId((current) => ({ ...current, [run.tabId]: totals }))
         setLiveSessionUsageByTabId((current) => {
@@ -4691,7 +3319,7 @@ function App({
   function interruptAgentCommand(tabId: string): void {
     const target = tabId.trim()
     if (!target) return
-    void window.api.terminal.interrupt(target)
+    void terminalClient.interrupt(target)
   }
 
   function stopAgentRun(
@@ -4781,48 +3409,6 @@ function App({
     }
   }
 
-  async function submitPasswordPrompt(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-    if (!passwordPromptRequest) return
-
-    const context = await window.api.terminal.getContext(passwordPromptRequest.tabId)
-    if (!isTerminalCurrentlyAtPasswordPrompt(context.output)) {
-      passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
-      setPasswordPromptValue('')
-      setPasswordPromptError(t.terminal.passwordPromptExpired)
-      return
-    }
-
-    sendTerminalInput(passwordPromptValue, passwordPromptRequest.tabId)
-    passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
-    passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
-    passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
-    rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
-    pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
-    setPasswordAttentionTabIds((current) =>
-      current.filter((id) => !passwordAttentionMatches(id, passwordPromptRequest.tabId))
-    )
-    setPasswordPromptValue('')
-    setPasswordPromptError('')
-    showNextPasswordPrompt(passwordPromptRequest.tabId)
-  }
-
-  function cancelPasswordPrompt(): void {
-    if (passwordPromptRequest) {
-      passwordPromptBuffersRef.current.set(passwordPromptRequest.tabId, '')
-      passwordPromptOpenTabsRef.current.delete(passwordPromptRequest.tabId)
-      passwordPromptsByTabRef.current.delete(passwordPromptRequest.tabId)
-      rootPasswordAutoSubmittedTabsRef.current.delete(passwordPromptRequest.tabId)
-      pendingAttentionNotifierRef.current.clear(`password:${passwordPromptRequest.tabId}`)
-      setPasswordAttentionTabIds((current) =>
-        current.filter((id) => !passwordAttentionMatches(id, passwordPromptRequest.tabId))
-      )
-    }
-    setPasswordPromptValue('')
-    setPasswordPromptError('')
-    showNextPasswordPrompt(passwordPromptRequest?.tabId)
-  }
-
   function resolveInlineCommandApproval(requestId: string, approved: boolean, note?: string): void {
     const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     // Prefer the chat that owns the pending approval step.
@@ -4839,7 +3425,7 @@ function App({
     }
     resolveApprovalStep(targetChatTabId, requestId, approved, note)
     pendingAttentionNotifierRef.current.clear(`approval:${requestId}`)
-    void window.api.agent.resolveCommandApproval({
+    void agentClient.resolveCommandApproval({
       requestId,
       approved,
       note,
@@ -4877,25 +3463,15 @@ function App({
       return
     }
     try {
-      await saveCommandWhitelistRules([...existing, rule])
+      const nextConfig = await agentClient.saveConfig({
+        ...config,
+        commandWhitelist: [...existing, rule]
+      })
+      setConfig(nextConfig)
+      setCommandWhitelistText((nextConfig.commandWhitelist ?? []).join('\n'))
       toast.success(t.commandReview.addedToWhitelist)
     } catch (error) {
       notifyOperationError(t.commandReview.addToWhitelist, error)
-    }
-  }
-
-  function showNextPasswordPrompt(preferredTabId = activeTabIdRef.current): void {
-    const preferredSession = resolveSessionChatTabId(tabsRef.current, preferredTabId)
-    const prompts = [...passwordPromptsByTabRef.current.values()]
-    const preferred =
-      prompts.find(
-        (prompt) => resolveSessionChatTabId(tabsRef.current, prompt.tabId) === preferredSession
-      ) ?? prompts[0]
-    passwordPromptRequestRef.current = preferred ?? null
-    setPasswordPromptRequest(preferred ?? null)
-    if (!preferred) {
-      setPasswordPromptValue('')
-      setPasswordPromptError('')
     }
   }
 
@@ -4908,9 +3484,7 @@ function App({
     }
 
     // Recovery brake #1: read SSOT first. Live PTY already on target -> nothing to do.
-    // A blank Enter can poison alignment to drifted while the newest prompt is
-    // still the remote host. Re-read that prompt before typing exit.
-    const context = await window.api.terminal.getContext(tabId)
+    const context = await terminalClient.getContext(tabId)
     if (context.mode !== 'none' && context.alignment === 'aligned' && !context.restoring) {
       connTrace('restore-cancel', `tab=${tabId}`, 'already aligned')
       return true
@@ -4936,13 +3510,13 @@ function App({
     const chatTabId = resolveSessionChatTabId(tabsRef.current, tabId)
     appendSystemToRunOrLog(chatTabId, t.terminal.terminalReconnecting)
     if (!tabsRef.current.find((current) => current.id === tabId)?.connectionId) {
-      void window.api.terminal.setExpectedHost({ tabId, host: null })
+      void terminalClient.setExpectedHost({ tabId, host: null })
     }
 
     try {
       const dimensions =
         tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
-      const session = await window.api.terminal.start({
+      const session = await terminalClient.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
         tabId
@@ -5035,7 +3609,7 @@ function App({
     const requireSshReady = options?.requireSshReady === true
 
     while (Date.now() < deadline) {
-      const context = await window.api.terminal.getContext(tabId)
+      const context = await terminalClient.getContext(tabId)
       const live = hasLiveTerminalSession(context.mode)
       const sshReady = live && context.ready === true && !context.restoring
       if (requireSshReady ? sshReady : live) return true
@@ -5081,7 +3655,7 @@ function App({
     let forceFreshLogin = false
     let statusLabel: string | undefined
 
-    void window.api.connections.setLastUsed(connection.id).catch(() => undefined)
+    void connectionsClient.setLastUsed(connection.id).catch(() => undefined)
 
     if (resolution.kind === 'reuse') {
       targetTabId = resolution.tab.id
@@ -5105,6 +3679,8 @@ function App({
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
         executionMode: normalizeExecutionMode(currentTab.executionMode),
+        approvalPolicy: currentTab.approvalPolicy ?? 'manual',
+        mutationPolicy: currentTab.mutationPolicy ?? 'confirm',
         connectionId: connection.id,
         connectionName: connection.name,
         isSsh: true
@@ -5214,7 +3790,7 @@ function App({
         // Recovery brake #2: never reinit + re-knock ssh on an already connected
         // terminal. Read the SSOT first; skip re-login when remaining commands
         // are empty (aligned / regex / ready remote / on-target aliases).
-        const context = await window.api.terminal.getContext(targetTabId)
+        const context = await terminalClient.getContext(targetTabId)
         const waitingForSecret = findNewestPromptSignal(context.output)?.kind === 'waiting'
         const onRemoteHost = Boolean(context.promptHost && context.promptHost !== 'local-shell')
         const liveSession = hasLiveTerminalSession(context.mode)
@@ -5293,10 +3869,10 @@ function App({
       const dimensions =
         tabId === activeTabIdRef.current ? fitAddonRef.current?.proposeDimensions() : undefined
       connTrace('teardown', `tab=${tabId}`)
-      await window.api.terminal.teardownGracefully({ tabId })
+      await terminalClient.teardownGracefully({ tabId })
       connTrace('spawn', `tab=${tabId}`)
       let session = await runWithTimeout(
-        window.api.terminal.start({
+        terminalClient.start({
           cols: dimensions?.cols ?? 80,
           rows: dimensions?.rows ?? 24,
           tabId
@@ -5325,7 +3901,7 @@ function App({
       if (session.mode === 'pipe' && !ptyRetryTriedRef.current.has(tabId)) {
         ptyRetryTriedRef.current.add(tabId)
         session = await runWithTimeout(
-          window.api.terminal.start({
+          terminalClient.start({
             cols: dimensions?.cols ?? 80,
             rows: dimensions?.rows ?? 24,
             tabId
@@ -5377,7 +3953,7 @@ function App({
       }))
       return false
     } finally {
-      if (!ok) void window.api.terminal.clearRestoring(tabId)
+      if (!ok) void terminalClient.clearRestoring(tabId)
     }
   }
 
@@ -5497,8 +4073,8 @@ function App({
         targetTab.id === activeTabIdRef.current
           ? fitAddonRef.current?.proposeDimensions()
           : undefined
-      void window.api.terminal.stop(targetTab.id)
-      const session = await window.api.terminal.start({
+      void terminalClient.stop(targetTab.id)
+      const session = await terminalClient.start({
         cols: dimensions?.cols ?? 80,
         rows: dimensions?.rows ?? 24,
         tabId: targetTab.id
@@ -5540,7 +4116,7 @@ function App({
     setConnectionFormOpen(false)
     setConnectionEditing(false)
     setConnectionModalOpen(true)
-    void window.api.connections
+    void connectionsClient
       .list()
       .then(setConnections)
       .catch((error) => {
@@ -5551,23 +4127,6 @@ function App({
   function closeOnboarding(): void {
     dismissOnboarding()
     setOnboardingOpen(false)
-  }
-
-  function addExampleOpenApiFromOnboarding(): void {
-    const profile = createExampleOpenApiProfile()
-    setConfig((current) =>
-      withActiveOpenApiProfile(
-        {
-          ...current,
-          openApiProfiles: [...current.openApiProfiles, profile]
-        },
-        profile.id
-      )
-    )
-    setValidation(undefined)
-    setOpenApiEditorOpen(true)
-    setSheetOpen(true)
-    closeOnboarding()
   }
 
   function startNewSession(): void {
@@ -5584,26 +4143,65 @@ function App({
   async function createHandoffConversation(
     sourceId: string,
     goal: string,
-    draft: string
+    draft: string,
+    target: HandoffTarget
   ): Promise<void> {
     if (!tabsRef.current.some((tab) => tab.id === sourceId)) throw new Error('Source closed')
+    const sourceChat = tabsRef.current.find((tab) => tab.id === sourceId)!
+    const source =
+      handoffParentTab(
+        tabsRef.current,
+        sourceId,
+        activeExecutionTabIdRef.current.get(sourceId),
+        activeTabIdRef.current
+      ) ?? sourceChat
+    const sourcePaneId = activeExecutionTabIdRef.current.get(sourceId) ?? source.id
+    const parentContext = await terminalClient.getContext(sourcePaneId)
+    const resolved = resolveHandoffTarget({
+      selection: target,
+      source: handoffSourceIdentity(source, parentContext),
+      connections: connectionsRef.current
+    })
     const nextTab = createTerminalTab({
       title: `${t.handoff.prefix}${goal.trim().replace(/\s+/g, ' ').slice(0, 48)}`,
-      providerId: config.providerId,
-      agentStyle: config.agentStyle,
-      isSsh: false,
-      agentInput: draft
+      providerId: source.providerId ?? config.providerId,
+      model: source.model,
+      agentStyle: source.agentStyle ?? config.agentStyle,
+      executionMode: normalizeExecutionMode(sourceChat.executionMode),
+      isSsh: resolved.isSsh,
+      connectionId: resolved.connectionId,
+      connectionName: resolved.connectionName,
+      handoffBlocked: resolved.blocked,
+      expectedTarget: resolved.isSsh
+        ? target === 'inherit'
+          ? (parentContext.expectedTarget ?? parentContext.promptHost)
+          : connectionsRef.current.find((item) => item.id === resolved.connectionId)?.host
+        : undefined,
+      connectionOrigin:
+        target === 'inherit'
+          ? parentContext.connectionOrigin
+          : resolved.isSsh
+            ? 'connection-card'
+            : 'manual-shell',
+      agentInput: `${draft}\n\n交接目标：${resolved.connectionName ?? (resolved.isSsh ? (parentContext.expectedTarget ?? '手动 SSH，待验证') : target === 'none' ? '仅资料，待选择目标' : '本机')}。审批不继承；先复核目标和状态。`
     })
+    const prepared = await terminalClient.prepareHandoff(sourcePaneId, nextTab.id, target)
+    if (!prepared.ok) throw new Error(prepared.error)
+
     // Existing storage contract saves tab metadata; composer text stays in memory.
     // Do not dismiss the editor or switch tabs until creation has been acknowledged.
-    const saved = await window.api.storage.saveTabs(
-      toStoredSessionTabs([...tabsRef.current, nextTab])
-    )
+    const saved = await storageClient.saveTabs(toStoredSessionTabs([...tabsRef.current, nextTab]))
     if (!saved?.ok) throw new Error('Could not save conversation')
     if (!tabsRef.current.some((tab) => tab.id === sourceId)) {
-      await window.api.storage.saveTabs(toStoredSessionTabs(tabsRef.current))
+      await storageClient.saveTabs(toStoredSessionTabs(tabsRef.current))
       throw new Error('Source closed')
     }
+    if (resolved.connectionId) {
+      const connection = connectionsRef.current.find((item) => item.id === resolved.connectionId)
+      if (!connection) throw new Error('Connection disappeared')
+      pendingSshRef.current.set(nextTab.id, connection)
+    }
+    setWorkbenchLayout('split')
     activateNewSession(nextTab)
     requestAnimationFrame(() => agentInputRef.current?.focus())
   }
@@ -5658,6 +4256,8 @@ function App({
         model: currentTab.model,
         agentStyle: currentTab.agentStyle,
         executionMode: normalizeExecutionMode(currentTab.executionMode),
+        approvalPolicy: currentTab.approvalPolicy ?? 'manual',
+        mutationPolicy: currentTab.mutationPolicy ?? 'confirm',
         isSsh: false
       })
       setTabs((current) => {
@@ -5727,7 +4327,7 @@ function App({
     }
 
     const dimensions = fitAddonRef.current?.proposeDimensions()
-    const opened = await window.api.terminal.openSubterminal({
+    const opened = await terminalClient.openSubterminal({
       parentTabId: parentTab.id,
       terminalName,
       cols: dimensions?.cols ?? 100,
@@ -5787,7 +4387,7 @@ function App({
     }
 
     const dimensions = fitAddonRef.current?.proposeDimensions()
-    const opened = await window.api.terminal.openSubterminal({
+    const opened = await terminalClient.openSubterminal({
       parentTabId: parentTab.id,
       terminalName,
       cols: dimensions?.cols ?? 100,
@@ -5931,9 +4531,9 @@ function App({
       setConnectionSaveMessage(null)
 
       try {
-        let nextConnections = await window.api.connections.save(overwrite.input)
+        let nextConnections = await connectionsClient.save(overwrite.input)
         if (overwrite.deleteId) {
-          nextConnections = await window.api.connections.delete(overwrite.deleteId)
+          nextConnections = await connectionsClient.delete(overwrite.deleteId)
         }
         setConnections(nextConnections)
         setConnectionNameConflict(null)
@@ -6002,7 +4602,7 @@ function App({
     }
     await Promise.all(
       [...tabIds].map((tabId) =>
-        window.api.terminal
+        terminalClient
           .patchClusterHostRegex({
             tabId,
             clusterHostRegex: clusterHostRegex ?? null
@@ -6015,14 +4615,14 @@ function App({
   async function deleteConnection(id: string): Promise<void> {
     if (!window.confirm(t.confirm.deleteConnection)) return
 
-    const nextConnections = await window.api.connections.delete(id)
+    const nextConnections = await connectionsClient.delete(id)
     setConnections(nextConnections)
     if (connectionForm.id === id) closeConnectionForm()
   }
 
   async function toggleConnectionFavorite(id: string): Promise<void> {
     try {
-      const nextConnections = await window.api.connections.toggleFavorite(id)
+      const nextConnections = await connectionsClient.toggleFavorite(id)
       setConnections(nextConnections)
     } catch (error) {
       setConnectionSaveMessage({
@@ -6037,7 +4637,7 @@ function App({
     action: 'up' | 'down' | 'top' | 'bottom'
   ): Promise<void> {
     try {
-      const nextConnections = await window.api.connections.reorder({ id, action })
+      const nextConnections = await connectionsClient.reorder({ id, action })
       setConnections(nextConnections)
     } catch (error) {
       setConnectionSaveMessage({
@@ -6062,14 +4662,14 @@ function App({
     let candidates = connections
 
     try {
-      candidates = await window.api.connections.list()
+      candidates = await connectionsClient.list()
       setConnections(candidates)
     } catch {
       candidates = connections
     }
 
     try {
-      const analysis = await window.api.agent.resolveConnectionIntent({
+      const analysis = await agentClient.resolveConnectionIntent({
         input,
         conversationContext: options?.conversationContext,
         currentConnectionId: options?.currentConnectionId,
@@ -6100,1310 +4700,52 @@ function App({
       }
     }
   }
-
-  async function submitAgent(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-    await submitAgentMessage()
-  }
-
-  async function submitAgentMessage(
-    overrideInput?: string,
-    options?: { forcedConnectionId?: string; skipUserLog?: boolean }
-  ): Promise<void> {
-    const terminalTabId = activeTabIdRef.current
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
-    const tab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
-    let terminalTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
-    const rawInput = (overrideInput ?? tab?.agentInput ?? '').trim()
-    const displayInput = stripComposerRefTokens(rawInput).trim()
-    if (!displayInput && !hasComposerRefTokens(rawInput)) return
-
-    if (/^\/new$/i.test(displayInput)) {
-      startNewSession()
-      return
-    }
-
-    if (/^\/reload$/i.test(displayInput)) {
-      void reloadApplicationRuntime()
-      return
-    }
-
-    const compactCommand = parseCompactSlashCommand(displayInput)
-    if (compactCommand) {
-      updateTab(chatTabId, (current) => applyComposerInput(current, ''))
-      void compactCurrentSession(compactCommand.instructions)
-      return
-    }
-
-    const captureIntent = parseCaptureIntent(displayInput)
-    if (captureIntent) {
-      updateTab(chatTabId, (current) => applyComposerInput(current, ''))
-      void startCaptureFromCurrentSession(
-        captureIntent.kind,
-        captureIntent.scope,
-        captureIntent.seedText
-      )
-      return
-    }
-
-    const skillRefs = tab?.skillRefs ?? []
-    const pathRefs = tab?.pathRefs ?? []
-    const toolRefs = tab?.toolRefs ?? []
-    const wikiRefs = tab?.wikiRefs ?? []
-    const wikiIds = [...(tab?.activeWikiIds ?? [])]
-    const skillPaths = skillRefs.map((skill) => skill.path).filter(Boolean)
-    const messageRefs = snapshotMessageReferences({
-      skillRefs,
-      wikiRefs,
-      toolRefs,
-      pathRefs
-    })
-    const resumeRequested = isContinueIntent(displayInput)
-    const baseInput = buildAgentInputWithReferences(
-      displayInput,
-      skillRefs,
-      pathRefs,
-      toolRefs,
-      wikiRefs,
-      t
-    )
-    const input = resumeRequested && tab ? buildResumeAgentInput(tab, baseInput, t) : baseInput
-    const conversationContext = tab ? buildRecentConversationContext(tab, displayInput, t) : ''
-    const startedAt = Date.now()
-
-    if (tab?.agentBusy) {
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        agentInput: '',
-        skillRefs: [],
-        pathRefs: [],
-        toolRefs: [],
-        wikiRefs: [],
-        activeWikiIds: []
-      }))
-      const runId = activeRunIdRef.current.get(chatTabId)
-      if (runId) {
-        const artifacts = buildBusySupplementArtifacts({
-          displayInput: rawInput,
-          runId,
-          createdAt: new Date().toISOString(),
-          stepId: `supplement-${Date.now()}`,
-          references: messageRefs
-        })
-        appendLog(artifacts.logEntry, chatTabId)
-        const ok = await window.api.agent
-          .supplement({ runId, input: wrapSteerSupplementPayload(input) })
-          .then((result) => result?.ok === true)
-          .catch(() => false)
-        if (!ok) {
-          // The agent session may not be active yet (e.g. still logging in via
-          // post-connection automation). Queue the supplement so it is merged
-          // into the post-login task input instead of being silently dropped.
-          const pending = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
-          pendingPostLoginSupplementsRef.current.set(chatTabId, [...pending, displayInput])
-        }
-        updateAgentRun(chatTabId, (run) => ({
-          ...run,
-          steps: [...(run.steps ?? []), artifacts.step]
-        }))
-      }
-      return
-    }
-
-    updateTab(chatTabId, (current) => ({
-      ...current,
-      agentInput: '',
-      skillRefs: [],
-      pathRefs: [],
-      toolRefs: [],
-      wikiRefs: [],
-      activeWikiIds: []
-    }))
-    // Clarify-card confirm resumes with skipUserLog — selection lives on the settled card
-    // and assistant match steps, never as a second user bubble.
-    if (!options?.skipUserLog) {
-      appendLog(
-        {
-          kind: 'user',
-          text: rawInput,
-          references: messageRefs
-        },
-        chatTabId
-      )
-    }
-    const setThinking = (message: string): void => {
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        agentThinking: true,
-        thinkingMessage: message
-      }))
-    }
-    const clearThinking = (): void => {
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        agentThinking: false,
-        thinkingMessage: undefined
-      }))
-    }
-    setThinking(t.input.thinkingAnalyzingRequest)
-
-    const terminalContext = await window.api.terminal.getContext(terminalTabId)
-    if (terminalContext.connectionOrigin === 'manual-shell' && terminalTab?.connectionId) {
-      // Keep the saved connection on the tab for browse and reconnect.
-      // This turn only treats the live shell as a manual hop.
-      terminalTab = {
-        ...terminalTab,
-        connectionId: undefined,
-        connectionName: undefined,
-        isSsh: false
-      }
-    }
-    connTrace(
-      'getContext',
-      `tab=${terminalTabId}`,
-      `aligned=${terminalContext.sessionAligned ?? 'n/a'}`,
-      `expected=${terminalContext.expectedHost ?? '-'}`,
-      `tail=${terminalContext.output.slice(-160).replace(/\n/g, '\\n')}`
-    )
-    if (terminalContext.sessionAligned === 'drifted') {
-      // Only clear readiness on real leave-target drift (local shell or jump
-      // fall-back). Hostname≠IP false positives must keep terminalReady so
-      // inspection reuses the live PTY instead of re-typing login actions.
-      const leftTarget = isLeaveTargetDrift({
-        sessionAligned: terminalContext.sessionAligned,
-        promptHost: terminalContext.promptHost,
-        returnToJumpHost: terminalContext.returnToJumpHost
-      })
-      if (leftTarget) {
-        const driftedChatTabId = resolveSessionChatTabId(tabsRef.current, terminalTabId)
-        updateConnectionAttempt(driftedChatTabId, (state) =>
-          markConnectionFailed(state, { reason: t.terminal.connectionDriftedReconnecting })
-        )
-        updateTab(terminalTabId, (tab) => ({ ...tab, terminalReady: false }))
-      }
-    }
-    const pendingClarification = tab?.pendingClarification
-    const activePending =
-      !options?.forcedConnectionId &&
-      pendingClarification?.kind === 'connection-intent' &&
-      !pendingClarification.settled
-    const intentSourceInput = activePending
-      ? `${pendingClarification.originalInput}\n\n${t.terminal.connectionClarifyReplyPrefix}\n${displayInput}`
-      : displayInput
-    if (activePending) {
-      updateTab(chatTabId, (current) => ({ ...current, pendingClarification: undefined }))
-    } else if (pendingClarification?.settled && !options?.forcedConnectionId) {
-      // Cancelled/stale settled card: drop on next typed submit.
-      updateTab(chatTabId, (current) => ({ ...current, pendingClarification: undefined }))
-    }
-
-    const explicitNonTerminalRequest = isExplicitNonTerminalAgentRequest(displayInput, toolRefs)
-    const explicitLocalFileRequest = hasExplicitLocalWorkIntent(intentSourceInput)
-    const sessionTabs = getSessionTerminals(
-      tabsRef.current,
-      getSessionGroupId(tab ?? terminalTab ?? { id: terminalTabId, sessionGroupId: terminalTabId })
-    )
-    const lastUsedConnectionId =
-      (await window.api.connections.getLastUsed().catch(() => null)) ?? undefined
-    let route = routeConnection({
-      message: intentSourceInput,
-      activeTabId: terminalTabId,
-      activeTab: terminalTab,
-      sessionTabs,
-      connections,
-      resumeRequested,
-      explicitNonTerminal: explicitNonTerminalRequest,
-      explicitLocalFile: explicitLocalFileRequest,
-      sessionAligned: terminalContext.sessionAligned,
-      promptHost: terminalContext.promptHost,
-      aliases: terminalContext.aliases,
-      expectedHost: terminalContext.expectedHost,
-      returnToJumpHost: terminalContext.returnToJumpHost,
-      monitorPolicy: terminalContext.monitorPolicy
-    })
-    connTrace(
-      'route',
-      `action=${route.action}`,
-      `reason=${route.reason ?? '-'}`,
-      `target=${route.targetTabId}`,
-      `aligned=${terminalContext.sessionAligned ?? 'n/a'}`
-    )
-
-    const forcedConnectionId = options?.forcedConnectionId?.trim()
-    if (forcedConnectionId) {
-      const forcedConnection = connections.find((candidate) => candidate.id === forcedConnectionId)
-      if (!forcedConnection) {
-        console.warn('[connection-clarify] forcedConnectionId not found', forcedConnectionId)
-      } else {
-        route = routeForcedConnection({
-          connection: forcedConnection,
-          message: intentSourceInput,
-          activeTabId: terminalTabId,
-          activeTab: terminalTab,
-          sessionTabs,
-          sessionAligned: terminalContext.sessionAligned,
-          promptHost: terminalContext.promptHost
-        })
-      }
-    }
-
-    const terminalSummary = [
-      `mode=${terminalContext.mode}`,
-      `cwd=${terminalContext.cwd || '-'}`,
-      terminalTab?.connectionId ? `tabConnectionId=${terminalTab.connectionId}` : '',
-      terminalTab?.connectionName ? `tabConnectionName=${terminalTab.connectionName}` : '',
-      terminalTab?.isSsh ? 'tabIsSsh=true' : 'tabIsSsh=false',
-      route.label ? `routeLabel=${route.label}` : '',
-      route.action ? `routeAction=${route.action}` : '',
-      `recentOutput=${terminalContext.output.slice(-1200)}`
-    ]
-      .filter(Boolean)
-      .join('\n')
-
-    let connectionIntent: Awaited<ReturnType<typeof resolveConnectionIntentForInput>> | undefined
-    let executionTerminalId = terminalTabId
-    const activeLoggedIn = isActiveLoggedInTerminal(terminalTab, {
-      sessionAligned: terminalContext.sessionAligned,
-      promptHost: terminalContext.promptHost,
-      returnToJumpHost: terminalContext.returnToJumpHost
-    })
-    try {
-      if (route.action === 'llm-fallback' && activeLoggedIn) {
-        // Never let LLM / lastUsed steal an already logged-in active terminal.
-        if (route.label) {
-          setThinking(t.input.routingTo.replace('{label}', route.label))
-        }
-        connectionIntent = undefined
-      } else if (route.action === 'llm-fallback') {
-        setThinking(t.input.thinkingResolvingConnection)
-        connectionIntent = await resolveConnectionIntentForInput(intentSourceInput, {
-          conversationContext,
-          currentConnectionId: terminalTab?.connectionId,
-          currentConnectionName: terminalTab?.connectionName,
-          terminalSummary
-        })
-        // User asked to log in but the model did not pick a target — ask, do not
-        // guess lastUsed / the only configured host.
-        if (
-          isExplicitConnectionRequest(intentSourceInput) &&
-          connectionIntent.analysis &&
-          !connectionIntent.analysis.needsClarification &&
-          !connectionIntent.analysis.shouldConnect
-        ) {
-          connectionIntent = {
-            analysis: {
-              ok: false,
-              shouldConnect: false,
-              confidence: 0,
-              needsClarification: true,
-              clarificationQuestion:
-                connections.length > 0
-                  ? t.terminal.connectionClarifyPickOne.replace(
-                      '{options}',
-                      formatConnectionClarifyOptions(
-                        prioritizeClarifyOptions(
-                          connections.map((c) => ({ id: c.id, label: c.name })),
-                          terminalTab?.connectionId,
-                          t.terminal.clarifyCurrentBadge
-                        )
-                      )
-                    )
-                  : t.terminal.connectionNoneConfigured,
-              reason: 'llm-no-connect-login'
-            }
-          }
-        }
-      } else if (route.action === 'clarify') {
-        const clarifyOptions = prioritizeClarifyOptions(
-          route.clarifyOptions && route.clarifyOptions.length > 0
-            ? route.clarifyOptions
-            : connections.map((c) => ({ id: c.id, label: c.name })),
-          terminalTab?.connectionId,
-          t.terminal.clarifyCurrentBadge
-        )
-        const optionsText = formatConnectionClarifyOptions(clarifyOptions)
-        const clarificationQuestion =
-          route.reason === 'remote-no-connections'
-            ? t.terminal.connectionNoneConfigured
-            : optionsText
-              ? t.terminal.connectionClarifyPickOne.replace('{options}', optionsText)
-              : t.terminal.connectionClarifyFallback
-        route = { ...route, clarifyOptions }
-        connectionIntent = {
-          analysis: {
-            ok: false,
-            shouldConnect: false,
-            confidence: 0,
-            needsClarification: true,
-            clarificationQuestion,
-            reason: route.reason
-          }
-        }
-      } else if ((route.action === 'connect' || route.action === 'switch') && route.connection) {
-        const thinkingLabel = route.label || route.connection.name
-        setThinking(
-          route.action === 'connect'
-            ? t.terminal.autoConnecting.replace('{label}', thinkingLabel)
-            : t.input.routingTo.replace('{label}', thinkingLabel)
-        )
-        // switch to an already-connected peer tab: reuse without reconnect
-        if (route.action === 'switch' && route.targetTabId !== terminalTabId) {
-          executionTerminalId = route.targetTabId
-          setActiveExecutionTerminal(chatTabId, route.targetTabId)
-          connectionIntent = undefined
-        } else {
-          connectionIntent = {
-            analysis: {
-              ok: true,
-              shouldConnect: true,
-              connectionId: route.connection.id,
-              confidence: 100,
-              executeAfterLogin: route.executeAfterLogin !== false,
-              matchBasis: 'name',
-              reason: `${t.terminal.connectionMatched}: ${route.connection.name}`
-            },
-            connection: route.connection
-          }
-        }
-      } else {
-        // reuse — instantaneous routing indicator, no LLM
-        if (route.label) {
-          setThinking(t.input.routingTo.replace('{label}', route.label))
-        }
-        connectionIntent = undefined
-        if (route.reason === 'active-logged-in' && route.label) {
-          appendStatusToActiveRunOrLog(
-            chatTabId,
-            t.terminal.usingCurrentConnection.replace('{name}', route.label)
-          )
-        }
-      }
-    } finally {
-      // Keep thinking visible until the next concrete UI phase replaces it.
-    }
-
-    if (connectionIntent?.analysis?.needsClarification) {
-      clearThinking()
-      const question =
-        connectionIntent.analysis.clarificationQuestion?.trim() ||
-        t.terminal.connectionClarifyFallback
-      const clarifyOptions = prioritizeClarifyOptions(
-        route.clarifyOptions && route.clarifyOptions.length > 0
-          ? route.clarifyOptions
-          : connections.map((c) => ({ id: c.id, label: c.name })),
-        terminalTab?.connectionId,
-        t.terminal.clarifyCurrentBadge
-      )
-      const defaultOptionId =
-        (terminalTab?.connectionId &&
-        clarifyOptions.some((option) => option.id === terminalTab.connectionId)
-          ? terminalTab.connectionId
-          : undefined) ||
-        (lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
-          ? lastUsedConnectionId
-          : undefined)
-      appendLog(
-        {
-          kind: 'assistant',
-          text: formatAgentRunMarkdown(
-            {
-              logId: -1,
-              actions: [],
-              steps: [
-                {
-                  id: 'clarify',
-                  kind: 'status',
-                  title: t.terminal.connectionClarifyTitle,
-                  detail: [connectionIntent.analysis.reason, question].filter(Boolean).join('\n')
-                }
-              ],
-              result: question,
-              elapsedMs: Date.now() - startedAt
-            },
-            t
-          )
-        },
-        chatTabId
-      )
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        pendingClarification: {
-          kind: 'connection-intent',
-          routeId: `clarify-${crypto.randomUUID()}`,
-          originalInput: pendingClarification?.originalInput || displayInput,
-          question,
-          options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
-          defaultOptionId
-        }
-      }))
-      pendingAttentionNotifierRef.current.notifyIfUnfocused(
-        `clarify:${chatTabId}`,
-        t.notifications.clarifyTitle,
-        t.notifications.clarifyBody,
-        { tabId: chatTabId, chatTabId }
-      )
-      return
-    }
-
-    const shouldUseCurrentTerminal =
-      terminalContext.mode !== 'none' &&
-      hasUsableCurrentTerminal(
-        tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? terminalTab,
-        terminalContext.output,
-        terminalContext.mode
-      ) &&
-      !connectionIntent?.analysis?.shouldConnect &&
-      !explicitNonTerminalRequest &&
-      !isExplicitConnectionRequest(displayInput)
-
-    // Explicit login without a resolved target must not fall through to the main
-    // model (it would otherwise invent a login method). Non-login work proceeds.
-    if (
-      !activeLoggedIn &&
-      !connectionIntent?.analysis?.shouldConnect &&
-      isExplicitConnectionRequest(intentSourceInput) &&
-      connections.length > 0 &&
-      !(
-        tabsRef.current.find((candidate) => candidate.id === executionTerminalId)?.connectionId ||
-        terminalTab?.connectionId ||
-        terminalTab?.isSsh
-      )
-    ) {
-      clearThinking()
-      const clarifyOptions = prioritizeClarifyOptions(
-        connections.map((c) => ({ id: c.id, label: c.name })),
-        terminalTab?.connectionId,
-        t.terminal.clarifyCurrentBadge
-      )
-      const optionsText = formatConnectionClarifyOptions(clarifyOptions)
-      const question = t.terminal.connectionClarifyPickOne.replace('{options}', optionsText)
-      const defaultOptionId =
-        lastUsedConnectionId && clarifyOptions.some((option) => option.id === lastUsedConnectionId)
-          ? lastUsedConnectionId
-          : undefined
-      appendLog(
-        {
-          kind: 'assistant',
-          text: formatAgentRunMarkdown(
-            {
-              logId: -1,
-              actions: [],
-              steps: [
-                {
-                  id: 'clarify',
-                  kind: 'status',
-                  title: t.terminal.connectionClarifyTitle,
-                  detail: question
-                }
-              ],
-              result: question,
-              elapsedMs: Date.now() - startedAt
-            },
-            t
-          )
-        },
-        chatTabId
-      )
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        pendingClarification: {
-          kind: 'connection-intent',
-          routeId: `clarify-${crypto.randomUUID()}`,
-          originalInput: pendingClarification?.originalInput || displayInput,
-          question,
-          options: clarifyOptions.length > 0 ? clarifyOptions : undefined,
-          defaultOptionId
-        }
-      }))
-      pendingAttentionNotifierRef.current.notifyIfUnfocused(
-        `clarify:${chatTabId}`,
-        t.notifications.clarifyTitle,
-        t.notifications.clarifyBody,
-        { tabId: chatTabId, chatTabId }
-      )
-      return
-    }
-
-    if (
-      activeLoggedIn &&
-      connectionIntent?.analysis?.shouldConnect &&
-      connectionIntent.connection?.id &&
-      connectionIntent.connection.id !== terminalTab?.connectionId &&
-      !options?.forcedConnectionId &&
-      route.action !== 'connect' &&
-      route.action !== 'switch'
-    ) {
-      // LLM / lastUsed must not steal a logged-in active terminal; explicit route actions may.
-      connectionIntent = undefined
-    }
-
-    if (
-      activeLoggedIn &&
-      connectionIntent?.analysis?.shouldConnect &&
-      connectionIntent.connection?.id === terminalTab?.connectionId &&
-      !isExplicitReconnectRequest(intentSourceInput)
-    ) {
-      // Already on this connection: run the inspect/task in the live PTY.
-      // Do not open a second login card or re-type ssh / login actions.
-      connectionIntent = undefined
-    }
-
-    if (connectionIntent?.analysis?.shouldConnect) {
-      clearThinking()
-      const matchedConnection = connectionIntent.connection
-      const executeAfterLogin = connectionIntent.analysis.executeAfterLogin === true
-
-      if (!matchedConnection) {
-        appendLog(
-          {
-            kind: 'assistant',
-            text: formatAgentRunMarkdown(
-              {
-                logId: -1,
-                actions: [],
-                steps: [
-                  {
-                    id: 'match-miss',
-                    kind: 'status',
-                    title: t.terminal.connectionMatched,
-                    detail: connectionIntent.analysis.reason ?? displayInput
-                  }
-                ],
-                error: t.terminal.connectionNoMatch,
-                elapsedMs: Date.now() - startedAt
-              },
-              t
-            )
-          },
-          chatTabId
-        )
-        return
-      }
-
-      const matchDetail = [
-        matchedConnection.name,
-        `${t.terminal.connectionTarget}: ${formatConnectionTarget(matchedConnection)}`,
-        connectionIntent.analysis.reason,
-        executeAfterLogin ? t.terminal.postLoginSkillHint : ''
-      ]
-        .filter(Boolean)
-        .join('\n')
-
-      const taskInput =
-        intentSourceInput === displayInput
-          ? input
-          : buildAgentInputWithReferences(
-              intentSourceInput,
-              skillRefs,
-              pathRefs,
-              toolRefs,
-              wikiRefs,
-              t
-            )
-
-      if (executeAfterLogin) {
-        const runId = `run-${crypto.randomUUID()}`
-        updateTab(chatTabId, (current) => ({
-          ...current,
-          agentInput: '',
-          agentBusy: true,
-          agentThinking: false,
-          thinkingMessage: undefined,
-          pendingClarification: retainSettledClarification(current.pendingClarification)
-        }))
-        activeRunCanceledRef.current.delete(chatTabId)
-        activeRunIdRef.current.set(chatTabId, runId)
-        activeRunInputRef.current.set(chatTabId, displayInput)
-        const matchStep = {
-          id: 'match',
-          kind: 'status' as const,
-          title: t.terminal.connectionMatched,
-          detail: matchDetail
-        }
-        const runLogId = appendLog(
-          {
-            kind: 'assistant',
-            text: formatAgentRunMarkdown(
-              {
-                logId: -1,
-                actions: [],
-                steps: [matchStep],
-                startedAt
-              },
-              t
-            )
-          },
-          chatTabId
-        )
-        activeAgentRunRef.current.set(chatTabId, {
-          logId: runLogId,
-          runId,
-          actions: [],
-          steps: [matchStep],
-          startedAt,
-          loginMeta: {
-            connectionName: matchedConnection.name,
-            host: matchedConnection.host,
-            port: matchedConnection.port,
-            user: matchedConnection.user,
-            actionCount: buildConnectionLoginActions(matchedConnection).length
-          }
-        })
-        updateAgentRun(chatTabId, (run) => run)
-        void persistAgentRun({
-          runId,
-          tabId: chatTabId,
-          input: displayInput,
-          status: 'running',
-          connectionId: matchedConnection.id
-        })
-
-        if (isPasswordChangedReconnectRequest(intentSourceInput)) {
-          skipStoredPasswordTabsRef.current.add(matchedConnection.id)
-        }
-
-        const targetTabId = await connectToConnection(
-          matchedConnection,
-          buildPostLoginAgentInput(taskInput, matchedConnection, t),
-          formatVisibleInputWithReferences(
-            displayInput,
-            skillRefs,
-            pathRefs,
-            toolRefs,
-            wikiRefs,
-            t
-          ),
-          conversationContext,
-          false,
-          startedAt,
-          { logId: runLogId, runId },
-          { activeWikiIds: wikiIds, activeSkillPaths: skillPaths }
-        )
-        setActiveExecutionTerminal(chatTabId, targetTabId)
-        return
-      }
-
-      // Pure login (no follow-up task) still gets an assistant-run card so the
-      // connection flow steps land inside it instead of scattered system rows.
-      const loginRunId = `run-${crypto.randomUUID()}`
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        agentInput: '',
-        agentBusy: true,
-        agentThinking: false,
-        thinkingMessage: undefined,
-        pendingClarification: retainSettledClarification(current.pendingClarification)
-      }))
-      activeRunCanceledRef.current.delete(chatTabId)
-      activeRunIdRef.current.set(chatTabId, loginRunId)
-      activeRunInputRef.current.set(chatTabId, displayInput)
-      const loginMatchStep = {
-        id: 'match',
-        kind: 'status' as const,
-        title: t.terminal.connectionMatched,
-        detail: matchDetail
-      }
-      const loginRunLogId = appendLog(
-        {
-          kind: 'assistant',
-          text: formatAgentRunMarkdown(
-            {
-              logId: -1,
-              actions: [],
-              steps: [loginMatchStep],
-              startedAt
-            },
-            t
-          )
-        },
-        chatTabId
-      )
-      activeAgentRunRef.current.set(chatTabId, {
-        logId: loginRunLogId,
-        runId: loginRunId,
-        actions: [],
-        steps: [loginMatchStep],
-        startedAt,
-        loginMeta: {
-          connectionName: matchedConnection.name,
-          host: matchedConnection.host,
-          port: matchedConnection.port,
-          user: matchedConnection.user,
-          actionCount: buildConnectionLoginActions(matchedConnection).length
-        }
-      })
-      lastLoginRunLogIdRef.current.set(chatTabId, loginRunLogId)
-      updateAgentRun(chatTabId, (run) => run)
-      void persistAgentRun({
-        runId: loginRunId,
-        tabId: chatTabId,
-        input: displayInput,
-        status: 'running',
-        connectionId: matchedConnection.id
-      })
-
-      if (isPasswordChangedReconnectRequest(intentSourceInput)) {
-        skipStoredPasswordTabsRef.current.add(matchedConnection.id)
-      }
-
-      void connectToConnection(matchedConnection)
-      updateTab(chatTabId, (current) => ({
-        ...current,
-        pendingClarification: retainSettledClarification(current.pendingClarification)
-      }))
-      return
-    }
-
-    setThinking(t.input.thinkingPreparingRun)
-    const resolvedInput =
-      intentSourceInput === displayInput
-        ? input
-        : buildAgentInputWithReferences(
-            intentSourceInput,
-            skillRefs,
-            pathRefs,
-            toolRefs,
-            wikiRefs,
-            t
-          )
-    const runInput = shouldUseCurrentTerminal
-      ? buildCurrentTerminalAgentInput(resolvedInput, terminalContext, t)
-      : resolvedInput
-    const executionTab =
-      tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? terminalTab
-
-    if (isRemoteExecutionTab(executionTab)) {
-      const liveContext = await window.api.terminal.getContext(executionTerminalId)
-      if (!hasLiveTerminalSession(liveContext.mode)) {
-        const connection = connections.find(
-          (candidate) => candidate.id === executionTab?.connectionId
-        )
-        if (connection) {
-          clearThinking()
-          updateTab(chatTabId, (current) => ({
-            ...current,
-            agentInput: '',
-            agentBusy: true,
-            agentThinking: false,
-            thinkingMessage: undefined
-          }))
-          const targetTabId = await connectToConnection(
-            connection,
-            buildPostLoginAgentInput(resolvedInput, connection, t),
-            formatVisibleInputWithReferences(
-              displayInput,
-              skillRefs,
-              pathRefs,
-              toolRefs,
-              wikiRefs,
-              t
-            ),
-            conversationContext,
-            false,
-            startedAt,
-            undefined,
-            { activeWikiIds: wikiIds, activeSkillPaths: skillPaths }
-          )
-          setActiveExecutionTerminal(chatTabId, targetTabId)
-          return
-        }
-      }
-    }
-
-    // Gate: ensure local PTY exists even when the terminal pane is hidden (xterm never mounted).
-    const ensureResult = await ensureLocalTerminalStarted({
-      tab: executionTab ?? createTerminalTab({ id: executionTerminalId, title: 'Terminal' }),
-      getContext: async () => window.api.terminal.getContext(executionTerminalId),
-      start: async () => {
-        const dimensions =
-          executionTerminalId === activeTabIdRef.current
-            ? fitAddonRef.current?.proposeDimensions()
-            : undefined
-        return window.api.terminal.start({
-          cols: dimensions?.cols ?? 80,
-          rows: dimensions?.rows ?? 24,
-          tabId: executionTerminalId
-        })
-      }
-    })
-    updateTab(executionTerminalId, () => ensureResult.tab)
-    if (executionTerminalId === activeTabIdRef.current && ensureResult.ok) {
-      terminalSessionIdRef.current = ensureResult.tab.sessionId ?? null
-      terminalModeRef.current = ensureResult.tab.terminalMode
-      terminalCwdRef.current = ensureResult.tab.terminalCwd
-      pipePromptRef.current = formatPipePrompt(ensureResult.tab.terminalCwd)
-    }
-
-    const executionTabAfterEnsure =
-      tabsRef.current.find((candidate) => candidate.id === executionTerminalId) ?? ensureResult.tab
-    const isRemote = isRemoteExecutionTab(executionTabAfterEnsure)
-    // Local non-SSH: skip long SSH wait — snapshot ready check only.
-    const waitedOk = isRemote
-      ? await waitForTerminalReadyForAgent(executionTerminalId, {
-          getTab: () => tabsRef.current.find((candidate) => candidate.id === executionTerminalId)
-        })
-      : true
-    const executionContext = await window.api.terminal.getContext(executionTerminalId)
-    const readyTab = tabsRef.current.find((candidate) => candidate.id === executionTerminalId)
-    const gate = resolveTerminalReadyGateOutcome({
-      ensureOk: ensureResult.ok,
-      ensureError: ensureResult.error,
-      tab: readyTab,
-      terminalMode: executionContext.mode,
-      waitedOk:
-        waitedOk &&
-        isTerminalSnapshotReadyForAgent({
-          tab: readyTab,
-          terminalMode: executionContext.mode,
-          output: executionContext.output
-        }),
-      failedToStartShellNotReady: t.terminal.failedToStartShellNotReady
-    })
-    if (gate.kind !== 'ready') {
-      clearThinking()
-      if (gate.kind === 'clarify') {
-        const currentConnection =
-          connections.find((candidate) => candidate.id === readyTab?.connectionId) ??
-          connections.find((candidate) => candidate.id === executionTabAfterEnsure.connectionId)
-        const clarifyOptions = buildTerminalNotReadyClarifyOptions({
-          connections: currentConnection
-            ? [{ id: currentConnection.id, label: currentConnection.name }]
-            : [],
-          currentConnectionId: currentConnection?.id,
-          retryCurrentLabel: currentConnection
-            ? t.terminal.clarifyRetryCurrent.replace('{label}', currentConnection.name)
-            : undefined,
-          manualContinueLabel: t.terminal.clarifyManualContinue,
-          openConnectionsLabel: t.terminal.clarifyOpenConnections
-        })
-        const question = t.terminal.connectionNotReadyClarify
-        appendLog(
-          {
-            kind: 'assistant',
-            text: formatAgentRunMarkdown(
-              {
-                logId: -1,
-                actions: [],
-                steps: [
-                  {
-                    id: 'terminal-not-ready-clarify',
-                    kind: 'status',
-                    title: t.terminal.connectionClarifyTitle,
-                    detail: question
-                  }
-                ],
-                result: question,
-                elapsedMs: Date.now() - startedAt
-              },
-              t
-            )
-          },
-          chatTabId
-        )
-        updateTab(chatTabId, (current) => ({
-          ...current,
-          pendingClarification: {
-            kind: 'connection-intent',
-            routeId: `clarify-${crypto.randomUUID()}`,
-            originalInput: displayInput,
-            question,
-            options: clarifyOptions,
-            defaultOptionId: currentConnection?.id ?? CLARIFY_MANUAL_CONTINUE_ID
-          }
-        }))
-        pendingAttentionNotifierRef.current.notifyIfUnfocused(
-          `clarify:${chatTabId}`,
-          t.notifications.clarifyTitle,
-          t.notifications.clarifyBody,
-          { tabId: chatTabId, chatTabId }
-        )
-        return
-      }
-
-      const reason = gate.reason
-      appendLog(
-        {
-          kind: 'assistant',
-          text: formatAgentRunMarkdown(
-            {
-              logId: -1,
-              actions: [],
-              steps: [
-                {
-                  id: 'terminal-not-ready',
-                  kind: 'status',
-                  title: t.terminal.failedToStartShell,
-                  detail: reason
-                }
-              ],
-              error: t.terminal.failedToStartShellReason.replace('{reason}', reason),
-              elapsedMs: Date.now() - startedAt
-            },
-            t
-          )
-        },
-        chatTabId
-      )
-      return
-    }
-
-    await runAgentConversation(
-      runInput,
-      executionTerminalId,
-      readyTab?.connectionId || terminalTab?.connectionId || undefined,
-      displayInput,
-      false,
-      startedAt,
-      {
-        conversationContext,
-        chatTabId,
-        connectionRouteLabel: route.label,
-        activeWikiIds: wikiIds,
-        activeSkillPaths: skillPaths
-      }
-    )
-  }
-
-  async function runAgentConversation(
-    input: string,
-    terminalTabId: string,
-    connectionId?: string,
-    displayInput = input,
-    appendUserLog = true,
-    startedAt = Date.now(),
-    options: {
-      conversationContext?: string
-      chatTabId?: string
-      reuseRun?: ReuseAgentRun
-      connectionRouteLabel?: string
-      activeWikiIds?: string[]
-      activeSkillPaths?: string[]
-    } = {}
-  ): Promise<void> {
-    const chatTabId = options.chatTabId ?? resolveSessionChatTabId(tabsRef.current, terminalTabId)
-    // Merge supplements that were queued while no agent session was active
-    // (e.g. typed during connection login) into the task that starts now.
-    const pendingSupplements = pendingPostLoginSupplementsRef.current.get(chatTabId) ?? []
-    if (pendingSupplements.length > 0) {
-      pendingPostLoginSupplementsRef.current.delete(chatTabId)
-      input = mergePostLoginSupplements(input, pendingSupplements)
-    }
-    const reuseRun = options.reuseRun
-    const existingReuse =
-      reuseRun && activeAgentRunRef.current.get(chatTabId)?.logId === reuseRun.logId
-        ? activeAgentRunRef.current.get(chatTabId)
-        : undefined
-
-    updateTab(chatTabId, (current) => ({
-      ...current,
-      agentInput: '',
-      agentBusy: true,
-      agentThinking: false,
-      thinkingMessage: undefined,
-      pendingClarification: retainSettledClarification(current.pendingClarification)
-    }))
-    activeRunCanceledRef.current.delete(chatTabId)
-    const runId = existingReuse?.runId ?? reuseRun?.runId ?? `run-${crypto.randomUUID()}`
-    activeRunIdRef.current.set(chatTabId, runId)
-    activeRunInputRef.current.set(chatTabId, displayInput)
-    setActiveExecutionTerminal(chatTabId, terminalTabId)
-    void persistAgentRun({
-      runId,
-      tabId: chatTabId,
-      input: displayInput,
-      status: 'running',
-      connectionId
-    })
-    if (existingReuse) {
-      activeAgentRunRef.current.set(chatTabId, {
-        ...existingReuse,
-        runId,
-        startedAt: existingReuse.startedAt ?? startedAt,
-        error: undefined,
-        elapsedMs: undefined
-      })
-      updateAgentRun(chatTabId, (run) => run)
-    } else {
-      if (appendUserLog) appendLog({ kind: 'user', text: displayInput }, chatTabId)
-      const runLogId = appendLog(
-        {
-          kind: 'assistant',
-          text: formatAgentRunMarkdown(
-            {
-              logId: -1,
-              actions: [],
-              steps: []
-            },
-            t
-          )
-        },
-        chatTabId
-      )
-      activeAgentRunRef.current.set(chatTabId, {
-        logId: runLogId,
-        runId,
-        actions: [],
-        steps: [],
-        startedAt
-      })
-
-      // Publish the initial structured run so the timeline renders immediately.
-      updateAgentRun(chatTabId, (run) => run)
-    }
-
-    try {
-      const runTab = tabsRef.current.find((candidate) => candidate.id === terminalTabId)
-      const chatTab = tabsRef.current.find((candidate) => candidate.id === chatTabId)
-      const runModelSelection = resolveTabModelSelection(chatTab ?? runTab, config, visibleModels)
-      const executionTabId = activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId
-      const executionTabForRun =
-        tabsRef.current.find((candidate) => candidate.id === executionTabId) ?? runTab
-      const executionConnectionId =
-        executionTabForRun?.isSsh && executionTabForRun.connectionId
-          ? executionTabForRun.connectionId
-          : undefined
-      let terminalContext = ''
-      try {
-        const context = await window.api.terminal.getContext(executionTabId)
-        const executionTab =
-          tabsRef.current.find((candidate) => candidate.id === executionTabId) ?? runTab
-        const executionConnection = connections.find(
-          (candidate) => candidate.id === executionTab?.connectionId
-        )
-        const loggedIn = isActiveLoggedInTerminal(executionTab)
-        const routeLine = options.connectionRouteLabel?.trim()
-          ? `当前终端/连接：${options.connectionRouteLabel.trim()}`
-          : ''
-        terminalContext = [
-          routeLine,
-          `tabId: ${executionTabId}`,
-          executionTab?.connectionId ? `connectionId: ${executionTab.connectionId}` : '',
-          executionTab?.connectionName ? `connectionName: ${executionTab.connectionName}` : '',
-          executionConnection?.host ? `host: ${executionConnection.host}` : '',
-          `loggedIn: ${loggedIn ? 'yes' : 'no'}`,
-          `alignment: ${context.alignment ?? 'unknown'}`,
-          `ready: ${context.ready ? 'yes' : 'no'}`,
-          `promptHost: ${context.promptHost ?? '-'}`,
-          `aliases: ${(context.aliases ?? []).join(',') || '-'}`,
-          `terminalReady: ${executionTab?.terminalReady ? 'yes' : 'no'}`,
-          `mode: ${context.mode}`,
-          `cwd: ${context.cwd || '-'}`,
-          `shell: ${context.shell || '-'}`,
-          '',
-          (context.output || '').slice(-8000)
-        ]
-          .filter(Boolean)
-          .join('\n')
-      } catch {
-        terminalContext = options.connectionRouteLabel?.trim()
-          ? `当前终端/连接：${options.connectionRouteLabel.trim()}`
-          : ''
-      }
-      const result = await window.api.agent.run({
-        runId,
-        input,
-        skillInput: displayInput,
-        conversationContext:
-          options.conversationContext ?? buildRecentConversationContext(chatTab, displayInput, t),
-        providerId: runModelSelection.providerId,
-        model: runModelSelection.model,
-        tabId: chatTabId,
-        executionTabId,
-        executionConnectionId,
-        terminalContext,
-        locale,
-        agentStyle: normalizeAgentStyle(sessionAgentStyle),
-        executionMode: normalizeExecutionMode(chatTab?.executionMode),
-        activeWikiIds: options.activeWikiIds ?? chatTab?.activeWikiIds ?? [],
-        activeSkillPaths:
-          options.activeSkillPaths ??
-          (chatTab?.skillRefs ?? []).map((skill) => skill.path).filter(Boolean)
-      })
-
-      if (activeRunCanceledRef.current.has(chatTabId)) return
-
-      const notifyRunOutcome = (outcome: 'success' | 'error', summaryText: string): void => {
-        if (activeRunCanceledRef.current.has(chatTabId)) return
-        const title =
-          outcome === 'success' ? t.notifications.runCompleteTitle : t.notifications.runFailedTitle
-        const body =
-          summarizeNotificationBody(summaryText) ||
-          (outcome === 'success' ? t.input.done : t.input.failed)
-        pendingAttentionNotifierRef.current.notifyRunComplete(runId, title, body, {
-          tabId: executionTabId,
-          chatTabId
-        })
-      }
-
-      if (result.ok) {
-        const resolved = resolveSuccessfulAgentResult({
-          text: result.text,
-          run: activeAgentRunRef.current.get(chatTabId),
-          doneFallback: t.input.done
-        })
-        const elapsedMs = Date.now() - startedAt
-        if (!resolved.ok) {
-          updateAgentRun(chatTabId, (run) => ({
-            ...run,
-            steps: closeStreamingOpenSteps(run.steps ?? []),
-            error: resolved.error,
-            elapsedMs
-          }))
-          void persistAgentRun({
-            runId,
-            tabId: chatTabId,
-            input: displayInput,
-            status: 'error',
-            connectionId,
-            error: resolved.error,
-            startedAt: new Date(startedAt).toISOString(),
-            elapsedMs,
-            trace: buildTraceFromAgentRunView({
-              runId,
-              tabId: chatTabId,
-              displayInput,
-              status: 'error',
-              connectionId,
-              run: activeAgentRunRef.current.get(chatTabId),
-              startedAt,
-              error: resolved.error
-            })
-          })
-          notifyRunOutcome('error', resolved.error)
-        } else {
-          updateAgentRun(chatTabId, (run) => ({
-            ...run,
-            steps: closeStreamingOpenSteps(run.steps ?? []),
-            result: resolved.text ?? '',
-            elapsedMs
-          }))
-          void persistAgentRun({
-            runId,
-            tabId: chatTabId,
-            input: displayInput,
-            status: 'success',
-            connectionId,
-            output: resolved.text,
-            startedAt: new Date(startedAt).toISOString(),
-            elapsedMs,
-            trace: buildTraceFromAgentRunView({
-              runId,
-              tabId: chatTabId,
-              displayInput,
-              status: 'success',
-              connectionId,
-              run: activeAgentRunRef.current.get(chatTabId),
-              startedAt,
-              output: resolved.text
-            })
-          })
-          notifyRunOutcome('success', resolved.text)
-        }
-      } else {
-        const elapsedMs = Date.now() - startedAt
-        const humanError = localizeAgentEventMessage(result.error || t.input.failed, t)
-        updateAgentRun(chatTabId, (run) => ({
-          ...run,
-          steps: closeStreamingOpenSteps(run.steps ?? []),
-          error: humanError,
-          elapsedMs
-        }))
-        void persistAgentRun({
-          runId,
-          tabId: chatTabId,
-          input: displayInput,
-          status: 'error',
-          connectionId,
-          error: humanError,
-          startedAt: new Date(startedAt).toISOString(),
-          elapsedMs,
-          trace: buildTraceFromAgentRunView({
-            runId,
-            tabId: chatTabId,
-            displayInput,
-            status: 'error',
-            connectionId,
-            run: activeAgentRunRef.current.get(chatTabId),
-            startedAt,
-            error: humanError
-          })
-        })
-        notifyRunOutcome('error', humanError)
-      }
-    } catch (error) {
-      if (activeRunCanceledRef.current.has(chatTabId)) return
-
-      const rawMessage = error instanceof Error ? error.message : String(error)
-      const message = localizeAgentEventMessage(rawMessage, t)
-      const elapsedMs = Date.now() - startedAt
-      updateAgentRun(chatTabId, (run) => ({
-        ...run,
-        steps: closeStreamingOpenSteps(run.steps ?? []),
-        error: message,
-        elapsedMs
-      }))
-      void persistAgentRun({
-        runId,
-        tabId: chatTabId,
-        input: displayInput,
-        status: 'error',
-        connectionId,
-        error: message,
-        startedAt: new Date(startedAt).toISOString(),
-        elapsedMs,
-        trace: buildTraceFromAgentRunView({
-          runId,
-          tabId: chatTabId,
-          displayInput,
-          status: 'error',
-          connectionId,
-          run: activeAgentRunRef.current.get(chatTabId),
-          startedAt,
-          error: message
-        })
-      })
-      pendingAttentionNotifierRef.current.notifyRunComplete(
-        runId,
-        t.notifications.runFailedTitle,
-        summarizeNotificationBody(message) || t.input.failed,
-        {
-          tabId: activeExecutionTabIdRef.current.get(chatTabId) ?? terminalTabId,
-          chatTabId
-        }
-      )
-    } finally {
-      // Only tear down if this run is still the active one (stop→resubmit race).
-      if (activeRunIdRef.current.get(chatTabId) === runId) {
-        const finishedRun = activeAgentRunRef.current.get(chatTabId)
-        const finishedLogId = finishedRun?.logId
-        // Persist the full compact document to SQLite; updateLogEntryText
-        // structure-clamps only the in-memory agentLog copy for OOM safety.
-        if (finishedRun && typeof finishedLogId === 'number') {
-          try {
-            updateLogEntryText(chatTabId, finishedLogId, buildFinishPersistText(finishedRun))
-          } catch (error) {
-            console.warn('[crescent] finish snapshot write failed; continuing teardown', error)
-          }
-        }
-        activeAgentRunRef.current.delete(chatTabId)
-        activeRunCanceledRef.current.delete(chatTabId)
-        activeRunIdRef.current.delete(chatTabId)
-        activeRunInputRef.current.delete(chatTabId)
-        if (typeof finishedLogId === 'number') pruneLiveRuns([finishedLogId])
-        updateTab(chatTabId, (current) => ({
-          ...current,
-          agentInput: '',
-          agentBusy: false,
-          agentThinking: false,
-          thinkingMessage: undefined
-        }))
-      }
-    }
-  }
+  const { submitAgent, submitAgentMessage, runAgentConversation } = useAgentController({
+    activeTabIdRef,
+    tabsRef,
+    startNewSession,
+    reloadApplicationRuntime,
+    updateTab,
+    applyComposerInput,
+    compactCurrentSession,
+    startCaptureFromCurrentSession,
+    t,
+    activeRunIdRef,
+    appendLog,
+    pendingPostLoginSupplementsRef,
+    updateAgentRun,
+    updateConnectionAttempt,
+    connections,
+    resolveConnectionIntentForInput,
+    setActiveExecutionTerminal,
+    appendStatusToActiveRunOrLog,
+    pendingAttentionNotifierRef,
+    activeRunCanceledRef,
+    activeRunInputRef,
+    activeAgentRunRef,
+    persistAgentRun,
+    skipStoredPasswordTabsRef,
+    connectToConnection,
+    lastLoginRunLogIdRef,
+    fitAddonRef,
+    terminalSessionIdRef,
+    terminalModeRef,
+    terminalCwdRef,
+    pipePromptRef,
+    config,
+    visibleModels,
+    activeExecutionTabIdRef,
+    locale,
+    sessionAgentStyle,
+    updateLogEntryText,
+    pruneLiveRuns
+  })
 
   function slashReplacementCursor(input: string): number {
     return getSlashCommandQuery(input, composerCaret) !== undefined ? composerCaret : input.length
   }
+
+  runAgentConversationRef.current = runAgentConversation
 
   function applyComposerInput(
     tab: AgentTerminalTab,
@@ -7433,18 +4775,6 @@ function App({
     )
     setComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, next))
     return applyComposerInput(tab, next, extras)
-  }
-
-  function openCaptureDraft(kind: CaptureKind): void {
-    const chatTabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
-    const job = findCaptureJob(captureJobsRef.current, { kind, tabId: chatTabId })
-    if (!job || !capturePinIsActionable(job.phase, jobHasContent(job))) return
-    agentInputRef.current?.blur()
-    const focused = document.activeElement
-    if (focused instanceof HTMLElement && focused.closest('.app-composer-body')) {
-      focused.blur()
-    }
-    setCaptureDialogKind(kind)
   }
 
   function handleAgentInputKeyDown(event: KeyboardEvent<HTMLElement>): void {
@@ -7625,12 +4955,6 @@ function App({
     )
   }
 
-  function removeSkillRef(skillId: string): void {
-    updateTab(sessionChatTab.id, (tab) =>
-      applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'skill', skillId))
-    )
-  }
-
   function removeToolRef(toolId: string): void {
     updateTab(sessionChatTab.id, (tab) =>
       applyComposerInput(tab, removeComposerRefToken(tab.agentInput, 'tool', toolId))
@@ -7659,7 +4983,7 @@ function App({
   }
 
   async function pickPathReference(kind: AgentPathReference['kind']): Promise<void> {
-    const reference = await window.api.agent.pickPathReference(kind)
+    const reference = await agentClient.pickPathReference(kind)
     if (!reference) return
 
     updateTab(sessionChatTab.id, (tab) => {
@@ -7688,172 +5012,6 @@ function App({
   function updateConfig<K extends keyof AgentConfig>(key: K, value: AgentConfig[K]): void {
     setConfig((current) => ({ ...current, [key]: value }))
     setValidation(undefined)
-  }
-
-  function updateSettingsProvider<K extends keyof AgentProviderConfig>(
-    key: K,
-    value: AgentProviderConfig[K]
-  ): void {
-    const currentProviderId = settingsProviderId || settingsProvider.id
-    if (!currentProviderId) return
-
-    if (key === 'id') {
-      const nextProviderId = String(value).trim()
-      if (!nextProviderId) return
-      if (
-        config.providers.some(
-          (provider) => provider.id !== currentProviderId && provider.id === nextProviderId
-        )
-      ) {
-        return
-      }
-
-      setConfig((current) => {
-        const providers = current.providers.map((provider) =>
-          provider.id === currentProviderId ? { ...provider, id: nextProviderId } : provider
-        )
-
-        return {
-          ...current,
-          providers,
-          providerId: current.providerId === currentProviderId ? nextProviderId : current.providerId
-        }
-      })
-      setSettingsProviderId(nextProviderId)
-      setValidation(undefined)
-      return
-    }
-
-    setConfig((current) => ({
-      ...current,
-      providers: current.providers.map((provider) =>
-        provider.id === currentProviderId ? { ...provider, [key]: value } : provider
-      )
-    }))
-    setValidation(undefined)
-  }
-
-  function updateSettingsProviderModels(value: string): void {
-    setProviderModelsText(value)
-    updateSettingsProvider('models', parseProviderModels(value))
-  }
-
-  function selectSettingsProvider(providerId: string): void {
-    const provider = config.providers.find((candidate) => candidate.id === providerId)
-    setSettingsProviderId(providerId)
-    setProviderModelsText(formatProviderModels(provider?.models ?? []))
-  }
-
-  function toggleProviderDetails(providerId: string): void {
-    selectSettingsProvider(providerId)
-    setOpenApiEditorOpen(false)
-    setInstructionEditorOpen(false)
-    setProviderEditorOpen(true)
-    window.requestAnimationFrame(() => {
-      document.getElementById('provider-editor-panel')?.scrollIntoView({
-        block: 'start',
-        behavior: 'smooth'
-      })
-    })
-  }
-
-  function toggleProviderEnabled(providerId: string, enabled: boolean): void {
-    const targetId = providerId.trim()
-    if (!targetId) return
-
-    setConfig((current) => {
-      const providers = current.providers.map((provider) =>
-        provider.id === targetId ? { ...provider, enabled } : provider
-      )
-      const selection = selectEnabledAgentProvider(
-        providers,
-        current.providerId ?? '',
-        current.model
-      )
-      return {
-        ...current,
-        providers,
-        providerId: selection.providerId,
-        model: selection.model
-      }
-    })
-    setValidation(undefined)
-  }
-
-  function createProvider(): void {
-    const id = `provider-${Date.now()}`
-    const provider: AgentProviderConfig = {
-      id,
-      name: '',
-      baseUrl: '',
-      apiKey: '',
-      enabled: true,
-      models: []
-    }
-
-    setConfig((current) => ({ ...current, providers: [...current.providers, provider] }))
-    setSettingsProviderId(id)
-    setProviderModelsText(formatProviderModels(provider.models))
-    setOpenApiEditorOpen(false)
-    setInstructionEditorOpen(false)
-    setProviderEditorOpen(true)
-    setValidation(undefined)
-    window.requestAnimationFrame(() => {
-      document.getElementById('provider-editor-panel')?.scrollIntoView({
-        block: 'start',
-        behavior: 'smooth'
-      })
-    })
-  }
-
-  function deleteSettingsProvider(providerId = settingsProviderId): void {
-    const targetId = providerId.trim()
-    if (!targetId) return
-    if (config.providers.length <= 1) return
-
-    const target = config.providers.find((provider) => provider.id === targetId) ?? settingsProvider
-    const label = target.name.trim() || target.id || targetId
-    if (!window.confirm(`${t.confirm.deleteProvider}\n\n${label}`)) return
-
-    const remainingProviders = config.providers.filter((provider) => provider.id !== targetId)
-    const remainingEnabled = remainingProviders.filter(isAgentProviderEnabled)
-    const nextProvider = remainingEnabled[0] ?? remainingProviders[0]
-    const modelProvider = remainingEnabled.find((provider) =>
-      provider.models.some((model) => model.id === config.model)
-    )
-    const modelStillAvailable = Boolean(modelProvider)
-    const wasEditingTarget = targetId === settingsProviderId
-
-    setConfig({
-      ...config,
-      providers: remainingProviders,
-      providerId: modelStillAvailable ? modelProvider?.id : nextProvider?.id,
-      model: modelStillAvailable ? config.model : (nextProvider?.models[0]?.id ?? '')
-    })
-    setSettingsProviderId(wasEditingTarget ? (nextProvider?.id ?? '') : settingsProviderId)
-    setProviderModelsText(
-      formatProviderModels(
-        (wasEditingTarget ? nextProvider?.models : settingsProvider.models) ?? []
-      )
-    )
-    if (wasEditingTarget) setProviderEditorOpen(false)
-    setValidation(undefined)
-  }
-
-  function updateSettingsMcpServers(nextServers: AgentMcpServerConfig[]): void {
-    setConfig((current) => ({ ...current, mcpServers: nextServers }))
-    setValidation(undefined)
-  }
-
-  async function saveMcpServers(nextServers: AgentMcpServerConfig[]): Promise<void> {
-    const nextConfig = await saveAgentConfig({
-      ...config,
-      mcpServers: nextServers,
-      commandWhitelist: parseCommandWhitelist(commandWhitelistText)
-    })
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1400)
-    void validateConfig(nextConfig)
   }
 
   function updateConnectionForm<K extends keyof ConnectionInput>(
@@ -8000,10 +5158,10 @@ function App({
     ])
 
     suppressTerminalReconnectRef.current.add(tabId)
-    window.api.terminal.stop(tabId)
+    terminalClient.stop(tabId)
     closingTab?.subTerminals.forEach((subterminal) => {
       suppressTerminalReconnectRef.current.add(subterminal.id)
-      window.api.terminal.stop(subterminal.id)
+      terminalClient.stop(subterminal.id)
     })
     pendingSshRef.current.delete(tabId)
     setTabs((current) => {
@@ -8043,10 +5201,10 @@ function App({
       if (tab.id !== tabId) {
         closedTabIds.push(tab.id, ...tab.subTerminals.map((subterminal) => subterminal.id))
         suppressTerminalReconnectRef.current.add(tab.id)
-        window.api.terminal.stop(tab.id)
+        terminalClient.stop(tab.id)
         tab.subTerminals.forEach((subterminal) => {
           suppressTerminalReconnectRef.current.add(subterminal.id)
-          window.api.terminal.stop(subterminal.id)
+          terminalClient.stop(subterminal.id)
         })
         pendingSshRef.current.delete(tab.id)
       }
@@ -8067,10 +5225,10 @@ function App({
     for (const tab of tabsRef.current) {
       closedTabIds.push(tab.id, ...tab.subTerminals.map((subterminal) => subterminal.id))
       suppressTerminalReconnectRef.current.add(tab.id)
-      window.api.terminal.stop(tab.id)
+      terminalClient.stop(tab.id)
       tab.subTerminals.forEach((subterminal) => {
         suppressTerminalReconnectRef.current.add(subterminal.id)
-        window.api.terminal.stop(subterminal.id)
+        terminalClient.stop(subterminal.id)
       })
       pendingSshRef.current.delete(tab.id)
     }
@@ -8145,7 +5303,7 @@ function App({
     const extracted = extractResultMarkdown(entry.text, t) || entry.text
     const tabId = resolveSessionChatTabId(tabsRef.current, activeTabIdRef.current)
     try {
-      const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
+      const runs = await storageClient.listAgentRuns({ tabId, limit: 40 })
       const storedRun =
         runs.find(
           (run) =>
@@ -8190,12 +5348,14 @@ function App({
   }
 
   function exportLogEntryFullMarkdown(entry: AgentLogEntry): void {
-    void downloadMarkdown(entry.text, buildLogMarkdownFilename(entry), t)
+    void resolveLogEntryResultMarkdown(entry).then((value) =>
+      downloadMarkdown(value, buildLogMarkdownFilename(entry), t)
+    )
   }
 
   async function exportLogEntryTrace(entry: AgentLogEntry): Promise<void> {
     const tabId = activeTabIdRef.current
-    const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
+    const runs = await storageClient.listAgentRuns({ tabId, limit: 40 })
     const resultText = extractResultMarkdown(entry.text, t)
     const storedRun =
       runs.find(
@@ -8221,8 +5381,8 @@ function App({
     const tabId = sessionChatTab.id
     const title = getSessionDisplayTitle(sessionChatTab, tabs, activeTab.id)
     const [runs, storedUsage] = await Promise.all([
-      window.api.storage.listAllAgentRuns(tabId),
-      window.api.storage.getSessionTokenUsage(tabId)
+      storageClient.listAllAgentRuns(tabId),
+      storageClient.getSessionTokenUsage(tabId)
     ])
     const bundle = buildAgentSessionTrace({
       tabId,
@@ -8236,80 +5396,16 @@ function App({
     await downloadJson(serializeAgentSessionTrace(bundle), buildSessionTraceFilename(), t)
   }
 
-  async function resolveRunIdForLogEntry(entry: AgentLogEntry): Promise<string | undefined> {
-    for (const run of activeAgentRunRef.current.values()) {
-      if (run.logId === entry.id && run.runId) return run.runId
-    }
-
-    const tabId =
-      getSessionChatTab(tabsRef.current, getSessionGroupId(activeTab))?.id ?? activeTabIdRef.current
-    const runs = await window.api.storage.listAgentRuns({ tabId, limit: 40 })
-    const resultText = extractResultMarkdown(entry.text, t)
-    const matched =
-      runs.find((run) => run.output && resultText && run.output.trim() === resultText.trim()) ??
-      runs.find(
-        (run) =>
-          Math.abs(Date.parse(run.startedAt ?? '') - Date.parse(entry.createdAt)) < 5 * 60_000
-      )
-    return matched?.runId
-  }
-
-  async function submitOpsFeedbackForEntry(
-    entry: AgentLogEntry,
-    rating: 'like' | 'dislike'
-  ): Promise<void> {
-    if (opsFeedbackBusyLogId === entry.id) return
-
-    const existingRating = opsFeedbackByLogId[entry.id]
-    if (existingRating) {
-      toast.error(t.common.opsFeedbackAlreadyRated, {
-        duration: TOAST_INTERVENTION_DURATION_MS
-      })
-      return
-    }
-
-    const chatTab = getSessionChatTab(tabsRef.current, getSessionGroupId(activeTab)) ?? activeTab
-    const connectionId = resolveOpsConnectionId(
-      activeTab.connectionId ||
-        chatTab.connectionId ||
-        getSessionTerminals(tabsRef.current, getSessionGroupId(activeTab)).find(
-          (tab) => tab.connectionId
-        )?.connectionId
-    )
-
-    const runId = await resolveRunIdForLogEntry(entry)
-    if (!runId) {
-      toast.error(t.common.opsFeedbackFailed, { duration: TOAST_INTERVENTION_DURATION_MS })
-      return
-    }
-
-    setOpsFeedbackBusyLogId(entry.id)
-    const savingToast = toast.loading(t.common.opsFeedbackSaving)
+  async function saveSkillPreviewFileFromSheet(
+    skill: AgentSkillOption,
+    relativePath: string,
+    content: string
+  ): Promise<boolean> {
+    setSkillFileSaving(true)
     try {
-      const result = await window.api.storage.submitOpsFeedback({
-        tabId: chatTab.id,
-        runId,
-        rating,
-        connectionId
-      })
-      toast.dismiss(savingToast)
-      if (!result.ok || !result.record) {
-        toast.error(result.error || t.common.opsFeedbackFailed, {
-          duration: TOAST_INTERVENTION_DURATION_MS
-        })
-        return
-      }
-      setOpsFeedbackByLogId((current) => ({ ...current, [entry.id]: result.record!.rating }))
-      toast.success(
-        result.record.rating === 'like'
-          ? t.common.opsFeedbackSavedLike
-          : t.common.opsFeedbackSavedDislike
-      )
-    } catch (error) {
-      toast.dismiss(savingToast)
-      notifyOperationError(t.common.opsFeedbackFailed, error)
+      return await saveSkillPreviewFile(skill, relativePath, content)
     } finally {
-      setOpsFeedbackBusyLogId(null)
+      setSkillFileSaving(false)
     }
   }
 
@@ -8345,15 +5441,7 @@ function App({
       onSaveSkillRoot={() => void saveSkillRoot()}
       onLoadGlobalAgentSkillsChange={(checked) => {
         void persistAgentConfigPatch({ loadGlobalAgentSkills: checked }).then(async () => {
-          const nextSkills = await window.api.agent.listSkills()
-          setSkills(nextSkills)
-          const allowedPaths = new Set(nextSkills.map((skill) => skill.path))
-          setTabs((current) =>
-            current.map((tab) => ({
-              ...tab,
-              skillRefs: (tab.skillRefs ?? []).filter((skill) => allowedPaths.has(skill.path))
-            }))
-          )
+          setSkills(await agentClient.listSkills())
         })
       }}
       onLocalSkillSearchQueryChange={setLocalSkillSearchQuery}
@@ -8370,7 +5458,7 @@ function App({
       onPreviewCatalogSkill={(result) => void previewCatalogSkill(result)}
       onSelectSkillPreviewFile={(relativePath) => void selectSkillPreviewFile(relativePath)}
       onSaveSkillFile={(skill, relativePath, content) =>
-        saveSkillPreviewFile(skill, relativePath, content)
+        saveSkillPreviewFileFromSheet(skill, relativePath, content)
       }
       onDeleteSkillInstallLog={deleteSkillInstallLog}
       onSelectedSkillPreviewChange={setSelectedSkillPreview}
@@ -8535,6 +5623,36 @@ function App({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label="记忆中心"
+            title="记忆中心"
+            onClick={() => setMemoryCenterOpen(true)}
+          >
+            <BrainIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="本地资料"
+            title="本地资料"
+            onClick={() => setLocalDocumentsOpen(true)}
+          >
+            <FolderOpenIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="命令手册"
+            title="命令手册"
+            onClick={() => setCommandDirectoryOpen(true)}
+          >
+            <BookMarkedIcon aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             aria-label={t.wiki.title}
             title={t.wiki.title}
             onClick={() => setWikiSheetOpen(true)}
@@ -8579,96 +5697,235 @@ function App({
               {localeOptions.find((option) => option.value === locale)?.shortLabel}
             </span>
           </Button>
-          <SettingsSheet
-            open={sheetOpen}
-            onOpenChange={(open) => {
-              setSheetOpen(open)
-              if (!open) {
-                flushWorkspaceCwdPersist()
-                setProviderEditorOpen(false)
-                setOpenApiEditorOpen(false)
-                setInstructionEditorOpen(false)
-              }
-            }}
-            t={t}
-            config={config}
-            settingsProvider={settingsProvider}
-            settingsProviderId={settingsProviderId}
-            modelOptions={modelOptions}
-            providerModelsText={providerModelsText}
-            commandWhitelistText={commandWhitelistText}
-            instructionFiles={instructionFiles}
-            selectedInstructionName={selectedInstructionName}
-            selectedInstructionFile={selectedInstructionFile}
-            instructionContent={instructionContent}
-            instructionSaved={instructionSaved}
-            providerEditorOpen={providerEditorOpen}
-            openApiEditorOpen={openApiEditorOpen}
-            settingsOpenApiProfile={
-              (config.openApiProfiles ?? []).find(
-                (profile) => profile.id === config.openApiProfileId
-              ) ?? (config.openApiProfiles ?? [])[0]
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              whaleEnabled
+                ? locale === 'en'
+                  ? 'Hide whale pet'
+                  : '隐藏桌宠'
+                : locale === 'en'
+                  ? 'Show whale pet'
+                  : '显示桌宠'
             }
-            instructionEditorOpen={instructionEditorOpen}
-            validation={validation}
-            saved={saved}
-            importingOpenApi={importingOpenApi}
-            closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
-            workbenchLayout={workbenchLayout}
-            onWorkbenchLayoutChange={persistAndSetWorkbenchLayout}
-            onCreateProvider={createProvider}
-            onToggleProviderDetails={toggleProviderDetails}
-            onToggleProviderEnabled={toggleProviderEnabled}
-            onDeleteProvider={deleteSettingsProvider}
-            onApplyDefaultModel={applyDefaultModel}
-            onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
-            onAgentStyleChange={persistAgentStyle}
-            onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
-            onShowAgentThinkingChange={persistShowAgentThinking}
-            onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
-            onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
-            onCommandWhitelistChange={(text) => {
-              setCommandWhitelistText(text)
-              updateConfig('commandWhitelist', parseCommandWhitelist(text))
-            }}
-            onCreateOpenApiProfile={createOpenApiProfile}
-            onToggleOpenApiProfileDetails={toggleOpenApiProfileDetails}
-            onDeleteOpenApiProfile={deleteOpenApiProfile}
-            onOpenApiEditorOpenChange={setOpenApiEditorOpen}
-            onPatchActiveOpenApiProfile={patchActiveOpenApiProfile}
-            onImportOpenApiDocument={importOpenApiDocument}
-            onToggleInstructionDetails={toggleInstructionDetails}
-            onProviderEditorOpenChange={setProviderEditorOpen}
-            onUpdateSettingsProvider={updateSettingsProvider}
-            onUpdateSettingsProviderModels={updateSettingsProviderModels}
-            onSaveProviderEditor={async () => {
-              await saveConfig()
-              setProviderEditorOpen(false)
-            }}
-            onSaveOpenApiEditor={async () => {
-              await saveConfig()
-              setOpenApiEditorOpen(false)
-            }}
-            onInstructionEditorOpenChange={setInstructionEditorOpen}
-            onInstructionContentChange={(value) => {
-              setInstructionContent(value)
-              setInstructionSaved(false)
-            }}
-            onSaveInstructionFile={saveInstructionFile}
-          />
+            title={
+              whaleEnabled
+                ? locale === 'en'
+                  ? 'Hide whale pet'
+                  : '隐藏桌宠'
+                : locale === 'en'
+                  ? 'Show whale pet'
+                  : '显示桌宠'
+            }
+            onClick={() => void toggleWhaleMonitor()}
+          >
+            <WhalePetPortrait />
+          </Button>
+          <ThemeSwitcher t={t} />
+          {appUpdateStatus.state === 'available' ||
+          appUpdateStatus.state === 'downloading' ||
+          (appUpdateStatus.state === 'downloaded' && appUpdateStatus.installerPath) ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={appUpdateStatus.state === 'downloading'}
+              aria-label={
+                appUpdateStatus.state === 'downloading'
+                  ? t.app.updateDownloading.replace(
+                      '{percent}',
+                      String(Math.round(appUpdateStatus.percent))
+                    )
+                  : appUpdateStatus.state === 'downloaded'
+                    ? t.app.updateSaved
+                    : t.app.downloadInstaller.replace('{version}', appUpdateStatus.version)
+              }
+              title={`v${appVersion} · ${
+                appUpdateStatus.state === 'downloading'
+                  ? t.app.updateDownloading.replace(
+                      '{percent}',
+                      String(Math.round(appUpdateStatus.percent))
+                    )
+                  : appUpdateStatus.state === 'downloaded'
+                    ? t.app.updateSaved
+                    : t.app.updateAvailable.replace('{version}', appUpdateStatus.version)
+              }`}
+              onClick={() => {
+                setAppUpdateStatus({
+                  state: 'downloading',
+                  percent: 0,
+                  bytesPerSecond: 0,
+                  transferred: 0,
+                  total: 0
+                })
+                void updateClient.downloadInstaller().then((result) => {
+                  if (result.ok) return
+                  const message = result.error || t.settings.updateDownloadFailed
+                  toast.error(message)
+                  setAppUpdateStatus({ state: 'error', message })
+                })
+              }}
+            >
+              {appUpdateStatus.state === 'downloading' ? (
+                <Loader2Icon className="animate-spin" aria-hidden="true" />
+              ) : (
+                <ArrowUpCircleIcon aria-hidden="true" />
+              )}
+            </Button>
+          ) : null}
+          <Button
+            id="settings-trigger"
+            variant="ghost"
+            size="icon"
+            aria-label={t.settings.title}
+            title={t.settings.title}
+            onClick={() => setSheetOpen(true)}
+          >
+            <SettingsIcon className="size-4" />
+          </Button>
+          {sheetOpen && (
+            <Suspense fallback={null}>
+              <SettingsSheet
+                open={sheetOpen}
+                onOpenChange={(open) => {
+                  setSheetOpen(open)
+                  if (!open) {
+                    flushWorkspaceCwdPersist()
+                    setProviderEditorOpen(false)
+                    setOpenApiEditorOpen(false)
+                    setInstructionEditorOpen(false)
+                  }
+                }}
+                t={t}
+                config={config}
+                settingsProvider={settingsProvider}
+                settingsProviderId={settingsProviderId}
+                modelOptions={modelOptions}
+                providerModelsText={providerModelsText}
+                commandWhitelistText={commandWhitelistText}
+                instructionFiles={instructionFiles}
+                selectedInstructionName={selectedInstructionName}
+                selectedInstructionFile={selectedInstructionFile}
+                instructionContent={instructionContent}
+                instructionSaved={instructionSaved}
+                providerEditorOpen={providerEditorOpen}
+                openApiEditorOpen={openApiEditorOpen}
+                settingsOpenApiProfile={
+                  (config.openApiProfiles ?? []).find(
+                    (profile) => profile.id === config.openApiProfileId
+                  ) ?? (config.openApiProfiles ?? [])[0]
+                }
+                instructionEditorOpen={instructionEditorOpen}
+                validation={validation}
+                saved={saved}
+                importingOpenApi={importingOpenApi}
+                closeTerminalConfirmEnabled={closeTerminalConfirmEnabled}
+                workbenchLayout={workbenchLayout}
+                onWorkbenchLayoutChange={persistAndSetWorkbenchLayout}
+                onCreateProvider={createProvider}
+                onToggleProviderDetails={toggleProviderDetails}
+                onToggleProviderEnabled={toggleProviderEnabled}
+                onDeleteProvider={deleteSettingsProvider}
+                onApplyDefaultModel={applyDefaultModel}
+                onCloseTerminalConfirmChange={setCloseTerminalConfirmEnabled}
+                onAgentStyleChange={persistAgentStyle}
+                onThinkingLevelChange={(level) =>
+                  void persistAgentConfigPatch({ thinkingLevel: level })
+                }
+                onLogLevelChange={(level) => void persistAgentConfigPatch({ logLevel: level })}
+                onShowAgentThinkingChange={persistShowAgentThinking}
+                onCommandTimeoutsChange={(commandTimeouts) =>
+                  void persistAgentConfigPatch({ commandTimeouts })
+                }
+                onWorkspaceCwdChange={scheduleWorkspaceCwdPersist}
+                onMaxActiveToolsChange={(value) => updateConfig('maxActiveTools', value)}
+                onCommandWhitelistChange={(text) => {
+                  setCommandWhitelistText(text)
+                  updateConfig('commandWhitelist', parseCommandWhitelist(text))
+                }}
+                onCreateOpenApiProfile={createOpenApiProfile}
+                onToggleOpenApiProfileDetails={toggleOpenApiProfileDetails}
+                onDeleteOpenApiProfile={deleteOpenApiProfile}
+                onOpenApiEditorOpenChange={setOpenApiEditorOpen}
+                onPatchActiveOpenApiProfile={patchActiveOpenApiProfile}
+                onImportOpenApiDocument={importOpenApiDocument}
+                onToggleInstructionDetails={toggleInstructionDetails}
+                onProviderEditorOpenChange={setProviderEditorOpen}
+                onUpdateSettingsProvider={updateSettingsProvider}
+                onUpdateSettingsProviderModels={updateSettingsProviderModels}
+                onSaveProviderEditor={async () => {
+                  await saveConfig()
+                  setProviderEditorOpen(false)
+                }}
+                onSaveOpenApiEditor={async () => {
+                  await saveConfig()
+                  setOpenApiEditorOpen(false)
+                }}
+                onInstructionEditorOpenChange={setInstructionEditorOpen}
+                onInstructionContentChange={(value) => {
+                  setInstructionContent(value)
+                  setInstructionSaved(false)
+                }}
+                onSaveInstructionFile={saveInstructionFile}
+              />
+            </Suspense>
+          )}
         </div>
       </header>
-      {skillSheet}
-      {mcpSheet}
-      {historySheet}
-      {wikiSheet}
-      <CommandWhitelistSheet
-        open={commandWhitelistOpen}
-        onOpenChange={setCommandWhitelistOpen}
-        t={t}
-        rules={parseCommandWhitelist(commandWhitelistText)}
-        onSave={saveCommandWhitelistRules}
-      />
+      {skillOpen && <Suspense fallback={null}>{skillSheet}</Suspense>}
+      {mcpOpen && <Suspense fallback={null}>{mcpSheet}</Suspense>}
+      {historyOpen && <Suspense fallback={null}>{historySheet}</Suspense>}
+      {memoryCenterOpen && (
+        <Suspense fallback={null}>
+          <MemoryCenter
+            selection={{ providerId: activeProviderId, model: activeTabModelId }}
+            open={memoryCenterOpen}
+            onOpenChange={setMemoryCenterOpen}
+            onOpenHistory={async (tabId) => {
+              const item = (await storageClient.listSessionHistory(200)).find(
+                (entry) => entry.tabId === tabId
+              )
+              if (!item) throw new Error('来源会话已删除')
+              await openHistorySession(item)
+              setMemoryCenterOpen(false)
+            }}
+          />
+        </Suspense>
+      )}
+      {localDocumentsOpen && (
+        <Suspense fallback={null}>
+          <LocalDocumentsSheet
+            open={localDocumentsOpen}
+            onOpenChange={setLocalDocumentsOpen}
+            t={t}
+            onInsert={(text) =>
+              updateTab(sessionChatTab.id, (tab) => ({
+                ...tab,
+                agentInput: [tab.agentInput, text].filter(Boolean).join('\n\n')
+              }))
+            }
+          />
+        </Suspense>
+      )}
+      {commandDirectoryOpen && (
+        <Suspense fallback={null}>
+          <CommandDirectorySheet
+            open={commandDirectoryOpen}
+            onOpenChange={setCommandDirectoryOpen}
+            tabId={activeExecutionTabIdRef.current.get(sessionChatTab.id) ?? activeTab.id}
+            chatTabId={sessionChatTab.id}
+            connectionId={activeTab.connectionId}
+            executionMode={normalizeExecutionMode(sessionChatTab.executionMode)}
+            mutationPolicy={sessionChatTab.mutationPolicy ?? 'confirm'}
+            onInsert={(text) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, agentInput: text }))
+            }
+          />
+        </Suspense>
+      )}
+      {wikiOpen && <Suspense fallback={null}>{wikiSheet}</Suspense>}
       <CaptureDraftDialog
         open={Boolean(captureDialogJob)}
         kind={captureDialogJob?.kind ?? captureDialogKind ?? 'sop'}
@@ -8817,6 +6074,11 @@ function App({
         <HandoffDialog
           key={sessionChatTab.id}
           editor={handoff.editor}
+          sourceSessionKey={sessionChatTab.id}
+          sourcePaneId={executionTerminalByChatId[sessionChatTab.id] ?? sessionChatTab.id}
+          connections={connections.filter((connection) => !isLocalConnection(connection))}
+          sourceTarget="当前绑定的执行终端（以主进程确认结果为准）"
+          onTarget={handoff.setTarget}
           title={getSessionDisplayTitle(sessionChatTab, tabs)}
           cwd={handoff.status?.cwd}
           model={config.model}
@@ -8855,12 +6117,28 @@ function App({
             onExecutionModeChange={(mode) =>
               updateTab(sessionChatTab.id, (tab) => ({ ...tab, executionMode: mode }))
             }
+            approvalPolicy={sessionChatTab.approvalPolicy ?? 'manual'}
+            mutationPolicy={sessionChatTab.mutationPolicy ?? 'confirm'}
+            onApprovalPolicyChange={(policy) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, approvalPolicy: policy }))
+            }
+            onVerifyHandoff={() =>
+              void (async () => {
+                const verified = await terminalClient.confirmLogin({ tabId: activeTab.id })
+                if (verified.ok && verified.ready)
+                  updateTab(sessionChatTab.id, (tab) => ({ ...tab, handoffBlocked: false }))
+                else toast.error(verified.error ?? '请先连接并确认交接目标；不会降级到本机。')
+              })()
+            }
+            onMutationPolicyChange={(policy) =>
+              updateTab(sessionChatTab.id, (tab) => ({ ...tab, mutationPolicy: policy }))
+            }
             agentStyle={sessionAgentStyle}
             onAgentStyleChange={applyConversationStyle}
             thinkingCollapsedByDefault={
               !resolveShowAgentThinking(sessionAgentStyle, config.showAgentThinking)
             }
-            activeAgentPending={activeAgentPending}
+            activeAgentPending={activeAgentPending || Boolean(sessionChatTab.handoffBlocked)}
             executionTerminalId={executionTerminalByChatId[sessionChatTab.id]}
             pinnedWorkflows={(resolveActiveOpenApiProfile(config)?.pinnedWorkflows ?? []).filter(
               (workflow) => workflow.pinned !== false
@@ -9171,6 +6449,13 @@ function App({
           t={t}
         />
       </Suspense>
+      <CommandWhitelistSheet
+        open={commandWhitelistOpen}
+        onOpenChange={setCommandWhitelistOpen}
+        t={t}
+        rules={config.commandWhitelist ?? []}
+        onSave={saveCommandWhitelistRules}
+      />
       <CloseTabsConfirmModal
         request={closeTabsConfirmRequest}
         t={t}
@@ -9198,371 +6483,22 @@ function App({
           closeOnboarding()
           setSkillOpen(true)
         }}
-        onAddExampleOpenApi={addExampleOpenApiFromOnboarding}
       />
-      <AppFooter
-        version={appVersion}
-        updateStatus={appUpdateStatus}
-        t={t}
-        whaleEnabled={whaleEnabled}
-        onToggleWhale={() => void toggleWhaleMonitor()}
-        onDownloadUpdate={() => {
-          if (appUpdateStatus.state === 'downloading') return
-          setAppUpdateStatus({
-            state: 'downloading',
-            percent: 0,
-            bytesPerSecond: 0,
-            transferred: 0,
-            total: 0
-          })
-          void window.api.update.downloadInstaller().then((result) => {
-            if (!result.ok) {
-              toast.error(result.error || t.settings.updateDownloadFailed)
-              setAppUpdateStatus({
-                state: 'error',
-                message: result.error || t.settings.updateDownloadFailed
-              })
+      {whaleEnabled && (
+        <Suspense fallback={null}>
+          <WhaleMonitor
+            locale={locale}
+            agentBusy={
+              sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id])
             }
-          })
-        }}
-      />
-      <WhaleMonitor
-        locale={locale}
-        agentBusy={sessionChatTab.agentBusy || Boolean(contextCompactingByTabId[sessionChatTab.id])}
-        selectedModel={activeTabModelId}
-        onEnabledChange={setWhaleEnabled}
-        onSelectModel={selectWhaleModel}
-      />
+            selectedModel={activeTabModelId}
+            onEnabledChange={setWhaleEnabled}
+            onSelectModel={selectWhaleModel}
+          />
+        </Suspense>
+      )}
     </main>
   )
-}
-
-function isApprovalTargetAlive(tabId: string | undefined, tabs: AgentTerminalTab[]): boolean {
-  if (tabs.length === 0) return false
-  if (!tabId) return false
-
-  if (tabs.some((tab) => tab.id === tabId)) return true
-  if (tabs.some((tab) => tab.subTerminals.some((subterminal) => subterminal.id === tabId))) {
-    return true
-  }
-
-  const subterminal = parseSubterminalTabId(tabId)
-  if (subterminal) {
-    return tabs.some((tab) => tab.id === subterminal.parentTabId)
-  }
-
-  return false
-}
-
-function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
-  const next = { ...record }
-  delete next[key]
-  return next
-}
-
-function isComposingInput(event: KeyboardEvent<HTMLElement>): boolean {
-  return isImeKeyEvent(event)
-}
-
-async function resolvePastedFileReference(file: File): Promise<AgentPathReference | undefined> {
-  const path = (file as File & { path?: string }).path
-  if (path) {
-    return {
-      id: `file:${path}`,
-      kind: 'file',
-      path,
-      name: file.name || path.split(/[\\/]/).pop() || path
-    }
-  }
-
-  const base64 = await fileToBase64(file)
-  return window.api.agent.savePastedAttachment({
-    name: file.name || defaultPastedFileName(file.type),
-    mimeType: file.type,
-    base64
-  })
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return window.btoa(binary)
-}
-
-function defaultPastedFileName(mimeType: string): string {
-  if (mimeType === 'image/png') return 'pasted-image.png'
-  if (mimeType === 'image/jpeg') return 'pasted-image.jpg'
-  if (mimeType === 'image/gif') return 'pasted-image.gif'
-  if (mimeType === 'image/webp') return 'pasted-image.webp'
-  return 'pasted-file'
-}
-
-async function runConnectionCommandSequence(
-  commands: string[],
-  tabId: string,
-  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
-  appendSystem: (text: string, tabId: string) => void,
-  t: Dictionary,
-  logTabId = tabId,
-  options?: { hasLeadingAutoPassword?: boolean }
-): Promise<boolean> {
-  const [sshCommand, ...loginActions] = commands
-  if (!sshCommand) return true
-
-  // Paste into a shell that is still sourcing startup files can drop the
-  // command: zsh's line editor discards input typed before the first prompt
-  // (the PTY still echoes it, which is why the terminal shows the line). Wait
-  // for an actual prompt and never dispatch if startup has not completed.
-  const shellInteractive = await waitForShellInteractive(tabId, CONNECTION_SHELL_READY_TIMEOUT_MS)
-  connTrace('login-stage', `tab=${tabId}`, `shellInteractive=${shellInteractive}`)
-  if (!shellInteractive) {
-    const message = t.terminal.connectionShellReadyTimeout.replace(
-      '{ms}',
-      String(Math.round(CONNECTION_SHELL_READY_TIMEOUT_MS / 1000))
-    )
-    appendLog({ kind: 'error', text: message }, logTabId)
-    return false
-  }
-
-  const pasteResult = await window.api.terminal.pasteCommand(sshCommand, true, tabId)
-  connTrace(
-    'ssh-command-dispatch',
-    `tab=${tabId}`,
-    `ok=${pasteResult.ok}`,
-    `error=${pasteResult.error ?? '-'}`
-  )
-  if (!pasteResult.ok) {
-    appendLog(
-      { kind: 'error', text: pasteResult.error || t.terminal.postLoginTaskAborted },
-      logTabId
-    )
-    return false
-  }
-
-  if (loginActions.length === 0) return true
-
-  return typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId, {
-    hasLeadingAutoPassword: Boolean(options?.hasLeadingAutoPassword)
-  })
-}
-
-async function runConnectionLoginActionSequence(
-  loginActions: string[],
-  tabId: string,
-  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
-  appendSystem: (text: string, tabId: string) => void,
-  t: Dictionary,
-  logTabId = tabId,
-  options?: { hasLeadingAutoPassword?: boolean }
-): Promise<boolean> {
-  if (loginActions.length === 0) return true
-
-  return typeConnectionLoginActions(loginActions, tabId, appendLog, appendSystem, t, logTabId, {
-    hasLeadingAutoPassword: Boolean(options?.hasLeadingAutoPassword)
-  })
-}
-
-function createLoginActionWaitDeps(tabId: string): LoginActionWaitDeps {
-  return {
-    getContext: async () => {
-      const context = await window.api.terminal.getContext(tabId)
-      return { output: context.output, promptHost: context.promptHost }
-    },
-    onData: (handler) => window.api.terminal.onData(handler),
-    setInterval: (fn, ms) => window.setInterval(fn, ms),
-    clearInterval: (id) => window.clearInterval(id),
-    setTimeout: (fn, ms) => window.setTimeout(fn, ms),
-    clearTimeout: (id) => window.clearTimeout(id)
-  }
-}
-
-async function typeConnectionLoginActions(
-  loginActions: string[],
-  tabId: string,
-  appendLog: (entry: AgentLogEntryInput, tabId?: string) => void,
-  appendSystem: (text: string, tabId: string) => void,
-  t: Dictionary,
-  logTabId: string,
-  options?: { hasLeadingAutoPassword?: boolean }
-): Promise<boolean> {
-  const deps = createLoginActionWaitDeps(tabId)
-  const hasLeadingAutoPassword = Boolean(options?.hasLeadingAutoPassword)
-  let previousWasCommand = false
-  let previousConsumedKind: Exclude<LoginStepConsumed['kind'], 'timeout'> | undefined
-
-  for (let index = 0; index < loginActions.length; index += 1) {
-    const action = loginActions[index]
-    // The auto-prepended connection password is always a secret, even when its
-    // text happens to collide with a shell command word (e.g. `enable`).
-    const isAutoPassword = hasLeadingAutoPassword && index === 0
-    const isSecret = isAutoPassword || !looksLikeCommand(action)
-    const isLeadingAutoPassword = isAutoPassword
-    const actionStart = Date.now()
-    // Secrets (except unused leading SSH password / NOPASSWD after a command)
-    // must wait for a password prompt — never type them into a bare host shell.
-    const allowHostReady =
-      isLeadingAutoPassword || (previousWasCommand && previousConsumedKind === 'host')
-    let ready: LoginTypeReady = await waitForLoginTypeReady(deps, {
-      tabId,
-      timeoutMs: LOGIN_TYPE_READY_TIMEOUT_MS,
-      requireWaiting: isSecret && !allowHostReady
-    })
-    if (ready.kind === 'timeout') {
-      const context = await window.api.terminal.getContext(tabId)
-      const recheck = resolveLoginTypeReady(context.output ?? '')
-      if (recheck && !(isSecret && !allowHostReady && recheck.kind !== 'waiting')) {
-        ready = recheck
-      } else if (isSecret && recheck?.kind === 'host') {
-        // Trailing unused secret (e.g. extra sudo password after hostname) while
-        // already on a clean host — skip instead of marking the whole login failed.
-        connTrace(
-          'login-stage',
-          `tab=${tabId}`,
-          `action=${index + 1}`,
-          'skip-secret-timeout-on-host'
-        )
-        appendSystem(formatConnectionActionSkippedLog(index + 1, t), logTabId)
-        // Keep the host skip-chain alive for any further unused secrets.
-        previousWasCommand = true
-        previousConsumedKind = 'host'
-        continue
-      }
-    }
-    connTrace(
-      'login-stage',
-      `tab=${tabId}`,
-      `action=${index + 1}`,
-      `ready=${ready.kind}`,
-      `readyAfterMs=${Date.now() - actionStart}`
-    )
-
-    if (ready.kind === 'timeout') {
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
-        },
-        logTabId
-      )
-      return false
-    }
-
-    if (
-      isSecret &&
-      shouldSkipSecretOnHost({
-        readyKind: ready.kind,
-        isLeadingAutoPassword,
-        previousWasCommand,
-        previousConsumedKind
-      })
-    ) {
-      connTrace('login-stage', `tab=${tabId}`, `action=${index + 1}`, 'skip-secret-already-host')
-      appendSystem(formatConnectionActionSkippedLog(index + 1, t), logTabId)
-      // Do not clear previousWasCommand — consecutive unused secrets (password,
-      // enable, …) must keep skipping while the shell stays on a clean host.
-      previousWasCommand = true
-      previousConsumedKind = 'host'
-      continue
-    }
-
-    const contextAtType = await window.api.terminal.getContext(tabId)
-    const outputAtType = contextAtType.output ?? ''
-    const waitingLine = ready.kind === 'waiting' ? ready.line : undefined
-    sendTerminalInput(action, tabId)
-    appendSystem(
-      formatConnectionActionLog(action, index + 1, t, { forceMask: isAutoPassword }),
-      logTabId
-    )
-
-    const consumed = await waitForLoginActionConsumed(deps, {
-      tabId,
-      mode: ready.kind === 'waiting' ? 'waiting' : 'shell',
-      waitingLine,
-      outputAtType,
-      timeoutMs: LOGIN_ACTION_CONSUMED_TIMEOUT_MS
-    })
-    connTrace(
-      'login-stage',
-      `tab=${tabId}`,
-      `action=${index + 1}`,
-      `consumed=${consumed.kind}`,
-      `consumedAfterMs=${Date.now() - actionStart}`
-    )
-    let settled = consumed
-    if (settled.kind === 'timeout') {
-      const context = await window.api.terminal.getContext(tabId)
-      const recheck = resolveLoginActionConsumed(context.output ?? '', {
-        mode: ready.kind === 'waiting' ? 'waiting' : 'shell',
-        waitingLine,
-        outputAtType,
-        acceptQuietGrowth: true
-      })
-      if (recheck) settled = recheck
-    }
-    if (settled.kind === 'timeout') {
-      appendLog(
-        {
-          kind: 'status',
-          text: `${t.terminal.outputSettleTimeout} (${index + 1})`
-        },
-        logTabId
-      )
-      return false
-    }
-
-    previousWasCommand = !isSecret
-    previousConsumedKind = settled.kind
-  }
-
-  return true
-}
-
-async function waitForTerminalReadyForAgent(
-  tabId: string,
-  options?: {
-    getTab?: () =>
-      | Pick<
-          import('@renderer/lib/terminal-tabs').AgentTerminalTab,
-          'terminalReady' | 'connectionId' | 'isSsh'
-        >
-      | undefined
-    timeoutMs?: number
-  }
-): Promise<boolean> {
-  const deadline = Date.now() + (options?.timeoutMs ?? TERMINAL_READY_WAIT_MS)
-
-  while (Date.now() < deadline) {
-    const context = await window.api.terminal.getContext(tabId)
-    const output = context.output.slice(-8000)
-    const tab = options?.getTab?.()
-    if (
-      isTerminalSnapshotReadyForAgent({
-        tab,
-        terminalMode: context.mode,
-        output
-      })
-    ) {
-      return true
-    }
-
-    await sleep(500)
-  }
-
-  return false
-}
-
-async function settleAgentCancel(runId: string): Promise<void> {
-  try {
-    await window.api.agent.cancel(runId)
-  } catch {
-    // Ignore cancel transport errors; UI still clears after settle.
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 /**
@@ -9570,18 +6506,6 @@ function sleep(ms: number): Promise<void> {
  * remote host style). A freshly spawned PTY is ready only after the shell
  * finishes its startup files; pasting earlier loses the command in zsh.
  */
-async function waitForShellInteractive(tabId: string, timeoutMs = 2_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-
-  while (Date.now() < deadline) {
-    const context = await window.api.terminal.getContext(tabId)
-    const signal = findNewestPromptSignal(context.output)
-    if (signal?.kind === 'local' || signal?.kind === 'host') return true
-    await sleep(200)
-  }
-
-  return false
-}
 
 /**
  * Poll SSOT for the REMOTE prompt during the login window. A transient local
@@ -9589,79 +6513,5 @@ async function waitForShellInteractive(tabId: string, timeoutMs = 2_000): Promis
  * when the whole window expires with the shell still at the local prompt does
  * the login count as failed.
  */
-async function waitForPromptHostOrTimeout(
-  tabId: string,
-  timeoutMs = 20_000,
-  options?: {
-    expectedHost?: string
-    previousHost?: string
-    acceptAnyRemoteHost?: boolean
-    clusterHostRegex?: string
-  }
-): Promise<'host' | 'local' | 'none'> {
-  return waitForRemotePrompt(
-    {
-      getContext: () => window.api.terminal.getContext(tabId),
-      onData: (handler) => window.api.terminal.onData(handler),
-      // DOM timer functions must be invoked with `this === window`; calling a
-      // bare reference as an object method throws "Illegal invocation" in the
-      // renderer. Wrap them so the call site keeps the correct receiver.
-      setInterval: (fn, ms) => window.setInterval(fn, ms),
-      clearInterval: (id) => window.clearInterval(id),
-      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
-      clearTimeout: (id) => window.clearTimeout(id),
-      now: () => Date.now()
-    },
-    {
-      tabId,
-      timeoutMs,
-      expectedHost: options?.expectedHost,
-      previousHost: options?.previousHost,
-      acceptAnyRemoteHost: options?.acceptAnyRemoteHost,
-      clusterHostRegex: options?.clusterHostRegex
-    }
-  )
-}
-
-function passwordAttentionMatches(attentionId: string, promptTabId: string): boolean {
-  if (attentionId === promptTabId) return true
-  return parseSubterminalTabId(promptTabId)?.parentTabId === attentionId
-}
-
-function sendTerminalInput(value: string, tabId: string): void {
-  window.api.terminal.write(`${value}\r`, tabId, 'automation')
-}
-
-function getSelectedTextWithinLog(logId: number): string {
-  const selection = window.getSelection()
-  const selectedText = selection?.toString().trim()
-  if (!selection || !selectedText) return ''
-
-  const container = document.querySelector(`[data-agent-log-entry="${logId}"]`)
-  const anchorNode = selection.anchorNode
-  const focusNode = selection.focusNode
-  if (!container || (!container.contains(anchorNode) && !container.contains(focusNode))) return ''
-
-  return selectedText
-}
-
-function buildLogMarkdownFilename(entry: AgentLogEntry, scope?: 'result'): string {
-  const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
-  return `crescent-${entry.kind}${scope ? `-${scope}` : ''}-${timestamp}.md`
-}
-
-function buildLogTraceFilename(entry: AgentLogEntry): string {
-  const timestamp = entry.createdAt.replace(/[:.]/g, '-').replace(/T/, '_').replace(/Z$/, '')
-  return `crescent-agent-trace-${timestamp}.json`
-}
-
-function buildSessionTraceFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, '-')
-    .replace(/T/, '_')
-    .replace(/Z$/, '')
-  return `crescent-session-trace-${timestamp}.json`
-}
 
 export default App

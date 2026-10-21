@@ -1,16 +1,15 @@
-import { ipcMain } from 'electron'
-
 import type { RemoteFsListInput, RemoteFsReadInput } from '../../shared/remote-fs-types'
+import { rendererIpc } from '../ipc-security'
 import { disposeAllRemoteFsSessions } from './client'
 import { listRemoteFs, readRemoteFs } from './operations'
 
 export function registerRemoteFsIpc(): void {
-  ipcMain.handle('remote-fs:list', async (_event, payload: unknown) => {
+  rendererIpc.handle('remote-fs:list', async (_event, payload: unknown) => {
     const input = parseListInput(payload)
     return listRemoteFs(input.connectionId, input.path)
   })
 
-  ipcMain.handle('remote-fs:read', async (_event, payload: unknown) => {
+  rendererIpc.handle('remote-fs:read', async (_event, payload: unknown) => {
     const input = parseReadInput(payload)
     return readRemoteFs(input.connectionId, input.path)
   })

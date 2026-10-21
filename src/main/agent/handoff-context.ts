@@ -1,5 +1,3 @@
-import type { AgentMessage } from '@earendil-works/pi-agent-core'
-import type {} from '@earendil-works/pi-coding-agent'
 import { redactSensitiveText } from '../../shared/secret-redaction'
 import { HANDOFF_INPUT_MAX_BYTES } from '../../shared/handoff'
 
@@ -7,15 +5,22 @@ const TOOL_TEXT_MAX = 2_000
 const OMITTED = '[Attachment omitted; content not available for handoff]'
 
 /** No raw tool payloads, reasoning, image data, or attachment paths. */
-function messageText(message: AgentMessage): string {
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+function messageText(value: unknown): string {
+  const message = record(value)
   switch (message.role) {
     case 'compactionSummary':
     case 'branchSummary':
-      return `[${message.role}]\n${message.summary}`
+      return `[${message.role}]\n${text(message.summary)}`
     case 'bashExecution':
       return message.excludeFromContext
         ? ''
-        : `[bash] exit=${message.exitCode ?? 'unknown'}\n${redactSensitiveText(message.command).slice(0, TOOL_TEXT_MAX)}\n${redactSensitiveText(message.output).slice(0, TOOL_TEXT_MAX)}`
+        : `[bash] exit=${typeof message.exitCode === 'number' ? message.exitCode : 'unknown'}\n${redactSensitiveText(text(message.command)).slice(0, TOOL_TEXT_MAX)}\n${redactSensitiveText(text(message.output)).slice(0, TOOL_TEXT_MAX)}`
     case 'user':
     case 'assistant':
     case 'toolResult':
@@ -23,12 +28,13 @@ function messageText(message: AgentMessage): string {
       const content =
         typeof message.content === 'string'
           ? message.content
-          : message.content
-              .map((part) => {
-                if (part.type === 'text') return part.text
+          : (Array.isArray(message.content) ? message.content : [])
+              .map((value) => {
+                const part = record(value)
+                if (part.type === 'text') return text(part.text)
                 if (part.type === 'thinking') return ''
                 if (part.type === 'toolCall')
-                  return `[Tool requested: ${part.name}; arguments omitted]`
+                  return `[Tool requested: ${text(part.name)}; arguments omitted]`
                 return OMITTED
               })
               .filter(Boolean)
@@ -41,12 +47,12 @@ function messageText(message: AgentMessage): string {
   }
 }
 
-/** Input must be Pi's buildSessionContext().messages (active branch, compaction aware).
+/** Input comes from the runtime active context (compaction aware).
  * Select complete message representations before joining; keep the summary first,
  * then recent messages. Byte budget is conservative even for CJK/code tokenization.
  */
 export function buildHandoffContext(
-  messages: AgentMessage[],
+  messages: unknown[],
   maxBytes = HANDOFF_INPUT_MAX_BYTES
 ): {
   text: string
@@ -56,7 +62,7 @@ export function buildHandoffContext(
   const candidates = messages
     .map((message, index) => ({
       index,
-      summary: message.role === 'compactionSummary',
+      summary: record(message).role === 'compactionSummary',
       text: redactSensitiveText(messageText(message))
     }))
     .filter((entry) => entry.text)
@@ -90,7 +96,10 @@ export function buildHandoffContext(
     truncated:
       summaryClipped ||
       selected.size !== candidates.length ||
-      messages.some((message) => message.role === 'toolResult' || message.role === 'bashExecution')
+      messages.some(
+        (message) =>
+          record(message).role === 'toolResult' || record(message).role === 'bashExecution'
+      )
   }
 }
 

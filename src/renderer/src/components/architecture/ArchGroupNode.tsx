@@ -1,17 +1,19 @@
+import { APP_THEMES } from '@renderer/lib/theme-definitions'
 import { memo } from 'react'
 import type { Node, NodeProps } from '@xyflow/react'
 
-import { ARCHITECTURE_KIND_TONE } from './kinds'
 import type { ArchGroupData } from './layout'
 
 function ArchGroupNodeComponent({ data }: NodeProps<Node<ArchGroupData>>): React.JSX.Element {
-  const tone = ARCHITECTURE_KIND_TONE[data.kind ?? 'ingress']
+  const theme = APP_THEMES[data.themeId]
+  const tone = theme.diagram.kinds[data.kind ?? 'ingress']
 
   return (
     <div
       className="app-arch-group box-border size-full rounded-xl border border-dashed"
       style={{
-        background: 'rgba(18,22,31,0.45)',
+        borderRadius: theme.geometry.radius,
+        background: theme.diagram.cluster,
         borderColor: tone.border
       }}
     >

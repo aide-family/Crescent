@@ -7,8 +7,7 @@
 import { hostedMcpToolFingerprint } from '../../shared/mcp-servers'
 import type { AgentConfig, AgentMcpServerConfig } from '../../shared/agent-types'
 
-export const HOSTED_SESSION_TOOL_PROFILE =
-  'pty-bash-open-subterminal-close-subterminal-capture-subagent-v2'
+export const HOSTED_SESSION_TOOL_PROFILE = 'pty-targets-scoped-files-approval-v2'
 
 export interface HostedSessionSnapshot {
   cwd: string

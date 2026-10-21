@@ -11,8 +11,7 @@ export function OnboardingModal({
   onDismiss,
   onOpenSettings,
   onOpenConnections,
-  onOpenSkills,
-  onAddExampleOpenApi
+  onOpenSkills
 }: {
   open: boolean
   t: Dictionary
@@ -20,7 +19,6 @@ export function OnboardingModal({
   onOpenSettings: () => void
   onOpenConnections: () => void
   onOpenSkills: () => void
-  onAddExampleOpenApi: () => void
 }): React.JSX.Element | null {
   const panelRef = useRef<HTMLDivElement>(null)
   const overlayRef = useAppModalA11y(open, { onEscape: onDismiss, panelRef })
@@ -51,12 +49,10 @@ export function OnboardingModal({
         <div className="space-y-2.5 px-4 py-3">
           <OnboardingStep
             icon={<PlugIcon className="size-4 text-primary" aria-hidden="true" />}
-            title={t.onboarding.stepOpenApiTitle}
-            body={t.onboarding.stepOpenApiBody}
-            actionLabel={t.onboarding.addExampleOpenApi}
-            secondaryLabel={t.onboarding.openSettings}
-            onAction={onAddExampleOpenApi}
-            onSecondary={onOpenSettings}
+            title={t.onboarding.stepModelTitle}
+            body={t.onboarding.stepModelBody}
+            actionLabel={t.onboarding.openSettings}
+            onAction={onOpenSettings}
           />
           <OnboardingStep
             icon={<ServerIcon className="size-4 text-primary" aria-hidden="true" />}

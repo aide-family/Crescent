@@ -36,6 +36,6 @@ npm run build
 ## Phase 4 — Distribution Polish
 
 - [x] App update channel configuration.
-- [x] Signed builds per platform (CI signs when secrets are present; see docs/CODE_SIGNING.md).
+- [x] Signed builds per platform (CI signs when secrets are present; see Document/CODE_SIGNING.md).
 - [x] First-run onboarding and example OpenAPI spec.
 - [x] Packaging smoke tests for macOS, Windows, and Linux.

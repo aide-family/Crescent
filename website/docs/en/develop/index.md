@@ -41,10 +41,10 @@ Pushes to `main` that change `website/` deploy the static site with GitHub Actio
 
 These files stay in the repository. The site links to them instead of copying the text:
 
-- [Code signing](https://github.com/aide-family/Crescent/blob/main/docs/CODE_SIGNING.md)
+- [Code signing](https://github.com/aide-family/Crescent/blob/main/Document/CODE_SIGNING.md)
 - [Roadmap](https://github.com/aide-family/Crescent/blob/main/ROADMAP.md)
-- [Architecture](https://github.com/aide-family/Crescent/blob/main/docs/ARCHITECTURE.md)
-- [Testing](https://github.com/aide-family/Crescent/blob/main/docs/TESTING.md)
+- [Architecture](https://github.com/aide-family/Crescent/blob/main/Document/ARCHITECTURE.md)
+- [Testing](https://github.com/aide-family/Crescent/blob/main/Document/TESTING.md)
 
 ## Contribute
 

@@ -72,7 +72,7 @@ The Agent runs on a small, reviewable tool set instead of an open-ended plugin s
 - `bash` executed in the visible terminal pane, so every command is observable and high-risk commands still need approval.
 - `open_subterminal` to dock a dedicated local or SSH terminal for cross-context work.
 
-OpenAPI and MCP tooling from earlier versions has been removed from the Agent loop; their settings remain only for config migration.
+OpenAPI tools are deprecated and retained only for settings migration. Configured MCP tools are loaded as Crescent-owned Pi custom tools; every invocation requires operator approval.
 
 ## Comparison
 
@@ -122,7 +122,7 @@ Verify downloads with `SHA256SUMS.txt` from the same release when possible.
 
 #### macOS: “is damaged and can’t be opened”
 
-Until repository signing secrets are configured, some release builds may still be unsigned. See [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md). After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt—clear the quarantine attribute, then open the app:
+Until repository signing secrets are configured, some release builds may still be unsigned. See [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md). After a browser download, Gatekeeper may say **“Crescent” is damaged and can’t be opened**. The package is not corrupt—clear the quarantine attribute, then open the app:
 
 1. Move `Crescent.app` into Applications.
 2. Run:
@@ -149,22 +149,22 @@ npm run dev
 
 ### Build
 
+macOS delivery uses one **Universal** application, DMG and ZIP containing both x64 and arm64. Follow [the development and packaging rules](Document/DEVELOPMENT.md).
+
 ```bash
-# Windows (cross-packaging from macOS/Linux is supported via node-pty win32 prebuilds)
-npm run build:win
+# Local unsigned Universal package; runs all local gates, never publishes
+npm run build:mac:local
 
-# macOS
+# Universal package with separately configured signing / notarization
 npm run build:mac
-
-# Linux
-npm run build:linux
 ```
+
+The legacy Mac x64/arm64 command names also produce Universal packages. Windows adaptation is outside the current development and acceptance scope.
 
 Notes:
 
 - Packaging uses `node-pty` N-API prebuilds with `npmRebuild: false`, so macOS does not try to cross-compile Windows/Linux native modules.
 - Official releases build each platform on its native runner (see `.github/workflows/release.yml`).
-- If a local Windows NSIS build asks for Wine, use CI or install Wine first.
 
 After launch, configure an OpenAI-compatible model provider, select a model, and ask Crescent beside the terminal:
 
@@ -192,7 +192,7 @@ Crescent is especially useful for:
 
 Crescent already includes the core MVP capabilities: local terminal, model provider configuration, terminal-grounded Agent execution, Agent run panel, command review, Skills, and a knowledge base.
 
-Phase 1–4 product and distribution plumbing are in place: in-app updates against GitHub Releases, packaging smoke checks, and CI signing/notarization when certificate secrets are configured (see [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md)).
+Phase 1–4 product and distribution plumbing are in place: in-app updates against GitHub Releases, packaging smoke checks, and CI signing/notarization when certificate secrets are configured (see [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md)).
 
 See [ROADMAP.md](./ROADMAP.md) for details.
 

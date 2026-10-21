@@ -1,5 +1,11 @@
-import { app, BrowserWindow, clipboard, ipcMain, Notification, screen } from 'electron'
-import { join } from 'path'
+import { registerKnowledgeIpc } from './knowledge-ipc'
+import { registerLocalDocumentIpc } from './local-document-ipc'
+import { registerCommandDirectoryIpc } from './command-directory'
+import { rendererIpc } from './ipc-security'
+import { app, BrowserWindow, clipboard, Notification, screen } from 'electron'
+import { join, resolve } from 'path'
+import { mkdirSync } from 'fs'
+import { traceStartup } from './startup-trace'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerTerminalIpc, stopAllTerminalSessions } from './terminal/ipc'
@@ -10,6 +16,7 @@ import {
 } from './renderer-recovery'
 import { registerWorkbenchLayoutIpc } from './workbench-layout-ipc'
 import { normalizeAttentionNotifyPayload } from '../shared/attention-notify'
+import { initializePrivateFiles } from './private-files'
 import { initSystemLogging, setSystemLogLevel } from './logging'
 import { readAgentConfig } from './crescent-store'
 import { isKnownNativeLogNoise } from './native-log-filter'
@@ -24,6 +31,13 @@ import {
 
 let stopAttachmentCleanup: (() => void) | undefined
 
+const mainStartup = traceStartup('main:start')
+const userDataOverride = process.env.CRESCENT_USER_DATA_DIR?.trim()
+if (userDataOverride) {
+  mkdirSync(resolve(userDataOverride), { recursive: true })
+  app.setPath('userData', resolve(userDataOverride))
+}
+initializePrivateFiles()
 initSystemLogging()
 installWarningFilter()
 installNativeLogFilter()
@@ -95,11 +109,15 @@ function createWindow(): BrowserWindow {
     icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false
     }
   })
 
+  mainWindow.webContents.once('did-finish-load', () => traceStartup('renderer:loaded', mainStartup))
   mainWindow.on('ready-to-show', () => {
+    traceStartup('window:ready', mainStartup)
     // macOS ignores maximize() while the window is hidden.
     if (process.platform === 'darwin') {
       mainWindow.show()
@@ -133,13 +151,23 @@ function createWindow(): BrowserWindow {
   })
 
   mainWindow.webContents.session.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      callback(isAllowedRendererPermission(permission))
+    (webContents, permission, callback, details) => {
+      callback(
+        webContents === mainWindow.webContents &&
+          isAllowedRendererPermission(
+            permission,
+            'mediaTypes' in details ? { mediaTypes: details.mediaTypes } : undefined
+          )
+      )
     }
   )
-  mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
-    return isAllowedRendererPermission(permission)
-  })
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (webContents, permission, _origin, details) => {
+      return (
+        webContents === mainWindow.webContents && isAllowedRendererPermission(permission, details)
+      )
+    }
+  )
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -156,9 +184,14 @@ function createWindow(): BrowserWindow {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  traceStartup('electron:ready', mainStartup)
   // Apply the persisted log level unless an env override was requested.
   if (!process.env.CRESCENT_LOG_LEVEL) {
-    setSystemLogLevel(readAgentConfig().logLevel ?? 'info')
+    try {
+      setSystemLogLevel(readAgentConfig().logLevel ?? 'info')
+    } catch (error) {
+      console.error('[secure-storage]', error)
+    }
   }
 
   const [
@@ -181,6 +214,7 @@ app.whenReady().then(async () => {
     import('./menu')
   ])
 
+  traceStartup('main:modules-loaded', mainStartup)
   app.setName('Crescent')
   configureAboutPanel(icon)
   registerMenuIpc()
@@ -203,8 +237,8 @@ app.whenReady().then(async () => {
   })
 
   // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
-  ipcMain.handle('app:notify-attention', (event, payload?: unknown) => {
+  rendererIpc.on('ping', () => console.log('pong'))
+  rendererIpc.handle('app:notify-attention', (event, payload?: unknown) => {
     const normalized = normalizeAttentionNotifyPayload(payload)
     if (!Notification.isSupported()) return { ok: false }
 
@@ -234,12 +268,12 @@ app.whenReady().then(async () => {
     notification.show()
     return { ok: true }
   })
-  ipcMain.handle('app:open-external', async (_event, url: unknown) => {
+  rendererIpc.handle('app:open-external', async (_event, url: unknown) => {
     if (typeof url !== 'string') return { ok: false }
     const ok = await openExternalUrlIfAllowed(url)
     return { ok }
   })
-  ipcMain.handle('app:write-clipboard-text', (_event, value: unknown) => {
+  rendererIpc.handle('app:write-clipboard-text', (_event, value: unknown) => {
     const text = parseClipboardWriteText(value)
     if (text === null) return { ok: false, error: 'Invalid clipboard payload.' }
     clipboard.writeText(text)
@@ -255,12 +289,19 @@ app.whenReady().then(async () => {
   registerRemoteFsIpc()
   registerStorageIpc()
   registerTerminalIpc()
+  registerCommandDirectoryIpc()
+  registerLocalDocumentIpc()
+  registerKnowledgeIpc()
   registerWhaleMonitorIpc()
   registerUpdateIpc()
   stopAttachmentCleanup = startAttachmentCleanupScheduler()
 
   const mainWindow = createWindow()
-  startWhaleMonitorScheduler()
+  try {
+    startWhaleMonitorScheduler()
+  } catch (error) {
+    console.error('[secure-storage] Monitor scheduler could not start', error)
+  }
   attachRendererCrashRecovery(mainWindow, {
     iconPath: icon,
     notifyTitle: 'Crescent',
@@ -302,7 +343,6 @@ app.on('before-quit', () => {
   stopAttachmentCleanup?.()
   stopAttachmentCleanup = undefined
   stopWhaleMonitorScheduler()
-  void import('./remote-fs/ipc').then(({ stopRemoteFsSessions }) => stopRemoteFsSessions())
 })
 
 // In this file you can include the rest of your app's specific main process

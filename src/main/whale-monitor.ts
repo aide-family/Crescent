@@ -1,4 +1,5 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { rendererIpc } from './ipc-security'
+import { BrowserWindow } from 'electron'
 import { readWhaleMonitorConfig, writeWhaleMonitorConfig } from './crescent-store'
 import type {
   WhaleModelsSnapshot,
@@ -20,8 +21,8 @@ let inFlightModels: Promise<WhaleModelsSnapshot> | undefined
 const activeControllers = new Set<AbortController>()
 
 export function registerWhaleMonitorIpc(): void {
-  ipcMain.handle('whale-monitor:get-snapshot', () => getWhaleMonitorSnapshot())
-  ipcMain.handle('whale-monitor:save-settings', (_event, input: unknown) => {
+  rendererIpc.handle('whale-monitor:get-snapshot', () => getWhaleMonitorSnapshot())
+  rendererIpc.handle('whale-monitor:save-settings', (_event, input: unknown) => {
     const current = readWhaleMonitorConfig()
     const validated = validateSettingsInput(input, current)
     const next = writeWhaleMonitorConfig({
@@ -33,18 +34,18 @@ export function registerWhaleMonitorIpc(): void {
     broadcastSnapshot()
     return toSettings(next)
   })
-  ipcMain.handle('whale-monitor:refresh-usage', async (_event, range: unknown) => {
+  rendererIpc.handle('whale-monitor:refresh-usage', async (_event, range: unknown) => {
     const normalized = validateDateRange(range)
     const result = await fetchUsage(normalized.startDate, normalized.endDate)
     broadcastSnapshot()
     return result
   })
-  ipcMain.handle('whale-monitor:refresh-models', async () => {
+  rendererIpc.handle('whale-monitor:refresh-models', async () => {
     const result = await fetchModels()
     broadcastSnapshot()
     return result
   })
-  ipcMain.handle('whale-monitor:set-position', (_event, position: unknown) => {
+  rendererIpc.handle('whale-monitor:set-position', (_event, position: unknown) => {
     if (!isRecord(position)) return { ok: false }
     const x = typeof position.x === 'number' ? position.x : Number.NaN
     const y = typeof position.y === 'number' ? position.y : Number.NaN
@@ -117,8 +118,11 @@ function validateEndpoint(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length > 2048) {
     throw new Error(`The ${label} endpoint URL is invalid.`)
   }
+  if (!value.trim()) {
+    throw new Error(`Enter the ${label} endpoint URL in whale monitor settings.`)
+  }
   try {
-    const url = new URL(value)
+    const url = new URL(value.trim())
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
       throw new Error('invalid')
     }
@@ -131,7 +135,7 @@ function validateEndpoint(value: unknown, label: string): string {
 export function startWhaleMonitorScheduler(): void {
   restartWhaleMonitorScheduler()
   const settings = readWhaleMonitorConfig()
-  if (settings.enabled && settings.apiKey) {
+  if (settings.enabled && settings.apiKey && settings.spendBaseUrl && settings.modelsBaseUrl) {
     const range = defaultDateRange(settings)
     void fetchUsage(range.startDate, range.endDate).then(broadcastSnapshot)
     void fetchModels().then(broadcastSnapshot)
@@ -148,7 +152,14 @@ export function stopWhaleMonitorScheduler(): void {
 function restartWhaleMonitorScheduler(): void {
   stopWhaleMonitorScheduler()
   const settings = readWhaleMonitorConfig()
-  if (!settings.enabled || !settings.apiKey) return
+  if (
+    !settings.enabled ||
+    !settings.apiKey ||
+    !settings.spendBaseUrl ||
+    !settings.modelsBaseUrl
+  ) {
+    return
+  }
   refreshTimer = setInterval(() => {
     const range = defaultDateRange(readWhaleMonitorConfig())
     void fetchUsage(range.startDate, range.endDate).then(broadcastSnapshot)

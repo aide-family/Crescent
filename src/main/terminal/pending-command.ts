@@ -1,14 +1,4 @@
-import {
-  TERMINAL_CTRL_C_CONFIRM_MS,
-  buildInterruptedCommandError,
-  buildTimeoutCommandError,
-  detectsTerminalCtrlC,
-  hasLikelyShellPrompt
-} from './command-interrupt'
-import {
-  TERMINAL_COMMAND_START_DEADLINE_FLOOR_MS,
-  TERMINAL_COMMAND_START_TIMEOUT_BASE_MS
-} from './script-runner'
+import type { CommandOutcome } from '../../shared/command-outcome'
 
 export interface PendingCommandResult {
   ok: boolean
@@ -21,13 +11,12 @@ export interface PendingCommandResult {
   timedOut?: boolean
   interrupted?: boolean
   terminalExited?: boolean
+  outcome?: CommandOutcome
 }
-
 export interface PendingCommandTimers {
   setTimeout: typeof setTimeout
   clearTimeout: typeof clearTimeout
 }
-
 export interface CreatePendingCommandControllerInput {
   command: string
   mode: 'pty' | 'pipe'
@@ -36,286 +25,218 @@ export interface CreatePendingCommandControllerInput {
   endMarker: string
   timeoutMs: number
   signal?: AbortSignal
-  /** Grace after we send Ctrl+C for hard timeout before forcing settle. */
   interruptGraceMs?: number
-  /** Wait after observing ^C before settle (unless prompt returns sooner). */
   ctrlCConfirmMs?: number
   /** Idle wait for start marker; re-armed on PTY progress before start. */
   startTimeoutMs?: number
-  /** Absolute wall-clock cap from write; prevents infinite idle-reset. */
-  startDeadlineMs?: number
+  idleTimeoutMs?: number
   continuationPromptTimeoutMs?: number
   secretPromptTimeoutMs?: number
+  deferDispatch?: boolean
   interruptSession: () => void
   onTimeout?: () => void
+  onSettled?: (result: PendingCommandResult) => void
   display?: (message: string) => void
+  onPhase?: (phase: string) => void
   hasUnterminatedSecretPrompt?: (buffer: string) => boolean
   hasShellContinuationPrompt?: (buffer: string) => boolean
   parseCommandBuffer: (
     buffer: string,
     startMarker: string,
     endMarker: string
-  ) => { done: boolean; exitCode?: number; output: string }
+  ) => { done: boolean; exitCode?: number; cwd?: string; output: string }
   extractPartialCommandOutput: (buffer: string, startMarker: string) => string
   timers?: PendingCommandTimers
 }
-
 export interface PendingCommandController {
   onData: (data: string) => void
   onExit: (event: { exitCode: number; signal?: number | string }) => void
-  /** External interrupt (user terminal:write \\x03 or Stop button). */
   notifyUserInterrupt: () => void
+  failDispatch: (message: string) => void
+  markDispatching: () => void
+  markDispatched: () => void
+  continueWaiting: (ms?: number) => boolean
   promise: Promise<PendingCommandResult>
 }
-
-/**
- * Pure-ish pending-command waiter: sentinel completion + Ctrl+C interrupt + hard timeout.
- * Used by terminal ipc and unit tests (no real PTY required).
- */
+/** Deadlines describe command uncertainty. Only explicit user/run cancellation sends SIGINT. */
 export function createPendingCommandController(
   input: CreatePendingCommandControllerInput
 ): PendingCommandController {
   const timers = input.timers ?? { setTimeout, clearTimeout }
-  const interruptGraceMs = input.interruptGraceMs ?? 2_000
-  const ctrlCConfirmMs = input.ctrlCConfirmMs ?? TERMINAL_CTRL_C_CONFIRM_MS
-  const startTimeoutMs = input.startTimeoutMs ?? TERMINAL_COMMAND_START_TIMEOUT_BASE_MS
-  const startDeadlineMs = input.startDeadlineMs ?? TERMINAL_COMMAND_START_DEADLINE_FLOOR_MS
-  const continuationPromptTimeoutMs = input.continuationPromptTimeoutMs ?? 5_000
-  const secretPromptTimeoutMs = input.secretPromptTimeoutMs ?? 300_000
-
+  const startMs = Math.max(1000, Math.min(60000, input.startTimeoutMs ?? 30000))
+  const hardMs = Math.max(1000, Math.min(600000, input.timeoutMs))
   let buffer = ''
   let settled = false
-  let timeoutTriggered = false
-  let commandStarted = false
-  let waitingForSecretPrompt = false
-  let interruptGraceTimeout: ReturnType<typeof setTimeout> | undefined
-  let continuationPromptTimeout: ReturnType<typeof setTimeout> | undefined
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  let startTimeout: ReturnType<typeof setTimeout> | undefined
-  let startDeadlineTimeout: ReturnType<typeof setTimeout> | undefined
-  let ctrlCConfirmTimeout: ReturnType<typeof setTimeout> | undefined
-  let resolvePromise!: (result: PendingCommandResult) => void
-
-  const promise = new Promise<PendingCommandResult>((resolve) => {
-    resolvePromise = resolve
+  let dispatched = false
+  let transportAccepted = false
+  let started = false
+  let waitingSecret = false
+  let continuationWarned = false
+  const handles = new Map<string, ReturnType<typeof setTimeout>>()
+  let resolve!: (result: PendingCommandResult) => void
+  const promise = new Promise<PendingCommandResult>((r) => {
+    resolve = r
   })
-
-  const clearStartWatchdogs = (): void => {
-    if (startTimeout) timers.clearTimeout(startTimeout)
-    if (startDeadlineTimeout) timers.clearTimeout(startDeadlineTimeout)
-    startTimeout = undefined
-    startDeadlineTimeout = undefined
+  function clear(name: string): void {
+    const handle = handles.get(name)
+    if (handle !== undefined) timers.clearTimeout(handle)
+    handles.delete(name)
   }
-
-  const clearAllTimers = (): void => {
-    if (timeout) timers.clearTimeout(timeout)
-    if (interruptGraceTimeout) timers.clearTimeout(interruptGraceTimeout)
-    if (continuationPromptTimeout) timers.clearTimeout(continuationPromptTimeout)
-    if (ctrlCConfirmTimeout) timers.clearTimeout(ctrlCConfirmTimeout)
-    clearStartWatchdogs()
-    timeout = undefined
-    interruptGraceTimeout = undefined
-    continuationPromptTimeout = undefined
-    ctrlCConfirmTimeout = undefined
+  function arm(name: string, ms: number, fn: () => void): void {
+    clear(name)
+    handles.set(
+      name,
+      timers.setTimeout(() => {
+        handles.delete(name)
+        if (!settled) fn()
+      }, ms)
+    )
   }
-
-  const settle = (result: PendingCommandResult): void => {
+  function settle(result: Partial<PendingCommandResult>): void {
     if (settled) return
     settled = true
-    clearAllTimers()
-    if (input.signal) {
-      input.signal.removeEventListener('abort', onAbort)
-    }
-    resolvePromise(result)
-  }
-
-  const settleInterrupted = (): void => {
-    if (settled || timeoutTriggered) return
-    settle({
+    for (const name of handles.keys()) clear(name)
+    input.signal?.removeEventListener('abort', onAbort)
+    const final: PendingCommandResult = {
       ok: false,
       command: input.command,
       mode: input.mode,
       cwd: input.cwd,
       output: input.extractPartialCommandOutput(buffer, input.startMarker),
-      error: buildInterruptedCommandError(),
-      interrupted: true
+      ...result
+    }
+    input.onSettled?.(final)
+    resolve(final)
+  }
+  function deadline(): void {
+    input.onTimeout?.()
+    const outcome = started ? 'completion-unknown' : 'timeout-unconfirmed'
+    input.onPhase?.(outcome)
+    settle({
+      timedOut: true,
+      outcome,
+      error:
+        'Command result is unconfirmed. No interrupt was sent. Do not replay mutations; inspect the terminal or verify current state read-only.'
     })
   }
-
-  const interruptForTimeout = (message: string, display?: string): void => {
+  function warn(message: string, phase: string): void {
+    input.onPhase?.(phase)
+    input.display?.(`\r\n[Crescent] ${message} Continue waiting or interrupt manually.\r\n`)
+  }
+  function armIdle(): void {
+    arm('idle', Math.max(1000, input.idleTimeoutMs ?? 30000), () =>
+      warn('No recent command output.', 'idle-warning')
+    )
+  }
+  function markDispatching(): void {
     if (settled) return
-    timeoutTriggered = true
-    input.onTimeout?.()
-    if (display) input.display?.(display)
-    input.interruptSession()
-    interruptGraceTimeout = timers.setTimeout(() => {
-      settle({
-        ok: false,
-        command: input.command,
-        mode: input.mode,
-        cwd: input.cwd,
-        output: input.extractPartialCommandOutput(buffer, input.startMarker),
-        error: message,
-        timedOut: true
-      })
-    }, interruptGraceMs)
-  }
-
-  const armCommandTimeout = (ms: number): void => {
-    if (timeout) timers.clearTimeout(timeout)
-    timeout = timers.setTimeout(() => {
-      interruptForTimeout(
-        buildTimeoutCommandError(ms),
-        `\r\n\x1b[33m[Crescent] command exceeded ${ms}ms; sending Ctrl+C.\x1b[0m\r\n`
+    dispatched = true
+    input.onPhase?.('dispatching')
+    arm('transport-warning', startMs, () =>
+      warn(
+        'PTY transmission is awaiting confirmation; SSH health is unchanged.',
+        'timeout-unconfirmed'
       )
-    }, ms)
+    )
   }
-
-  /** Idle watchdog: fires only after silence lasting startTimeoutMs. */
-  const armStartTimeout = (): void => {
-    if (startTimeout) timers.clearTimeout(startTimeout)
-    startTimeout = timers.setTimeout(() => {
-      if (commandStarted || settled || waitingForSecretPrompt) return
-      interruptForTimeout(
-        'Command did not reach the execution start marker. The shell may be waiting for an unfinished quote or continuation prompt; Crescent sent Ctrl+C to recover.',
-        `\r\n\x1b[33m[Crescent] command did not start within ${startTimeoutMs}ms; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
-      )
-    }, startTimeoutMs)
+  function markDispatched(): void {
+    if (transportAccepted || settled) return
+    transportAccepted = true
+    clear('transport-warning')
+    dispatched = true
+    input.onPhase?.('dispatched')
+    if (started) return
+    arm('start', startMs, () => {
+      if (!started && !waitingSecret)
+        warn('Execution start is unconfirmed; SSH health is unchanged.', 'timeout-unconfirmed')
+    })
+    arm('hard', Math.min(600000, Math.max(60000, startMs * 2)), deadline)
   }
-
-  /** Absolute cap from write so idle-reset cannot stretch forever. */
-  const armStartDeadline = (): void => {
-    if (startDeadlineTimeout) timers.clearTimeout(startDeadlineTimeout)
-    startDeadlineTimeout = timers.setTimeout(() => {
-      if (commandStarted || settled || waitingForSecretPrompt) return
-      interruptForTimeout(
-        'Command did not reach the execution start marker before the absolute start deadline; Crescent sent Ctrl+C to recover.',
-        `\r\n\x1b[33m[Crescent] command did not start within ${startDeadlineMs}ms (absolute); sending Ctrl+C to recover the shell.\x1b[0m\r\n`
-      )
-    }, startDeadlineMs)
+  function continueWaiting(ms = hardMs): boolean {
+    if (settled || !dispatched) return false
+    arm('hard', Math.max(1000, Math.min(600000, Number.isFinite(ms) ? ms : hardMs)), deadline)
+    armIdle()
+    input.onPhase?.('waiting')
+    return true
   }
-
-  const markCommandStarted = (): void => {
-    if (commandStarted) return
-    commandStarted = true
-    clearStartWatchdogs()
-  }
-
-  const armCtrlCConfirm = (): void => {
-    if (settled || timeoutTriggered || ctrlCConfirmTimeout) return
-    ctrlCConfirmTimeout = timers.setTimeout(() => {
-      settleInterrupted()
-    }, ctrlCConfirmMs)
-  }
-
-  const onAbort = (): void => {
+  function onAbort(): void {
     if (settled) return
-    input.interruptSession()
-    settleInterrupted()
+    settle({
+      interrupted: true,
+      outcome: dispatched ? 'user-cancelled' : 'blocked-before-dispatch',
+      error: 'Canceled by user/run. Verify terminal state before repeating a mutation.'
+    })
+    if (dispatched) input.interruptSession()
   }
-
-  const onData = (data: string): void => {
+  function onData(data: string): void {
     if (settled) return
     buffer += data
-    if (buffer.includes(input.startMarker)) markCommandStarted()
-
-    // Bootstrap still in flight: any PTY progress resets the idle start watchdog.
-    if (!commandStarted && !waitingForSecretPrompt && !timeoutTriggered) {
-      armStartTimeout()
+    // Keep a bounded transcript while retaining the start sentinel across truncation.
+    if (buffer.length > 1024 * 1024)
+      buffer = (started ? `${input.startMarker}\n` : '') + buffer.slice(-512 * 1024)
+    if (!started && new RegExp(`(?:^|[\\r\\n])${input.startMarker}(?:[\\r\\n]|$)`).test(buffer)) {
+      started = true
+      clear('start')
+      input.onPhase?.('started')
+      arm('hard', hardMs, deadline)
     }
-
-    if (!timeoutTriggered && detectsTerminalCtrlC(data)) {
-      armCtrlCConfirm()
-      if (hasLikelyShellPrompt(buffer)) {
-        settleInterrupted()
-        return
-      }
-    }
-
     const parsed = input.parseCommandBuffer(buffer, input.startMarker, input.endMarker)
-    if (!parsed.done) {
-      const atSecretPrompt = Boolean(input.hasUnterminatedSecretPrompt?.(buffer))
-      if (atSecretPrompt && !waitingForSecretPrompt) {
-        waitingForSecretPrompt = true
-        clearStartWatchdogs()
-        if (continuationPromptTimeout) {
-          timers.clearTimeout(continuationPromptTimeout)
-          continuationPromptTimeout = undefined
-        }
-        armCommandTimeout(secretPromptTimeoutMs)
-      } else if (!atSecretPrompt && waitingForSecretPrompt) {
-        waitingForSecretPrompt = false
-        armCommandTimeout(input.timeoutMs)
-        if (!commandStarted) {
-          armStartTimeout()
-          armStartDeadline()
-        }
-      }
-
-      if (
-        commandStarted &&
-        !timeoutTriggered &&
-        !continuationPromptTimeout &&
-        !waitingForSecretPrompt &&
-        input.hasShellContinuationPrompt?.(buffer)
-      ) {
-        continuationPromptTimeout = timers.setTimeout(() => {
-          if (!commandStarted || settled || waitingForSecretPrompt) return
-          interruptForTimeout(
-            'Command appears stuck at a shell continuation prompt; Crescent sent Ctrl+C to recover.',
-            `\r\n\x1b[33m[Crescent] shell continuation prompt persisted for ${continuationPromptTimeoutMs}ms; sending Ctrl+C to recover the shell.\x1b[0m\r\n`
-          )
-        }, continuationPromptTimeoutMs)
-      }
+    if (parsed.done) {
+      settle({
+        ok: parsed.exitCode === 0,
+        exitCode: parsed.exitCode,
+        cwd: parsed.cwd ?? input.cwd,
+        output: parsed.output,
+        outcome: parsed.exitCode === 0 ? 'completed' : 'confirmed-exit-nonzero'
+      })
       return
     }
-
-    settle({
-      ok: !timeoutTriggered && parsed.exitCode === 0,
-      command: input.command,
-      mode: input.mode,
-      cwd: input.cwd,
-      exitCode: parsed.exitCode,
-      output: parsed.output,
-      error: timeoutTriggered ? buildTimeoutCommandError(input.timeoutMs) : undefined,
-      timedOut: timeoutTriggered || undefined,
-      interrupted: undefined
-    })
-  }
-
-  const onExit = (event: { exitCode: number; signal?: number | string }): void => {
-    settle({
-      ok: false,
-      command: input.command,
-      mode: input.mode,
-      cwd: input.cwd,
-      output: input.extractPartialCommandOutput(buffer, input.startMarker),
-      error: timeoutTriggered
-        ? `${buildTimeoutCommandError(input.timeoutMs)} Terminal exit code: ${event.exitCode}.`
-        : `Terminal session exited before the command completion marker (terminal exit code ${event.exitCode}).`,
-      timedOut: timeoutTriggered || undefined,
-      terminalExited: true
-    })
-  }
-
-  const notifyUserInterrupt = (): void => {
-    if (settled || timeoutTriggered) return
-    input.interruptSession()
-    settleInterrupted()
-  }
-
-  armCommandTimeout(input.timeoutMs)
-  armStartTimeout()
-  armStartDeadline()
-
-  if (input.signal) {
-    if (input.signal.aborted) {
-      // Defer so callers can attach listeners/write first in the same tick if needed.
-      timers.setTimeout(() => onAbort(), 0)
-    } else {
-      input.signal.addEventListener('abort', onAbort, { once: true })
+    const secret = Boolean(input.hasUnterminatedSecretPrompt?.(buffer))
+    if (secret && !waitingSecret) {
+      waitingSecret = true
+      clear('start')
+      arm('hard', input.secretPromptTimeoutMs ?? 300000, deadline)
+      input.onPhase?.('awaiting-input')
+    } else if (!secret && waitingSecret) {
+      waitingSecret = false
+      arm('hard', started ? hardMs : Math.max(60000, startMs * 2), deadline)
+    }
+    if (started && !waitingSecret) {
+      armIdle()
+      if (input.hasShellContinuationPrompt?.(buffer) && !continuationWarned) {
+        continuationWarned = true
+        arm('continuation', input.continuationPromptTimeoutMs ?? 5000, () => {
+          if (input.hasShellContinuationPrompt?.(buffer))
+            warn('Possible shell continuation; completion remains unconfirmed.', 'awaiting-input')
+        })
+      }
     }
   }
-
-  return { onData, onExit, notifyUserInterrupt, promise }
+  function onExit(event: { exitCode: number }): void {
+    settle({
+      terminalExited: true,
+      outcome: 'session-exited',
+      error: `Terminal exited (${event.exitCode}) before command completion.`
+    })
+  }
+  if (!input.deferDispatch) markDispatched()
+  if (input.signal?.aborted) onAbort()
+  else input.signal?.addEventListener('abort', onAbort, { once: true })
+  return {
+    onData,
+    onExit,
+    notifyUserInterrupt: onAbort,
+    failDispatch: (message) => {
+      input.onPhase?.('timeout-unconfirmed')
+      settle({
+        timedOut: true,
+        outcome: started ? 'completion-unknown' : 'timeout-unconfirmed',
+        error: message
+      })
+    },
+    markDispatching,
+    markDispatched,
+    continueWaiting,
+    promise
+  }
 }

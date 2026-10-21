@@ -117,7 +117,7 @@ const en = {
     shellFailed: 'Shell failed to start',
     shellRetry: 'Retry shell start',
     swapPanes: 'Swap terminal and chat panes',
-    themeSwitcher: 'Switch theme',
+    themeSwitcher: 'Appearance',
     themeOriginal: 'Crescent Original',
     themeNightShift: 'Night Shift',
     themeRouteSurvey: 'Route Survey',
@@ -139,17 +139,16 @@ const en = {
   onboarding: {
     title: 'Welcome to Crescent',
     description:
-      'A short first-run tour: load an example API, connect a host, and open Skills when you need reusable playbooks.',
-    stepOpenApiTitle: 'OpenAPI tools',
-    stepOpenApiBody:
-      'Add an example profile so the agent can call REST endpoints as tools. You can replace it later in Settings.',
+      'A short first-run tour: configure a model, connect a host, and open Skills when you need reusable playbooks.',
+    stepModelTitle: 'Agent model',
+    stepModelBody:
+      'Configure a model provider and API key in Settings. The agent uses the current terminal and configured MCP tools.',
     stepConnectionTitle: 'Terminal connections',
     stepConnectionBody:
       'Connect to a local shell or SSH host. Agent commands run in the active terminal session.',
     stepSkillsTitle: 'Skills',
     stepSkillsBody:
       'Skills are reusable Markdown playbooks. Browse local skills or install from a registry when ready.',
-    addExampleOpenApi: 'Add example API profile',
     openSettings: 'Open settings',
     openConnections: 'Open connections',
     openSkills: 'Open skills',
@@ -705,7 +704,7 @@ const en = {
     fullRunNoSteps: 'No process steps to show.',
     fullRunNoResult: 'No result text to show.',
     askPlaceholder: 'Ask AI, or type /command to check the current terminal…',
-    chatNoTools: 'Chat works without OpenAPI tools',
+    chatNoTools: 'Configure a model to start chatting',
     contextAdded: 'Added to current run context',
     contextAdd: 'Add context',
     contextHint: 'You can keep typing while the run is active; Enter adds context to this run.',
@@ -988,6 +987,10 @@ const en = {
     agentStyleGuidedHint: 'Pair through the investigation: goal, evidence, next step.',
     agentStyleTeach: 'Teach',
     agentStyleTeachHint: 'Explain why this check and what the evidence means. For learning.',
+    thinkingLevel: 'Reasoning effort',
+    thinkingLevelHint:
+      'High by default. Higher effort may increase latency and usage; unsupported levels are adjusted for the model.',
+    thinkingLevels: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', max: 'Maximum' },
     showAgentThinking: 'Show thinking process',
     showAgentThinkingHint:
       'Overrides the style default. Swift/Concise/Guided hide thinking; Teach shows it.',
@@ -1038,7 +1041,7 @@ const en = {
       'https://api.example.com/openapi.json\nor /absolute/path/openapi.yaml\nor paste OpenAPI JSON',
     openApiSection: 'OpenAPI tools',
     openApiSectionHint:
-      'Load an OpenAPI document so the agent can call matching REST endpoints as tools. Save multiple API profiles and switch between them.',
+      'Legacy API profiles are retained for migration. The current Pi agent does not load OpenAPI tools.',
     openApiProfiles: 'OpenAPI profiles',
     openApiProfile: 'Active OpenAPI profile',
     openApiProfileHint:
@@ -1084,7 +1087,7 @@ const en = {
     instructionFiles: 'Advanced: identity and principles',
     instructionFilesHint:
       'Working style controls how much Crescent says. These files still shape judgment and identity; they do not override working-style density or safety rules.',
-    maxToolsHint: 'Only the most relevant OpenAPI tools are sent to the model.',
+    maxToolsHint: 'Legacy compatibility field; the current Pi agent does not use it.',
     mcpArgs: 'MCP arguments',
     mcpArgsHint: 'One argument per line. Values are passed to the MCP command in order.',
     mcpCommand: 'MCP command',
@@ -1226,7 +1229,7 @@ const en = {
     skillsSearching: 'Searching skills',
     title: 'Agent settings',
     titleDescription:
-      'Configure model providers, OpenAPI tools, command review, and local instruction files.',
+      'Configure model providers, MCP tools, command review, and local instruction files.',
     updateSection: 'App updates',
     updateSectionHint:
       'Check GitHub Releases for a newer Crescent build. Download and install when an update is available.',

@@ -32,3 +32,53 @@ export function validHandoffInput(value: unknown): value is AgentGenerateHandoff
     (v.locale === undefined || v.locale === 'zh-CN' || v.locale === 'en')
   )
 }
+
+export type HandoffTarget = 'inherit' | 'local' | 'none' | `connection:${string}`
+/** Resolve the explicitly selected source pane, using main-process context when available. */
+export function resolveHandoffTarget(input: {
+  selection: HandoffTarget
+  source: { isSsh?: boolean; connectionId?: string; connectionName?: string }
+  connections: Array<{ id: string; name: string }>
+}): { isSsh: boolean; connectionId?: string; connectionName?: string; blocked: boolean } {
+  if (input.selection === 'none') return { isSsh: false, blocked: true }
+  if (input.selection === 'local') return { isSsh: false, blocked: false }
+  const id =
+    input.selection === 'inherit'
+      ? input.source.connectionId
+      : input.selection.slice('connection:'.length)
+  if (id) {
+    const saved = input.connections.find((item) => item.id === id)
+    if (!saved) throw new Error('Target connection is missing; select an environment explicitly.')
+    return { isSsh: true, connectionId: id, connectionName: saved.name, blocked: true }
+  }
+  if (input.source.isSsh)
+    return { isSsh: true, connectionName: input.source.connectionName, blocked: true }
+  return { isSsh: false, blocked: false }
+}
+
+/** Runtime manual hops supersede a cached connection-card identity in the renderer. */
+export function handoffSourceIdentity(
+  source: { isSsh?: boolean; connectionId?: string; connectionName?: string },
+  context: {
+    executionMode?: 'ssh' | 'local'
+    manualSshActive?: boolean
+    connectionOrigin?: string
+    expectedTarget?: string
+    promptHost?: string
+    connectionId?: string
+    connectionName?: string
+  }
+) {
+  const manual =
+    context.connectionOrigin === 'manual-shell' &&
+    (context.executionMode === 'ssh' || context.manualSshActive)
+  if (context.executionMode === 'local')
+    return { isSsh: false, connectionId: undefined, connectionName: undefined }
+  return {
+    isSsh: Boolean(source.isSsh || context.executionMode === 'ssh'),
+    connectionId: manual ? undefined : (context.connectionId ?? source.connectionId),
+    connectionName: manual
+      ? (context.expectedTarget ?? context.promptHost ?? 'Manual SSH')
+      : (context.connectionName ?? source.connectionName)
+  }
+}

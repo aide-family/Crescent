@@ -1,3 +1,5 @@
+import { getArchitectureTheme } from '../../../../shared/architecture-theme'
+import { APP_THEMES, type AppThemeId } from '@renderer/lib/theme-definitions'
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 
 import {
@@ -12,15 +14,19 @@ export type ArchNodeData = {
   label: string
   subtitle?: string
   kind: ArchitectureKind
+  themeId: AppThemeId
 }
 
 export type ArchGroupData = {
   label: string
   kind?: ArchitectureKind
+  themeId: AppThemeId
 }
 
 export type ArchEdgeData = {
   color: string
+  canvas: string
+  radius: number
   dashed: boolean
   animate: boolean
   label?: string
@@ -44,7 +50,10 @@ const PORT_TO_HANDLE: Record<ArchPortSide, string> = {
 }
 
 /** Layer nodes left-to-right from shared layout; wrap group members in parent frames. */
-export function buildArchitectureFlowGraph(spec: ArchitectureSpec): ArchitectureFlowGraph {
+export function buildArchitectureFlowGraph(
+  spec: ArchitectureSpec,
+  themeId: AppThemeId = 'crescent'
+): ArchitectureFlowGraph {
   const layout = layoutArchitecture(spec, { titleOffset: 0 })
   const groupById = new Map(layout.groups.map((group) => [group.id, group] as const))
 
@@ -55,7 +64,7 @@ export function buildArchitectureFlowGraph(spec: ArchitectureSpec): Architecture
       id: `group:${group.id}`,
       type: 'archGroup',
       position: { x: group.x, y: group.y },
-      data: { label: group.label, kind: group.kind } satisfies ArchGroupData,
+      data: { label: group.label, kind: group.kind, themeId } satisfies ArchGroupData,
       style: { width: group.width, height: group.height },
       selectable: false,
       draggable: false,
@@ -77,7 +86,8 @@ export function buildArchitectureFlowGraph(spec: ArchitectureSpec): Architecture
       data: {
         label: node.label,
         ...(node.subtitle ? { subtitle: node.subtitle } : {}),
-        kind: node.kind
+        kind: node.kind,
+        themeId
       } satisfies ArchNodeData,
       draggable: false,
       zIndex: 1,
@@ -85,12 +95,13 @@ export function buildArchitectureFlowGraph(spec: ArchitectureSpec): Architecture
     })
   }
 
-  const edges: Edge[] = layout.edges.map((edge) => toFlowEdge(edge))
+  const edges: Edge[] = layout.edges.map((edge) => toFlowEdge(edge, themeId))
 
   return { nodes, edges }
 }
 
-function toFlowEdge(edge: ArchitectureLayoutEdge): Edge {
+function toFlowEdge(edge: ArchitectureLayoutEdge, themeId: AppThemeId): Edge {
+  const color = getArchitectureTheme(themeId).kinds[edge.kind].border
   return {
     id: `e-${edge.from}-${edge.to}-${edge.index}`,
     source: edge.from,
@@ -100,7 +111,9 @@ function toFlowEdge(edge: ArchitectureLayoutEdge): Edge {
     type: 'archEdge',
     label: edge.label,
     data: {
-      color: edge.color,
+      color,
+      canvas: getArchitectureTheme(themeId).canvas,
+      radius: APP_THEMES[themeId].geometry.radiusSmall,
       dashed: edge.dashed,
       animate: !edge.dashed,
       ...(edge.label ? { label: edge.label } : {}),
@@ -111,7 +124,7 @@ function toFlowEdge(edge: ArchitectureLayoutEdge): Edge {
     } satisfies ArchEdgeData,
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: edge.color,
+      color,
       width: 18,
       height: 18
     }

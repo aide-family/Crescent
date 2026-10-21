@@ -1,6 +1,6 @@
 # fix-v4：工作风格旁新增执行模式
 
-状态：已实施，验证记录见 `docs/EXECUTION_PLANS.md`  
+状态：已实施，验证记录见 `docs/EXECUTION_PLANS.md`
 日期：2026-09-28
 
 ## 目标与方案选择

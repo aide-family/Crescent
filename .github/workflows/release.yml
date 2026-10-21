@@ -30,24 +30,40 @@ jobs:
             exit 1
           fi
 
+  quality:
+    name: Release quality gate
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release source
+        run: npm run ci
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   build:
     name: Build ${{ matrix.name }}
-    needs: validate
+    needs: [validate, quality]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS arm64
+          - name: macOS Universal
             os: macos-latest
-            artifact_name: crescent-macos-arm64
+            artifact_name: crescent-macos-universal
             platform: mac
-            arch_flags: --arm64
-          - name: macOS x64
-            os: macos-latest
-            artifact_name: crescent-macos-x64
-            platform: mac
-            arch_flags: --x64
+            arch_flags: --universal
           - name: Windows
             os: windows-latest
             artifact_name: crescent-windows
@@ -134,12 +150,12 @@ jobs:
             mac)
               if [[ "$MAC_SIGN" == "1" ]]; then
                 unset CSC_IDENTITY_AUTO_DISCOVERY || true
-                npx electron-builder --mac ${{ matrix.arch_flags }} --publish=never
+                npx electron-builder --mac --universal --publish=never
               else
                 # Keep CSC_LINK truly unset for unsigned builds.
                 unset CSC_LINK CSC_KEY_PASSWORD || true
                 export CSC_IDENTITY_AUTO_DISCOVERY=false
-                npx electron-builder --mac ${{ matrix.arch_flags }} \
+                npx electron-builder --mac --universal \
                   -c.mac.notarize=false -c.mac.hardenedRuntime=false --publish=never
               fi
               ;;

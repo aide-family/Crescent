@@ -47,8 +47,8 @@ export interface WhaleMonitorConfigInput extends WhaleMonitorConfig {
 
 export const DEFAULT_WHALE_MONITOR_CONFIG: WhaleMonitorConfig = {
   enabled: true,
-  spendBaseUrl: 'https://dmxwg.intra.yiducloud.cn/litellm/spend/logs/self',
-  modelsBaseUrl: 'http://nova.dmxwg.yiducloud.cn/litellm/v1/models',
+  spendBaseUrl: '',
+  modelsBaseUrl: '',
   totalBudget: 200,
   refreshIntervalSeconds: 120,
   defaultDateRange: 'current-month'

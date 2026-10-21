@@ -1,3 +1,13 @@
+import { CodeIntelligenceSettings } from './CodeIntelligenceSettings'
+import {
+  normalizeCommandTimeoutPolicy,
+  type CommandTimeoutPolicy
+} from '../../../shared/command-timeouts'
+import {
+  AGENT_THINKING_LEVELS,
+  normalizeThinkingLevel,
+  type AgentThinkingLevel
+} from '../../../shared/agent-thinking'
 import {
   BotIcon,
   CheckIcon,
@@ -5,7 +15,6 @@ import {
   PencilIcon,
   PlusIcon,
   PowerIcon,
-  SettingsIcon,
   Trash2Icon,
   XIcon
 } from 'lucide-react'
@@ -23,8 +32,7 @@ import {
   SheetContent,
   SheetDescription,
   SheetHeader,
-  SheetTitle,
-  SheetTrigger
+  SheetTitle
 } from '@renderer/components/ui/sheet'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
@@ -74,13 +82,13 @@ export type OpenApiProfilePatch = Partial<{
   toolDenyList: string[]
 }>
 
-const LOG_LEVEL_LABEL_KEYS: Record<SystemLogLevel, keyof Dictionary['settings']> = {
+const LOG_LEVEL_LABEL_KEYS = {
   off: 'logLevelOff',
   debug: 'logLevelDebug',
   info: 'logLevelInfo',
   warn: 'logLevelWarn',
   error: 'logLevelError'
-}
+} as const satisfies Record<SystemLogLevel, keyof Dictionary['settings']>
 
 export interface SettingsSheetProps {
   open: boolean
@@ -114,9 +122,11 @@ export interface SettingsSheetProps {
   onApplyDefaultModel: (selection: string) => void | Promise<void>
   onCloseTerminalConfirmChange: (enabled: boolean) => void
   onAgentStyleChange: (style: AgentStyle) => void
+  onThinkingLevelChange: (level: AgentThinkingLevel) => void
   onLogLevelChange: (level: SystemLogLevel) => void
   onShowAgentThinkingChange: (value: boolean | undefined) => void
   onWorkspaceCwdChange: (value: string) => void
+  onCommandTimeoutsChange: (value: CommandTimeoutPolicy) => void
   onMaxActiveToolsChange: (value: number) => void
   onCommandWhitelistChange: (text: string) => void
   onCreateOpenApiProfile: () => void
@@ -170,9 +180,11 @@ export function SettingsSheet({
   onApplyDefaultModel,
   onCloseTerminalConfirmChange,
   onAgentStyleChange,
+  onThinkingLevelChange,
   onLogLevelChange,
   onShowAgentThinkingChange,
   onWorkspaceCwdChange,
+  onCommandTimeoutsChange,
   onMaxActiveToolsChange: _onMaxActiveToolsChange,
   onCommandWhitelistChange: _onCommandWhitelistChange,
   onCreateOpenApiProfile: _onCreateOpenApiProfile,
@@ -208,17 +220,11 @@ export function SettingsSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t.common.settings}
-          title={t.common.settings}
-        >
-          <SettingsIcon aria-hidden="true" />
-        </Button>
-      </SheetTrigger>
       <SheetContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          document.getElementById('settings-trigger')?.focus()
+        }}
         side="right"
         className={`w-full ${detailEditorOpen ? 'sm:max-w-5xl' : 'sm:max-w-2xl'}`}
       >
@@ -235,6 +241,7 @@ export function SettingsSheet({
         </SheetHeader>
         <div className="app-sheet-split flex min-h-0 flex-1 flex-row-reverse gap-3 overflow-hidden px-4">
           <div className="app-sheet-main min-w-0 flex-1 space-y-3 overflow-auto overscroll-contain">
+            <CodeIntelligenceSettings />
             <div className="flex items-center justify-between gap-2">
               <p className="app-section-label">
                 {t.settings.providerList} · {config.providers.length}
@@ -434,6 +441,27 @@ export function SettingsSheet({
                 <FieldDescription>{t.settings.agentStyleHint}</FieldDescription>
               </Field>
               <Field>
+                <FieldLabel htmlFor="thinking-level">{t.settings.thinkingLevel}</FieldLabel>
+                <Select
+                  value={normalizeThinkingLevel(config.thinkingLevel)}
+                  onValueChange={(value) => onThinkingLevelChange(normalizeThinkingLevel(value))}
+                >
+                  <SelectTrigger id="thinking-level" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {AGENT_THINKING_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {t.settings.thinkingLevels[level]}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{t.settings.thinkingLevelHint}</FieldDescription>
+              </Field>
+              <Field>
                 <FieldLabel htmlFor="log-level">{t.settings.logLevel}</FieldLabel>
                 <Select
                   value={normalizeSystemLogLevel(config.logLevel)}
@@ -528,6 +556,36 @@ export function SettingsSheet({
                 <FieldDescription>{t.settings.workbenchLayoutHint}</FieldDescription>
               </Field>
               <Field>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['startMs', 'idleMs', 'executionMs', 'approvalMs'] as const).map((key) => (
+                    <label key={key} className="space-y-1 text-xs">
+                      {
+                        {
+                          startMs: '启动告警（秒）',
+                          idleMs: '空闲告警（秒）',
+                          executionMs: '执行时限（秒）',
+                          approvalMs: '审批等待（秒）'
+                        }[key]
+                      }
+                      <Input
+                        type="number"
+                        value={normalizeCommandTimeoutPolicy(config.commandTimeouts)[key] / 1000}
+                        onChange={(event) =>
+                          onCommandTimeoutsChange(
+                            normalizeCommandTimeoutPolicy({
+                              ...config.commandTimeouts,
+                              [key]: Number(event.target.value) * 1000
+                            })
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <FieldDescription>
+                  超时只标记未知结果；不会自动 Ctrl+C 或重放变更。执行时限 60–600
+                  秒，可在运行中继续等待。
+                </FieldDescription>
                 <FieldLabel htmlFor="workspace-cwd">{t.settings.workspaceCwd}</FieldLabel>
                 <Input
                   id="workspace-cwd"

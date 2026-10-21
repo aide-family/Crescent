@@ -3,13 +3,24 @@ productName: Crescent
 directories:
   buildResources: build
 files:
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+  - resources/**/*
+  - package.json
+  - '!out/implementation/**/*'
+  - '!experiments/**/*'
   - '!**/.vscode/*'
+  - '!Document/**/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!node_modules/@tailwindcss/**/*'
+  # PDF.js is baked into the lazy renderer chunk and worker; no native canvas at runtime.
+  - '!node_modules/pdfjs-dist/**/*'
+  - '!node_modules/@napi-rs/canvas*/**/*'
   # Prefer node-pty N-API prebuilds over host-compiled build/ binaries.
   - '!node_modules/node-pty/build/**'
   - '!design/**/*'
@@ -36,6 +47,13 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # Both builds use identical JS archives. Preserve one archive and merge the
+  # unpacked native files without universal's oversized per-file unpack glob.
+  mergeASARs: false
+  # Both architectures intentionally retain these platform-selected prebuilds.
+  # The generic esbuild executable is selected in afterPack and merged by lipo.
+  x64ArchFiles: >-
+    Contents/Resources/app.asar.unpacked/node_modules/{@earendil-works/pi-tui/native/darwin/prebuilds/darwin-{x64,arm64}/darwin-platform.node,node-pty/prebuilds/darwin-{x64,arm64}/{pty.node,spawn-helper},@esbuild/darwin-{x64,arm64}/bin/esbuild}
   category: public.app-category.developer-tools
   icon: build/icon.icns
   hardenedRuntime: true
@@ -43,10 +61,11 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
@@ -67,6 +86,7 @@ appImage:
 # node-pty ships N-API prebuilds for darwin/win32/linux. Do not force node-gyp rebuild
 # during packaging — that breaks cross-compiling Windows/Linux targets from macOS.
 npmRebuild: false
+afterPack: ./scripts/prepare-macos-native.cjs
 publish:
   provider: github
   owner: aide-family

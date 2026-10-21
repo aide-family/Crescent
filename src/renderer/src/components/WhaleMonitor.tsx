@@ -4,38 +4,21 @@ import whaleIdlePoster from '@renderer/assets/whale-idle-poster.png'
 import { WhalePetPortrait } from '@renderer/components/WhalePetPortrait'
 import type { WhaleMonitorConfigInput, WhaleMonitorSnapshot } from '../../../shared/whale-monitor'
 
-interface WhaleMotionAsset {
-  id: string
-  category: string
-  src: string
-}
+import {
+  whaleMotionAssets,
+  idleMotion,
+  staticIdleMotion,
+  type WhaleMotionAsset
+} from './whale/registry'
 
 interface ActiveWhaleMotion extends WhaleMotionAsset {
+  src: string
   loop: boolean
   token: number
 }
 
 const WHALE_WIDGET_HEIGHT = 136
 const PET_DOUBLE_CLICK_DELAY_MS = 350
-const whaleMotionModules = import.meta.glob<string>('../assets/whale-motions/**/*.webm', {
-  eager: true,
-  import: 'default',
-  query: '?url'
-})
-const whaleMotionAssets: WhaleMotionAsset[] = Object.entries(whaleMotionModules).map(
-  ([path, src]) => {
-    const parts = path.split('/')
-    const category = parts.at(-2) ?? 'other'
-    const name = (parts.at(-1) ?? path).replace(/\.webm$/, '')
-    return { id: `${category}/${name}`, category, src }
-  }
-)
-const idleMotion = whaleMotionAssets.find((motion) => motion.id === 'idle/breathing') ?? {
-  id: 'idle/static',
-  category: 'idle',
-  src: ''
-}
-const staticIdleMotion = { id: 'idle/static', category: 'idle', src: '' }
 const workMotions = whaleMotionAssets.filter((motion) => motion.category === 'work')
 const clickMotions = whaleMotionAssets.filter((motion) => motion.category === 'clicks')
 const dragMotions = whaleMotionAssets.filter((motion) => motion.category === 'drag')
@@ -105,7 +88,7 @@ function WhaleAvatar({
             loop={motion.loop}
             muted
             playsInline
-            preload="auto"
+            preload="metadata"
             src={motion.src}
             className={`whale-pet-sprite absolute inset-0 h-full w-full object-contain drop-shadow-xl ${videoReady ? 'opacity-100' : 'opacity-0'}`}
             onCanPlay={() => setVideoState({ token: motion.token, ready: true, failed: false })}
@@ -137,6 +120,7 @@ export function WhaleMonitor({
   const [dragging, setDragging] = useState(false)
   const [activeMotion, setActiveMotion] = useState<ActiveWhaleMotion>(() => ({
     ...idleMotion,
+    src: '',
     loop: true,
     token: 0
   }))
@@ -177,11 +161,30 @@ export function WhaleMonitor({
   )
 
   const playMotion = useCallback((motion: WhaleMotionAsset, loop: boolean): void => {
-    const nextMotion = { ...motion, loop, token: motionTokenRef.current + 1 }
-    motionTokenRef.current = nextMotion.token
-    activeMotionRef.current = nextMotion
-    setActiveMotion(nextMotion)
+    const token = ++motionTokenRef.current
+    void motion
+      .load()
+      .then((src) => {
+        if (motionTokenRef.current !== token) return
+        const nextMotion = { ...motion, src, loop, token }
+        activeMotionRef.current = nextMotion
+        setActiveMotion(nextMotion)
+      })
+      .catch(() => {
+        if (motionTokenRef.current !== token) return
+        failedMotionsRef.current.add(motion.id)
+        const nextMotion = { ...staticIdleMotion, src: '', loop: true, token }
+        activeMotionRef.current = nextMotion
+        setActiveMotion(nextMotion)
+      })
   }, [])
+
+  useEffect(() => {
+    playMotion(idleMotion, true)
+    return () => {
+      motionTokenRef.current += 1
+    }
+  }, [playMotion])
 
   const playRandomMotion = useCallback(
     (pool: WhaleMotionAsset[], loop = false): void => {
@@ -329,6 +332,14 @@ export function WhaleMonitor({
   const panelAlignsRight = bounds.x + 112 > window.innerWidth / 2
 
   const refreshUsage = async (): Promise<void> => {
+    if (!snapshot || !snapshot.settings.spendBaseUrl || !snapshot.settings.apiKeyConfigured) {
+      setError(
+        en
+          ? 'Set the spend endpoint and API key in settings first.'
+          : '请先在设置中填写用量端点和 API Key 并保存。'
+      )
+      return
+    }
     if (!range.startDate || !range.endDate || range.startDate > range.endDate) {
       setError(en ? 'Choose a valid date range.' : '请选择有效的日期区间。')
       return
@@ -355,6 +366,14 @@ export function WhaleMonitor({
   }
 
   const refreshModels = async (): Promise<void> => {
+    if (!snapshot || !snapshot.settings.modelsBaseUrl || !snapshot.settings.apiKeyConfigured) {
+      setError(
+        en
+          ? 'Set the models endpoint and API key in settings first.'
+          : '请先在设置中填写模型端点和 API Key 并保存。'
+      )
+      return
+    }
     setBusy(true)
     setError('')
     try {
@@ -368,6 +387,14 @@ export function WhaleMonitor({
   }
 
   const saveSettings = async (): Promise<void> => {
+    if (!endpointSpend.trim() || !endpointModels.trim()) {
+      setError(
+        en
+          ? 'Enter both endpoint URLs before saving.'
+          : '请先填写用量端点和模型端点，再保存设置。'
+      )
+      return
+    }
     const amount = Number(budgetText)
     if (!Number.isFinite(amount) || amount < 0) {
       setError(en ? 'Budget must be zero or greater.' : '额度必须是大于或等于 0 的数字。')
@@ -581,9 +608,10 @@ export function WhaleMonitor({
                 />
               </label>
               <label className="block space-y-1 text-xs">
-                <span>{en ? 'Spend endpoint' : '用量端点'}</span>
+                <span>{en ? 'Spend endpoint (required)' : '用量端点（必填）'}</span>
                 <input
                   className="h-8 w-full rounded border border-input bg-background px-2 text-xs"
+                  placeholder={en ? 'Enter the usage endpoint URL' : '请填写用量接口地址'}
                   value={endpointSpend}
                   onChange={(event) => setEndpointSpend(event.target.value)}
                 />
@@ -599,9 +627,10 @@ export function WhaleMonitor({
                 </label>
               )}
               <label className="block space-y-1 text-xs">
-                <span>{en ? 'Models endpoint' : '模型端点'}</span>
+                <span>{en ? 'Models endpoint (required)' : '模型端点（必填）'}</span>
                 <input
                   className="h-8 w-full rounded border border-input bg-background px-2 text-xs"
+                  placeholder={en ? 'Enter the models endpoint URL' : '请填写模型列表接口地址'}
                   value={endpointModels}
                   onChange={(event) => setEndpointModels(event.target.value)}
                 />
@@ -801,14 +830,14 @@ export function WhaleMonitor({
         {detailsOpen ? (
           <span
             aria-hidden="true"
-            className="invisible rounded-full border border-teal-300/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur"
+            className="invisible rounded-full border border-primary/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur"
           >
             {balanceLabel}
           </span>
         ) : (
           <button
             data-whale-drag-handle
-            className="rounded-full border border-teal-300/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur hover:bg-card"
+            className="rounded-full border border-primary/50 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-lg backdrop-blur hover:bg-card"
             onClick={handlePetClick}
           >
             {balanceLabel}

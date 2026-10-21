@@ -1,3 +1,15 @@
+import {
+  readRow,
+  readRows,
+  agentRunRow,
+  opsHistoryRow,
+  sessionHistoryRow,
+  agentLogRow,
+  operationRow,
+  memoryRow,
+  type AgentRunRow,
+  type OpsHistoryRow
+} from './sqlite/rows'
 import { normalizeExecutionMode } from '../shared/execution-plan'
 import { existsSync, mkdirSync } from 'fs'
 import type { DatabaseSync } from 'node:sqlite'
@@ -23,24 +35,6 @@ let database: DatabaseSync | undefined
 
 function parseStoredAgentStyle(value: string | null | undefined): AgentStyle | undefined {
   return isAgentStyle(value) ? value : undefined
-}
-
-interface SessionHistoryRow {
-  tabId: string
-  title: string
-  connectionId?: string | null
-  connectionName?: string | null
-  isSsh: 0 | 1
-  terminalCwd?: string | null
-  terminalMode?: 'pty' | 'pipe' | null
-  updatedAt: string
-  summary?: string | null
-  titleLocked?: 0 | 1
-  lastMessage?: string | null
-  lastMessageAt?: string | null
-  runCount?: number
-  agentStyle?: string | null
-  executionMode?: string | null
 }
 
 export function initializeCrescentDatabase(): void {
@@ -148,6 +142,9 @@ export function initializeCrescentDatabase(): void {
   ensureColumn(db, 'session_tabs', 'title_locked', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'session_tabs', 'agent_style', 'TEXT')
   ensureColumn(db, 'session_tabs', 'execution_mode', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'handoff_blocked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'session_tabs', 'expected_target', 'TEXT')
+  ensureColumn(db, 'session_tabs', 'connection_origin', 'TEXT')
   ensureColumn(db, 'agent_logs', 'run_id', 'TEXT')
   ensureColumn(db, 'agent_runs', 'started_at', 'TEXT')
   ensureColumn(db, 'agent_runs', 'elapsed_ms', 'INTEGER')
@@ -163,13 +160,44 @@ export function initializeCrescentDatabase(): void {
   `)
 }
 
+/** Main-only metadata read: restore execution intent before any PTY can be used. No logs/credentials. */
+export function readStoredExecutionIntent(tabId: string):
+  | {
+      isSsh: boolean
+      blocked: boolean
+      expectedTarget?: string
+      connectionId?: string
+      connectionOrigin?: import('../shared/connection-state').ConnectionOrigin
+    }
+  | undefined {
+  const row = getDatabase()
+    .prepare(
+      'SELECT is_ssh, handoff_blocked, expected_target, connection_id, connection_origin FROM session_tabs WHERE tab_id = ?'
+    )
+    .get(tabId)
+  if (!row) return undefined
+  if (![0, 1].includes(row.is_ssh as number) || ![0, 1].includes(row.handoff_blocked as number))
+    return { isSsh: false, blocked: true }
+  return {
+    isSsh: row.is_ssh === 1,
+    blocked: row.handoff_blocked === 1,
+    expectedTarget: typeof row.expected_target === 'string' ? row.expected_target : undefined,
+    connectionId: typeof row.connection_id === 'string' ? row.connection_id : undefined,
+    connectionOrigin: ['manual-shell', 'connection-card', 'special-ssh'].includes(
+      String(row.connection_origin)
+    )
+      ? (row.connection_origin as import('../shared/connection-state').ConnectionOrigin)
+      : undefined
+  }
+}
+
 export function saveSessionTabs(tabs: StoredSessionTab[]): void {
   const db = getDatabase()
   const now = new Date().toISOString()
   const statement = db.prepare(`
     INSERT INTO session_tabs (
-      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, execution_mode, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tab_id, title, connection_id, connection_name, is_ssh, terminal_cwd, terminal_mode, agent_style, execution_mode, handoff_blocked, expected_target, connection_origin, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tab_id) DO UPDATE SET
       title = CASE
         WHEN session_tabs.title_locked = 1 THEN session_tabs.title
@@ -182,6 +210,9 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       terminal_mode = excluded.terminal_mode,
       agent_style = excluded.agent_style,
       execution_mode = excluded.execution_mode,
+      handoff_blocked = excluded.handoff_blocked,
+      expected_target = excluded.expected_target,
+      connection_origin = excluded.connection_origin,
       updated_at = excluded.updated_at
   `)
 
@@ -196,6 +227,9 @@ export function saveSessionTabs(tabs: StoredSessionTab[]): void {
       tab.terminalMode ?? null,
       tab.agentStyle ?? null,
       normalizeExecutionMode(tab.executionMode),
+      tab.handoffBlocked ? 1 : 0,
+      tab.expectedTarget ?? null,
+      tab.connectionOrigin ?? null,
       now
     )
   }
@@ -234,9 +268,10 @@ export function updateAgentLog(input: Pick<StoredAgentLogEntry, 'tabId' | 'logId
 export function getAgentLog(tabId: string, logId: number): StoredAgentLogEntry | undefined {
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId || !Number.isFinite(logId)) return undefined
-  const row = getDatabase()
-    .prepare(
-      `
+  const row = readRow(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         tab_id AS tabId,
         log_id AS logId,
@@ -247,8 +282,10 @@ export function getAgentLog(tabId: string, logId: number): StoredAgentLogEntry |
       FROM agent_logs
       WHERE tab_id = ? AND log_id = ?
     `
-    )
-    .get(normalizedTabId, logId) as StoredAgentLogEntry | undefined
+      )
+      .get(normalizedTabId, logId),
+    agentLogRow
+  )
   return row
 }
 
@@ -283,23 +320,6 @@ const AGENT_RUN_SELECT_COLUMNS = `
   cache_read_tokens AS cacheReadTokens,
   cache_write_tokens AS cacheWriteTokens
 `
-
-interface AgentRunRow {
-  runId: string
-  tabId: string
-  input: string
-  status: StoredAgentRun['status']
-  connectionId?: string | null
-  output?: string | null
-  error?: string | null
-  startedAt?: string | null
-  elapsedMs?: number | null
-  traceJson?: string | null
-  inputTokens?: number | null
-  outputTokens?: number | null
-  cacheReadTokens?: number | null
-  cacheWriteTokens?: number | null
-}
 
 export function saveAgentRun(run: StoredAgentRun): void {
   const db = getDatabase()
@@ -355,15 +375,18 @@ export function getAgentRun(runId: string): StoredAgentRun | undefined {
   const normalizedRunId = runId.trim()
   if (!normalizedRunId) return undefined
 
-  const row = getDatabase()
-    .prepare(
-      `
+  const row = readRow(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${AGENT_RUN_SELECT_COLUMNS}
       FROM agent_runs
       WHERE run_id = ?
     `
-    )
-    .get(normalizedRunId) as AgentRunRow | undefined
+      )
+      .get(normalizedRunId),
+    agentRunRow
+  )
 
   if (!row) return undefined
   return mapStoredAgentRun(row)
@@ -373,17 +396,20 @@ export function listAgentRunsForTab(tabId: string, limit = 50): StoredAgentRun[]
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId) return []
 
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${AGENT_RUN_SELECT_COLUMNS}
       FROM agent_runs
       WHERE tab_id = ?
       ORDER BY updated_at DESC
       LIMIT ?
     `
-    )
-    .all(normalizedTabId, limit) as unknown as AgentRunRow[]
+      )
+      .all(normalizedTabId, limit),
+    agentRunRow
+  )
 
   return rows.map(mapStoredAgentRun)
 }
@@ -392,16 +418,19 @@ export function listAllAgentRunsForTab(tabId: string): StoredAgentRun[] {
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId) return []
 
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${AGENT_RUN_SELECT_COLUMNS}
       FROM agent_runs
       WHERE tab_id = ?
       ORDER BY COALESCE(started_at, created_at) ASC, run_id ASC
     `
-    )
-    .all(normalizedTabId) as unknown as AgentRunRow[]
+      )
+      .all(normalizedTabId),
+    agentRunRow
+  )
 
   return rows.map(mapStoredAgentRun)
 }
@@ -422,14 +451,7 @@ export function getSessionTokenUsage(tabId: string): SessionTokenUsage {
       WHERE tab_id = ?
     `
     )
-    .get(normalizedTabId) as
-    | {
-        input?: number | null
-        output?: number | null
-        cacheRead?: number | null
-        cacheWrite?: number | null
-      }
-    | undefined
+    .get(normalizedTabId)
 
   return {
     input: readSqlCount(row?.input),
@@ -543,15 +565,18 @@ export function getOpsHistoryByRunId(runId: string): OpsHistoryRecord | undefine
   const normalizedRunId = runId.trim()
   if (!normalizedRunId) return undefined
 
-  const row = getDatabase()
-    .prepare(
-      `
+  const row = readRow(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${OPS_HISTORY_SELECT}
       FROM ops_history_records
       WHERE run_id = ?
     `
-    )
-    .get(normalizedRunId) as OpsHistoryRow | undefined
+      )
+      .get(normalizedRunId),
+    opsHistoryRow
+  )
 
   return row ? mapOpsHistoryRow(row) : undefined
 }
@@ -561,17 +586,20 @@ export function listOpsHistoryForTab(tabId: string, limit = 20): OpsHistoryRecor
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId) return []
 
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${OPS_HISTORY_SELECT}
       FROM ops_history_records
       WHERE tab_id = ?
       ORDER BY updated_at DESC
       LIMIT ?
     `
-    )
-    .all(normalizedTabId, Math.max(1, Math.min(limit, 50))) as unknown as OpsHistoryRow[]
+      )
+      .all(normalizedTabId, Math.max(1, Math.min(limit, 50))),
+    opsHistoryRow
+  )
 
   return rows.map(mapOpsHistoryRow)
 }
@@ -580,17 +608,20 @@ export function listOpsHistoryForConnection(connectionId: string, limit = 20): O
   const normalizedConnectionId = connectionId.trim()
   if (!normalizedConnectionId) return []
 
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${OPS_HISTORY_SELECT}
       FROM ops_history_records
       WHERE connection_id = ?
       ORDER BY updated_at DESC
       LIMIT ?
     `
-    )
-    .all(normalizedConnectionId, Math.max(1, Math.min(limit, 100))) as unknown as OpsHistoryRow[]
+      )
+      .all(normalizedConnectionId, Math.max(1, Math.min(limit, 100))),
+    opsHistoryRow
+  )
 
   return rows.map(mapOpsHistoryRow)
 }
@@ -599,15 +630,18 @@ export function getOpsHistoryById(id: string): OpsHistoryRecord | undefined {
   const normalizedId = id.trim()
   if (!normalizedId) return undefined
 
-  const row = getDatabase()
-    .prepare(
-      `
+  const row = readRow(
+    getDatabase()
+      .prepare(
+        `
       SELECT ${OPS_HISTORY_SELECT}
       FROM ops_history_records
       WHERE id = ?
     `
-    )
-    .get(normalizedId) as OpsHistoryRow | undefined
+      )
+      .get(normalizedId),
+    opsHistoryRow
+  )
 
   return row ? mapOpsHistoryRow(row) : undefined
 }
@@ -663,19 +697,6 @@ export function deleteOpsHistoryForConnection(connectionId: string): number {
   return Number(result.changes)
 }
 
-interface OpsHistoryRow {
-  id: string
-  tabId: string
-  connectionId: string
-  runId: string
-  rating: OpsHistoryRating
-  userGoal: string
-  pathSummary: string
-  lesson: string
-  createdAt: string
-  updatedAt: string
-}
-
 function mapOpsHistoryRow(row: OpsHistoryRow): OpsHistoryRecord {
   return {
     id: row.id,
@@ -692,9 +713,10 @@ function mapOpsHistoryRow(row: OpsHistoryRow): OpsHistoryRecord {
 }
 
 export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         tab.tab_id AS tabId,
         tab.title,
@@ -705,6 +727,9 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
         tab.terminal_mode AS terminalMode,
         tab.agent_style AS agentStyle,
         tab.execution_mode AS executionMode,
+        tab.handoff_blocked AS handoffBlocked,
+        tab.expected_target AS expectedTarget,
+        tab.connection_origin AS connectionOrigin,
         tab.updated_at AS updatedAt,
         tab.summary AS summary,
         tab.title_locked AS titleLocked,
@@ -736,8 +761,10 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
       ORDER BY COALESCE(lastMessageAt, tab.updated_at) DESC
       LIMIT ?
     `
-    )
-    .all(limit) as unknown as SessionHistoryRow[]
+      )
+      .all(limit),
+    sessionHistoryRow
+  )
 
   return rows.map((row) => ({
     tabId: row.tabId,
@@ -749,6 +776,9 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
     terminalMode: row.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(row.agentStyle),
     executionMode: normalizeExecutionMode(row.executionMode),
+    handoffBlocked: Boolean(row.handoffBlocked),
+    expectedTarget: row.expectedTarget ?? undefined,
+    connectionOrigin: row.connectionOrigin ?? undefined,
     updatedAt: row.updatedAt,
     summary: row.summary ?? undefined,
     lastMessage: row.lastMessage ?? undefined,
@@ -758,9 +788,10 @@ export function listSessionHistory(limit = 80): StoredSessionHistoryItem[] {
 }
 
 export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDetail | undefined {
-  const tab = getDatabase()
-    .prepare(
-      `
+  const tab = readRow(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         tab_id AS tabId,
         title,
@@ -771,20 +802,26 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
         terminal_mode AS terminalMode,
         agent_style AS agentStyle,
         execution_mode AS executionMode,
+        handoff_blocked AS handoffBlocked,
+        expected_target AS expectedTarget,
+        connection_origin AS connectionOrigin,
         summary,
         title_locked AS titleLocked,
         updated_at AS updatedAt
       FROM session_tabs
       WHERE tab_id = ?
     `
-    )
-    .get(tabId) as SessionHistoryRow | undefined
+      )
+      .get(tabId),
+    sessionHistoryRow
+  )
 
   if (!tab) return undefined
 
-  const logs = getDatabase()
-    .prepare(
-      `
+  const logs = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         tab_id AS tabId,
         log_id AS logId,
@@ -796,8 +833,10 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
       WHERE tab_id = ?
       ORDER BY log_id ASC
     `
-    )
-    .all(tabId) as unknown as StoredAgentLogEntry[]
+      )
+      .all(tabId),
+    agentLogRow
+  )
 
   const [historyItem] = listSessionHistory(200).filter((item) => item.tabId === tabId)
 
@@ -811,6 +850,9 @@ export function readSessionHistoryDetail(tabId: string): StoredSessionHistoryDet
     terminalMode: tab.terminalMode ?? undefined,
     agentStyle: parseStoredAgentStyle(tab.agentStyle),
     executionMode: normalizeExecutionMode(tab.executionMode),
+    handoffBlocked: Boolean(tab.handoffBlocked),
+    expectedTarget: tab.expectedTarget ?? undefined,
+    connectionOrigin: tab.connectionOrigin ?? undefined,
     updatedAt: tab.updatedAt,
     summary: tab.summary ?? undefined,
     lastMessage: historyItem?.lastMessage,
@@ -835,9 +877,10 @@ export function listAgentLogs(
 
   const rows = (
     beforeLogId == null
-      ? (getDatabase()
-          .prepare(
-            `
+      ? readRows(
+          getDatabase()
+            .prepare(
+              `
         SELECT
           tab_id AS tabId,
           log_id AS logId,
@@ -850,11 +893,14 @@ export function listAgentLogs(
         ORDER BY log_id DESC
         LIMIT ?
       `
-          )
-          .all(normalizedTabId, limit) as unknown as StoredAgentLogEntry[])
-      : (getDatabase()
-          .prepare(
-            `
+            )
+            .all(normalizedTabId, limit),
+          agentLogRow
+        )
+      : readRows(
+          getDatabase()
+            .prepare(
+              `
         SELECT
           tab_id AS tabId,
           log_id AS logId,
@@ -867,8 +913,10 @@ export function listAgentLogs(
         ORDER BY log_id DESC
         LIMIT ?
       `
-          )
-          .all(normalizedTabId, beforeLogId, limit) as unknown as StoredAgentLogEntry[])
+            )
+            .all(normalizedTabId, beforeLogId, limit),
+          agentLogRow
+        )
   ).slice()
 
   return rows.reverse()
@@ -879,8 +927,19 @@ export function countAgentLogs(tabId: string): number {
   if (!normalizedTabId) return 0
   const row = getDatabase()
     .prepare(`SELECT COUNT(*) AS count FROM agent_logs WHERE tab_id = ?`)
-    .get(normalizedTabId) as { count?: number } | undefined
+    .get(normalizedTabId)
   return Number(row?.count ?? 0)
+}
+
+/** Revision metadata for edits anywhere in a conversation; no history text crosses IPC. */
+export function sessionKnowledgeRevision(tabId: string): string {
+  return JSON.stringify(
+    getDatabase()
+      .prepare(
+        'SELECT COUNT(*) AS count, MAX(log_id) AS lastId, MAX(updated_at) AS updatedAt, SUM(length(text)) AS characters FROM agent_logs WHERE tab_id=?'
+      )
+      .get(tabId)
+  )
 }
 
 export function deleteSessionHistory(tabId: string): boolean {
@@ -953,12 +1012,12 @@ export function updateSessionHistorySummary(input: {
 
   const row = getDatabase()
     .prepare('SELECT title, summary FROM session_tabs WHERE tab_id = ?')
-    .get(normalizedTabId) as { title?: string; summary?: string } | undefined
+    .get(normalizedTabId)
 
   return {
     ok: Number(result.changes) > 0,
-    title: row?.title ?? title,
-    summary: row?.summary ?? summary,
+    title: typeof row?.title === 'string' ? row.title : title,
+    summary: typeof row?.summary === 'string' ? row.summary : summary,
     updatedAt
   }
 }
@@ -967,9 +1026,10 @@ export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] 
   const normalizedTabId = tabId.trim()
   if (!normalizedTabId) return []
 
-  return getDatabase()
-    .prepare(
-      `
+  return readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         tab_id AS tabId,
         log_id AS logId,
@@ -982,16 +1042,18 @@ export function readSessionLogsForSummary(tabId: string): StoredAgentLogEntry[] 
       ORDER BY log_id ASC
       LIMIT 80
     `
-    )
-    .all(normalizedTabId) as unknown as StoredAgentLogEntry[]
+      )
+      .all(normalizedTabId),
+    agentLogRow
+  )
 }
 
 export function readCommandWhitelistFromDb(): string[] {
   const rows = getDatabase()
     .prepare('SELECT rule FROM command_whitelist ORDER BY position ASC, created_at ASC')
-    .all() as Array<{ rule: string }>
+    .all()
 
-  return rows.map((row) => row.rule)
+  return rows.flatMap((row) => (typeof row.rule === 'string' ? [row.rule] : []))
 }
 
 export function writeCommandWhitelistToDb(rules: string[]): string[] {
@@ -1021,7 +1083,7 @@ export function readCrescentMemoryFromDb(): CrescentMemoryFile {
       ORDER BY position ASC
     `
     )
-    .all() as unknown as AgentMemoryRecord[]
+    .all()
   const longTermRows = db
     .prepare(
       `
@@ -1030,18 +1092,18 @@ export function readCrescentMemoryFromDb(): CrescentMemoryFile {
       ORDER BY kind ASC, position ASC
     `
     )
-    .all() as Array<{ kind: 'preferences' | 'notes'; content: string }>
+    .all()
 
   return {
-    shortTerm: shortTermRows.filter(isMemoryRecord).slice(-100),
+    shortTerm: readRows(shortTermRows, memoryRow).slice(-100),
     longTerm: {
       preferences: longTermRows
         .filter((row) => row.kind === 'preferences')
-        .map((row) => row.content)
+        .flatMap((row) => (typeof row.content === 'string' ? [row.content] : []))
         .slice(-100),
       notes: longTermRows
         .filter((row) => row.kind === 'notes')
-        .map((row) => row.content)
+        .flatMap((row) => (typeof row.content === 'string' ? [row.content] : []))
         .slice(-100),
       operations: readOperationRecordsFromDb()
     }
@@ -1152,9 +1214,7 @@ export function appendOperationRecordToDb(record: OperationRecord): OperationRec
 }
 
 export function readCrescentDbValue(key: string): string | undefined {
-  const row = getDatabase().prepare('SELECT value FROM app_metadata WHERE key = ?').get(key) as
-    | { value?: string }
-    | undefined
+  const row = getDatabase().prepare('SELECT value FROM app_metadata WHERE key = ?').get(key)
 
   return typeof row?.value === 'string' ? row.value : undefined
 }
@@ -1198,16 +1258,17 @@ function getDatabase(): DatabaseSync {
 }
 
 function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all()
   if (columns.some((entry) => entry.name === column)) return
 
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
 }
 
 function readOperationRecordsFromDb(): OperationRecord[] {
-  const rows = getDatabase()
-    .prepare(
-      `
+  const rows = readRows(
+    getDatabase()
+      .prepare(
+        `
       SELECT
         id,
         created_at AS createdAt,
@@ -1221,8 +1282,10 @@ function readOperationRecordsFromDb(): OperationRecord[] {
       ORDER BY created_at DESC
       LIMIT 500
     `
-    )
-    .all() as unknown as OperationRecord[]
+      )
+      .all(),
+    operationRow
+  )
 
   return rows.filter(isOperationRecord)
 }

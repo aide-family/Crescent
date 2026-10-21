@@ -1,3 +1,4 @@
+import { createPiRuntime } from './runtime/pi/runtime'
 import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
@@ -6,17 +7,15 @@ import {
   closeTemporarySubterminal,
   listTemporarySubterminalNames,
   MAX_TEMPORARY_SUBTERMINALS,
-  readTerminalSessionHealth
+  readTerminalSessionHealth,
+  readTerminalExecutionTarget
 } from '../terminal/ipc'
 import {
   MAIN_TERMINAL_RESTORING_ERROR,
   shouldBlockToolsWhileMainRestoring
 } from '../terminal/session-health'
 import { buildInvariantAgentPrompt } from '../../shared/agent-prompt-discipline'
-import {
-  extractAssistantTextFromCurrentTurn,
-  mapPiSessionEventToAgentEvents
-} from './pi-event-bridge'
+import { extractAssistantTextFromCurrentTurn } from './pi-event-bridge'
 import { resolveAgentWorkspaceCwd } from './pi-cwd'
 import { createCrescentSettingsManager } from './pi-packages'
 import {
@@ -415,13 +414,22 @@ async function runChildSubagent(input: {
     }
   }
 
-  const mode = parent.isSsh && parent.connectionId ? 'ssh' : 'local'
+  const target = readTerminalExecutionTarget(parent.webContents.id, parent.executionTabId)
+  if (target.executionMode === 'ssh' && (!target.connectionId || (target.sshHops?.length ?? 0) > 1))
+    return {
+      agent: profile.name,
+      pane: input.paneName,
+      ok: false,
+      error:
+        'Current SSH target has no independent saved login route. Select a saved target explicitly; subagent cannot fall back to a local shell or the original host.'
+    }
+  const mode = target.executionMode
   const opened = await openAgentSubterminal({
     sessionKey: input.parentSessionKey,
     params: {
       mode,
       name: input.paneName,
-      connectionId: mode === 'ssh' ? parent.connectionId : undefined
+      connectionId: mode === 'ssh' ? target.connectionId : undefined
     },
     signal: input.signal,
     rerouteParentBash: false,
@@ -537,11 +545,11 @@ async function runChildPiSession(input: {
   })
   await resourceLoader.reload()
 
-  const { session } = await pi.createAgentSession({
+  const session = await createPiRuntime(pi).createSession({
     cwd,
     agentDir,
     model,
-    thinkingLevel: resolveThinkingLevelForModel(model),
+    thinkingLevel: resolveThinkingLevelForModel(model, parent.config.thinkingLevel),
     modelRuntime,
     resourceLoader,
     tools: [...input.profile.tools],
@@ -556,17 +564,15 @@ async function runChildPiSession(input: {
   }
   rememberChildHandle(parent.runId, handle)
 
-  const unsubscribe = session.subscribe((event) => {
-    for (const agentEvent of mapPiSessionEventToAgentEvents(event, {
-      runId: parent.runId,
-      tabId: parent.chatTabId,
-      locale: parent.locale,
-      fromSubagent: true
-    })) {
-      if (agentEvent.type === 'token' || agentEvent.type === 'thought') continue
-      parent.emit(agentEvent)
-    }
-  })
+  const unsubscribe = session.subscribe(
+    (event) => {
+      for (const agentEvent of event.events) {
+        if (agentEvent.type === 'token' || agentEvent.type === 'thought') continue
+        parent.emit(agentEvent)
+      }
+    },
+    { runId: parent.runId, tabId: parent.chatTabId, locale: parent.locale, fromSubagent: true }
+  )
 
   const abortChild = (): void => {
     void session.abort()
@@ -578,7 +584,7 @@ async function runChildPiSession(input: {
   }
 
   try {
-    session.setThinkingLevel(resolveThinkingLevelForModel(model))
+    session.setThinkingLevel(resolveThinkingLevelForModel(model, parent.config.thinkingLevel))
   } catch {
     // ignore unsupported thinking levels
   }

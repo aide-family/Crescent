@@ -1,7 +1,6 @@
 import { extractRiskVerb, hasHighWriteVerb, isStaticallyReadonly } from '../../shared/command-guard'
 import type { CommandAuditSource } from '../../shared/agent-types'
 import { CommandAuditor, CommandAuditTimeoutError } from './command-auditor'
-import { matchCommandWhitelist } from './command-whitelist'
 import type { AgentConfig, CommandAuditResult } from './types'
 
 export interface ClassifyCommandResult {
@@ -13,11 +12,9 @@ export interface ClassifyCommandResult {
 }
 
 /**
- * Funnel: static HIGH → specific whitelist → static READONLY → advisory audit.
- * A broad pattern such as `kubectl *` cannot authorize a write. A saved rule that
- * itself contains the write verb can, so an approved command class skips next time.
- * Auditor "low" on a non-write command is allowed. Auditor high, timeout, and local
- * policy upgrades still require approval.
+ * Funnel order: HIGH → READONLY → advisory audit (always requires approval).
+ * A model rating or legacy wildcard whitelist cannot authorize unknown commands.
+ * Subagent "high" is clamped to low when static READONLY matches.
  */
 export async function classifyCommand(
   cmd: string,
@@ -29,18 +26,8 @@ export async function classifyCommand(
   }
 ): Promise<ClassifyCommandResult> {
   const startedAt = Date.now()
-  const highWrite = hasHighWriteVerb(cmd)
-  const whitelistRule = matchCommandWhitelist(cmd, ctx.config.commandWhitelist ?? [])
-  const whitelistAuthorizes =
-    Boolean(whitelistRule) && (!highWrite || hasHighWriteVerb(whitelistRule ?? ''))
 
-  if (whitelistRule && whitelistAuthorizes) {
-    const elapsedMs = Date.now() - startedAt
-    const audit = buildRuleAudit('low', 'whitelist', elapsedMs, ctx.locale, whitelistRule)
-    return { level: 'low', source: 'whitelist', elapsedMs, audit, whitelistRule }
-  }
-
-  if (highWrite) {
+  if (hasHighWriteVerb(cmd)) {
     const elapsedMs = Date.now() - startedAt
     const audit = buildRuleAudit('high', 'rule', elapsedMs, ctx.locale, undefined, cmd)
     return { level: 'high', source: 'rule', elapsedMs, audit }
@@ -61,7 +48,8 @@ export async function classifyCommand(
       locale: ctx.locale
     })
     const elapsedMs = Date.now() - startedAt
-    const level: 'low' | 'high' = audit.risk === 'low' && !audit.requiresApproval ? 'low' : 'high'
+    // Clamp mistaken high ratings when the command is statically read-only.
+    const level: 'low' | 'high' = isStaticallyReadonly(cmd) ? 'low' : 'high'
     const human =
       level === 'high'
         ? buildHighRiskHumanSummary(cmd, ctx.locale)

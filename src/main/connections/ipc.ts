@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron'
+import { publicConnection, mergeConnectionSecrets } from '../renderer-secrets'
+import { rendererIpc } from '../ipc-security'
 
 import {
   deleteCustomConnection,
@@ -22,45 +23,53 @@ import { resolveRuntimeEnvValue } from './runtime-env'
 const REORDER_ACTIONS = new Set<ConnectionReorderAction>(['up', 'down', 'top', 'bottom'])
 
 export function registerConnectionIpc(): void {
-  ipcMain.handle('connections:list', async () => {
-    return listConnections()
+  rendererIpc.handle('connections:list', async () => {
+    return (await listConnections()).map(publicConnection)
   })
 
-  ipcMain.handle('connections:resolve', async (_, id: string) => {
+  rendererIpc.handle('connections:resolve', async (_, id: string) => {
     const connections = await listConnections({ forceRefreshSecrets: true })
-    return connections.find((connection) => connection.id === id)
+    const connection = connections.find((connection) => connection.id === id)
+    return connection && publicConnection(connection)
   })
 
-  ipcMain.handle('connections:save', async (_, input: ConnectionInput) => {
-    upsertCustomConnection(input)
-    return listConnections()
+  rendererIpc.handle('connections:save', async (_, input: ConnectionInput) => {
+    const savedConnections = readCustomConnections()
+    upsertCustomConnection(
+      mergeConnectionSecrets(
+        input,
+        savedConnections.find((c) => c.id === input.id),
+        savedConnections
+      )
+    )
+    return (await listConnections()).map(publicConnection)
   })
 
-  ipcMain.handle('connections:delete', async (_, id: string) => {
+  rendererIpc.handle('connections:delete', async (_, id: string) => {
     deleteCustomConnection(id)
     deleteOpsHistoryForConnection(id ?? '')
-    return listConnections()
+    return (await listConnections()).map(publicConnection)
   })
 
-  ipcMain.handle('connections:get-last-used', async () => {
+  rendererIpc.handle('connections:get-last-used', async () => {
     return readLastUsedConnectionId() ?? null
   })
 
-  ipcMain.handle('connections:set-last-used', async (_, id: string) => {
+  rendererIpc.handle('connections:set-last-used', async (_, id: string) => {
     writeLastUsedConnectionId(id)
     return readLastUsedConnectionId() ?? null
   })
 
-  ipcMain.handle('connections:toggle-favorite', async (_, id: unknown) => {
+  rendererIpc.handle('connections:toggle-favorite', async (_, id: unknown) => {
     const connectionId = String(id ?? '').trim()
     if (!connectionId) throw new Error('Missing connection id')
     const knownIds = await listKnownConnectionIds()
     if (!knownIds.includes(connectionId)) throw new Error(`Unknown connection id: ${connectionId}`)
     toggleConnectionFavorite(connectionId, knownIds)
-    return listConnections()
+    return (await listConnections()).map(publicConnection)
   })
 
-  ipcMain.handle('connections:reorder', async (_, payload: unknown) => {
+  rendererIpc.handle('connections:reorder', async (_, payload: unknown) => {
     const record =
       payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
     const connectionId = String(record.id ?? '').trim()
@@ -70,7 +79,7 @@ export function registerConnectionIpc(): void {
     const knownIds = await listKnownConnectionIds()
     if (!knownIds.includes(connectionId)) throw new Error(`Unknown connection id: ${connectionId}`)
     reorderConnection(connectionId, action, knownIds)
-    return listConnections()
+    return (await listConnections()).map(publicConnection)
   })
 }
 

@@ -1,11 +1,5 @@
 import type { ExecutionMode } from './execution-plan'
-import {
-  buildAgentStyleContract,
-  DEFAULT_AGENT_STYLE,
-  isSummaryShapedRequest,
-  SUMMARY_OUTPUT_CONTRACT,
-  type AgentStyle
-} from './agent-style'
+import { buildAgentStyleContract, DEFAULT_AGENT_STYLE, type AgentStyle } from './agent-style'
 
 export const SOP_GUIDANCE_HEADER = '# 生效 SOP 指引（用户选定）'
 export const SKILL_GUIDANCE_HEADER = '# 引用 Skill 内容'
@@ -129,9 +123,8 @@ export function buildPromptText(input: BuildPromptTextInput): string {
   parts.push(
     input.executionMode === 'planned'
       ? '# Execution mode: planned\nOnly read-only bash investigation is allowed. Submit changes with submit_change_plan. The host reviews the exact commands, backups, checks and recovery, waits for operator approval, then executes them. Selecting this mode is not approval. After failure stop and report completed/remaining steps; never retry or improvise recovery.'
-      : '# Execution mode: immediate\nRead-only queries execute automatically, including commands the host confirms are read-only. Mutating commands, file redirects, and commands the host cannot confirm as read-only still require individual approval.'
+      : '# Execution mode: immediate\nKnown read-only bash queries execute automatically. Mutating, mixed and unknown commands require individual approval.'
   )
-  if (isSummaryShapedRequest(input.input)) parts.push(SUMMARY_OUTPUT_CONTRACT)
   parts.push(input.input.trim())
   return parts.join('\n')
 }

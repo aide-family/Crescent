@@ -1,6 +1,5 @@
 import type { ArchitectureEdge, ArchitectureKind, ArchitectureSpec } from './architecture-spec'
 import {
-  ARCHITECTURE_KIND_TONE,
   ARCH_COL_GAP,
   ARCH_GROUP_PAD_X,
   ARCH_GROUP_PAD_Y,
@@ -8,7 +7,7 @@ import {
   ARCH_NODE_WIDTH,
   ARCH_PORT_GAP,
   ARCH_ROW_GAP
-} from './architecture-theme'
+} from './architecture-geometry'
 
 export type ArchPortSide = 'left' | 'right' | 'top' | 'bottom'
 
@@ -46,7 +45,7 @@ export type ArchitectureLayoutEdge = {
   targetPort: ArchPortSide
   points: ArchitectureLayoutPoint[]
   d: string
-  color: string
+  kind: ArchitectureKind
   dashed: boolean
   label?: string
   /** Layout-resolved label anchor (shared by Flow + SVG). */
@@ -405,8 +404,8 @@ function routeOneEdge(
     sourcePort: ports.sourcePort,
     targetPort: ports.targetPort,
     points,
-    d: pointsToRoundedPath(points, { sharpJoins: routed.sharpJoins }),
-    color: ARCHITECTURE_KIND_TONE[fromKind].border,
+    d: pointsToRoundedPath(points),
+    kind: fromKind,
     dashed: edge.style === 'dashed',
     ...(edge.label ? { label: edge.label } : {})
   }

@@ -1,13 +1,16 @@
+import { agentClient } from '@renderer/clients'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dictionary, Locale } from '@renderer/i18n'
 import type { AgentHandoffStatus } from '../../../shared/agent-types'
 import {
+  type HandoffTarget,
   HANDOFF_DRAFT_MAX,
   HANDOFF_GOAL_MAX,
   HANDOFF_RETRY_DELAY_MS
 } from '../../../shared/handoff'
 
 export interface HandoffEditor {
+  target: HandoffTarget
   open: boolean
   goal: string
   draft: string
@@ -21,6 +24,7 @@ export interface HandoffEditor {
 }
 
 const EMPTY: HandoffEditor = {
+  target: 'inherit',
   open: false,
   goal: '',
   draft: '',
@@ -36,7 +40,12 @@ export function useHandoff(input: {
   contextVersion: number
   locale: Locale
   t: Dictionary
-  createDraft: (sourceId: string, goal: string, draft: string) => Promise<void>
+  createDraft: (
+    sourceId: string,
+    goal: string,
+    draft: string,
+    target: HandoffTarget
+  ) => Promise<void>
 }) {
   const { tabId, busy, contextVersion, locale, t, createDraft } = input
   const editors = useRef<Record<string, HandoffEditor>>({})
@@ -57,7 +66,7 @@ export function useHandoff(input: {
       mounted.current = false
       for (const [id, editor] of Object.entries(editors.current)) {
         if (editor.requestId)
-          void window.api.agent
+          void agentClient
             .cancelHandoff({ sessionKey: id, tabId: id, requestId: editor.requestId })
             .catch(() => {})
       }
@@ -69,7 +78,7 @@ export function useHandoff(input: {
     for (const [id, editor] of Object.entries(editors.current)) {
       if (liveTabs.current.has(id)) continue
       if (editor.requestId)
-        void window.api.agent
+        void agentClient
           .cancelHandoff({ sessionKey: id, tabId: id, requestId: editor.requestId })
           .catch(() => {})
       delete editors.current[id]
@@ -81,7 +90,7 @@ export function useHandoff(input: {
     let current = true
     let retry: ReturnType<typeof setTimeout> | undefined
     const refresh = (): void => {
-      void window.api.agent
+      void agentClient
         .handoffStatus({ sessionKey: tabId, tabId })
         .then((status) => {
           if (!current) return
@@ -127,7 +136,7 @@ export function useHandoff(input: {
     const requestId = crypto.randomUUID()
     update(sourceId, { generating: true, error: undefined, requestId, lastStarted: Date.now() })
     try {
-      const result = await window.api.agent.generateHandoff({
+      const result = await agentClient.generateHandoff({
         sessionKey: sourceId,
         tabId: sourceId,
         requestId,
@@ -154,7 +163,7 @@ export function useHandoff(input: {
     const current = editors.current[tabId]
     if (current?.creating) return
     if (current?.requestId)
-      void window.api.agent
+      void agentClient
         .cancelHandoff({ sessionKey: tabId, tabId, requestId: current.requestId })
         .catch(() => {})
     // Invalidate before awaiting IPC so late replies cannot reopen/overwrite the editor.
@@ -174,16 +183,16 @@ export function useHandoff(input: {
       return
     update(sourceId, { creating: true, error: undefined })
     try {
-      const latest = await window.api.agent.handoffStatus({ sessionKey: sourceId, tabId: sourceId })
+      const latest = await agentClient.handoffStatus({ sessionKey: sourceId, tabId: sourceId })
       if (!latest.available || latest.revision !== current.revision) {
         update(sourceId, { error: t.handoff.errors[latest.error ?? 'stale'] })
         return
       }
       if (!liveTabs.current.has(sourceId)) return
-      await createDraft(sourceId, current.goal, current.draft)
+      await createDraft(sourceId, current.goal, current.draft, current.target)
       update(sourceId, { ...EMPTY })
-    } catch {
-      update(sourceId, { error: t.handoff.saveFailed })
+    } catch (error) {
+      update(sourceId, { error: error instanceof Error ? error.message : t.handoff.saveFailed })
     } finally {
       update(sourceId, { creating: false })
     }
@@ -200,6 +209,7 @@ export function useHandoff(input: {
       if (!disabledReason)
         update(tabId, { open: true, error: undefined, sourceRevision: status?.revision })
     },
+    setTarget: (target: HandoffTarget) => update(tabId, { target }),
     setGoal: (goal: string) => update(tabId, { goal }),
     setDraft: (draft: string) => update(tabId, { draft })
   }

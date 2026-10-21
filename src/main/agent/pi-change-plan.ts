@@ -67,6 +67,7 @@ export function createChangePlanTool(
       if (
         !context ||
         context.executionMode !== 'planned' ||
+        context.mutationPolicy === 'manual-execution' ||
         context.fromSubagent ||
         context.subterminalName
       )

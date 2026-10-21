@@ -1,3 +1,4 @@
+import { storageClient } from '@renderer/clients'
 import { useCallback, useRef, useState, type MutableRefObject } from 'react'
 
 import type { Dictionary } from '@renderer/i18n'
@@ -125,7 +126,7 @@ export function useAgentRuns({
           agentLog: trimmed
         }
       })
-      void window.api.storage.saveAgentLog({
+      void storageClient.saveAgentLog({
         tabId,
         logId: id,
         kind: nextEntry.kind,
@@ -153,7 +154,7 @@ export function useAgentRuns({
       }))
       if (persist) {
         // Persist the full compact document; renderer memory stays structure-clamped.
-        void window.api.storage.updateAgentLog({ tabId, logId, text })
+        void storageClient.updateAgentLog({ tabId, logId, text })
       }
     },
     [updateTab]

@@ -96,7 +96,8 @@ export function normalizeAgentStyle(value: unknown): AgentStyle {
 /** Effective thinking-block visibility. Unset override follows the style default. */
 export function resolveShowAgentThinking(style: AgentStyle, override?: boolean): boolean {
   if (typeof override === 'boolean') return override
-  return style === 'teach'
+  void style
+  return false
 }
 
 export function buildAgentStyleContract(style: AgentStyle = DEFAULT_AGENT_STYLE): string {

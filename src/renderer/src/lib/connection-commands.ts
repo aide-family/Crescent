@@ -1,3 +1,7 @@
+import { looksLikeLoginCommand as looksLikeCommand } from '../../../shared/login-actions'
+export { looksLikeLoginCommand as looksLikeCommand } from '../../../shared/login-actions'
+import { quoteSshOptions, shellQuote } from '../../../shared/ssh-options'
+export { shellQuote } from '../../../shared/ssh-options'
 import type { Dictionary } from '@renderer/i18n'
 import type { ConnectionConfig } from '../../../shared/agent-types'
 import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
@@ -256,6 +260,7 @@ export function toConnectionClipboardPayload(
   const stripped = stripStoredPassword(connection)
   return {
     ...stripped,
+    actions: stripped.actions?.filter((action) => !action.startsWith('__crescent_secret_')),
     hasPassword: Boolean(connection.password?.trim() || connection.resolvedPassword?.trim()),
     hasRootPassword: Boolean(connection.rootPassword?.trim())
   }
@@ -291,14 +296,6 @@ export function maskPotentialSecret(value: string): string {
  * Login-action lines that should be typed at a shell prompt.
  * Passwords are almost always a single token; any whitespace means a command.
  */
-export function looksLikeCommand(value: string): boolean {
-  const trimmed = value.trim()
-  if (!trimmed) return false
-  if (/\s/.test(trimmed)) return true
-  return /^(ssh|sudo|su|cd|ls|pwd|kubectl|docker|systemctl|journalctl|cat|tail|grep|vim|vi|export|bash|zsh|sh|fish|enable|exit|tmux|screen|source|passwd|env|unset|alias|history|clear|whoami|id|hostname)\b/.test(
-    trimmed
-  )
-}
 
 export function createCustomConnectionId(): string {
   return `custom-${crypto.randomUUID()}`
@@ -306,21 +303,17 @@ export function createCustomConnectionId(): string {
 
 export function buildSshCommand(connection: ConnectionConfig): string {
   if (connection.source === 'local') return ''
-  if (connection.source === 'ssh-config') return `ssh ${shellQuote(connection.name)}`
+  if (connection.source === 'ssh-config') return `ssh -- ${shellQuote(connection.name)}`
 
   return [
     'ssh',
     connection.port ? `-p ${connection.port}` : '',
     connection.identityFile ? `-i ${shellQuote(connection.identityFile)}` : '',
-    ...(connection.sshOptions ?? []),
+    ...quoteSshOptions(connection.sshOptions ?? []),
     connection.user ? `-l ${shellQuote(connection.user)}` : '',
+    '--',
     shellQuote(connection.host)
   ]
     .filter(Boolean)
     .join(' ')
-}
-
-export function shellQuote(value: string): string {
-  if (/^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)) return value
-  return `'${value.replace(/'/g, "'\\''")}'`
 }

@@ -32,12 +32,22 @@ export interface RecoveryBudget {
   windowStartAt: number
 }
 
+export interface SshHop {
+  host: string
+  previousHost?: string
+  source: 'connection' | 'manual'
+  shellLevel: number
+}
+
 export interface ConnectionState {
   mode: TerminalMode
   connectionOrigin?: ConnectionOrigin
   monitorPolicy?: MonitorPolicy
   targetScope?: 'host' | 'cluster'
   sshHopChain?: string[]
+  sshHops?: SshHop[]
+  pendingSshHop?: { host: string; previousHost?: string }
+  pendingSshExit?: boolean
   manualSshActive?: boolean
   owner?: string
   connectionId?: string
@@ -75,7 +85,11 @@ export function connectionPhase(
   hasSession: boolean,
   restoring: boolean
 ): ConnectionPhase {
-  if (!state?.expectedHost) return 'local-ready'
+  if (!state?.expectedHost) {
+    if (state?.manualSshActive)
+      return !hasSession ? 'ssh-lost' : state.ready ? 'ssh-ready' : 'ssh-connecting'
+    return 'local-ready'
+  }
   if (restoring) return 'ssh-restoring'
   if (!hasSession || alignment === 'drifted') return 'ssh-lost'
   if (state.connectionFault === 'lost') return 'ssh-lost'
@@ -141,6 +155,9 @@ export function setConnectionExpectedHost(
       monitorPolicy: 'manual',
       targetScope: 'host',
       sshHopChain: [],
+      sshHops: [],
+      pendingSshHop: undefined,
+      pendingSshExit: false,
       manualSshActive: false,
       aliases: [],
       alignment: 'unknown',
@@ -166,6 +183,9 @@ export function setConnectionExpectedHost(
           : 'manual',
     targetScope: clusterHostRegex ? 'cluster' : 'host',
     sshHopChain: options?.sshHopChain ?? [],
+    sshHops: [],
+    pendingSshHop: undefined,
+    pendingSshExit: false,
     manualSshActive: false,
     alignment: 'unknown',
     ready: false,
@@ -833,6 +853,8 @@ export function classifyPipeCommand(command: string): PipeCommandKind {
 
   if (/^sudo\s*(?:$|-i\b|-s\b|su\b)/.test(trimmed)) return 'interactive'
 
+  if (/^(?:\S*\/)?(?:vi|vim|nvim|nano|less|more|top|htop|watch|man)(?:\s|$)/.test(trimmed))
+    return 'interactive'
   const tool = trimmed.match(/^(ssh|sftp|scp|su\b|passwd\b|mysql\b|psql\b)/)?.[1]
   if (!tool) return 'other'
 
@@ -841,7 +863,6 @@ export function classifyPipeCommand(command: string): PipeCommandKind {
   if (tool === 'scp') return hasBatchMode ? 'one-shot' : 'interactive'
   if (tool !== 'ssh') return 'interactive'
 
-  if (hasBatchMode) return 'one-shot'
   if (/(^|\s)-t{1,3}(\s|$)/.test(trimmed)) return 'interactive'
   if (sshHasRemoteCommand(trimmed)) return 'one-shot'
   return 'interactive'
@@ -857,9 +878,7 @@ function sshHasRemoteCommand(command: string): boolean {
     if (token.startsWith('-')) {
       // Option with a value: -p 22 / -l user / -i file / -o BatchMode=yes
       if (
-        /^-(p|P|i|l|o|E|F|J|W|b|c|m|e|g|G|I|L|M|N|O|Q|R|S|T|V|v|w|X|x|Y|y|B|K|k|s|t)$/.test(
-          token
-        ) &&
+        /^-(p|P|i|l|o|E|F|J|W|b|c|m|e|I|L|O|Q|R|S|w|B)$/.test(token) &&
         tokens[index + 1] &&
         !tokens[index + 1].startsWith('-')
       ) {

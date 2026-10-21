@@ -1,3 +1,4 @@
+import { appClient } from '@renderer/clients'
 import './assets/main.css'
 
 import { useEffect, useState } from 'react'
@@ -10,6 +11,7 @@ import { dictionaries, type Locale } from './i18n'
 import { parseWorkbenchLayout, type WorkbenchLayout } from '@renderer/lib/app-shell'
 import { initializeAppTheme } from '@renderer/lib/app-theme'
 
+performance.mark('crescent:renderer-start')
 initializeAppTheme()
 
 function resolveBootLocale(): Locale {
@@ -25,7 +27,7 @@ function resolveBootLocale(): Locale {
 function installGlobalErrorReporting(): void {
   const report = (message: string): void => {
     try {
-      window.api.app.reportDiagnosticError(message.slice(0, 2048))
+      appClient.reportDiagnosticError(message.slice(0, 2048))
     } catch {
       // ignore
     }
@@ -71,11 +73,12 @@ function BootShell({
   useEffect(() => {
     let cancelled = false
     void Promise.all([
-      window.api.app.getRendererRecoveryMode(),
-      window.api.app.getWorkbenchLayout().catch(() => ({ layout: null }))
+      appClient.getRendererRecoveryMode(),
+      appClient.getWorkbenchLayout().catch(() => ({ layout: null }))
     ])
       .then(([recovery, layoutResult]) => {
         if (cancelled) return
+        performance.mark('crescent:boot-data-ready')
         setBoot({
           mode: recovery.mode,
           layout: parseWorkbenchLayout(layoutResult.layout)
@@ -88,6 +91,15 @@ function BootShell({
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!boot) return
+    const frame = requestAnimationFrame(() => {
+      performance.mark('crescent:first-ui')
+      performance.measure('crescent:boot-to-ui', 'crescent:renderer-start', 'crescent:first-ui')
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [boot])
 
   if (boot == null) {
     return <div className="h-full bg-background" />

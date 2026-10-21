@@ -246,11 +246,8 @@ export function TerminalPane({
                 ) : null}
               </div>
             ) : null}
-            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-              <div
-                ref={terminalHostRef}
-                className="terminal-canvas absolute inset-x-3 top-1 bottom-0 overflow-hidden"
-              />
+            <div className="relative min-h-0 flex-1">
+              <div ref={terminalHostRef} className="terminal-canvas absolute inset-0" />
               {agentBusy && executionTerminalId === activeTabId ? (
                 <TerminalLockOverlay
                   commandRunning={commandRunning}

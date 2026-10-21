@@ -1,8 +1,5 @@
 import type { ConnectionConfig } from '../../../shared/agent-types'
-import {
-  connectionInstructionText,
-  hasExplicitLocalWorkIntent
-} from '../../../shared/agent-local-intent'
+import { connectionInstructionText } from '../../../shared/agent-local-intent'
 import { isHostOnTarget, matchesClusterHostRegex } from '../../../shared/connection-state'
 import {
   findDirectlyMentionedConnection,
@@ -106,9 +103,9 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
-  // Multi-hop card: clarify only on true leave-target (local / jump). Nested
-  // kubectl-exec / peer hops soft-align and must not force a fresh login.
-  if (ctx.monitorPolicy === 'special' && leaveTarget) {
+  // A multi-hop card has no safe generic recovery path once its final hop
+  // cannot be identified. Ask the operator to select the target explicitly.
+  if (ctx.monitorPolicy === 'special' && ctx.sessionAligned === 'drifted') {
     return {
       targetTabId: activeTabId,
       action: 'clarify',
@@ -140,9 +137,10 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
   // named connection wins over the current tab's binding; otherwise reconnect
   // the current tab's configured SSH. Do not dump every saved connection as a
   // picker, and never retry a different host than the one the user named.
-  // Bare reconnect without a bound target clarifies — never fall through to
-  // agent bash `ssh` (command-review rejectable).
-  if (isExplicitReconnectRequest(connectionInstructionText(message))) {
+  if (
+    isExplicitConnectionRequest(message) &&
+    isExplicitReconnectRequest(connectionInstructionText(message))
+  ) {
     const connection =
       (mentioned && connections.find((candidate) => candidate.id === mentioned.id)) ||
       (activeTab?.connectionId &&
@@ -262,13 +260,10 @@ export function routeConnection(ctx: ConnectionRouteContext): ConnectionRouteRes
     }
   }
 
-  // --- Layer C: name soft-match (only when active is not a ready login) ---
-  // A unique or ambiguous configured name matches without a connect verb.
-  // Local work never selects a connection. Host/user matching stays in
-  // findDirectlyMentionedConnection and still requires a connect verb.
-  const softMatches = hasExplicitLocalWorkIntent(message)
-    ? []
-    : findSoftConnectionMatches(connectionInstructionText(message), connections)
+  // --- Layer C: soft keyword mismatch (only when active is not a ready login) ---
+  const softMatches = isExplicitConnectionRequest(message)
+    ? findSoftConnectionMatches(connectionInstructionText(message), connections)
+    : []
   if (softMatches.length > 1) {
     return {
       targetTabId: activeTabId,

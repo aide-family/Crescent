@@ -26,6 +26,13 @@ export interface McpRuntimeClient {
   close(): Promise<void>
 }
 
+export type McpToolAuthorizer = (input: {
+  server: AgentMcpServerConfig
+  tool: { name: string; description?: string }
+  params: unknown
+  signal?: AbortSignal
+}) => Promise<boolean>
+
 export type McpServerConnector = (server: AgentMcpServerConfig) => Promise<McpRuntimeClient>
 
 export interface McpLoadedTools {
@@ -80,7 +87,7 @@ export function buildMcpCatalogEntry(
     description: tool.description?.trim() || `MCP tool ${tool.name}`,
     source: 'mcp',
     risk: 'medium',
-    requiresApproval: false,
+    requiresApproval: true,
     external: true,
     stateChanging: true
   }
@@ -133,7 +140,8 @@ export async function listMcpToolCatalog(
 export async function loadMcpPiTools(
   pi: PiSdkFacade,
   servers: AgentMcpServerConfig[],
-  connect: McpServerConnector = connectMcpServer
+  connect: McpServerConnector = connectMcpServer,
+  authorize?: McpToolAuthorizer
 ): Promise<McpLoadedTools> {
   const tools: ReturnType<PiSdkFacade['defineTool']>[] = []
   const toolNames: string[] = []
@@ -152,7 +160,7 @@ export async function loadMcpPiTools(
       })
       clients.push(client)
       for (const tool of filtered) {
-        const definition = createMcpPiToolDefinition(pi, server, tool, client)
+        const definition = createMcpPiToolDefinition(pi, server, tool, client, authorize)
         tools.push(definition)
         toolNames.push(definition.name)
         catalog.push(buildMcpCatalogEntry(server.id, tool))
@@ -178,7 +186,8 @@ export function createMcpPiToolDefinition(
   pi: PiSdkFacade,
   server: AgentMcpServerConfig,
   tool: { name: string; description?: string; inputSchema?: unknown },
-  client: McpRuntimeClient
+  client: McpRuntimeClient,
+  authorize?: McpToolAuthorizer
 ): ReturnType<PiSdkFacade['defineTool']> {
   const name = mcpPiToolName(server.id, tool.name)
   return pi.defineTool({
@@ -192,6 +201,14 @@ export function createMcpPiToolDefinition(
     parameters: mcpParametersSchema(tool.inputSchema),
     executionMode: 'sequential',
     async execute(_toolCallId, params, signal) {
+      if (
+        signal?.aborted ||
+        !authorize ||
+        !(await authorize({ server, tool, params, signal })) ||
+        signal?.aborted
+      ) {
+        throw new Error('MCP tool call was not approved or the run/target changed.')
+      }
       const result = await client.callTool(
         {
           name: tool.name,

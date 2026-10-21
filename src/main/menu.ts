@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { rendererIpc } from './ipc-security'
+import { app, BrowserWindow, Menu } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { getMenuLabels, normalizeMenuLocale, type MenuLocale } from '../shared/menu-labels'
@@ -69,7 +70,7 @@ export function configureAboutPanel(iconPath: string): void {
 }
 
 export function registerMenuIpc(): void {
-  ipcMain.handle('app:set-locale', (_event, locale: unknown) => {
+  rendererIpc.handle('app:set-locale', (_event, locale: unknown) => {
     const next = setApplicationMenuLocale(locale)
     return { ok: true as const, locale: next }
   })

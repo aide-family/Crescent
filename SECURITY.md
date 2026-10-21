@@ -18,20 +18,23 @@ Include:
 
 ## Security-Sensitive Areas
 
-Crescent embeds the [Pi coding agent](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) in the Electron main process. Agent runs use Pi built-in tools against a configured workspace directory:
+Crescent embeds the [Pi coding agent](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) in the Electron main process. The host controls the active session and exposed tools:
 
-- `read` / `write` / `edit` — local filesystem access under the agent workspace cwd.
-- `bash` — local shell execution with the user's privileges in that cwd (no agent command-approval gate in v1).
+- `read` / `write` / `edit` — local filesystem access with the user's privileges; relative paths resolve against the agent workspace cwd. The cwd is not a filesystem sandbox.
+- `bash` — Crescent's visible PTY executor, including the connected SSH target. State-changing commands use the host's command approval gate; planned execution binds exact steps to the active target.
+- MCP tools — configured stdio or HTTP servers, exposed through host-owned custom tools. Every tool invocation requires approval bound to the requesting window, run, terminal and target.
 - Model provider API keys and custom OpenAI-compatible endpoints (via Pi `ModelRuntime`).
 - Local knowledge-base and session persistence.
 
-Manual terminal / SSH panes remain available for interactive use; the agent does **not** drive remote PTY sessions or OpenAPI/MCP tool runtimes in this release.
+Manual terminal / SSH panes remain available for interactive use. OpenAPI configuration remains only for legacy migration; OpenAPI tools are not loaded into the Pi loop.
+
+Credentials stay in the main process and are encrypted through Electron safeStorage. Encryption or decryption failure rejects the operation instead of falling back to plaintext or silently erasing credentials. Renderer configuration uses stored-value placeholders and connection-bound credential references. Crescent data directories use private permissions and logs redact sensitive text at their final sink.
 
 Changes in these areas should include tests or a clear manual verification note.
 
 ## Code signing
 
-Release signing and notarization requirements are documented in [docs/CODE_SIGNING.md](./docs/CODE_SIGNING.md). Unsigned public builds remain available until certificate secrets are configured in CI.
+Release signing and notarization requirements are documented in [Document/CODE_SIGNING.md](./Document/CODE_SIGNING.md). Unsigned public builds remain available until certificate secrets are configured in CI.
 
 ## Maintainer Triage
 

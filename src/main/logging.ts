@@ -1,6 +1,8 @@
-import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs'
+import { chmodSync, appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
+import { inspect } from 'node:util'
 
+import { redactSensitiveText } from '../shared/secret-redaction'
 import { getCrescentLogsDir } from './crescent-paths'
 import {
   normalizeSystemLogLevel,
@@ -42,7 +44,7 @@ function dayStamp(date = new Date()): string {
 }
 
 function formatLogLine(level: SystemLogLevel, message: string): string {
-  return `[${new Date().toISOString()}] [${level.toUpperCase()}] ${message}\n`
+  return `[${new Date().toISOString()}] [${level.toUpperCase()}] ${redactSensitiveText(message)}\n`
 }
 
 /**
@@ -83,14 +85,19 @@ export function cleanupExpiredLogs(dir = getCrescentLogsDir()): number {
 export function writeSystemLog(level: SystemLogLevel, message: string): void {
   try {
     const dir = getCrescentLogsDir()
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(dir, 0o700)
     const day = dayStamp()
     if (day !== currentDay) {
       currentDay = day
       currentFilePath = join(dir, `${LOG_PREFIX}${day}${LOG_SUFFIX}`)
       cleanupExpiredLogs(dir)
     }
-    appendFileSync(currentFilePath, formatLogLine(level, message), 'utf8')
+    appendFileSync(currentFilePath, formatLogLine(level, message), {
+      encoding: 'utf8',
+      mode: 0o600
+    })
+    chmodSync(currentFilePath, 0o600)
   } catch {
     // Logging must never take the app down.
   }
@@ -123,10 +130,16 @@ export function initSystemLogging(): void {
   const capture =
     (level: SystemLogLevel, original: (...args: unknown[]) => void) =>
     (...args: unknown[]): void => {
-      original(...args)
       const text = args
-        .map((arg) => (arg instanceof Error ? (arg.stack ?? arg.message) : String(arg)))
+        .map((arg) =>
+          arg instanceof Error
+            ? (arg.stack ?? arg.message)
+            : typeof arg === 'string'
+              ? arg
+              : inspect(arg, { depth: 6 })
+        )
         .join(' ')
+      original(redactSensitiveText(text))
       if (text && shouldRecordLogLevel(level, logThreshold)) writeSystemLog(level, text)
     }
 

@@ -1,3 +1,5 @@
+import { ExecutionTargetChip } from './ExecutionTargetChip'
+import type { ApprovalPolicy, MutationPolicy } from '../../../shared/approval-policy'
 import { normalizeExecutionMode, type ExecutionMode } from '../../../shared/execution-plan'
 import {
   type FormEvent,
@@ -95,6 +97,11 @@ export function AgentPanel({
   aiState,
   aiStatusText,
   modelValidationError,
+  approvalPolicy,
+  mutationPolicy,
+  onApprovalPolicyChange,
+  onMutationPolicyChange,
+  onVerifyHandoff,
   executionMode,
   onExecutionModeChange,
   agentStyle,
@@ -189,6 +196,11 @@ export function AgentPanel({
   aiState: 'ready' | 'pending' | 'not-ready'
   aiStatusText: string
   modelValidationError?: string
+  approvalPolicy: ApprovalPolicy
+  mutationPolicy: MutationPolicy
+  onApprovalPolicyChange: (policy: ApprovalPolicy) => void
+  onMutationPolicyChange: (policy: MutationPolicy) => void
+  onVerifyHandoff: () => void
   executionMode: ExecutionMode
   onExecutionModeChange: (mode: ExecutionMode) => void
   agentStyle: AgentStyle
@@ -569,6 +581,18 @@ export function AgentPanel({
                 ))}
               </div>
             ) : null}
+            <ExecutionTargetChip
+              sessionKey={sessionChatTab.id}
+              tabId={executionTerminalId ?? activeTab.id}
+            />
+            {sessionChatTab.handoffBlocked && (
+              <div className="flex items-center gap-2 text-xs text-amber-600">
+                <span>交接目标待连接 / 验证；暂不可执行。</span>
+                <Button size="xs" variant="outline" onClick={onVerifyHandoff}>
+                  确认交接连接
+                </Button>
+              </div>
+            )}
             <ComposerEditor
               value={sessionChatTab.agentInput}
               placeholder={t.input.askPlaceholder}
@@ -673,6 +697,27 @@ export function AgentPanel({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+                <select
+                  aria-label="审批策略"
+                  className="max-w-32 bg-transparent text-xs"
+                  disabled={activeAgentPending}
+                  value={approvalPolicy}
+                  onChange={(event) => onApprovalPolicyChange(event.target.value as ApprovalPolicy)}
+                  title="安全自动审批仅授权本次 run 和当前目标，10 分钟有效；所有变更仍需人工确认"
+                >
+                  <option value="manual">审批：默认</option>
+                  <option value="safe-auto">审批：安全自动</option>
+                </select>
+                <select
+                  aria-label="变更执行方式"
+                  className="max-w-32 bg-transparent text-xs"
+                  disabled={activeAgentPending}
+                  value={mutationPolicy}
+                  onChange={(event) => onMutationPolicyChange(event.target.value as MutationPolicy)}
+                >
+                  <option value="confirm">变更：确认后执行</option>
+                  <option value="manual-execution">变更：仅人工执行</option>
+                </select>
                 <Select
                   value={executionMode}
                   onValueChange={(value) => onExecutionModeChange(normalizeExecutionMode(value))}

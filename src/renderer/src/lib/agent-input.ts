@@ -116,11 +116,9 @@ export function findDirectlyMentionedConnection(
   input: string,
   connections: ConnectionConfig[]
 ): ConnectionConfig | undefined {
-  if (hasExplicitLocalWorkIntent(input)) return undefined
+  if (hasExplicitLocalWorkIntent(input) || !isExplicitConnectionRequest(input)) return undefined
 
   const searchable = connectionMentionSearchText(connectionInstructionText(input))
-  // Names match without a connect verb. Host and user still require one,
-  // so a bare address does not select a saved connection.
   const allowHostOrUserMatch = isExplicitConnectionRequest(input)
   const matches = connections.filter((connection) => {
     const nameTokens = getConnectionNameMentionTokens(connection)

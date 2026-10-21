@@ -1,3 +1,4 @@
+import { tokenizeSshOptions } from '../../../shared/ssh-options'
 import { useMemo } from 'react'
 
 import type { Dictionary } from '@renderer/i18n'
@@ -16,7 +17,7 @@ export type ConnectionSaveInputResult =
   | { ok: true; value: ConnectionInput }
   | {
       ok: false
-      reason: 'missing-name' | 'missing-host' | 'invalid-cluster-regex'
+      reason: 'missing-name' | 'missing-host' | 'invalid-cluster-regex' | 'invalid-ssh-options'
       detail?: string
       clusterReason?: ClusterHostPatternReason
     }
@@ -76,6 +77,7 @@ export function formatConnectionSaveError(
 ): string {
   if (result.reason === 'missing-name') return t.connections.saveMissingName
   if (result.reason === 'missing-host') return t.connections.saveMissingHost
+  if (result.reason === 'invalid-ssh-options') return result.detail || 'Invalid SSH options'
   return formatClusterHostPatternError(
     {
       ok: false,
@@ -98,6 +100,15 @@ export function normalizeConnectionInputForSave(
 
   if (!name) return { ok: false, reason: 'missing-name' }
   if (!host) return { ok: false, reason: 'missing-host' }
+  try {
+    tokenizeSshOptions(sshOptions)
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'invalid-ssh-options',
+      detail: error instanceof Error ? error.message : 'Invalid SSH options'
+    }
+  }
 
   const clusterHostRegexResult = validateClusterHostRegex(connectionForm.clusterHostRegex)
   if (!clusterHostRegexResult.ok) {
@@ -179,16 +190,29 @@ export function useConnections({
     [connectionForm.clusterHostRegex]
   )
 
+  const sshOptionsError = useMemo(() => {
+    try {
+      tokenizeSshOptions(parseSshOptions(connectionSshOptionsText))
+      return ''
+    } catch (error) {
+      return error instanceof Error ? error.message : 'Invalid SSH options'
+    }
+  }, [connectionSshOptionsText])
+
   const connectionFormReady = useMemo(
     () =>
       Boolean(
-        connectionForm.name.trim() && connectionForm.host.trim() && clusterHostRegexValidation.ok
+        connectionForm.name.trim() &&
+        connectionForm.host.trim() &&
+        clusterHostRegexValidation.ok &&
+        !sshOptionsError
       ),
-    [clusterHostRegexValidation.ok, connectionForm.host, connectionForm.name]
+    [clusterHostRegexValidation.ok, connectionForm.host, connectionForm.name, sshOptionsError]
   )
 
   const connectionCommandPreview = useMemo(() => {
     const host = connectionForm.host.trim()
+    if (sshOptionsError) return sshOptionsError
     if (!host) return ''
 
     return buildSshCommand({
@@ -201,7 +225,7 @@ export function useConnections({
       identityFile: connectionForm.identityFile?.trim() || undefined,
       sshOptions: parseSshOptions(connectionSshOptionsText)
     })
-  }, [connectionForm, connectionSshOptionsText])
+  }, [connectionForm, connectionSshOptionsText, sshOptionsError])
 
   return {
     localConnection,

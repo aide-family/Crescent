@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { rendererIpc } from '../ipc-security'
 import {
   checkForAppUpdates,
   configureAutoUpdater,
@@ -11,23 +11,23 @@ import {
 export function registerUpdateIpc(): void {
   configureAutoUpdater()
 
-  ipcMain.handle('update:get-version', async () => {
+  rendererIpc.handle('update:get-version', async () => {
     return { version: getAppVersion() }
   })
 
-  ipcMain.handle('update:check', async () => {
+  rendererIpc.handle('update:check', async () => {
     return checkForAppUpdates()
   })
 
-  ipcMain.handle('update:download', async () => {
+  rendererIpc.handle('update:download', async () => {
     return downloadAppUpdate()
   })
 
-  ipcMain.handle('update:download-installer', async () => {
+  rendererIpc.handle('update:download-installer', async () => {
     return downloadInstallerToDownloads()
   })
 
-  ipcMain.handle('update:install', async () => {
+  rendererIpc.handle('update:install', async () => {
     return installAppUpdate()
   })
 }

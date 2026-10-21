@@ -1,3 +1,9 @@
+import { createHash } from 'node:crypto'
+import { requestCommandApproval } from './command-approval'
+import { publicConnection } from '../renderer-secrets'
+import { redactSensitiveText } from '../../shared/secret-redaction'
+import { normalizeCommandTimeoutPolicy } from '../../shared/command-timeouts'
+import { readTerminalPlanIdentity } from '../terminal/ipc'
 import { Type } from 'typebox'
 import type { WebContents } from 'electron'
 
@@ -19,16 +25,16 @@ import {
   getFailedSshSubterminalConnectionIds,
   getPtyBashExecContext,
   recordFailedSshSubterminalConnection,
-  restoreSessionBashToMainTerminal,
-  updatePtyBashExecutionTabId
+  updatePtyBashExecutionTabId,
+  pushTemporaryExecutionTarget,
+  returnToMainTerminal
 } from './pi-terminal-bash'
 import { subterminalNameFromTabId } from './subterminal-routing'
 
 export const OPEN_SUBTERMINAL_DISCIPLINE = [
   '# 本机与子终端硬规范',
-  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。跨环境步骤结束后必须 close_subterminal，后续主任务命令回到主终端。',
-  '- 本机子终端只做客户端机器上的事。禁止在该 pane 上继续集群或远程命令（kubectl、kubeadm、helm、ssh、scp）；那些命令在 close_subterminal 之后的主终端执行。',
-  '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。主机负责恢复主终端；在当前 pane 用 bash。',
+  '- 写本机 /etc/hosts、本机文件、应用运行环境配置：若当前可见终端是远程 SSH / 集群会话，禁止在远程改；必须先 open_subterminal(mode=local)，再在该子终端用 bash 执行（如 sudo tee -a /etc/hosts）。',
+  '- 当前会话 SSH 断开或离开目标时，禁止对同一 connectionId 调用 open_subterminal(mode=ssh)。请操作员通过重连入口恢复并验证当前主终端后再用 bash；禁止自动重放原任务。',
   '- mode=ssh 只用于登录另一台已保存连接（不同 connectionId）；不要用子终端逃避当前连接的重连。',
   '- 识别到「写 hosts / 本机配置 / 本地执行」后立即调用工具并执行，禁止长篇无效分析替代落地。',
   '- workspace 的 write/edit 不能代替本机 /etc/hosts。',
@@ -47,6 +53,7 @@ export interface OpenSubterminalParams {
   mode: OpenSubterminalMode
   name?: string
   connectionId?: string
+  temporary?: boolean
 }
 
 export interface AgentSubterminalOpenedPayload {
@@ -62,6 +69,7 @@ export interface AgentSubterminalOpenedPayload {
 }
 
 interface SubterminalReadyWaiter {
+  ownerId?: number
   resolve: (result: { ok: boolean; error?: string }) => void
   timeout: NodeJS.Timeout
   abortHandler?: () => void
@@ -70,15 +78,18 @@ interface SubterminalReadyWaiter {
 
 const readyWaiters = new Map<string, SubterminalReadyWaiter>()
 
-export function resolveAgentSubterminalReady(payload: {
-  tabId?: string
-  ok?: boolean
-  error?: string
-}): { ok: boolean } {
+export function resolveAgentSubterminalReady(
+  payload: {
+    tabId?: string
+    ok?: boolean
+    error?: string
+  },
+  ownerId: number
+): { ok: boolean } {
   const tabId = payload?.tabId?.trim()
   if (!tabId) return { ok: false }
   const waiter = readyWaiters.get(tabId)
-  if (!waiter) return { ok: false }
+  if (!waiter || waiter.ownerId !== ownerId || typeof payload.ok !== 'boolean') return { ok: false }
   clearTimeout(waiter.timeout)
   if (waiter.signal && waiter.abortHandler) {
     waiter.signal.removeEventListener('abort', waiter.abortHandler)
@@ -123,7 +134,7 @@ export function waitForRendererReady(
   tabId: string,
   signal?: AbortSignal,
   timeoutMs = LOCAL_SUBTERMINAL_READY_TIMEOUT_MS,
-  options?: { failOnTimeout?: boolean }
+  options?: { failOnTimeout?: boolean; ownerId?: number }
 ): Promise<{ ok: boolean; error?: string }> {
   const failOnTimeout = options?.failOnTimeout === true
   return new Promise((resolve) => {
@@ -180,6 +191,7 @@ export function waitForRendererReady(
     }
 
     readyWaiters.set(tabId, {
+      ownerId: options?.ownerId,
       resolve: finish,
       timeout,
       abortHandler: signal ? abortHandler : undefined,
@@ -210,7 +222,7 @@ export function resolveOpenSubterminalParentTabId(executionTabId: string): strin
 export { MAIN_TERMINAL_RESTORING_ERROR }
 
 export const SAME_CONNECTION_SUBTERMINAL_ERROR =
-  'Do not open_subterminal for the current session SSH connection. The host restores the main terminal; retry bash on the current pane after reconnect. Use mode=ssh only with a different saved connectionId.'
+  'Do not open_subterminal for the current session SSH connection. Ask the operator to reconnect and verify the main terminal explicitly; do not replay the original request. Use mode=ssh only with a different saved connectionId.'
 
 export const FAILED_SSH_SUBTERMINAL_RETRY_ERROR =
   'SSH subterminal login to this connection already failed in this run. Do not open another pane. Wait for the host to restore the main terminal, then retry bash there.'
@@ -276,6 +288,7 @@ export async function openAgentSubterminal(input: {
   }
 
   const mode = input.params.mode
+  let requestedConnection: Awaited<ReturnType<typeof listConnections>>[number] | undefined
   const connectionId = input.params.connectionId?.trim()
   if (mode === 'ssh' && !connectionId) {
     const hint = await formatAvailableConnectionsHint()
@@ -295,6 +308,7 @@ export async function openAgentSubterminal(input: {
         error: `Unknown connectionId "${connectionId}". Available connections:\n${hint}`
       }
     }
+    requestedConnection = connection
     if (connection.source === 'local' || !connection.host) {
       return {
         ok: false,
@@ -341,6 +355,82 @@ export async function openAgentSubterminal(input: {
     return { ok: false, error: FAILED_SSH_SUBTERMINAL_RETRY_ERROR }
   }
 
+  if (context.restorationRequired && mode === 'local' && rerouteParentBash)
+    return {
+      ok: false,
+      error:
+        'The parent SSH target must be explicitly restored or another SSH target selected. A new local pane cannot bypass that fence.'
+    }
+
+  if (requestedConnection) {
+    if (
+      context.mutationPolicy === 'manual-execution' &&
+      ((requestedConnection.actions?.length ?? 0) > 0 ||
+        requestedConnection.sshOptions?.some((option) => /ProxyCommand|LocalCommand/i.test(option)))
+    )
+      return {
+        ok: false,
+        error:
+          'Manual execution selected: saved login actions cannot be run by the Agent. Open/connect this environment manually.'
+      }
+    const parentIdentity = readTerminalPlanIdentity(webContents.id, parentTabId)
+    const digest = (value: typeof requestedConnection): string =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const reviewedDigest = digest(requestedConnection)
+    const view = publicConnection(requestedConnection)
+    const actions = (view.actions ?? []).map((action) => redactSensitiveText(action)).join('\n')
+    const decision = await requestCommandApproval({
+      webContents,
+      runId: context.runId,
+      tabId: context.executionTabId,
+      chatTabId: context.chatTabId,
+      locale: context.locale,
+      config: context.config,
+      signal: AbortSignal.any(
+        [input.signal, context.signal].filter((signal): signal is AbortSignal => Boolean(signal))
+      ),
+      timeoutMs: normalizeCommandTimeoutPolicy(context.config.commandTimeouts).approvalMs,
+      command: `Open SSH login scope: ${view.name} (${view.id})\nDestination: ${view.host}:${view.port ?? 22}\nUse the saved connection configuration. No ordinary Agent command is approved by this login confirmation.\nSaved login actions (credentials masked):\n${actions || '(none)'}`,
+      audit: {
+        summary: 'SSH login scope expansion requires human confirmation.',
+        operationReason:
+          'Confirm the destination and configured login sequence before creating a pane or sending credentials.',
+        risk: 'high',
+        requiresApproval: true,
+        riskPoints: [],
+        impactAnalysis: '',
+        recommendation: '',
+        source: 'rule',
+        elapsedMs: 0
+      }
+    })
+    if (
+      !decision.approved ||
+      input.signal?.aborted ||
+      context.signal?.aborted ||
+      webContents.isDestroyed()
+    )
+      return {
+        ok: false,
+        error:
+          'SSH login scope was rejected, expired or canceled. No pane created and no credentials sent.'
+      }
+    const current = (await listConnections({ forceRefreshSecrets: true })).find(
+      (connection) => connection.id === connectionId
+    )
+    if (
+      !current ||
+      digest(current) !== reviewedDigest ||
+      !parentIdentity ||
+      readTerminalPlanIdentity(webContents.id, parentTabId) !== parentIdentity
+    )
+      return {
+        ok: false,
+        error:
+          'Connection configuration or parent target changed during approval. Request a fresh review.'
+      }
+  }
+
   const name =
     input.params.name?.trim() ||
     (mode === 'local' ? 'local-hosts' : `ssh-${(connectionId ?? 'remote').slice(0, 24)}`)
@@ -383,7 +473,8 @@ export async function openAgentSubterminal(input: {
   const readyTimeoutMs =
     mode === 'ssh' ? SSH_SUBTERMINAL_READY_TIMEOUT_MS : LOCAL_SUBTERMINAL_READY_TIMEOUT_MS
   const ready = await waitForRendererReady(opened.tabId, input.signal, readyTimeoutMs, {
-    failOnTimeout: mode === 'ssh'
+    failOnTimeout: mode === 'ssh',
+    ownerId: webContents.id
   })
   if (!ready.ok) {
     closeTemporarySubterminal(webContents, opened.tabId)
@@ -402,10 +493,16 @@ export async function openAgentSubterminal(input: {
   }
 
   if (rerouteParentBash) {
-    updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
+    if (mode === 'local' && input.params.temporary === true)
+      pushTemporaryExecutionTarget(input.sessionKey)
+    const bound = updatePtyBashExecutionTabId(input.sessionKey, opened.tabId, {
       isSsh: mode === 'ssh',
       connectionId: mode === 'ssh' ? connectionId : undefined
     })
+    if (!bound) {
+      closeTemporarySubterminal(webContents, opened.tabId)
+      return { ok: false, error: 'Subterminal target is not verified. Parent route unchanged.' }
+    }
   }
 
   const hintParts: string[] = []
@@ -420,8 +517,13 @@ export async function openAgentSubterminal(input: {
   }
   hintParts.push(
     mode === 'local'
-      ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts). When that step is done, call close_subterminal before any further main-task bash.'
-      : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands. When that step is done, call close_subterminal so bash returns to the main terminal.'
+      ? 'Use bash here for local /etc/hosts and other client-machine work (e.g. sudo tee -a /etc/hosts).'
+      : 'SSH login was requested in this pane; wait for the prompt if needed, then run remote commands.'
+  )
+  hintParts.push(
+    input.params.temporary === true && mode === 'local'
+      ? 'Explicit single-command visit: return to the previous target after this bash call.'
+      : 'This target stays selected until you explicitly switch or return_to_main_terminal.'
   )
   if (ready.error) hintParts.push(ready.error)
 
@@ -445,23 +547,28 @@ export async function createOpenSubterminalToolDefinition(
     // other providers don't support anyOf/const patterns for string enums.
     mode: StringEnum(['local', 'ssh'] as const),
     name: Type.Optional(Type.String()),
-    connectionId: Type.Optional(Type.String())
+    connectionId: Type.Optional(Type.String()),
+    temporary: Type.Optional(
+      Type.Boolean({
+        description:
+          'Default false: keep the selected local target for all subsequent commands until explicit return_to_main_terminal. Set true only for an explicitly requested single-command visit.'
+      })
+    )
   })
   return pi.defineTool({
     name: 'open_subterminal',
     label: 'Open subterminal',
     description: [
-      'Open a docked subterminal and route subsequent bash there.',
+      'Open a docked subterminal and route subsequent bash there. A new SSH login scope requires host-owned human confirmation even under safe-auto; subsequent mutations still require separate command/plan approval.',
       'Use mode=local for client-machine work (/etc/hosts, local files) when the current pane is remote SSH.',
-      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the host restores the main terminal).',
+      'Use mode=ssh with a different saved connectionId for a new host — never for the current session connection (the operator reconnects and verifies the main terminal).',
       'Required for parallel multi-host work — never issue concurrent bash on the same pane.',
       'Do not only analyze — call this tool then execute.'
     ].join(' '),
     promptSnippet: 'open_subterminal — open local/SSH docked subterminal for cross-context work',
     promptGuidelines: [
       'For local hosts/file edits while on a remote pane, call open_subterminal(mode=local) before bash.',
-      'When the cross-context step is done, call close_subterminal so later bash runs on the main terminal.',
-      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the host restores the main terminal.',
+      'Use mode=ssh only with a different saved connectionId. Never open_subterminal for the current session connection — the operator must explicitly reconnect and verify the main terminal.',
       'Never run concurrent bash on the same terminal; open a subterminal for each parallel workstream.'
     ],
     parameters,
@@ -481,56 +588,61 @@ export async function createOpenSubterminalToolDefinition(
   })
 }
 
-export async function closeAgentSubterminal(input: {
+export function createReturnToMainTerminalTool(
+  pi: PiSdkFacade,
   sessionKey: string
-  webContents?: WebContents
-}): Promise<{
+): ReturnType<PiSdkFacade['defineTool']> {
+  return pi.defineTool({
+    name: 'return_to_main_terminal',
+    label: 'Return to main terminal',
+    description:
+      'Restore the captured parent execution target after temporary work. Host verifies pane generation and connection identity; failure never falls back to local.',
+    parameters: Type.Object({}),
+    executionMode: 'sequential',
+    async execute() {
+      const result = returnToMainTerminal(sessionKey)
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        details: result,
+        isError: !result.ok
+      }
+    }
+  })
+}
+
+async function closeAgentSubterminal(sessionKey: string): Promise<{
   ok: boolean
   parentTabId?: string
   closedTabId?: string
   hint?: string
   error?: string
 }> {
-  const context = getPtyBashExecContext(input.sessionKey)
-  const webContents = input.webContents ?? context?.webContents
+  const context = getPtyBashExecContext(sessionKey)
+  const webContents = context?.webContents
   if (!context || !webContents || webContents.isDestroyed()) {
-    return {
-      ok: false,
-      error: 'No active agent terminal context. Start a run in a terminal session first.'
-    }
+    return { ok: false, error: 'No active agent terminal context.' }
   }
-
-  const restored = restoreSessionBashToMainTerminal(input.sessionKey)
-  if (!restored.ok) {
-    return { ok: false, error: restored.error || 'Failed to restore bash to the main terminal.' }
+  const closedTabId = context.executionTabId
+  const parentTabId = context.mainTarget?.tabId
+  if (!parentTabId || parentTabId === closedTabId) {
+    return { ok: true, parentTabId: parentTabId ?? closedTabId, hint: 'Bash is already on the main terminal.' }
   }
-  if (restored.alreadyOnMain) {
-    return {
-      ok: true,
-      parentTabId: restored.parentTabId,
-      hint: 'Bash is already on the main terminal. Continue the main task there.'
-    }
-  }
-
-  const closedTabId = restored.closedTabId
-  const parentTabId = restored.parentTabId
-  if (closedTabId && parentTabId) {
-    closeTemporarySubterminal(webContents, closedTabId)
-    safeWebContentsSend(webContents, 'agent:subagent-status', {
-      parentTabId,
-      tabId: closedTabId,
-      name: subterminalNameFromTabId(closedTabId),
-      agentName: 'agent',
-      agentStatus: 'done',
-      close: true
-    })
-  }
-
+  const restored = returnToMainTerminal(sessionKey)
+  if (!restored.ok) return { ok: false, error: restored.error }
+  closeTemporarySubterminal(webContents, closedTabId)
+  safeWebContentsSend(webContents, 'agent:subagent-status', {
+    parentTabId,
+    tabId: closedTabId,
+    name: subterminalNameFromTabId(closedTabId),
+    agentName: 'agent',
+    agentStatus: 'done',
+    close: true
+  })
   return {
     ok: true,
     parentTabId,
     closedTabId,
-    hint: 'Closed the subterminal. Subsequent bash runs on the main terminal. Continue the main task there.'
+    hint: 'Closed the subterminal. Subsequent bash runs on the main terminal.'
   }
 }
 
@@ -538,30 +650,22 @@ export async function createCloseSubterminalToolDefinition(
   pi: PiSdkFacade,
   sessionKey: string
 ): Promise<ReturnType<PiSdkFacade['defineTool']>> {
-  const parameters = Type.Object({})
   return pi.defineTool({
     name: 'close_subterminal',
     label: 'Close subterminal',
-    description: [
-      'Close the docked subterminal this agent opened and route subsequent bash back to the main terminal.',
-      'Call this after cross-context work (local /etc/hosts, local files, or a one-off SSH pane) before any further main-task commands.',
-      'Do not use exit/logout to leave the pane.'
-    ].join(' '),
-    promptSnippet: 'close_subterminal — return bash to the main terminal and close the docked pane',
-    promptGuidelines: [
-      'After local hosts or other cross-context work, call close_subterminal before any further main-task bash.',
-      'Do not run kubectl, kubeadm, helm, ssh, or scp in a local subterminal opened from an SSH session.'
-    ],
-    parameters,
+    description: 'Close the current subterminal and route subsequent bash to the verified main terminal.',
+    promptSnippet: 'close_subterminal — return bash to the main terminal and close the subterminal',
+    promptGuidelines: ['After cross-context work, call close_subterminal before further main-task bash.'],
+    parameters: Type.Object({}),
     executionMode: 'sequential',
     async execute(_toolCallId, _params, signal) {
       const result = signal?.aborted
         ? { ok: false, error: 'Agent run was canceled.' }
-        : await closeAgentSubterminal({ sessionKey })
-      const text = JSON.stringify(result, null, 2)
+        : await closeAgentSubterminal(sessionKey)
       return {
-        content: [{ type: 'text', text }],
-        details: result
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        details: result,
+        isError: !result.ok
       }
     }
   })
