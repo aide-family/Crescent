@@ -584,6 +584,7 @@ function App({
   const [slashCommandOpen, setSlashCommandOpen] = useState(true)
   const [slashCommandIndex, setSlashCommandIndex] = useState(0)
   const [composerCaret, setComposerCaret] = useState(0)
+  const composerCaretRef = useRef(0)
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale())
 
   const [closeTabsConfirmRequest, setCloseTabsConfirmRequest] =
@@ -4742,7 +4743,22 @@ function App({
   })
 
   function slashReplacementCursor(input: string): number {
-    return getSlashCommandQuery(input, composerCaret) !== undefined ? composerCaret : input.length
+    const cursor = composerCaretRef.current
+    return getSlashCommandQuery(input, cursor) !== undefined ? cursor : input.length
+  }
+
+  function publishComposerCaret(cursor: number): void {
+    composerCaretRef.current = cursor
+    setComposerCaret(cursor)
+  }
+
+  function handleComposerCaretChange(cursor: number): void {
+    const previous = composerCaretRef.current
+    if (previous === cursor) return
+    const input = agentInputRef.current?.value ?? sessionChatTab.agentInput
+    const previousQuery = getSlashCommandQuery(input, previous)
+    composerCaretRef.current = cursor
+    if (previousQuery !== getSlashCommandQuery(input, cursor)) setComposerCaret(cursor)
   }
 
   runAgentConversationRef.current = runAgentConversation
@@ -4773,7 +4789,7 @@ function App({
       replacement,
       slashReplacementCursor(tab.agentInput)
     )
-    setComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, next))
+    publishComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, next))
     return applyComposerInput(tab, next, extras)
   }
 
@@ -4996,7 +5012,7 @@ function App({
               cursor
             )
           : insertComposerRefTokenAt(tab.agentInput, cursor, 'path', reference.id)
-      setComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, nextInput))
+      publishComposerCaret(caretAfterProgrammaticValueChange(tab.agentInput, nextInput))
       return applyComposerInput(tab, nextInput, {
         pathRefs: addUniquePathRef(tab.pathRefs, reference)
       })
@@ -6349,7 +6365,7 @@ function App({
               setSlashCommandIndex(0)
               updateTab(sessionChatTab.id, (tab) => applyComposerInput(tab, value))
             }}
-            onComposerCaretChange={setComposerCaret}
+            onComposerCaretChange={handleComposerCaretChange}
             onAgentInputKeyDown={handleAgentInputKeyDown}
             onAgentInputPaste={(event) => void handleAgentInputPaste(event)}
             onRemoveSkill={removeSkillRef}

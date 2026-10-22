@@ -6,7 +6,6 @@ import {
   useLayoutEffect,
   useRef
 } from 'react'
-import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 
 import { ComposerRefChip } from '@renderer/components/AgentReferenceBadges'
@@ -44,6 +43,39 @@ import type {
   AgentSkillOption,
   AgentWikiReference
 } from '../../../shared/agent-types'
+
+/** Detach chip roots after the current render so unmount does not re-enter it. */
+function unmountComposerChipRoots(roots: readonly Root[]): void {
+  if (roots.length === 0) return
+  const pending = roots.slice()
+  queueMicrotask(() => {
+    for (const root of pending) root.unmount()
+  })
+}
+
+function notifyComposerCaret(
+  cursor: number,
+  suppressCaretEventRef: { current: boolean },
+  lastNotifiedCaretRef: { current: number | null },
+  onCaretChange: ((cursor: number) => void) | undefined
+): void {
+  if (suppressCaretEventRef.current) return
+  if (lastNotifiedCaretRef.current === cursor) return
+  lastNotifiedCaretRef.current = cursor
+  onCaretChange?.(cursor)
+}
+
+function runWithSuppressedCaretEvents(
+  suppressCaretEventRef: { current: boolean },
+  place: () => void
+): void {
+  suppressCaretEventRef.current = true
+  try {
+    place()
+  } finally {
+    suppressCaretEventRef.current = false
+  }
+}
 
 export interface ComposerInputHandle {
   focus: () => void
@@ -90,6 +122,8 @@ export function ComposerEditor({
   const compositionEndedAtRef = useRef(0)
   const newlineImeWarmupAtRef = useRef(0)
   const mountedRef = useRef(false)
+  const lastNotifiedCaretRef = useRef<number | null>(null)
+  const suppressCaretEventRef = useRef(false)
   const lookupsRef = useRef({
     skillRefs,
     wikiRefs,
@@ -136,7 +170,15 @@ export function ComposerEditor({
             ) {
               return
             }
-            setComposerDomCaret(surface, end)
+            runWithSuppressedCaretEvents(suppressCaretEventRef, () => {
+              setComposerDomCaret(surface, end)
+            })
+            notifyComposerCaret(
+              end,
+              suppressCaretEventRef,
+              lastNotifiedCaretRef,
+              lookupsRef.current.onCaretChange
+            )
           }
         }
       }
@@ -169,7 +211,7 @@ export function ComposerEditor({
     previousValueRef.current = value
     pendingCaretRef.current = insertedCaret
 
-    for (const root of chipRootsRef.current) root.unmount()
+    unmountComposerChipRoots(chipRootsRef.current)
     chipRootsRef.current = []
     surface.replaceChildren()
 
@@ -208,30 +250,28 @@ export function ComposerEditor({
       const path = pathById.get(part.id)
       const root = createRoot(host)
       chipRootsRef.current.push(root)
-      flushSync(() => {
-        root.render(
-          <ComposerRefChip
-            kind={part.kind}
-            id={part.id}
-            label={label}
-            t={latest.t}
-            removable
-            atomic
-            isMcp={tool?.source === 'mcp'}
-            pathKind={path?.kind}
-            onRemove={() => {
-              const latest = lookupsRef.current
-              latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== 'Backspace' && event.key !== 'Delete') return
-              event.preventDefault()
-              const latest = lookupsRef.current
-              latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
-            }}
-          />
-        )
-      })
+      root.render(
+        <ComposerRefChip
+          kind={part.kind}
+          id={part.id}
+          label={label}
+          t={latest.t}
+          removable
+          atomic
+          isMcp={tool?.source === 'mcp'}
+          pathKind={path?.kind}
+          onRemove={() => {
+            const latest = lookupsRef.current
+            latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Backspace' && event.key !== 'Delete') return
+            event.preventDefault()
+            const latest = lookupsRef.current
+            latest.onChange(removeComposerRefToken(latest.value, part.kind, part.id))
+          }}
+        />
+      )
     }
 
     surface.appendChild(createComposerPadBr())
@@ -250,14 +290,21 @@ export function ComposerEditor({
       pendingCaretRef.current = null
       return
     }
-    setComposerDomCaret(surface, caret)
-    lookupsRef.current.onCaretChange?.(caret)
+    runWithSuppressedCaretEvents(suppressCaretEventRef, () => {
+      setComposerDomCaret(surface, caret)
+    })
+    notifyComposerCaret(
+      caret,
+      suppressCaretEventRef,
+      lastNotifiedCaretRef,
+      lookupsRef.current.onCaretChange
+    )
     pendingCaretRef.current = null
   }, [agentInputRef, value])
 
   useLayoutEffect(() => {
     return () => {
-      for (const root of chipRootsRef.current) root.unmount()
+      unmountComposerChipRoots(chipRootsRef.current)
       chipRootsRef.current = []
     }
   }, [])
@@ -268,8 +315,15 @@ export function ComposerEditor({
     const next = serializeComposerDom(surface)
     if (next === '') ensureComposerEmptySurface(surface)
     lastEmittedRef.current = next
-    lookupsRef.current.onCaretChange?.(getComposerDomCaret(surface))
-    scrollComposerCaretIntoView(surface)
+    notifyComposerCaret(
+      getComposerDomCaret(surface),
+      suppressCaretEventRef,
+      lastNotifiedCaretRef,
+      lookupsRef.current.onCaretChange
+    )
+    runWithSuppressedCaretEvents(suppressCaretEventRef, () => {
+      scrollComposerCaretIntoView(surface)
+    })
     if (next !== lookupsRef.current.value) lookupsRef.current.onChange(next)
   }
 
@@ -319,7 +373,12 @@ export function ComposerEditor({
       onSelect={() => {
         const surface = surfaceRef.current
         if (!surface) return
-        lookupsRef.current.onCaretChange?.(getComposerDomCaret(surface))
+        notifyComposerCaret(
+          getComposerDomCaret(surface),
+          suppressCaretEventRef,
+          lastNotifiedCaretRef,
+          lookupsRef.current.onCaretChange
+        )
       }}
       onPaste={(event) => {
         onPaste(event)
